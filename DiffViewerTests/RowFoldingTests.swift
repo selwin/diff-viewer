@@ -31,7 +31,7 @@ struct RowFoldingTests {
     @Test func noChangeBlocksShowsAllRows() {
         let folded = fold([], rows: 10)
         #expect(shape(folded) == ["rows 0..<10"])
-        #expect(!folded.hasSeparators)
+        #expect(folded.displayRows.count == folded.documentRowCount)
     }
 
     @Test func contextSurroundsBlockWithSeparatorsAtBothEnds() {
@@ -88,7 +88,7 @@ struct RowFoldingTests {
         state.expandAll(documentRowCount: 100)
         let folded = fold([50..<52], rows: 100, state: state)
         #expect(shape(folded) == ["rows 0..<100"])
-        #expect(!folded.hasSeparators)
+        #expect(folded.displayRows.count == folded.documentRowCount)
     }
 
     @Test func residualBelowMinimumAutoReveals() {
@@ -162,6 +162,18 @@ struct RowFoldingTests {
                 #expect(visible.count == block.count)
             }
         }
+    }
+
+    @Test func foldingALargeDocumentIsFast() {
+        let rows = 20_000
+        let blocks = stride(from: 0, to: rows, by: 200).map { $0..<($0 + 1) }
+        var state = FoldState()
+        state.expandDown(1..<195, step: 20)
+        let start = ContinuousClock.now
+        let folded = fold(blocks, rows: rows, state: state)
+        #expect(ContinuousClock.now - start < .milliseconds(50))
+        #expect(folded.displayRows.count < rows)
+        #expect(folded.displayIndex(forDocumentRow: rows - 1) == folded.displayRows.count - 1)
     }
 
     // MARK: Mapping

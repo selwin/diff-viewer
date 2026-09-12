@@ -80,8 +80,6 @@ struct FoldedRows: Sendable {
         FoldedRows(displayRows: (0..<documentRowCount).map { .documentRow($0) }, documentRowCount: documentRowCount)
     }
 
-    var hasSeparators: Bool { displayRows.count != documentRowCount }
-
     /// Precondition: `0 <= row < documentRowCount`.
     func displayIndex(forDocumentRow row: Int) -> Int { displayIndexByRow[row] }
 

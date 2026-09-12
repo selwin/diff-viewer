@@ -97,6 +97,39 @@ final class DiffPaneView: NSView {
         needsDisplay = true
     }
 
+    // MARK: - Cursor
+
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        (separatorHidden(at: point) != nil ? NSCursor.pointingHand : NSCursor.arrow).set()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
+    }
+
+    /// The hidden range of the separator row under `point`, if any.
+    private func separatorHidden(at point: NSPoint) -> (index: Int, hidden: Range<Int>)? {
+        guard onFoldAction != nil, point.y >= 0, point.y < layout.contentHeight else { return nil }
+        let index = layout.row(atY: point.y)
+        guard index < displayRows.count, case let .separator(hidden) = displayRows[index] else { return nil }
+        return (index, hidden)
+    }
+
+    private func separatorRowRect(at index: Int) -> NSRect {
+        NSRect(x: visibleRect.minX, y: layout.y(forRow: index), width: visibleRect.width, height: layout.rowHeight)
+    }
+
     // MARK: - Metrics
 
     private func recomputeMetrics() {
@@ -311,16 +344,48 @@ final class DiffPaneView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let onFoldAction, point.y >= 0, point.y < layout.contentHeight else { return super.mouseDown(with: event) }
-        let index = layout.row(atY: point.y)
-        guard index < displayRows.count, case let .separator(hidden) = displayRows[index] else { return super.mouseDown(with: event) }
+        guard let onFoldAction, let (index, hidden) = separatorHidden(at: point) else { return super.mouseDown(with: event) }
         if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
+        let control = controlRects(for: hidden, rowRect: separatorRowRect(at: index)).first(where: { $0.rect.contains(point) })?.control
+        onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
+    }
 
-        let rowRect = NSRect(x: visibleRect.minX, y: layout.y(forRow: index), width: visibleRect.width, height: layout.rowHeight)
-        switch controlRects(for: hidden, rowRect: rowRect).first(where: { $0.rect.contains(point) })?.control {
-        case .expandUp?: onFoldAction(.expandUp(hidden))
-        case .expandDown?: onFoldAction(.expandDown(hidden))
-        case .expandRun?, nil: onFoldAction(.expandRun(hidden))
+    private static func action(for control: FoldControl, hidden: Range<Int>) -> FoldAction {
+        switch control {
+        case .expandUp: .expandUp(hidden)
+        case .expandDown: .expandDown(hidden)
+        case .expandRun: .expandRun(hidden)
+        }
+    }
+
+    // MARK: - Accessibility
+
+    /// One button per visible separator control, so VoiceOver can expand folded regions.
+    override func accessibilityChildren() -> [Any]? {
+        guard let onFoldAction else { return nil }
+        var elements: [NSAccessibilityElement] = []
+        for index in layout.rows(intersecting: visibleRect.minY, visibleRect.maxY) where index < displayRows.count {
+            guard case let .separator(hidden) = displayRows[index] else { continue }
+            for (control, rect) in controlRects(for: hidden, rowRect: separatorRowRect(at: index)) {
+                let element = FoldControlElement()
+                element.setAccessibilityRole(.button)
+                element.setAccessibilityParent(self)
+                element.setAccessibilityFrameInParentSpace(rect)
+                element.setAccessibilityLabel(accessibilityLabel(for: control, hidden: hidden))
+                let action = Self.action(for: control, hidden: hidden)
+                element.onPress = { onFoldAction(action) }
+                elements.append(element)
+            }
+        }
+        return elements
+    }
+
+    private func accessibilityLabel(for control: FoldControl, hidden: Range<Int>) -> String {
+        let step = min(foldOptions.expansionStep, hidden.count)
+        switch control {
+        case .expandUp: return "Show \(step) lines before the next change"
+        case .expandDown: return "Show \(step) lines after the previous change"
+        case .expandRun: return "Show all \(hidden.count) unchanged lines"
         }
     }
 
@@ -365,5 +430,15 @@ final class DiffPaneView: NSView {
         let line = CTLineCreateWithAttributedString(attributed)
         numberCache[key] = line
         return line
+    }
+}
+
+private final class FoldControlElement: NSAccessibilityElement {
+    var onPress: (() -> Void)?
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onPress else { return false }
+        onPress()
+        return true
     }
 }
