@@ -34,7 +34,7 @@ Where DiffViewer already stands versus the bar:
 
 ## Requested: sidebar churn and sidebar actions
 
-Two items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
+Three items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
 
 ### A. Per-file churn in the sidebar
 
@@ -105,6 +105,32 @@ README when this lands. Hunk-level staging stays out.
 **Tests.** Menu-model derivation from `(Area, Kind)` to action list, post-action
 selection rule, and the git argument builder per action. The UI is verified by
 screenshots.
+
+### C. Show the current branch
+
+**Goal.** The window always shows which branch the open repository is on, and updates
+when the branch changes underneath the app (checkout in a terminal, a coding agent
+switching branches, a rebase in progress).
+
+**Design.**
+- Source: `git symbolic-ref --short -q HEAD`. When it fails the head is detached; fall
+  back to `git rev-parse --short HEAD` and show it as `detached at 1a2b3c4`. Add a
+  `currentBranch()` method to `RepoClient` next to `status()` and run it in the same
+  refresh so the two never disagree.
+- Placement: window subtitle under the repo name, via `.navigationSubtitle`, so it
+  reads "diff-viewer — main" in the title bar without taking sidebar space. In the tabs
+  model the tab title stays the repo name; the branch is per window and per session.
+- In-progress operations: if `.git/rebase-merge`, `.git/rebase-apply`, `.git/MERGE_HEAD`,
+  or `.git/CHERRY_PICK_HEAD` exists, append the state, e.g. `main (rebasing)`, the way
+  the git prompt scripts do. Cheap file-exists checks, no extra git calls.
+- Refresh: `RepoWatcher` already fires on `.git` changes; `.git/HEAD` rewrites cover
+  checkouts, so no new watcher is needed. Read-only, so it fits the current scope
+  regardless of item B.
+- Optional later: clicking the subtitle copies the branch name; upstream ahead/behind
+  counts (`git rev-list --left-right --count @{u}...HEAD`) if they stay cheap.
+
+**Tests.** Parsing of the symbolic-ref and detached fallbacks, and the in-progress
+state suffix from a set of existing marker files.
 
 ---
 
