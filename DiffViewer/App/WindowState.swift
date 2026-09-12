@@ -12,13 +12,13 @@ struct WindowID: Hashable, Sendable {
 /// is discarded.
 @MainActor
 final class RepoSession {
-    let root: URL
+    let root: RepositoryRoot
     let client: any RepoClient
     var watcher: (any RepoWatching)?
     /// Incremented per refresh; only the latest may publish.
     var refreshSerial = 0
 
-    init(root: URL, client: any RepoClient) {
+    init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root
         self.client = client
     }
@@ -42,14 +42,14 @@ enum RefreshCause: Sendable {
 @MainActor
 @Observable
 final class WindowState {
-    typealias WatcherFactory = @MainActor (URL, @escaping @MainActor () -> Void) -> (any RepoWatching)?
+    typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping @MainActor () -> Void) -> (any RepoWatching)?
 
     let id = WindowID()
     let preferences: Preferences
     let diffLoader: DiffLoader
 
     private(set) var session: RepoSession?
-    var repositoryRoot: URL? { session?.root }
+    var repositoryRoot: RepositoryRoot? { session?.root }
     var isEmpty: Bool { session == nil }
     private(set) var files: [ChangedFile] = []
     private(set) var isLoading = false
@@ -113,7 +113,7 @@ final class WindowState {
         (unstagedFiles + stagedFiles).filter { $0.id != selectedFileID }
     }
 
-    var repoName: String { repositoryRoot?.lastPathComponent ?? "DiffViewer" }
+    var repoName: String { repositoryRoot?.name ?? "DiffViewer" }
 
     // MARK: - Lifecycle
 
@@ -121,7 +121,7 @@ final class WindowState {
     /// One-time: returns `false` and changes nothing if the window is already
     /// populated or closed.
     @discardableResult
-    func adopt(root: URL, client: any RepoClient) -> Bool {
+    func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
         guard session == nil, !isClosed else { return false }
         let session = RepoSession(root: root, client: client)
         session.watcher = watchRepository(root) { [weak self, weak session] in

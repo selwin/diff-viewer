@@ -17,6 +17,7 @@ actor StubRepoClient: RepoClient {
     init(files: [ChangedFile]) { self.files = files }
 
     func set(files: [ChangedFile]) { self.files = files }
+    var currentFiles: [ChangedFile] { files }
     func hold(_ on: Bool) { holds = on }
     func fail(_ on: Bool) { fails = on }
     var heldCount: Int { held.count }
@@ -73,8 +74,8 @@ final class Harness {
     let suite = "DiffViewerTests.\(UUID().uuidString)"
     let runner = RunnerProbe()
     let preferences: Preferences
-    private(set) var watchers: [URL: NoopWatcher] = [:]
-    private(set) var watcherCallbacks: [URL: @MainActor () -> Void] = [:]
+    private(set) var watchers: [RepositoryRoot: NoopWatcher] = [:]
+    private(set) var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
     /// Every `onRefreshPublished` call, in order.
     private(set) var published: [(files: [ChangedFile], cause: RefreshCause)] = []
 
@@ -104,13 +105,13 @@ final class Harness {
         return state
     }
 
-    func repo(_ name: String, files: [ChangedFile]) -> (root: URL, client: StubRepoClient) {
-        (URL(fileURLWithPath: "/tmp/\(name)", isDirectory: true), StubRepoClient(files: files))
+    func repo(_ name: String, files: [ChangedFile]) -> (root: RepositoryRoot, client: StubRepoClient) {
+        (RepositoryRoot(path: "/tmp/\(name)"), StubRepoClient(files: files))
     }
 
     /// Adopts and waits for the initial refresh to publish.
     @discardableResult
-    func adopt(_ state: WindowState, _ name: String, files: [ChangedFile]) async -> (root: URL, client: StubRepoClient) {
+    func adopt(_ state: WindowState, _ name: String, files: [ChangedFile]) async -> (root: RepositoryRoot, client: StubRepoClient) {
         let repo = repo(name, files: files)
         let before = published.count
         #expect(state.adopt(root: repo.root, client: repo.client))

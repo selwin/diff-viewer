@@ -21,7 +21,7 @@ struct PreferencesTests {
         #expect(!preferences.hideWhitespace)
         #expect(!preferences.collapseUnchanged)
         #expect(preferences.fontSize == 15)
-        #expect(preferences.recentRepositoryRoots.map(\.path) == ["/tmp/one", "/tmp/two"])
+        #expect(preferences.recentRepositoryRoots == [RepositoryRoot(path: "/tmp/one"), RepositoryRoot(path: "/tmp/two")])
     }
 
     @Test func defaultsWhenNothingIsStored() {
@@ -63,7 +63,7 @@ struct PreferencesTests {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = Preferences(defaults: defaults)
-        let roots = (0..<12).map { URL(fileURLWithPath: "/tmp/repo\($0)", isDirectory: true) }
+        let roots = (0..<12).map { RepositoryRoot(path: "/tmp/repo\($0)") }
         for root in roots { preferences.noteOpened(root) }
         #expect(preferences.recentRepositoryRoots.count == Preferences.maxRecentRepositories)
         #expect(preferences.recentRepositoryRoots.first == roots[11])

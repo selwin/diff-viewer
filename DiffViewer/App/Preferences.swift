@@ -30,7 +30,7 @@ final class Preferences {
     }
 
     /// Most recently opened first.
-    private(set) var recentRepositoryRoots: [URL] {
+    private(set) var recentRepositoryRoots: [RepositoryRoot] {
         didSet { defaults.set(recentRepositoryRoots.map(\.path), forKey: Keys.recentRepos) }
     }
 
@@ -54,7 +54,7 @@ final class Preferences {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let paths = defaults.stringArray(forKey: Keys.recentRepos) ?? []
-        recentRepositoryRoots = paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
+        recentRepositoryRoots = paths.map { RepositoryRoot(path: $0) }
         hideWhitespace = defaults.object(forKey: Keys.hideWhitespace) as? Bool ?? true
         let storedSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 12
         fontSize = min(max(storedSize, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
@@ -63,9 +63,9 @@ final class Preferences {
     }
 
     /// Moves `root` to the front of the recent list.
-    func noteOpened(_ root: URL) {
+    func noteOpened(_ root: RepositoryRoot) {
         var roots = recentRepositoryRoots
-        roots.removeAll { $0.standardizedFileURL == root.standardizedFileURL }
+        roots.removeAll { $0 == root }
         roots.insert(root, at: 0)
         recentRepositoryRoots = Array(roots.prefix(Self.maxRecentRepositories))
     }

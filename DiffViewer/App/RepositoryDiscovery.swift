@@ -3,11 +3,11 @@ import Foundation
 
 /// Resolves a URL to the git repository containing it and a client for that root.
 enum RepositoryDiscovery {
-    typealias Result = (root: URL, client: any RepoClient)
+    typealias Result = (root: RepositoryRoot, client: any RepoClient)
 
     static func discover(_ url: URL) async throws -> Result {
-        let root = try await GitClient.discoverRoot(from: url)
-        return (root, GitClient(repoRoot: root))
+        let toplevel = try await GitClient.discoverRoot(from: url)
+        return (RepositoryRoot(toplevel), GitClient(repoRoot: toplevel))
     }
 
     /// Runs the standard folder chooser; nil when cancelled.

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @Environment(AppModel.self) private var model
+    @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
     @Environment(Preferences.self) private var preferences
 
@@ -18,10 +18,11 @@ struct ContentView: View {
         .navigationTitle(windowState.repoName)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
-            let model = model
+            let coordinator = services.coordinator
+            let origin = WindowCoordinator.OpenOrigin.window(windowState.id)
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in await model.open(url) }
+                Task { @MainActor in await coordinator.open(WindowCoordinator.OpenRequest(url: url, origin: origin)) }
             }
             return true
         }
@@ -75,7 +76,7 @@ struct ContentView: View {
             } description: {
                 Text("Open a git repository to view its changes.")
             } actions: {
-                Button("Open Repository…") { model.presentOpenPanel() }
+                Button("Open Repository…") { services.coordinator.presentOpenPanel(from: .window(windowState.id)) }
                     .keyboardShortcut(.defaultAction)
             }
         } else if let file = windowState.selectedFile {
