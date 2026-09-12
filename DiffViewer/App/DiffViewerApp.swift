@@ -8,7 +8,10 @@ struct DiffViewerApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
-                .task { await appState.restoreLastRepo() }
+                .task {
+                    await appState.restoreLastRepo()
+                    DebugLaunchOptions.apply(to: appState)
+                }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
