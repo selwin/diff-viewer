@@ -114,12 +114,14 @@ final class SideBySideContainerView: NSView {
 
 struct SideBySideView: NSViewRepresentable {
     let document: DiffDocument
+    var styles: DocumentStyles?
     var fontSize: CGFloat = 12
 
     func makeNSView(context: Context) -> SideBySideContainerView {
         let view = SideBySideContainerView(frame: .zero)
         view.setDocument(document, fontSize: fontSize)
         context.coordinator.documentID = document.id
+        applyStylesIfNeeded(to: view, coordinator: context.coordinator)
         return view
     }
 
@@ -127,12 +129,22 @@ struct SideBySideView: NSViewRepresentable {
         if context.coordinator.documentID != document.id || view.rightPane.fontSize != fontSize {
             view.setDocument(document, fontSize: fontSize)
             context.coordinator.documentID = document.id
+            context.coordinator.stylesApplied = false
         }
+        applyStylesIfNeeded(to: view, coordinator: context.coordinator)
+    }
+
+    private func applyStylesIfNeeded(to view: SideBySideContainerView, coordinator: Coordinator) {
+        guard !coordinator.stylesApplied, let styles, styles.documentID == document.id else { return }
+        view.leftPane.applyStyles(styles.old)
+        view.rightPane.applyStyles(styles.new)
+        coordinator.stylesApplied = true
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
         var documentID: UUID?
+        var stylesApplied = false
     }
 }

@@ -40,7 +40,8 @@ line-number gutters, change background colors, intra-line highlight, pad rows ha
 
 ## Stage 4: Syntax highlighting
 **Goal**: Tree-sitter highlighting for both sides using bundled grammars
-(Swift, Python, JS, TS/TSX, JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, Kotlin, PHP, Markdown).
+(Swift, Python, JS, TS/TSX, JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, PHP, Markdown).
+Kotlin was dropped: its grammar package ships no highlight queries.
 Capture names mapped to a theme with light/dark variants.
 **Success Criteria**: Highlighting is computed in the background and never blocks scrolling.
 **Tests**: Language detection from path; capture → style mapping.

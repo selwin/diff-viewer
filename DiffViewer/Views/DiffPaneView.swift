@@ -1,10 +1,10 @@
 import AppKit
 import CoreText
 
-/// A run of syntax color within a line (UTF-16 offsets). Filled in by the highlighter.
+/// A run of syntax style within a line (UTF-16 offsets). Produced by the highlighter.
 struct StyleRun: Sendable, Equatable {
     let range: Range<Int>
-    let color: NSColor
+    let style: TokenStyle
 }
 
 /// Everything one pane needs to draw.
@@ -28,6 +28,12 @@ struct PaneModel {
 final class DiffPaneView: NSView {
     var model: PaneModel? {
         didSet { lineCache.removeAll(); recomputeMetrics(); needsDisplay = true }
+    }
+
+    /// Attaches syntax styles without changing layout; only the text cache is reset.
+    func applyStyles(_ styles: [[StyleRun]]?) {
+        guard model != nil else { return }
+        model?.styles = styles
     }
 
     var fontSize: CGFloat = 12 {
@@ -222,7 +228,7 @@ final class DiffPaneView: NSView {
                 let clampedLower = min(max(lower, 0), length)
                 let clampedUpper = min(max(upper, clampedLower), length)
                 guard clampedUpper > clampedLower else { continue }
-                attributed.addAttribute(.foregroundColor, value: run.color, range: NSRange(location: clampedLower, length: clampedUpper - clampedLower))
+                attributed.addAttribute(.foregroundColor, value: DiffTheme.color(for: run.style), range: NSRange(location: clampedLower, length: clampedUpper - clampedLower))
             }
         }
         let line = CTLineCreateWithAttributedString(attributed)

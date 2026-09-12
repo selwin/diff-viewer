@@ -10,12 +10,16 @@ final class DiffLoader {
     private(set) var contentFileID: ChangedFile.ID?
     private(set) var isLoading = false
     private(set) var errorMessage: String?
+    /// Syntax styles for `content`, arriving shortly after the diff itself.
+    private(set) var styles: DocumentStyles?
 
     private var task: Task<Void, Never>?
+    private var highlightTask: Task<Void, Never>?
     private var generation = 0
 
     func load(file: ChangedFile?, client: GitClient?, hideWhitespace: Bool) {
         task?.cancel()
+        highlightTask?.cancel()
         generation += 1
         let gen = generation
         guard let file, let client else {
@@ -27,6 +31,7 @@ final class DiffLoader {
         }
         if contentFileID != file.id {
             content = nil
+            styles = nil
             contentFileID = file.id
         }
         isLoading = true
@@ -41,6 +46,9 @@ final class DiffLoader {
                 content = result
                 contentFileID = file.id
                 isLoading = false
+                if case let .text(document) = result {
+                    highlight(document, fileName: file.fileName, generation: gen)
+                }
             } catch is CancellationError {
                 // A newer request superseded this one.
             } catch {
@@ -50,4 +58,26 @@ final class DiffLoader {
             }
         }
     }
+
+    private func highlight(_ document: DiffDocument, fileName: String, generation gen: Int) {
+        let oldLines = document.oldLines
+        let newLines = document.newLines
+        let documentID = document.id
+        highlightTask = Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                let old = Highlighter.highlight(lines: oldLines, fileName: fileName)
+                if Task.isCancelled { return DocumentStyles(documentID: documentID, old: nil, new: nil) }
+                let new = Highlighter.highlight(lines: newLines, fileName: fileName)
+                return DocumentStyles(documentID: documentID, old: old, new: new)
+            }.value
+            guard !Task.isCancelled, gen == generation else { return }
+            styles = result
+        }
+    }
+}
+
+struct DocumentStyles: Sendable {
+    let documentID: UUID
+    let old: [[StyleRun]]?
+    let new: [[StyleRun]]?
 }

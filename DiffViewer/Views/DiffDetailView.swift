@@ -59,7 +59,7 @@ struct DiffDetailView: View {
         } else {
             switch loader.content {
             case let .text(document)?:
-                SideBySideView(document: document)
+                SideBySideView(document: document, styles: loader.styles)
             case .binary?:
                 ContentUnavailableView("Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
             case .identical?:
