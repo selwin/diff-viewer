@@ -19,10 +19,10 @@ row with GitHub-style expand controls. Full design: see the approved plan.
 **Goal**: `AppState.collapseUnchanged` (UserDefaults, default true) + validated `foldOptions`; menu item ⇧⌘U; toolbar toggle; `SideBySideView` three-way `updateNSView`; `COLLAPSE=` in `scripts/snapshot.sh`.
 **Success Criteria**: Toggle flips without diff recompute; syntax colors retained; top row anchored.
 **Tests**: `contextLinesAreClampedFromDefaults`
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 4: Polish
 **Goal**: Pointing-hand cursor over separators, accessibility elements for controls, light/dark check, README note, perf check.
 **Success Criteria**: Snapshots in both appearances; VoiceOver reads controls.
 **Tests**: none new
-**Status**: Not Started
+**Status**: In Progress

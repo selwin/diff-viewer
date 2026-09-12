@@ -49,6 +49,11 @@ struct DiffViewerApp: App {
                     set: { appState.hideWhitespace = $0 }
                 ))
                 .keyboardShortcut("w", modifiers: [.command, .shift])
+                Toggle("Collapse Unchanged Lines", isOn: Binding(
+                    get: { appState.collapseUnchanged },
+                    set: { appState.collapseUnchanged = $0 }
+                ))
+                .keyboardShortcut("u", modifiers: [.command, .shift])
                 Divider()
                 Button("Next Change") { appState.nextChange() }
                     .keyboardShortcut(.downArrow, modifiers: .command)

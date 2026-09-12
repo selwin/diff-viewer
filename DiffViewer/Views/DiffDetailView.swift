@@ -69,7 +69,9 @@ struct DiffDetailView: View {
                     styles: loader.styles,
                     fontSize: appState.fontSize,
                     scrollTarget: appState.scrollTarget,
-                    currentBlock: appState.currentChangeIndex
+                    currentBlock: appState.currentChangeIndex,
+                    collapseUnchanged: appState.collapseUnchanged,
+                    foldOptions: appState.foldOptions
                 )
             case .binary?:
                 ContentUnavailableView("Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))

@@ -42,6 +42,10 @@ struct ContentView: View {
                     Label("Hide Whitespace", systemImage: "arrow.left.and.right.text.vertical")
                 }
                 .help("Hide whitespace-only changes (⇧⌘W)")
+                Toggle(isOn: $appState.collapseUnchanged) {
+                    Label("Collapse Unchanged", systemImage: "rectangle.compress.vertical")
+                }
+                .help("Collapse unchanged lines (⇧⌘U)")
                 Button {
                     Task { await appState.refresh() }
                 } label: {

@@ -7,8 +7,9 @@ import AppKit
 ///   (ids look like `unstaged:src/app.swift`).
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
-/// - `DIFFVIEWER_FOLD=<up|down|run|all>[,...]` clicks that control on the first visible
-///   separator row, in order, after the diff has loaded (goes through the real mouse path).
+/// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
+///   visible separator row (or flips Collapse Unchanged Lines), in order, after the diff
+///   has loaded. Clicks go through the real mouse path.
 /// - `DIFFVIEWER_SNAPSHOT=<path.png>` renders the window contents to a PNG afterwards
 ///   (works even when the window is on another Space, unlike `screencapture`).
 enum DebugLaunchOptions {
@@ -34,7 +35,7 @@ enum DebugLaunchOptions {
             if !folds.isEmpty {
                 try? await Task.sleep(for: .seconds(nextCount > 0 ? 0.5 : 2))
                 for fold in folds {
-                    clickSeparator(fold)
+                    if fold == "toggle" { appState.collapseUnchanged.toggle() } else { clickSeparator(fold) }
                     try? await Task.sleep(for: .seconds(0.2))
                 }
             }

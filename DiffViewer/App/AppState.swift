@@ -41,12 +41,23 @@ final class AppState {
         }
     }
 
+    /// Show only change blocks plus context; hidden runs become expandable separators.
+    /// Applied in the view layer, so toggling never recomputes the diff.
+    var collapseUnchanged: Bool {
+        didSet { UserDefaults.standard.set(collapseUnchanged, forKey: Keys.collapseUnchanged) }
+    }
+
+    /// Context lines come from the hidden `collapseContextLines` default, validated once.
+    let foldOptions: FoldOptions
+
     private var client: GitClient?
 
     private enum Keys {
         static let recentRepos = "recentRepos"
         static let hideWhitespace = "hideWhitespace"
         static let fontSize = "fontSize"
+        static let collapseUnchanged = "collapseUnchanged"
+        static let collapseContextLines = "collapseContextLines"
     }
 
     static let fontSizeRange: ClosedRange<Double> = 9...24
@@ -57,6 +68,8 @@ final class AppState {
         hideWhitespace = UserDefaults.standard.object(forKey: Keys.hideWhitespace) as? Bool ?? true
         let storedSize = UserDefaults.standard.object(forKey: Keys.fontSize) as? Double ?? 12
         fontSize = min(max(storedSize, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
+        collapseUnchanged = UserDefaults.standard.object(forKey: Keys.collapseUnchanged) as? Bool ?? true
+        foldOptions = FoldOptions.validated(contextLines: UserDefaults.standard.object(forKey: Keys.collapseContextLines) as? Int)
     }
 
     var selectedFile: ChangedFile? {
