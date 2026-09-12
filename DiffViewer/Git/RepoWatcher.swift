@@ -28,10 +28,16 @@ final class Debouncer {
     }
 }
 
+/// Something that reports repository changes until stopped.
+@MainActor
+protocol RepoWatching: AnyObject {
+    func stop()
+}
+
 /// Watches a repository directory (including its .git folder) with FSEvents and
 /// reports changes, debounced, on the main actor.
 @MainActor
-final class RepoWatcher {
+final class RepoWatcher: RepoWatching {
     private var stream: FSEventStreamRef?
     private let debouncer: Debouncer
     private let queue = DispatchQueue(label: "com.selwin.DiffViewer.RepoWatcher")

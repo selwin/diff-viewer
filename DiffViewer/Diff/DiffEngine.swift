@@ -8,7 +8,7 @@ enum DiffEngine {
         let fileName: String
     }
 
-    static func sources(for file: ChangedFile, client: GitClient) async throws -> Sources {
+    static func sources(for file: ChangedFile, client: any RepoClient) async throws -> Sources {
         let old: Data?
         let new: Data?
         switch file.area {
@@ -16,19 +16,25 @@ enum DiffEngine {
             switch file.kind {
             case .untracked:
                 old = nil
-                new = client.worktreeContents(of: file.path)
+                new = await client.worktreeContents(of: file.path)
             case .unmerged:
                 old = try await client.headContents(of: file.path)
-                new = client.worktreeContents(of: file.path)
+                new = await client.worktreeContents(of: file.path)
             default:
                 old = try await client.indexContents(of: file.path)
-                new = file.kind == .deleted ? nil : client.worktreeContents(of: file.path)
+                new = file.kind == .deleted ? nil : await client.worktreeContents(of: file.path)
             }
         case .staged:
             old = file.kind == .added ? nil : try await client.headContents(of: file.originalPath ?? file.path)
             new = file.kind == .deleted ? nil : try await client.indexContents(of: file.path)
         }
         return Sources(old: old ?? Data(), new: new ?? Data(), fileName: file.fileName)
+    }
+
+    /// Whether a pair is text with differences, i.e. something difft can work on.
+    /// Compares whole buffers; call it off the main actor for large files.
+    static func needsDifft(_ sources: Sources) -> Bool {
+        !isBinary(sources.old) && !isBinary(sources.new) && sources.old != sources.new
     }
 
     /// Builds the document, taking difft hints from `cache` (which runs difft on a

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Thin wrapper over the `git` CLI for one repository.
-struct GitClient: Sendable {
+struct GitClient: RepoClient {
     let repoRoot: URL
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")
@@ -47,7 +47,7 @@ struct GitClient: Sendable {
     }
 
     /// Contents of `path` in the working tree, or nil if missing.
-    func worktreeContents(of path: String) -> Data? {
+    func worktreeContents(of path: String) async -> Data? {
         try? Data(contentsOf: repoRoot.appendingPathComponent(path))
     }
 

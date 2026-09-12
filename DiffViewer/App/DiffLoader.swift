@@ -22,7 +22,7 @@ final class DiffLoader {
         self.cache = cache
     }
 
-    func load(file: ChangedFile?, client: GitClient?, hideWhitespace: Bool) {
+    func load(file: ChangedFile?, client: (any RepoClient)?, hideWhitespace: Bool) {
         task?.cancel()
         highlightTask?.cancel()
         generation += 1

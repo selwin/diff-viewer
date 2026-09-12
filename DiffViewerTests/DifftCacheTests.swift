@@ -73,15 +73,6 @@ private func request(_ cache: DifftCache, _ name: String, _ priority: DifftCache
     await cache.result(old: Data(name.utf8), new: Data("\(name)!".utf8), fileName: fileName, priority: priority)
 }
 
-/// Polls `condition` for up to two seconds.
-private func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
-    for _ in 0..<200 {
-        if await condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await condition()
-}
-
 struct DifftCacheTests {
     @Test func sameInputsRunOnce() async {
         let probe = RunnerProbe()
