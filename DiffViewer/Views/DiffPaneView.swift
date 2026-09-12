@@ -7,42 +7,60 @@ struct StyleRun: Sendable, Equatable {
     let style: TokenStyle
 }
 
-/// Everything one pane needs to draw.
+/// The document content one pane draws from.
 struct PaneModel {
     enum Side { case old, new }
 
     let side: Side
     let rows: [DiffRow]
     let lines: [String]
-    /// Optional syntax color runs per line index.
-    var styles: [[StyleRun]]?
 
     func cell(_ row: DiffRow) -> DiffSide? {
         side == .old ? row.old : row.new
     }
 }
 
+/// A click on a separator row. Ranges are hidden document rows.
+enum FoldAction: Equatable {
+    case expandUp(Range<Int>)
+    case expandDown(Range<Int>)
+    case expandRun(Range<Int>)
+    case expandAll
+}
+
 /// Draws one side of the diff: sticky line-number gutter, row backgrounds, token
-/// highlights, and monospaced text. Only rows intersecting the dirty rect are drawn,
-/// and shaped lines are cached, so large diffs scroll smoothly.
+/// highlights, monospaced text, and separator rows for folded regions. Only rows
+/// intersecting the dirty rect are drawn, and shaped lines are cached, so large
+/// diffs scroll smoothly.
 final class DiffPaneView: NSView {
+    /// Document content. Set once per document; recomputes metrics and clears caches.
     var model: PaneModel? {
-        didSet { lineCache.removeAll(); recomputeMetrics(); needsDisplay = true }
+        didSet { lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true }
     }
 
-    /// Attaches syntax styles without changing layout; only the text cache is reset.
-    func applyStyles(_ styles: [[StyleRun]]?) {
-        guard model != nil else { return }
-        model?.styles = styles
+    /// Syntax color runs per line index. Only the shaped-text cache is reset.
+    var styles: [[StyleRun]]? {
+        didSet { lineCache.removeAll(); needsDisplay = true }
     }
 
-    /// Rows of the current change block; drawn with an accent bar in the gutter.
+    /// Folded projection of `model.rows`. Only the row count changes; caches are
+    /// keyed by line index and stay valid.
+    var displayRows: [DisplayRow] = [] {
+        didSet { layout.rowCount = displayRows.count; needsDisplay = true }
+    }
+
+    var foldOptions = FoldOptions()
+
+    /// Called when the user clicks a separator row.
+    var onFoldAction: ((FoldAction) -> Void)?
+
+    /// Display rows of the current change block; drawn with an accent bar in the gutter.
     var currentChangeRows: Range<Int>? {
         didSet { if currentChangeRows != oldValue { needsDisplay = true } }
     }
 
     var fontSize: CGFloat = 12 {
-        didSet { if fontSize != oldValue { lineCache.removeAll(); recomputeMetrics(); needsDisplay = true } }
+        didSet { if fontSize != oldValue { lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true } }
     }
 
     private(set) var layout = PaneLayout(rowHeight: 20, rowCount: 0)
@@ -86,8 +104,7 @@ final class DiffPaneView: NSView {
         ascent = ceil(font.ascender)
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         charWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
-        let rowCount = model?.rows.count ?? 0
-        layout = PaneLayout(rowHeight: lineHeight + 4, rowCount: rowCount)
+        layout = PaneLayout(rowHeight: lineHeight + 4, rowCount: displayRows.count)
 
         let lineCount = model?.lines.count ?? 0
         let digits = max(3, String(max(lineCount, 1)).count)
@@ -119,23 +136,15 @@ final class DiffPaneView: NSView {
 
         let visible = visibleRect
         let rows = layout.rows(intersecting: dirtyRect.minY, dirtyRect.maxY)
-        for rowIndex in rows {
-            let row = model.rows[rowIndex]
-            let rowRect = NSRect(x: visible.minX, y: layout.y(forRow: rowIndex), width: visible.width, height: layout.rowHeight)
-            let cell = model.cell(row)
-            let (rowColor, tokenColor, gutterColor) = colors(for: row.kind, side: model.side, hasCell: cell != nil)
-
-            if let cell {
-                if let rowColor {
-                    rowColor.setFill()
-                    context.fill(NSRect(x: 0, y: rowRect.minY, width: max(bounds.width, visible.maxX), height: rowRect.height))
-                }
-                drawText(cell, in: rowRect, model: model, tokenColor: tokenColor, context: context)
-            } else {
-                drawPad(rowRect, context: context)
+        for displayIndex in rows where displayIndex < displayRows.count {
+            let rowRect = NSRect(x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
+            switch displayRows[displayIndex] {
+            case let .documentRow(rowIndex):
+                drawDocumentRow(model.rows[rowIndex], in: rowRect, model: model, context: context)
+            case let .separator(hidden):
+                drawSeparator(hidden, in: rowRect, context: context)
             }
-            drawGutter(cell, rowRect: rowRect, gutterColor: gutterColor, context: context)
-            if let current = currentChangeRows, current.contains(rowIndex) {
+            if let current = currentChangeRows, current.contains(displayIndex) {
                 NSColor.controlAccentColor.setFill()
                 context.fill(NSRect(x: rowRect.minX, y: rowRect.minY, width: 3, height: rowRect.height))
             }
@@ -143,6 +152,25 @@ final class DiffPaneView: NSView {
 
         DiffTheme.divider.setFill()
         context.fill(NSRect(x: visible.minX + gutterWidth - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height))
+    }
+
+    private func drawDocumentRow(_ row: DiffRow, in rowRect: NSRect, model: PaneModel, context: CGContext) {
+        let cell = model.cell(row)
+        let (rowColor, tokenColor, gutterColor) = colors(for: row.kind, side: model.side, hasCell: cell != nil)
+        if let cell {
+            if let rowColor {
+                rowColor.setFill()
+                context.fill(fullWidthRect(rowRect))
+            }
+            drawText(cell, in: rowRect, model: model, tokenColor: tokenColor, context: context)
+        } else {
+            drawPad(rowRect, context: context)
+        }
+        drawGutter(cell, rowRect: rowRect, gutterColor: gutterColor, context: context)
+    }
+
+    private func fullWidthRect(_ rowRect: NSRect) -> NSRect {
+        NSRect(x: 0, y: rowRect.minY, width: max(bounds.width, rowRect.maxX), height: rowRect.height)
     }
 
     private func colors(for kind: DiffRow.Kind, side: PaneModel.Side, hasCell: Bool) -> (NSColor?, NSColor, NSColor?) {
@@ -162,7 +190,7 @@ final class DiffPaneView: NSView {
     }
 
     private func drawPad(_ rowRect: NSRect, context: CGContext) {
-        let fullRect = NSRect(x: 0, y: rowRect.minY, width: max(bounds.width, rowRect.maxX), height: rowRect.height)
+        let fullRect = fullWidthRect(rowRect)
         DiffTheme.padBackground.setFill()
         context.fill(fullRect)
         context.saveGState()
@@ -219,6 +247,83 @@ final class DiffPaneView: NSView {
         context.restoreGState()
     }
 
+    // MARK: - Separators
+
+    /// Control squares for a separator, left to right after the gutter. The same
+    /// geometry is used for drawing and hit testing. `rowRect.minX` is the visible
+    /// left edge, so controls stay put under horizontal scrolling like the gutter.
+    func controlRects(for hidden: Range<Int>, rowRect: NSRect) -> [(control: FoldControl, rect: NSRect)] {
+        let side = rowRect.height - 4
+        var x = rowRect.minX + gutterWidth + textInset
+        let controls = RowFolding.controls(for: hidden, documentRowCount: model?.rows.count ?? 0, options: foldOptions)
+        return controls.map { control in
+            defer { x += side + 4 }
+            return (control, NSRect(x: x, y: rowRect.minY + 2, width: side, height: side))
+        }
+    }
+
+    private func drawSeparator(_ hidden: Range<Int>, in rowRect: NSRect, context: CGContext) {
+        DiffTheme.foldBackground.setFill()
+        context.fill(fullWidthRect(rowRect))
+        drawGutter(nil, rowRect: rowRect, gutterColor: nil, context: context)
+
+        var textX = rowRect.minX + gutterWidth + textInset
+        for (control, rect) in controlRects(for: hidden, rowRect: rowRect) {
+            DiffTheme.foldControl.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+            drawChevrons(for: control, in: rect, context: context)
+            textX = rect.maxX + 4
+        }
+
+        let text = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
+        let attributed = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: DiffTheme.foldText])
+        drawLine(CTLineCreateWithAttributedString(attributed), at: CGPoint(x: textX + 6, y: rowRect.minY + 2 + ascent), context: context)
+    }
+
+    private func drawChevrons(for control: FoldControl, in rect: NSRect, context: CGContext) {
+        context.saveGState()
+        context.setStrokeColor(DiffTheme.foldText.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        let halfWidth = rect.width * 0.25
+        let height = rect.height * 0.2
+        // The view is flipped: smaller y is higher on screen.
+        func chevron(pointingUp: Bool, centerY: CGFloat) {
+            let apexY = pointingUp ? centerY - height / 2 : centerY + height / 2
+            let baseY = pointingUp ? centerY + height / 2 : centerY - height / 2
+            context.move(to: CGPoint(x: rect.midX - halfWidth, y: baseY))
+            context.addLine(to: CGPoint(x: rect.midX, y: apexY))
+            context.addLine(to: CGPoint(x: rect.midX + halfWidth, y: baseY))
+        }
+        switch control {
+        case .expandUp:
+            chevron(pointingUp: true, centerY: rect.midY)
+        case .expandDown:
+            chevron(pointingUp: false, centerY: rect.midY)
+        case .expandRun:
+            chevron(pointingUp: true, centerY: rect.midY - rect.height * 0.2)
+            chevron(pointingUp: false, centerY: rect.midY + rect.height * 0.2)
+        }
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let onFoldAction, point.y >= 0, point.y < layout.contentHeight else { return super.mouseDown(with: event) }
+        let index = layout.row(atY: point.y)
+        guard index < displayRows.count, case let .separator(hidden) = displayRows[index] else { return super.mouseDown(with: event) }
+        if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
+
+        let rowRect = NSRect(x: visibleRect.minX, y: layout.y(forRow: index), width: visibleRect.width, height: layout.rowHeight)
+        switch controlRects(for: hidden, rowRect: rowRect).first(where: { $0.rect.contains(point) })?.control {
+        case .expandUp?: onFoldAction(.expandUp(hidden))
+        case .expandDown?: onFoldAction(.expandDown(hidden))
+        case .expandRun?, nil: onFoldAction(.expandRun(hidden))
+        }
+    }
+
     // MARK: - Caches
 
     private func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
@@ -230,7 +335,8 @@ final class DiffPaneView: NSView {
             .font: font,
             .foregroundColor: DiffTheme.text,
         ])
-        if let runs = model.styles?[lineIndex] {
+        if let styles, lineIndex < styles.count {
+            let runs = styles[lineIndex]
             let length = attributed.length
             for run in runs {
                 let lower = expanded.map.map { $0[min(run.range.lowerBound, $0.count - 1)] } ?? run.range.lowerBound

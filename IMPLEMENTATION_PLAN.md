@@ -13,13 +13,13 @@ row with GitHub-style expand controls. Full design: see the approved plan.
 **Goal**: `DiffPaneView` draws separators and handles clicks; `SideBySideContainerView` owns fold state, `refold()` with row anchoring, index translations; overview sync fix. Collapse hard-coded on.
 **Success Criteria**: Snapshots show aligned separators in both panes; clicks expand stepwise; ⌘↑/⌘↓, overview, highlighting all work.
 **Tests**: none new (UI, verified by snapshots)
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Persisted toggle
 **Goal**: `AppState.collapseUnchanged` (UserDefaults, default true) + validated `foldOptions`; menu item ⇧⌘U; toolbar toggle; `SideBySideView` three-way `updateNSView`; `COLLAPSE=` in `scripts/snapshot.sh`.
 **Success Criteria**: Toggle flips without diff recompute; syntax colors retained; top row anchored.
 **Tests**: `contextLinesAreClampedFromDefaults`
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Polish
 **Goal**: Pointing-hand cursor over separators, accessibility elements for controls, light/dark check, README note, perf check.

@@ -31,6 +31,10 @@ enum DiffTheme {
     static let padBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(28, 30, 34))
     static let padStripe = dynamic(light: rgb(0, 0, 0, 0.06), dark: rgb(255, 255, 255, 0.05))
 
+    static let foldBackground = dynamic(light: rgb(240, 244, 250), dark: rgb(34, 38, 46))
+    static let foldControl = dynamic(light: rgb(0, 0, 0, 0.07), dark: rgb(255, 255, 255, 0.09))
+    static let foldText = NSColor.secondaryLabelColor
+
     static let tabWidth = 4
 
     static func font(size: CGFloat) -> NSFont {
