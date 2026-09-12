@@ -65,6 +65,12 @@ struct WindowAccessor: NSViewRepresentable {
             // The coordinator persists the session itself; AppKit must not save or
             // restore these windows.
             window.isRestorable = false
+            // Tabs are the policy, not the system preference: every repository window
+            // joins the key window's tab group when it is first ordered front.
+            // `.automatic` would follow System Settings > "Prefer tabs", whose default
+            // ("in full screen") yields separate windows.
+            window.tabbingMode = .preferred
+            window.tabbingIdentifier = "repository"
             services.windows[windowID] = window
             let coordinator = services.coordinator
             coordinator.windowDidAttach(windowID, sceneRoot: sceneRoot)

@@ -1,10 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// Handles folders opened from Finder or the Dock icon. URLs that arrive before the
-/// app has wired its handler are kept until it does.
+/// Handles folders opened from Finder or the Dock icon, and the tab bar's "+" button.
+/// URLs that arrive before the app has wired its handler are kept until it does.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Opens an empty window; set once the app's services exist.
+    var newTabHandler: (@MainActor () -> Void)?
+
+    /// AppKit sends this up the responder chain from the tab bar's "+" button; the
+    /// button is only shown when something implements it.
+    @objc func newWindowForTab(_ sender: Any?) {
+        newTabHandler?()
+    }
+
     var openHandler: (@MainActor (URL) -> Void)? {
         didSet {
             guard let openHandler else { return }
@@ -29,7 +38,7 @@ struct DiffViewerApp: App {
     @State private var services = AppServices()
 
     var body: some Scene {
-        WindowGroup(for: RepositoryRoot.self) { $root in
+        WindowGroup(id: AppServices.repositorySceneID, for: RepositoryRoot.self) { $root in
             RepositoryWindow(sceneRoot: $root, services: services, delegate: delegate)
         }
         .defaultLaunchBehavior(.presented)
@@ -67,6 +76,7 @@ struct RepositoryWindow: View {
                 // Finder URLs queued in the delegate must reach the coordinator before the
                 // first registration decides whether to reopen the recent repository.
                 delegate.openHandler = { url in coordinator.openFromApp(url) }
+                delegate.newTabHandler = { [services] in services.openEmptyWindow() }
                 services.installOpenWindow(openWindow)
                 coordinator.register(state, sceneRoot: sceneRoot) { sceneRoot = $0 }
                 DebugLaunchOptions.apply(to: services)
@@ -91,6 +101,7 @@ extension FocusedValues {
 struct RepositoryCommands: Commands {
     let services: AppServices
     @FocusedValue(\.windowState) private var windowState
+    @Environment(\.openWindow) private var openWindow
 
     private var origin: WindowCoordinator.OpenOrigin {
         windowState.map { .window($0.id) } ?? .app
@@ -100,6 +111,8 @@ struct RepositoryCommands: Commands {
         let preferences = services.preferences
         let coordinator = services.coordinator
         CommandGroup(replacing: .newItem) {
+            Button("New Tab") { openWindow(id: AppServices.repositorySceneID) }
+                .keyboardShortcut("t")
             Button("Open Repository…") { coordinator.presentOpenPanel(from: origin) }
                 .keyboardShortcut("o")
             Menu("Open Recent") {

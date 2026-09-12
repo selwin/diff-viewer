@@ -15,9 +15,20 @@ import AppKit
 /// - `DIFFVIEWER_OPEN=<JSON array of paths>` opens those repositories, in order, as if
 ///   from Finder, after the initial window is up.
 /// - `DIFFVIEWER_DUMP_WINDOWS=1` prints each window's title, tab-group size, key and
-///   occlusion state, plus the coordinator's routing table, to stdout after the opens.
+///   occlusion state, plus the coordinator's routing table, to stdout after the opens,
+///   and again on every SIGUSR1 (`kill -USR1 <pid>`) so scripted tab operations can
+///   be checked.
+/// - `DIFFVIEWER_TAB_STEPS=<JSON array>` runs tab operations after the opens, dumping
+///   the windows after each: `next`, `previous`, `detach` (Move Tab to New Window),
+///   `merge` (Merge All Windows), `newTab` (the tab bar's "+"), `key:<repo name>`,
+///   `open:<path>` (as from Finder), and `shot:<path.png>` (renders the key window).
+///   Tab actions are the `NSWindow` actions the Window menu items invoke; `newTab` goes
+///   through the responder chain like the "+" button. A step that cannot run (no key
+///   window in time, unknown command, unknown window) prints a failure and stops the
+///   sequence.
 enum DebugLaunchOptions {
     @MainActor private static var applied = false
+    @MainActor private static var dumpSignal: (any DispatchSourceProtocol)?
 
     /// Targets the key window's state, or the first populated window when the app
     /// is not active (as when launched from a script). Runs once per launch.
@@ -32,10 +43,10 @@ enum DebugLaunchOptions {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
         default: break
         }
-        let opens = decodePaths(env["DIFFVIEWER_OPEN"])
+        let opens = decodeStringArray(env["DIFFVIEWER_OPEN"])
         let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
         let selection = env["DIFFVIEWER_SELECT"] ?? ""
-        guard !opens.isEmpty || dump || !selection.isEmpty else { return }
+        guard !opens.isEmpty || dump || !selection.isEmpty || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
         let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
         let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
         // One ordered sequence: opens finish before the target window is chosen, so the
@@ -50,6 +61,26 @@ enum DebugLaunchOptions {
             if dump {
                 try? await Task.sleep(for: .seconds(2))
                 dumpWindows(coordinator)
+                dumpOnSignal(coordinator)
+            }
+            let steps = decodeStringArray(env["DIFFVIEWER_TAB_STEPS"])
+            if !steps.isEmpty {
+                // Activation must come from outside (`osascript -e 'tell application
+                // "DiffViewer" to activate'`); a script-launched process cannot make
+                // itself active on current macOS.
+                for step in steps {
+                    guard await eventually({ NSApp.keyWindow != nil }) else {
+                        fail(step, "no key window; activate the app first")
+                        break
+                    }
+                    if let failure = await runTabStep(step, services: services) {
+                        fail(step, failure)
+                        break
+                    }
+                    try? await Task.sleep(for: .seconds(2))
+                    print("### \(step)")
+                    dumpWindows(coordinator)
+                }
             }
             guard !selection.isEmpty else { return }
             @MainActor func target() -> WindowState? {
@@ -81,14 +112,65 @@ enum DebugLaunchOptions {
         #endif
     }
 
-    private static func decodePaths(_ json: String?) -> [String] {
+    private static func decodeStringArray(_ json: String?) -> [String] {
         guard let json, let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([String].self, from: data)) ?? []
     }
 
+    private static func fail(_ step: String, _ reason: String) {
+        print("### \(step) FAILED: \(reason)")
+        fflush(stdout)
+    }
+
+    /// Runs one step and returns nil, or a reason it could not run.
+    @MainActor
+    private static func runTabStep(_ step: String, services: AppServices) async -> String? {
+        guard let targetWindow = NSApp.keyWindow ?? NSApp.mainWindow else { return "no key or main window" }
+        switch step {
+        case "next": targetWindow.selectNextTab(nil)
+        case "previous": targetWindow.selectPreviousTab(nil)
+        case "detach": targetWindow.moveTabToNewWindow(nil)
+        case "merge": targetWindow.mergeAllWindows(nil)
+        case "newTab":
+            guard NSApp.sendAction(#selector(AppDelegate.newWindowForTab(_:)), to: nil, from: nil) else {
+                return "nothing in the responder chain handles newWindowForTab:"
+            }
+        default:
+            let parts = step.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return "unknown step" }
+            switch parts[0] {
+            case "key":
+                guard let window = NSApp.windows.first(where: { $0.title == parts[1] }) else { return "no window titled \(parts[1])" }
+                window.makeKeyAndOrderFront(nil)
+            case "open":
+                // Same request `openFromApp` makes, awaited so the next step sees the
+                // result; then wait for a created window to register.
+                let coordinator = services.coordinator
+                let request = WindowCoordinator.OpenRequest(url: URL(fileURLWithPath: parts[1], isDirectory: true), origin: .app)
+                await coordinator.open(request)
+                guard await eventually({ coordinator.pendingCreates.isEmpty }) else { return "window for \(parts[1]) did not register" }
+            case "shot":
+                snapshot(targetWindow, to: parts[1])
+            default: return "unknown step"
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func dumpOnSignal(_ coordinator: WindowCoordinator) {
+        signal(SIGUSR1, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler {
+            MainActor.assumeIsolated { dumpWindows(coordinator) }
+        }
+        source.resume()
+        dumpSignal = source
+    }
+
     @MainActor
     private static func dumpWindows(_ coordinator: WindowCoordinator) {
-        var lines: [String] = []
+        var lines: [String] = ["---"]
         for window in NSApp.windows where window.contentView != nil {
             let group = window.tabGroup?.windows.count ?? 1
             let visible = window.occlusionState.contains(.visible)

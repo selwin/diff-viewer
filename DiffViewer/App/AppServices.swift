@@ -10,6 +10,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class AppServices {
+    /// The repository window scene, so an empty window can be opened by id.
+    static let repositorySceneID = "repository"
+
     let preferences: Preferences
     let cache: DifftCache
     let prefetcher: DiffPrefetcher
@@ -38,6 +41,12 @@ final class AppServices {
 
     func installOpenWindow(_ action: OpenWindowAction) {
         opener.action = action
+    }
+
+    /// Opens an empty window, which becomes a tab of the key window. It adopts the
+    /// next repository opened from it.
+    func openEmptyWindow() {
+        opener.action?(id: Self.repositorySceneID)
     }
 
     func makeWindowState() -> WindowState {
