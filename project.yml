@@ -85,10 +85,10 @@ targets:
       - path: DiffViewer
         excludes:
           - "Resources/bin/**"
-    copyFiles:
-      - destination: executables
-        files:
-          - DiffViewer/Resources/bin/difft
+      - path: DiffViewer/Resources/bin/difft
+        buildPhase:
+          copyFiles:
+            destination: executables
     dependencies:
       - package: SwiftTreeSitter
       - package: TreeSitterSwift
