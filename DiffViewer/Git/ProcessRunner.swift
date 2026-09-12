@@ -28,14 +28,16 @@ enum ProcessRunner {
         _ executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        qualityOfService: QualityOfService = .userInitiated
     ) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
                 let process = Process()
                 process.executableURL = executable
                 process.arguments = arguments
                 process.currentDirectoryURL = currentDirectory
+                process.qualityOfService = qualityOfService
                 var env = ProcessInfo.processInfo.environment
                 for (key, value) in environment { env[key] = value }
                 process.environment = env
@@ -56,7 +58,7 @@ enum ProcessRunner {
                 let group = DispatchGroup()
                 nonisolated(unsafe) var stderrData = Data()
                 group.enter()
-                DispatchQueue.global(qos: .userInitiated).async {
+                DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
                     stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                     group.leave()
                 }
@@ -86,5 +88,18 @@ enum ProcessRunner {
             throw ProcessError.failed(command: command, status: result.status, stderr: result.stderrString)
         }
         return result
+    }
+}
+
+private extension QualityOfService {
+    var dispatchQoS: DispatchQoS.QoSClass {
+        switch self {
+        case .userInteractive: .userInteractive
+        case .userInitiated: .userInitiated
+        case .utility: .utility
+        case .background: .background
+        case .default: .default
+        @unknown default: .default
+        }
     }
 }

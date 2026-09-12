@@ -18,7 +18,9 @@ final class AppState {
             }
         }
     }
-    let diffLoader = DiffLoader()
+    /// One cache for every difft run, shared by the loader and (later) the prefetcher.
+    let difftCache: DifftCache
+    let diffLoader: DiffLoader
 
     /// Index into the current document's change blocks, for next/previous navigation.
     private(set) var currentChangeIndex: Int?
@@ -63,6 +65,8 @@ final class AppState {
     static let fontSizeRange: ClosedRange<Double> = 9...24
 
     init() {
+        difftCache = DifftCache.bundled()
+        diffLoader = DiffLoader(cache: difftCache)
         let paths = UserDefaults.standard.stringArray(forKey: Keys.recentRepos) ?? []
         recentRepos = paths.map { URL(fileURLWithPath: $0, isDirectory: true) }
         hideWhitespace = UserDefaults.standard.object(forKey: Keys.hideWhitespace) as? Bool ?? true

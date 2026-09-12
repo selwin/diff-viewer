@@ -86,7 +86,7 @@ enum DifftRunner {
     }()
 
     /// Runs difft on the two texts, using `fileName` so language detection works.
-    static func run(old: Data, new: Data, fileName: String) async throws -> DifftFile {
+    static func run(old: Data, new: Data, fileName: String, qualityOfService: QualityOfService = .userInitiated) async throws -> DifftFile {
         guard let executable else { throw Failure.binaryNotFound }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DiffViewer", isDirectory: true)
@@ -108,7 +108,8 @@ enum DifftRunner {
                 "DFT_BYTE_LIMIT": "8000000",
                 "DFT_GRAPH_LIMIT": "6000000",
                 "DFT_PARSE_ERROR_LIMIT": "5",
-            ]
+            ],
+            qualityOfService: qualityOfService
         )
         guard result.status == 0 else {
             throw ProcessError.failed(command: "difft", status: result.status, stderr: result.stderrString)

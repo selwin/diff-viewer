@@ -35,16 +35,16 @@ struct DifftRunnerTests {
 
     @Test func engineHidesAndShowsWhitespaceChanges() async {
         let sources = DiffEngine.Sources(old: Data("x = 1\n".utf8), new: Data("x  =  1\n".utf8), fileName: "w.py")
-        guard case let .text(hidden) = await DiffEngine.build(sources, hideWhitespace: true) else { Issue.record("expected text"); return }
+        guard case let .text(hidden) = await DiffEngine.build(sources, hideWhitespace: true, cache: .bundled(), priority: .foreground) else { Issue.record("expected text"); return }
         #expect(hidden.rows.map(\.kind) == [.equal])
-        guard case let .text(shown) = await DiffEngine.build(sources, hideWhitespace: false) else { Issue.record("expected text"); return }
+        guard case let .text(shown) = await DiffEngine.build(sources, hideWhitespace: false, cache: .bundled(), priority: .foreground) else { Issue.record("expected text"); return }
         #expect(shown.rows.map(\.kind) == [.modified])
     }
 
     @Test func engineDetectsBinaryAndIdentical() async {
         let bin = DiffEngine.Sources(old: Data([0, 1, 2]), new: Data([0, 1, 3]), fileName: "a.bin")
-        guard case .binary = await DiffEngine.build(bin, hideWhitespace: true) else { Issue.record("expected binary"); return }
+        guard case .binary = await DiffEngine.build(bin, hideWhitespace: true, cache: .bundled(), priority: .foreground) else { Issue.record("expected binary"); return }
         let same = DiffEngine.Sources(old: Data("a".utf8), new: Data("a".utf8), fileName: "a.txt")
-        guard case .identical = await DiffEngine.build(same, hideWhitespace: true) else { Issue.record("expected identical"); return }
+        guard case .identical = await DiffEngine.build(same, hideWhitespace: true, cache: .bundled(), priority: .foreground) else { Issue.record("expected identical"); return }
     }
 }

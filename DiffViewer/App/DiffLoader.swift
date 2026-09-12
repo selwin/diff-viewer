@@ -13,9 +13,14 @@ final class DiffLoader {
     /// Syntax styles for `content`, arriving shortly after the diff itself.
     private(set) var styles: DocumentStyles?
 
+    private let cache: DifftCache
     private var task: Task<Void, Never>?
     private var highlightTask: Task<Void, Never>?
     private var generation = 0
+
+    init(cache: DifftCache) {
+        self.cache = cache
+    }
 
     func load(file: ChangedFile?, client: GitClient?, hideWhitespace: Bool) {
         task?.cancel()
@@ -40,7 +45,7 @@ final class DiffLoader {
             do {
                 let sources = try await DiffEngine.sources(for: file, client: client)
                 try Task.checkCancellation()
-                let result = await DiffEngine.build(sources, hideWhitespace: hideWhitespace)
+                let result = await DiffEngine.build(sources, hideWhitespace: hideWhitespace, cache: cache, priority: .foreground)
                 try Task.checkCancellation()
                 guard gen == generation else { return }
                 content = result
