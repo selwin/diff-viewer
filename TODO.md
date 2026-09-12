@@ -17,6 +17,8 @@ Where DiffViewer already stands versus the bar:
 | Live working-copy refresh | yes (7.0 headline) | yes | yes | yes |
 | Multiple repos at once | tabs | repo tabs | tabs + windows | **no** |
 | Aggregate +/- churn | counts by kind only | per-commit only | none | **no** |
+| Per-file +/- churn in sidebar | no | no | no | **no** (Requested A) |
+| Stage / unstage / discard from file list | no (viewer) | yes | no | **no** (Requested B) |
 | All files in one scroll | no (per file) | yes (default view) | no | **no** |
 | Collapse unchanged / context expansion | yes | yes (default) | no | **no** |
 | Find in diff | yes | no | no | **no** |
@@ -30,7 +32,83 @@ Where DiffViewer already stands versus the bar:
 
 ---
 
-## Now: the three requested features
+## Requested: sidebar churn and sidebar actions
+
+Two items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
+
+### A. Per-file churn in the sidebar
+
+**Goal.** Every changed, added, or deleted file in the sidebar shows how much churn it
+has: a trailing `+12 −4` in monospaced caption, green/red, on each `FileRow`.
+
+**Design.** This is the sidebar half of feature 2 below; do it first and leave the
+aggregate totals, section-header sums, and detail-header counts for a follow-up.
+- `git diff --numstat -z` (unstaged) and `git diff --cached --numstat -z` (staged),
+  run alongside `status()` on every refresh, joined to `ChangedFile` by path and area.
+- Added / untracked files have no numstat entry: count the worktree file's lines and
+  show them as all additions. Deleted files: count HEAD (or index) lines as all
+  deletions. Binary files report `-`: show "binary" instead of numbers.
+- Pass `-w` when Hide Whitespace is on so the counts match the panes.
+- Add `LineStats { added: Int, deleted: Int }?` to `ChangedFile`, a `GitNumstatParser`
+  shaped like `GitStatusParser`, and a `numstat(area:)` method on `RepoClient`.
+- Optional: a five-block GitHub-style bar per row, only if it stays subtle.
+
+**Tests.** `GitNumstatParser` (rename lines, binary `-`, `-z` framing), join of numstat
+rows to status rows, untracked/deleted line counting.
+
+### B. Right-click actions on sidebar files
+
+**Goal.** Right-clicking a file in the sidebar shows the actions that make sense for its
+state: stage, unstage, discard (reset) changes, delete file, plus the harmless ones
+(Reveal in Finder, Open in Default Editor, Copy Path).
+
+**Scope note.** This is the first feature that writes to the repository, so it revises
+the "Read-only" principle in CLAUDE.md and the "Staging, discarding, cherry-picking hunks"
+entry under Not doing. The rule becomes: the app never edits file *contents* and never
+commits, but it may move whole files between the working tree, index, and HEAD, because
+those are the actions a reader takes right after reading a diff. Update CLAUDE.md and
+README when this lands. Hunk-level staging stays out.
+
+**Design.**
+- `.contextMenu` on `FileRow`, with the menu built from the file's `Area` and `Kind`:
+
+  | State | Actions |
+  |---|---|
+  | Unstaged, modified / typeChanged | Stage, Discard Changes… |
+  | Unstaged, deleted | Stage Deletion, Restore File |
+  | Untracked | Stage (add), Delete File… |
+  | Staged, any kind | Unstage |
+  | Staged, added | Unstage (then the file becomes untracked) |
+  | Unmerged | Stage (mark resolved) only |
+  | Every row | Reveal in Finder, Open in Default Editor, Copy Path |
+
+- Git commands, all whole-file and all added to `RepoClient` so tests can stub them:
+  `git add -- <path>` (stage), `git restore --staged -- <path>` (unstage, also covers a
+  staged add), `git restore -- <path>` (discard unstaged changes, also restores a deleted
+  file), `git restore --staged --worktree -- <path>` (discard a staged change). Deleting
+  an untracked file uses `FileManager.trashItem` so it is recoverable from the Trash.
+- Destructive actions (Discard Changes, Delete File) get a confirmation alert with the
+  file name and a Don't Ask Again toggle, persisted in `Preferences`. Stage / unstage
+  need no confirmation because they are reversible from the same menu.
+- Multi-selection: the sidebar is single-select today; keep it that way for the first
+  cut and act on the clicked row (macOS convention when the right-clicked row is not the
+  selected one).
+- After an action, run `status()` immediately rather than waiting for `RepoWatcher`, and
+  keep the selection on the same path if it still exists in either section; otherwise
+  select the next row. The detail pane reloads via `DiffLoader` as usual.
+- Keyboard: ⌘⌫ deletes / discards the selected file (with the same confirmation), ⌘S
+  stages, ⌘⇧S unstages. Mirror the menu in a File › menu so the shortcuts are
+  discoverable.
+- Errors (index lock, permission) surface as an alert with git's stderr; never retry
+  silently.
+
+**Tests.** Menu-model derivation from `(Area, Kind)` to action list, post-action
+selection rule, and the git argument builder per action. The UI is verified by
+screenshots.
+
+---
+
+## Now: the three planned features
 
 ### 1. Tabs: several repositories open at once (Safari-style)
 
@@ -233,8 +311,9 @@ Roughly in priority order.
 - **Commit browsing, ref-range compare, folder compare, blame, file history.** Non-goals
   in CLAUDE.md. Kaleidoscope 6.7's commit-history pane and Sublime Merge's blame are
   git-client features, not viewer features.
-- **Staging, discarding, cherry-picking hunks** from the changeset headers (Sublime
-  Merge). The app is read-only.
+- **Hunk-level staging, discarding, or cherry-picking** from the changeset headers
+  (Sublime Merge). Whole-file stage / unstage / discard / delete is now in scope via the
+  sidebar context menu (Requested B); anything finer than a file is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.
