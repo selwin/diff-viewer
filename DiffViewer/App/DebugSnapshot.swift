@@ -14,7 +14,7 @@ import AppKit
 ///   (works even when the window is on another Space, unlike `screencapture`).
 enum DebugLaunchOptions {
     @MainActor
-    static func apply(to appState: AppState) {
+    static func apply(to model: AppModel) {
         #if DEBUG
         let env = ProcessInfo.processInfo.environment
         switch env["DIFFVIEWER_APPEARANCE"] {
@@ -27,15 +27,15 @@ enum DebugLaunchOptions {
         let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(0.5))
-            appState.selectedFileID = selection
+            model.windowState.selectedFileID = selection
             if nextCount > 0 {
                 try? await Task.sleep(for: .seconds(2))
-                for _ in 0..<nextCount { appState.nextChange() }
+                for _ in 0..<nextCount { model.windowState.nextChange() }
             }
             if !folds.isEmpty {
                 try? await Task.sleep(for: .seconds(nextCount > 0 ? 0.5 : 2))
                 for fold in folds {
-                    if fold == "toggle" { appState.collapseUnchanged.toggle() } else { clickSeparator(fold) }
+                    if fold == "toggle" { model.preferences.collapseUnchanged.toggle() } else { clickSeparator(fold) }
                     try? await Task.sleep(for: .seconds(0.2))
                 }
             }
