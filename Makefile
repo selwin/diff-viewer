@@ -20,7 +20,7 @@ difft: DiffViewer/Resources/bin/difft
 DiffViewer/Resources/bin/difft:
 	scripts/fetch-difft.sh
 
-$(PROJECT): project.yml
+$(PROJECT): project.yml $(shell find DiffViewer DiffViewerTests -type d)
 	xcodegen generate
 
 gen: $(PROJECT)

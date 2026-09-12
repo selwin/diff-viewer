@@ -1,0 +1,64 @@
+import Foundation
+
+/// Loads the two versions of a changed file from git and builds its diff.
+enum DiffEngine {
+    struct Sources: Sendable {
+        let old: Data
+        let new: Data
+        let fileName: String
+    }
+
+    static func sources(for file: ChangedFile, client: GitClient) async throws -> Sources {
+        let old: Data?
+        let new: Data?
+        switch file.area {
+        case .unstaged:
+            switch file.kind {
+            case .untracked:
+                old = nil
+                new = client.worktreeContents(of: file.path)
+            case .unmerged:
+                old = try await client.headContents(of: file.path)
+                new = client.worktreeContents(of: file.path)
+            default:
+                old = try await client.indexContents(of: file.path)
+                new = file.kind == .deleted ? nil : client.worktreeContents(of: file.path)
+            }
+        case .staged:
+            old = file.kind == .added ? nil : try await client.headContents(of: file.originalPath ?? file.path)
+            new = file.kind == .deleted ? nil : try await client.indexContents(of: file.path)
+        }
+        return Sources(old: old ?? Data(), new: new ?? Data(), fileName: file.fileName)
+    }
+
+    static func build(_ sources: Sources, hideWhitespace: Bool) async -> DiffContent {
+        if isBinary(sources.old) || isBinary(sources.new) { return .binary }
+        if sources.old == sources.new { return .identical }
+
+        let oldText = String(decoding: sources.old, as: UTF8.self)
+        let newText = String(decoding: sources.new, as: UTF8.self)
+
+        var hints = DifftHints()
+        var language: String?
+        do {
+            let file = try await DifftRunner.run(old: sources.old, new: sources.new, fileName: sources.fileName)
+            hints = DifftHints(file: file)
+            language = file.language
+        } catch {
+            // Fall back to a plain line diff; the view still works, just without token hints.
+            NSLog("difft failed: \(error.localizedDescription)")
+        }
+
+        let document = await Task.detached(priority: .userInitiated) {
+            let oldLines = TextLines.split(oldText)
+            let newLines = TextLines.split(newText)
+            let rows = DiffAligner.align(oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
+            return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language)
+        }.value
+        return .text(document)
+    }
+
+    static func isBinary(_ data: Data) -> Bool {
+        data.prefix(8000).contains(0)
+    }
+}
