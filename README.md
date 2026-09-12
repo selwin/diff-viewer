@@ -10,7 +10,7 @@ A native macOS 26 app for viewing git working-tree diffs side by side.
   controls (20 lines at a time), click the text to reveal the run, ⌥-click to reveal the
   whole file. The hidden `collapseContextLines` default overrides the context size.
 - **Full syntax highlighting** of both sides with tree-sitter (Swift, Python, JS, TS/TSX,
-  JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, PHP, Markdown).
+  JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, Kotlin, PHP, Markdown).
 - **Fast**: custom AppKit renderer draws only visible rows; a 20k-line file scrolls smoothly.
 - Unstaged / staged file list, live refresh when the repo changes, next/previous change
   (⌘↓ / ⌘↑), change overview strip, font size (⌘+ / ⌘- / ⌘0), light and dark mode.
@@ -56,6 +56,5 @@ screenshots (see `scripts/`).
 - Highlighting a 20k-line Swift file takes ~2.8 s per side in Debug builds (tree-sitter
   query predicates are regex-heavy); both sides run in parallel and never block scrolling.
   Possible follow-ups: cache compiled predicates, or highlight visible rows first.
-- Kotlin is not highlighted: its grammar package ships no highlight queries.
 - Separator controls are exposed to VoiceOver as buttons but have no keyboard shortcut yet.
 - Not yet built: `git difftool` CLI integration, commit/ref-range browsing, folder compare.

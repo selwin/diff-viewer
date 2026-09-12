@@ -74,6 +74,9 @@ packages:
   TreeSitterMarkdown:
     url: https://github.com/tree-sitter-grammars/tree-sitter-markdown
     from: 0.5.3
+  TreeSitterKotlin:
+    url: https://github.com/fwcd/tree-sitter-kotlin
+    exactVersion: 0.3.8
 targets:
   DiffViewer:
     type: application
@@ -107,6 +110,7 @@ targets:
       - package: TreeSitterPHP
         product: TreeSitterPHP
       - package: TreeSitterMarkdown
+      - package: TreeSitterKotlin
     info:
       path: DiffViewer/Info.plist
       properties:

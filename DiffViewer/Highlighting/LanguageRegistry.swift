@@ -9,6 +9,7 @@ import TreeSitterHTML
 import TreeSitterJava
 import TreeSitterJavaScript
 import TreeSitterJSON
+import TreeSitterKotlin
 import TreeSitterMarkdown
 import TreeSitterPHP
 import TreeSitterPython
@@ -23,13 +24,24 @@ import TreeSitterYAML
 /// Bundled tree-sitter grammars, looked up by file name.
 enum LanguageRegistry {
     struct Spec: Sendable {
+        /// Which pattern wins when two capture the same range. tree-sitter-highlight lets
+        /// the later pattern win, and queries are written for that: general captures
+        /// first, specific ones later. A few upstream queries are ordered the other way.
+        enum Precedence: Sendable {
+            case laterPatternWins
+            case earlierPatternWins
+        }
+
         let name: String
         let bundleName: String
+        let precedence: Precedence
         let language: @Sendable () -> OpaquePointer?
 
-        init(_ name: String, bundleName: String? = nil, _ language: @escaping @Sendable () -> OpaquePointer?) {
+        init(_ name: String, bundleName: String? = nil, precedence: Precedence = .laterPatternWins,
+             _ language: @escaping @Sendable () -> OpaquePointer?) {
             self.name = name
             self.bundleName = bundleName ?? "TreeSitter\(name)_TreeSitter\(name)"
+            self.precedence = precedence
             self.language = language
         }
     }
@@ -45,7 +57,8 @@ enum LanguageRegistry {
         add(Spec("TypeScript", tree_sitter_typescript), "ts", "mts", "cts")
         add(Spec("TSX", bundleName: "TreeSitterTypeScript_TreeSitterTSX", tree_sitter_tsx), "tsx")
         add(Spec("JSON", tree_sitter_json), "json", "jsonc", "json5")
-        add(Spec("Go", tree_sitter_go), "go")
+        // tree-sitter-go lists call and definition captures before `(identifier) @variable`.
+        add(Spec("Go", precedence: .earlierPatternWins, tree_sitter_go), "go")
         add(Spec("Rust", tree_sitter_rust), "rs")
         add(Spec("C", tree_sitter_c), "c", "h")
         add(Spec("CPP", tree_sitter_cpp), "cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++", "mm", "ipp")
@@ -58,6 +71,7 @@ enum LanguageRegistry {
         add(Spec("Java", tree_sitter_java), "java")
         add(Spec("PHP", tree_sitter_php), "php", "phtml")
         add(Spec("Markdown", tree_sitter_markdown), "md", "markdown", "mdx")
+        add(Spec("Kotlin", tree_sitter_kotlin), "kt", "kts")
         return map
     }()
 

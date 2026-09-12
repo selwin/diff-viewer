@@ -71,6 +71,20 @@ enum TokenStyle: UInt8, Sendable, CaseIterable {
             return .plain
         }
     }
+
+    /// Capture classes the theme deliberately leaves in the text color. They still paint,
+    /// as a reset to plain, so an identifier nested in a wider capture (a string
+    /// interpolation, a `return` expression) drops the outer color.
+    private static let plainClasses: Set<Substring> = ["variable", "none"]
+
+    /// The style to paint for a capture, or nil when the capture is not a highlight:
+    /// helper captures used only by predicates (`@_name`) and names the theme does not know.
+    static func paintStyle(forCaptureName name: String) -> TokenStyle? {
+        if name.hasPrefix("_") { return nil }
+        let style = from(captureName: name)
+        if style != .plain { return style }
+        return plainClasses.contains(name.split(separator: ".").first ?? "") ? .plain : nil
+    }
 }
 
 extension DiffTheme {

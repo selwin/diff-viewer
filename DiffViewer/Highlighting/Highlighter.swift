@@ -21,16 +21,17 @@ enum Highlighter {
 
         // Collect captures as UTF-16 ranges, then paint in tree-sitter precedence order:
         // earlier start first, wider ranges before nested ones (so inner captures win),
-        // and for identical ranges the earlier pattern wins.
+        // and for identical ranges the pattern the grammar's spec prefers (normally the
+        // later one, as in tree-sitter-highlight).
+        let laterPatternWins = LanguageRegistry.spec(forFileNamed: fileName)?.precedence != .earlierPatternWins
         var captures: [(start: Int, end: Int, pattern: Int, style: TokenStyle)] = []
         let cursor = query.execute(in: tree)
         let context = Predicate.Context(string: text)
         while let match = cursor.nextMatch() {
             guard match.allowed(in: context) else { continue }
             for capture in match.captures {
-                guard let name = capture.name else { continue }
-                let style = TokenStyle.from(captureName: name)
-                guard style != .plain else { continue }
+                guard let name = capture.name,
+                      let style = TokenStyle.paintStyle(forCaptureName: name) else { continue }
                 let range = capture.range
                 guard range.length > 0 else { continue }
                 captures.append((range.location, range.location + range.length, match.patternIndex, style))
@@ -40,7 +41,7 @@ enum Highlighter {
         captures.sort {
             if $0.start != $1.start { return $0.start < $1.start }
             if $0.end != $1.end { return $0.end > $1.end }
-            return $0.pattern < $1.pattern
+            return laterPatternWins ? $0.pattern > $1.pattern : $0.pattern < $1.pattern
         }
 
         var painter = LinePainter(lines: lines)
