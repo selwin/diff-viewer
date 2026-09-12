@@ -48,12 +48,8 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
             }
         } else if let file = appState.selectedFile {
-            VStack(alignment: .leading) {
-                Text(file.path).font(.headline)
-                Text(file.kind.label).foregroundStyle(.secondary)
-            }
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            DiffDetailView(file: file)
+                .id(file.id)
         } else {
             ContentUnavailableView("Select a file", systemImage: "doc.text.magnifyingglass")
         }

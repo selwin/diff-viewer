@@ -9,14 +9,20 @@ final class AppState {
     private(set) var files: [ChangedFile] = []
     private(set) var isLoading = false
     var errorMessage: String?
-    var selectedFileID: ChangedFile.ID?
+    var selectedFileID: ChangedFile.ID? {
+        didSet { if selectedFileID != oldValue { reloadDiff() } }
+    }
+    let diffLoader = DiffLoader()
 
     var recentRepos: [URL] {
         didSet { UserDefaults.standard.set(recentRepos.map(\.path), forKey: Keys.recentRepos) }
     }
 
     var hideWhitespace: Bool {
-        didSet { UserDefaults.standard.set(hideWhitespace, forKey: Keys.hideWhitespace) }
+        didSet {
+            UserDefaults.standard.set(hideWhitespace, forKey: Keys.hideWhitespace)
+            if hideWhitespace != oldValue { reloadDiff() }
+        }
     }
 
     private var client: GitClient?
@@ -86,8 +92,13 @@ final class AppState {
                 self.selectedFileID = nil
             }
             errorMessage = nil
+            reloadDiff()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func reloadDiff() {
+        diffLoader.load(file: selectedFile, client: client, hideWhitespace: hideWhitespace)
     }
 }

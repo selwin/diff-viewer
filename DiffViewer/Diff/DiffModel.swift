@@ -31,7 +31,8 @@ struct DiffRow: Sendable, Equatable {
 
 /// The fully computed diff for one file: both texts split into lines, aligned rows,
 /// and the row ranges that contain changes (for next/previous navigation).
-struct DiffDocument: Sendable {
+struct DiffDocument: Sendable, Identifiable {
+    let id = UUID()
     let oldLines: [String]
     let newLines: [String]
     let rows: [DiffRow]
