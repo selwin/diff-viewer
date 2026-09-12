@@ -45,3 +45,11 @@ The last repository reopens on launch.
 
 Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_NEXT`, `DIFFVIEWER_APPEARANCE`, and
 `DIFFVIEWER_SNAPSHOT` environment variables for scripted screenshots (see `scripts/`).
+
+## Known limitations / next steps
+
+- Highlighting a 20k-line Swift file takes ~2.8 s per side in Debug builds (tree-sitter
+  query predicates are regex-heavy); both sides run in parallel and never block scrolling.
+  Possible follow-ups: cache compiled predicates, or highlight visible rows first.
+- Kotlin is not highlighted: its grammar package ships no highlight queries.
+- Not yet built: `git difftool` CLI integration, commit/ref-range browsing, folder compare.
