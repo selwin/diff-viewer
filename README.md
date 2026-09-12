@@ -1,0 +1,47 @@
+# DiffViewer
+
+A native macOS 26 app for viewing git working-tree diffs side by side.
+
+- **Syntax-aware diffs** via a bundled [difftastic](https://difftastic.wilfred.me.uk) (`difft`)
+  binary: token-level highlights that understand the language's structure.
+- **Hide whitespace** toggle (⇧⌘W), like GitHub's diff viewer.
+- **Full syntax highlighting** of both sides with tree-sitter (Swift, Python, JS, TS/TSX,
+  JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, PHP, Markdown).
+- **Fast**: custom AppKit renderer draws only visible rows; a 20k-line file scrolls smoothly.
+- Unstaged / staged file list, live refresh when the repo changes, next/previous change
+  (⌘↓ / ⌘↑), change overview strip, font size (⌘+ / ⌘- / ⌘0), light and dark mode.
+
+## Build
+
+Requires Xcode 26 and [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+
+```bash
+make run      # generate the project, fetch difft, build, launch
+make test     # run the unit tests
+make open     # open the generated Xcode project
+```
+
+`make` points `DEVELOPER_DIR` at `/Applications/Xcode.app` so it works even when
+`xcode-select` is set to the Command Line Tools.
+
+The `difft` binary is copied from Homebrew if installed, otherwise downloaded from the
+difftastic GitHub release, into `DiffViewer/Resources/bin/` (git-ignored).
+
+## Use
+
+Open a repository with ⌘O, drag a folder onto the window, or `open -a DiffViewer <repo>`.
+The last repository reopens on launch.
+
+## Layout
+
+| Directory | Contents |
+|-----------|----------|
+| `DiffViewer/App` | App entry, `AppState`, `DiffLoader` |
+| `DiffViewer/Git` | `git` CLI wrapper, status parser, FSEvents watcher |
+| `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine |
+| `DiffViewer/Highlighting` | tree-sitter grammar registry, highlighter, token theme |
+| `DiffViewer/Views` | SwiftUI shell plus the AppKit pane renderer and overview strip |
+| `DiffViewerTests` | Swift Testing suites for the non-UI layers |
+
+Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_NEXT`, `DIFFVIEWER_APPEARANCE`, and
+`DIFFVIEWER_SNAPSHOT` environment variables for scripted screenshots (see `scripts/`).

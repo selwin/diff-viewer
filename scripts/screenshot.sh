@@ -8,7 +8,7 @@ app=build/Build/Products/Debug/DiffViewer.app/Contents/MacOS/DiffViewer
 pkill -x DiffViewer 2>/dev/null || true
 sleep 0.5
 if [[ -n $repo ]]; then defaults write com.selwin.DiffViewer recentRepos -array "$repo"; fi
-DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" >/dev/null 2>&1 &
+DIFFVIEWER_NEXT="${NEXT:-0}" DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" >/dev/null 2>&1 &
 sleep "$delay"
 id=$(swift scripts/windowid.swift DiffViewer)
 screencapture -x -o -l "$id" "$out"

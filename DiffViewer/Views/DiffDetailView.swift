@@ -36,7 +36,12 @@ struct DiffDetailView: View {
                         Text(language)
                     }
                     if case let .text(doc)? = loader.content {
-                        Text("\(doc.changeBlocks.count) change\(doc.changeBlocks.count == 1 ? "" : "s")")
+                        let count = doc.changeBlocks.count
+                        if let index = appState.currentChangeIndex, index < count {
+                            Text("Change \(index + 1) of \(count)")
+                        } else {
+                            Text("\(count) change\(count == 1 ? "" : "s")")
+                        }
                     }
                 }
                 .font(.caption)
@@ -59,7 +64,13 @@ struct DiffDetailView: View {
         } else {
             switch loader.content {
             case let .text(document)?:
-                SideBySideView(document: document, styles: loader.styles)
+                SideBySideView(
+                    document: document,
+                    styles: loader.styles,
+                    fontSize: appState.fontSize,
+                    scrollTarget: appState.scrollTarget,
+                    currentBlock: appState.currentChangeIndex
+                )
             case .binary?:
                 ContentUnavailableView("Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
             case .identical?:

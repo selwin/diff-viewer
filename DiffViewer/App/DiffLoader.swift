@@ -64,12 +64,14 @@ final class DiffLoader {
         let newLines = document.newLines
         let documentID = document.id
         highlightTask = Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                let old = Highlighter.highlight(lines: oldLines, fileName: fileName)
-                if Task.isCancelled { return DocumentStyles(documentID: documentID, old: nil, new: nil) }
-                let new = Highlighter.highlight(lines: newLines, fileName: fileName)
-                return DocumentStyles(documentID: documentID, old: old, new: new)
+            // Both sides are independent parses; run them in parallel.
+            async let old = Task.detached(priority: .userInitiated) {
+                Highlighter.highlight(lines: oldLines, fileName: fileName)
             }.value
+            async let new = Task.detached(priority: .userInitiated) {
+                Highlighter.highlight(lines: newLines, fileName: fileName)
+            }.value
+            let result = await DocumentStyles(documentID: documentID, old: old, new: new)
             guard !Task.isCancelled, gen == generation else { return }
             styles = result
         }

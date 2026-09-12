@@ -36,6 +36,11 @@ final class DiffPaneView: NSView {
         model?.styles = styles
     }
 
+    /// Rows of the current change block; drawn with an accent bar in the gutter.
+    var currentChangeRows: Range<Int>? {
+        didSet { if currentChangeRows != oldValue { needsDisplay = true } }
+    }
+
     var fontSize: CGFloat = 12 {
         didSet { if fontSize != oldValue { lineCache.removeAll(); recomputeMetrics(); needsDisplay = true } }
     }
@@ -61,6 +66,7 @@ final class DiffPaneView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        clipsToBounds = true
         recomputeMetrics()
     }
 
@@ -108,7 +114,7 @@ final class DiffPaneView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         DiffTheme.background.setFill()
-        context.fill(dirtyRect)
+        context.fill(bounds.intersection(dirtyRect))
         guard let model else { return }
 
         let visible = visibleRect
@@ -129,6 +135,10 @@ final class DiffPaneView: NSView {
                 drawPad(rowRect, context: context)
             }
             drawGutter(cell, rowRect: rowRect, gutterColor: gutterColor, context: context)
+            if let current = currentChangeRows, current.contains(rowIndex) {
+                NSColor.controlAccentColor.setFill()
+                context.fill(NSRect(x: rowRect.minX, y: rowRect.minY, width: 3, height: rowRect.height))
+            }
         }
 
         DiffTheme.divider.setFill()
