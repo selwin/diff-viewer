@@ -1,0 +1,8 @@
+build/
+DerivedData/
+DiffViewer.xcodeproj/
+DiffViewer/Resources/bin/difft
+*.xcuserstate
+xcuserdata/
+.DS_Store
+.swiftpm/
