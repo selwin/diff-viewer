@@ -38,11 +38,9 @@ brew install pre-commit swiftlint
 make hooks
 ```
 
-Committing then runs, over the staged files only, text hygiene (trailing whitespace, final
-newline, line endings, YAML) followed by swift-format and SwiftLint, with the same
-configuration as the Format and Lint workflows. swift-format rewrites the file and stops the
-commit, so re-stage and commit again. The tests are left to CI. CI pins SwiftLint 0.65.1 and
-Swift 6.3 (Xcode 26.6), and the hooks warn when the local versions differ.
+Committing then runs text hygiene, swift-format and SwiftLint over the staged files, with the
+same configuration as the Format and Lint workflows; `make hooks-all` checks the whole
+repository. swift-format rewrites the file and stops the commit, so re-stage and commit again.
 
 `make` points `DEVELOPER_DIR` at `/Applications/Xcode.app` so it works even when
 `xcode-select` is set to the Command Line Tools.

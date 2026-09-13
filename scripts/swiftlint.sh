@@ -12,7 +12,10 @@ fi
 
 version=$(swiftlint --version 2>/dev/null | tail -1)
 if [[ $version != "$EXPECTED" ]]; then
-    print -u2 "warning: SwiftLint $version; CI lints with $EXPECTED, so results may differ."
+    message="warning: SwiftLint $version; CI lints with $EXPECTED, so results may differ."
+    # pre-commit shows a hook's output only when it fails, so prefer the terminal,
+    # falling back to stderr when there is none (a GUI client, say).
+    ( print -- $message > /dev/tty ) 2>/dev/null || print -u2 -- $message
 fi
 
 # --force-exclude so .swiftlint.yml's exclusions still apply to explicitly passed paths.
