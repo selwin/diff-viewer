@@ -145,7 +145,9 @@ enum DiffAligner {
         var prefix = 0
         while prefix < o.count, prefix < n.count, o[prefix] == n[prefix] { prefix += 1 }
         var suffix = 0
-        while suffix < o.count - prefix, suffix < n.count - prefix, o[o.count - 1 - suffix] == n[n.count - 1 - suffix] { suffix += 1 }
+        while suffix < o.count - prefix, suffix < n.count - prefix, o[o.count - 1 - suffix] == n[n.count - 1 - suffix] {
+            suffix += 1
+        }
         let oRange = prefix..<(o.count - suffix)
         let nRange = prefix..<(n.count - suffix)
         return (oRange.isEmpty ? [] : [oRange], nRange.isEmpty ? [] : [nRange])

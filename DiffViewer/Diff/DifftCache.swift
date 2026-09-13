@@ -19,7 +19,8 @@ struct DifftResult: Sendable {
     /// Approximate payload size in bytes, used for the cache budget. Counts ranges,
     /// pairs, and per-line dictionary entries; not a precise memory ceiling.
     var cost: Int {
-        let ranges = hints.oldChanges.values.reduce(0) { $0 + $1.count }
+        let ranges =
+            hints.oldChanges.values.reduce(0) { $0 + $1.count }
             + hints.newChanges.values.reduce(0) { $0 + $1.count }
         let lines = hints.oldChanges.count + hints.newChanges.count
         return (hints.pairs.count + ranges) * 16 + lines * 32 + language.utf8.count
@@ -39,7 +40,9 @@ actor DifftCache {
         case background
     }
 
-    typealias Runner = @Sendable (_ old: Data, _ new: Data, _ fileName: String, _ qualityOfService: QualityOfService) async throws -> DifftFile
+    typealias Runner =
+        @Sendable (_ old: Data, _ new: Data, _ fileName: String, _ qualityOfService: QualityOfService) async throws ->
+        DifftFile
 
     /// `backgroundProcesses` must be positive. Zero `entries` or `bytes` disables
     /// result retention (every request runs difft); zero `failures` disables failure
@@ -126,9 +129,14 @@ actor DifftCache {
     /// Remembered failures, expired or not. For tests.
     var rememberedFailureCount: Int { failures.count }
 
-    init(runner: @escaping Runner, limits: Limits = Limits(), now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }) {
+    init(
+        runner: @escaping Runner, limits: Limits = Limits(),
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
         precondition(limits.backgroundProcesses > 0, "backgroundProcesses must be positive")
-        precondition(limits.entries >= 0 && limits.bytes >= 0 && limits.maxResultCost >= 0 && limits.failures >= 0, "limits must be non-negative")
+        precondition(
+            limits.entries >= 0 && limits.bytes >= 0 && limits.maxResultCost >= 0 && limits.failures >= 0,
+            "limits must be non-negative")
         precondition(limits.failureExpiry >= .zero, "failureExpiry must be non-negative")
         self.runner = runner
         self.limits = limits

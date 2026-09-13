@@ -3,7 +3,9 @@ import Testing
 
 struct HighlightPerfTests {
     @Test func twentyThousandLineSwiftFile() {
-        let lines = ["func big() {"] + (0..<20000).map { "    let v\($0) = compute(a: \($0), b: \($0 * 2)) // comment \($0)" } + ["}"]
+        let lines =
+            ["func big() {"] + (0..<20000).map { "    let v\($0) = compute(a: \($0), b: \($0 * 2)) // comment \($0)" }
+            + ["}"]
         let start = ContinuousClock.now
         let runs = Highlighter.highlight(lines: lines, fileName: "big.swift")
         let elapsed = ContinuousClock.now - start

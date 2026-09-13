@@ -26,8 +26,12 @@ opt_in_rules:
 disabled_rules:
   # Diff sources are decoded lossily on purpose: files with invalid UTF-8 must still render.
   - optional_data_string_conversion
-  # swift-format formats collections with trailing commas.
+  # Layout belongs to swift-format, and these three rules contradict how it wraps code:
+  # it adds trailing commas, moves a brace off a wrapped condition, and breaks before
+  # closure parameters that do not fit.
   - trailing_comma
+  - opening_brace
+  - closure_parameter_position
 
 # The diff and layout code uses short mathematical names (a, b, x, y, w1, h) by design.
 identifier_name:

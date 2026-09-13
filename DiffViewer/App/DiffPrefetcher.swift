@@ -42,7 +42,8 @@ final class DiffPrefetcher: Prefetching {
 
     var isIdle: Bool { activeWorkers == 0 }
 
-    init(cache: DifftCache, loadSources: @escaping SourceLoader = { try await DiffEngine.sources(for: $0, client: $1) }) {
+    init(cache: DifftCache, loadSources: @escaping SourceLoader = { try await DiffEngine.sources(for: $0, client: $1) })
+    {
         self.cache = cache
         self.loadSources = loadSources
     }
@@ -73,14 +74,17 @@ final class DiffPrefetcher: Prefetching {
             defer { activeWorkers -= 1 }
             while let (file, client) = dequeue() {
                 guard let sources = await Self.candidate(file, client: client, loader: loadSources) else { continue }
-                _ = await cache.result(old: sources.old, new: sources.new, fileName: sources.fileName, priority: .background)
+                _ = await cache.result(
+                    old: sources.old, new: sources.new, fileName: sources.fileName, priority: .background)
             }
         }
     }
 
     /// Loads and classifies off the main actor: the identical-content check compares
     /// whole buffers, which must not stall the UI for a speculative read.
-    nonisolated private static func candidate(_ file: ChangedFile, client: any RepoClient, loader: SourceLoader) async -> DiffEngine.Sources? {
+    nonisolated private static func candidate(_ file: ChangedFile, client: any RepoClient, loader: SourceLoader) async
+        -> DiffEngine.Sources?
+    {
         guard let sources = try? await loader(file, client), DiffEngine.needsDifft(sources) else { return nil }
         return sources
     }

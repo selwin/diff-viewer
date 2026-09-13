@@ -5,7 +5,9 @@ import Testing
 struct RowFoldingTests {
     private let options = FoldOptions(contextLines: 5, expansionStep: 20, minimumHiddenRun: 4)
 
-    private func fold(_ blocks: [Range<Int>], rows: Int, state: FoldState = FoldState(), options: FoldOptions? = nil) -> FoldedRows {
+    private func fold(_ blocks: [Range<Int>], rows: Int, state: FoldState = FoldState(), options: FoldOptions? = nil)
+        -> FoldedRows
+    {
         RowFolding.fold(changeBlocks: blocks, documentRowCount: rows, state: state, options: options ?? self.options)
     }
 
@@ -56,7 +58,10 @@ struct RowFoldingTests {
 
     @Test func smallGapsAreShownNotFolded() {
         // Hidden gap of exactly minimumHiddenRun (4) folds; 3 does not.
-        #expect(shape(fold([20..<21, 35..<36], rows: 100)) == ["sep 0..<15", "rows 15..<26", "sep 26..<30", "rows 30..<41", "sep 41..<100"])
+        #expect(
+            shape(fold([20..<21, 35..<36], rows: 100)) == [
+                "sep 0..<15", "rows 15..<26", "sep 26..<30", "rows 30..<41", "sep 41..<100",
+            ])
         #expect(shape(fold([20..<21, 34..<35], rows: 100)) == ["sep 0..<15", "rows 15..<40", "sep 40..<100"])
     }
 
@@ -95,7 +100,8 @@ struct RowFoldingTests {
         // Hidden run of 22: one step of 20 leaves 2, which is shown rather than folded.
         var state = FoldState()
         state.expandDown(57..<79, step: 20)
-        #expect(shape(fold([50..<52, 84..<85], rows: 100, state: state)) == ["sep 0..<45", "rows 45..<90", "sep 90..<100"])
+        #expect(
+            shape(fold([50..<52, 84..<85], rows: 100, state: state)) == ["sep 0..<45", "rows 45..<90", "sep 90..<100"])
     }
 
     @Test func stepsClampToTheRun() {
@@ -108,7 +114,10 @@ struct RowFoldingTests {
     @Test func revealedRowsOutsideDocumentAreIgnored() {
         var state = FoldState()
         state.expandRun(90..<500)
-        #expect(shape(fold([50..<52], rows: 100, state: state)) == ["sep 0..<45", "rows 45..<57", "sep 57..<90", "rows 90..<100"])
+        #expect(
+            shape(fold([50..<52], rows: 100, state: state)) == [
+                "sep 0..<45", "rows 45..<57", "sep 57..<90", "rows 90..<100",
+            ])
     }
 
     @Test func controlsDependOnRunSizeAndPosition() {

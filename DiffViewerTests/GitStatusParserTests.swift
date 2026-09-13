@@ -24,15 +24,18 @@ struct GitStatusParserTests {
     }
 
     @Test func renameCarriesOriginalPath() {
-        let files = GitStatusParser.parse(data(["2 R. N... 100644 100644 100644 abc abc R100 new/name.txt", "old/name.txt"]))
-        #expect(files == [ChangedFile(path: "new/name.txt", originalPath: "old/name.txt", kind: .renamed, area: .staged)])
+        let files = GitStatusParser.parse(
+            data(["2 R. N... 100644 100644 100644 abc abc R100 new/name.txt", "old/name.txt"]))
+        #expect(
+            files == [ChangedFile(path: "new/name.txt", originalPath: "old/name.txt", kind: .renamed, area: .staged)])
     }
 
     @Test func untrackedAndConflict() {
-        let files = GitStatusParser.parse(data([
-            "? notes.md",
-            "u UU N... 100644 100644 100644 100644 a b c d conflict.txt",
-        ]))
+        let files = GitStatusParser.parse(
+            data([
+                "? notes.md",
+                "u UU N... 100644 100644 100644 100644 a b c d conflict.txt",
+            ]))
         #expect(files.map(\.kind) == [.untracked, .unmerged])
         #expect(files.allSatisfy { $0.area == .unstaged })
     }

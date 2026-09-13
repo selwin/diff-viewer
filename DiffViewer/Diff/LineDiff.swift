@@ -78,7 +78,10 @@ enum LineDiff {
                     let snake = middleSnake(a0: a0, a1: a1, b0: b0, b1: b1)
                     stack.append(.solve(a0: a0 + snake.u, a1: a1, b0: b0 + snake.v, b1: b1))
                     if snake.u > snake.x {
-                        stack.append(.emit((0..<(snake.u - snake.x)).map { .equal(old: a0 + snake.x + $0, new: b0 + snake.y + $0) }))
+                        stack.append(
+                            .emit(
+                                (0..<(snake.u - snake.x)).map { .equal(old: a0 + snake.x + $0, new: b0 + snake.y + $0) }
+                            ))
                     }
                     stack.append(.solve(a0: a0, a1: a0 + snake.x, b0: b0, b1: b0 + snake.y))
                 }
@@ -109,7 +112,8 @@ enum LineDiff {
                     while x < n, y < m, a[a0 + x] == b[b0 + y] { x += 1; y += 1 }
                     vf[offset + k] = x
                     if odd, (k - delta) >= -(d - 1), (k - delta) <= (d - 1),
-                       vf[offset + k] + vb[offset + delta - k] >= n {
+                        vf[offset + k] + vb[offset + delta - k] >= n
+                    {
                         return (sx, sy, x, y)
                     }
                     k += 2
@@ -127,7 +131,8 @@ enum LineDiff {
                     while x < n, y < m, a[a1 - 1 - x] == b[b1 - 1 - y] { x += 1; y += 1 }
                     vb[offset + k] = x
                     if !odd, (k - delta) >= -d, (k - delta) <= d,
-                       vb[offset + k] + vf[offset + delta - k] >= n {
+                        vb[offset + k] + vf[offset + delta - k] >= n
+                    {
                         return (n - x, m - y, n - sx, m - sy)
                     }
                     k += 2

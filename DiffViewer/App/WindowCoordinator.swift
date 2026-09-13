@@ -225,7 +225,8 @@ final class WindowCoordinator {
         }
         // A new window joins the origin's group, so bring the origin forward first.
         if let originID { hooks.focusWindow(originID) }
-        pendingCreates[root] = PendingWindowOpen(root: root, client: client, purpose: request.purpose, restoreEntry: entry, windowID: nil)
+        pendingCreates[root] = PendingWindowOpen(
+            root: root, client: client, purpose: request.purpose, restoreEntry: entry, windowID: nil)
         accept(root)
         hooks.createWindow(root)
     }
@@ -267,10 +268,11 @@ final class WindowCoordinator {
     /// else appends.
     private func accept(_ root: RepositoryRoot) {
         if phase == .restoring, let saved = restoreList.firstIndex(of: root) {
-            let insertAt = openOrder.firstIndex { candidate in
-                guard let other = restoreList.firstIndex(of: candidate) else { return true }
-                return other > saved
-            } ?? openOrder.endIndex
+            let insertAt =
+                openOrder.firstIndex { candidate in
+                    guard let other = restoreList.firstIndex(of: candidate) else { return true }
+                    return other > saved
+                } ?? openOrder.endIndex
             openOrder.insert(root, at: insertAt)
         } else {
             openOrder.append(root)
@@ -303,7 +305,10 @@ final class WindowCoordinator {
     /// Registers a window's state. Idempotent by id; refused for a window that
     /// already closed and for a state that is closed. A `sceneRoot` naming a pending
     /// create adopts that repository without a second discovery.
-    func register(_ state: WindowState, sceneRoot: RepositoryRoot?, setSceneRoot: @escaping @MainActor (RepositoryRoot?) -> Void = { _ in }) {
+    func register(
+        _ state: WindowState, sceneRoot: RepositoryRoot?,
+        setSceneRoot: @escaping @MainActor (RepositoryRoot?) -> Void = { _ in }
+    ) {
         guard !closedBeforeRegistration.contains(state.id), !state.isClosed, windows[state.id] == nil else { return }
         windows[state.id] = state
         sceneRootSetters[state.id] = setSceneRoot

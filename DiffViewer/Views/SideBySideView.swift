@@ -54,8 +54,12 @@ final class SideBySideContainerView: NSView {
 
         // Selector-based observers are removed automatically when the view is deallocated.
         let center = NotificationCenter.default
-        center.addObserver(self, selector: #selector(clipBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: leftScroll.contentView)
-        center.addObserver(self, selector: #selector(clipBoundsChanged(_:)), name: NSView.boundsDidChangeNotification, object: rightScroll.contentView)
+        center.addObserver(
+            self, selector: #selector(clipBoundsChanged(_:)), name: NSView.boundsDidChangeNotification,
+            object: leftScroll.contentView)
+        center.addObserver(
+            self, selector: #selector(clipBoundsChanged(_:)), name: NSView.boundsDidChangeNotification,
+            object: rightScroll.contentView)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -146,7 +150,9 @@ final class SideBySideContainerView: NSView {
 
     private func refold(anchor: Anchor?) {
         if let document, collapseUnchanged {
-            folded = RowFolding.fold(changeBlocks: document.changeBlocks, documentRowCount: document.rows.count, state: foldState, options: foldOptions)
+            folded = RowFolding.fold(
+                changeBlocks: document.changeBlocks, documentRowCount: document.rows.count, state: foldState,
+                options: foldOptions)
         } else {
             folded = .identity(documentRowCount: document?.rows.count ?? 0)
         }

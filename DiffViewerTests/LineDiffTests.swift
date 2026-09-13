@@ -37,15 +37,21 @@ struct LineDiffTests {
     @Test func allDeleted() { verify(["a", "b"], [], expectedEdits: 2) }
     @Test func replaceMiddle() { verify(["a", "b", "c"], ["a", "x", "c"], expectedEdits: 2) }
     @Test func insertMiddle() { verify(["a", "c"], ["a", "b", "c"], expectedEdits: 1) }
-    @Test func classicMyersExample() { verify(["a", "b", "c", "a", "b", "b", "a"], ["c", "b", "a", "b", "a", "c"], expectedEdits: 5) }
+    @Test func classicMyersExample() {
+        verify(["a", "b", "c", "a", "b", "b", "a"], ["c", "b", "a", "b", "a", "c"], expectedEdits: 5)
+    }
     @Test func completelyDifferent() { verify(["a", "b"], ["c", "d"], expectedEdits: 4) }
 
     @Test func randomizedAgainstLCS() {
         var generator = SplitMix64(seed: 42)
         for _ in 0..<300 {
             let alphabet = ["a", "b", "c", "d"]
-            let a = (0..<Int.random(in: 0..<12, using: &generator)).map { _ in alphabet.randomElement(using: &generator)! }
-            let b = (0..<Int.random(in: 0..<12, using: &generator)).map { _ in alphabet.randomElement(using: &generator)! }
+            let a = (0..<Int.random(in: 0..<12, using: &generator)).map { _ in
+                alphabet.randomElement(using: &generator)!
+            }
+            let b = (0..<Int.random(in: 0..<12, using: &generator)).map { _ in
+                alphabet.randomElement(using: &generator)!
+            }
             let expected = a.count + b.count - 2 * lcsLength(a, b)
             verify(a, b, expectedEdits: expected)
         }

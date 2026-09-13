@@ -33,7 +33,9 @@ actor LoaderProbe {
         }
         inFlight -= 1
         if failing.contains(file.path) { throw ProcessError.failed(command: "git", status: 128, stderr: "nope") }
-        if binary.contains(file.path) { return DiffEngine.Sources(old: Data([0, 1]), new: Data([0, 2]), fileName: file.fileName) }
+        if binary.contains(file.path) {
+            return DiffEngine.Sources(old: Data([0, 1]), new: Data([0, 2]), fileName: file.fileName)
+        }
         let old = Data(file.path.utf8)
         let new = identical.contains(file.path) ? old : old + Data("!".utf8)
         return DiffEngine.Sources(old: old, new: new, fileName: file.fileName)
@@ -57,12 +59,19 @@ struct TaggedClient: RepoClient {
 }
 
 @MainActor
-private func makePrefetcher(runner: RunnerProbe, loader: LoaderProbe, limits: DifftCache.Limits = DifftCache.Limits()) -> (DiffPrefetcher, DifftCache) {
+private func makePrefetcher(runner: RunnerProbe, loader: LoaderProbe, limits: DifftCache.Limits = DifftCache.Limits())
+    -> (DiffPrefetcher, DifftCache)
+{
     let cache = DifftCache(
-        runner: { old, new, fileName, qos in try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos) },
+        runner: { old, new, fileName, qos in
+            try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
+        },
         limits: limits
     )
-    return (DiffPrefetcher(cache: cache, loadSources: { file, client in try await loader.load(file, client: client) }), cache)
+    return (
+        DiffPrefetcher(cache: cache, loadSources: { file, client in try await loader.load(file, client: client) }),
+        cache
+    )
 }
 
 private func files(_ count: Int, prefix: String = "f") -> [ChangedFile] {
@@ -84,7 +93,8 @@ struct DiffPrefetcherTests {
 
         // The point of warming: a later foreground request for the same sources is a hit.
         let sources = try? await loader.load(list[7], client: TaggedClient())
-        let result = await cache.result(old: sources!.old, new: sources!.new, fileName: sources!.fileName, priority: .foreground)
+        let result = await cache.result(
+            old: sources!.old, new: sources!.new, fileName: sources!.fileName, priority: .foreground)
         #expect(result != nil)
         #expect(await runner.launches.count == 20)
         #expect(await cache.stats.hits == 1)
@@ -99,7 +109,9 @@ struct DiffPrefetcherTests {
         prefetcher.prefetch(files: files(5), client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
         #expect(await loader.calls.count == 5)
-        #expect(await Set(runner.fileNames) == ["f0.swift", "f1.swift", "f4.swift"], "completion order is not asserted; dequeue order is")
+        #expect(
+            await Set(runner.fileNames) == ["f0.swift", "f1.swift", "f4.swift"],
+            "completion order is not asserted; dequeue order is")
     }
 
     @Test func sourceLoadsAreBoundedByTheWorkerCount() async {
@@ -182,7 +194,11 @@ struct DiffPrefetcherTests {
         #expect(prefetcher.dequeuedFileIDs == lists[4].map(\.id))
         #expect(await runner.launches.count == 13, "three from the first list, then the whole last list")
         let calls = await loader.calls
-        #expect(calls.prefix(3).map(\.client) == ["r0", "r0", "r0"], "jobs in progress keep the client they were dequeued with")
-        #expect(calls.dropFirst(3).map(\.client) == Array(repeating: "r4", count: 10), "newly dequeued jobs use the replacement client")
+        #expect(
+            calls.prefix(3).map(\.client) == ["r0", "r0", "r0"],
+            "jobs in progress keep the client they were dequeued with")
+        #expect(
+            calls.dropFirst(3).map(\.client) == Array(repeating: "r4", count: 10),
+            "newly dequeued jobs use the replacement client")
     }
 }

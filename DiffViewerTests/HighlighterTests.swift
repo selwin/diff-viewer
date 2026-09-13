@@ -75,7 +75,10 @@ struct HighlighterTests {
     }
 
     @Test func everyBundledGrammarLoads() {
-        for name in ["a.swift", "a.py", "a.js", "a.ts", "a.tsx", "a.json", "a.go", "a.rs", "a.c", "a.cpp", "a.html", "a.css", "a.sh", "a.rb", "a.yml", "a.toml", "a.java", "a.php", "a.md", "a.kt", "a.kts"] {
+        for name in [
+            "a.swift", "a.py", "a.js", "a.ts", "a.tsx", "a.json", "a.go", "a.rs", "a.c", "a.cpp", "a.html", "a.css",
+            "a.sh", "a.rb", "a.yml", "a.toml", "a.java", "a.php", "a.md", "a.kt", "a.kts",
+        ] {
             let config = LanguageRegistry.configuration(forFileNamed: name)
             #expect(config != nil, "\(name) failed to load")
             #expect(config?.queries[.highlights] != nil, "\(name) has no highlights query")

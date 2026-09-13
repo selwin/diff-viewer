@@ -49,14 +49,20 @@ final class RepoWatcher: RepoWatching {
 
     private func start(root: URL) {
         let unmanaged = Unmanaged.passUnretained(self)
-        var context = FSEventStreamContext(version: 0, info: unmanaged.toOpaque(), retain: nil, release: nil, copyDescription: nil)
+        var context = FSEventStreamContext(
+            version: 0, info: unmanaged.toOpaque(), retain: nil, release: nil, copyDescription: nil)
         let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
             guard let info else { return }
             let watcher = Unmanaged<RepoWatcher>.fromOpaque(info).takeUnretainedValue()
             Task { @MainActor in watcher.debouncer.call() }
         }
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagIgnoreSelf)
-        guard let stream = FSEventStreamCreate(nil, callback, &context, [root.path] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.2, flags) else { return }
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagIgnoreSelf)
+        guard
+            let stream = FSEventStreamCreate(
+                nil, callback, &context, [root.path] as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+                0.2, flags)
+        else { return }
         FSEventStreamSetDispatchQueue(stream, queue)
         FSEventStreamStart(stream)
         self.stream = stream

@@ -94,7 +94,9 @@ enum DifftRunner {
     }()
 
     /// Runs difft on the two texts, using `fileName` so language detection works.
-    static func run(old: Data, new: Data, fileName: String, qualityOfService: QualityOfService = .userInitiated) async throws -> DifftFile {
+    static func run(old: Data, new: Data, fileName: String, qualityOfService: QualityOfService = .userInitiated)
+        async throws -> DifftFile
+    {
         guard let executable else { throw Failure.binaryNotFound }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DiffViewer", isDirectory: true)
@@ -103,8 +105,10 @@ enum DifftRunner {
         let oldURL = dir.appendingPathComponent("old", isDirectory: true).appendingPathComponent(safeName)
         let newURL = dir.appendingPathComponent("new", isDirectory: true).appendingPathComponent(safeName)
         defer { try? FileManager.default.removeItem(at: dir) }
-        try FileManager.default.createDirectory(at: oldURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: oldURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try old.write(to: oldURL)
         try new.write(to: newURL)
 

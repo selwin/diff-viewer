@@ -60,7 +60,11 @@ final class DiffPaneView: NSView {
     }
 
     var fontSize: CGFloat = 12 {
-        didSet { if fontSize != oldValue { lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true } }
+        didSet {
+            if fontSize != oldValue {
+                lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true
+            }
+        }
     }
 
     private(set) var layout = PaneLayout(rowHeight: 20, rowCount: 0)
@@ -104,7 +108,9 @@ final class DiffPaneView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
+        let area = NSTrackingArea(
+            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
         addTrackingArea(area)
         trackingArea = area
     }
@@ -170,7 +176,8 @@ final class DiffPaneView: NSView {
         let visible = visibleRect
         let rows = layout.rows(intersecting: dirtyRect.minY, dirtyRect.maxY)
         for displayIndex in rows where displayIndex < displayRows.count {
-            let rowRect = NSRect(x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
+            let rowRect = NSRect(
+                x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
             switch displayRows[displayIndex] {
             case let .documentRow(rowIndex):
                 drawDocumentRow(model.rows[rowIndex], in: rowRect, model: model, context: context)
@@ -248,10 +255,14 @@ final class DiffPaneView: NSView {
         guard let cell else { return }
         let numberLine = numberLine(for: cell.lineNumber, changed: gutterColor != nil)
         let width = CTLineGetTypographicBounds(numberLine, nil, nil, nil)
-        drawLine(numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: rowRect.minY + 2 + ascent), context: context)
+        drawLine(
+            numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: rowRect.minY + 2 + ascent),
+            context: context)
     }
 
-    private func drawText(_ cell: DiffSide, in rowRect: NSRect, model: PaneModel, tokenColor: NSColor, context: CGContext) {
+    private func drawText(
+        _ cell: DiffSide, in rowRect: NSRect, model: PaneModel, tokenColor: NSColor, context: CGContext
+    ) {
         let cached = cachedLine(for: cell.lineIndex, model: model)
         let textX = gutterWidth + textInset
         let baseline = rowRect.minY + 2 + ascent
@@ -309,8 +320,11 @@ final class DiffPaneView: NSView {
         }
 
         let text = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
-        let attributed = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: DiffTheme.foldText])
-        drawLine(CTLineCreateWithAttributedString(attributed), at: CGPoint(x: textX + 6, y: rowRect.minY + 2 + ascent), context: context)
+        let attributed = NSAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: DiffTheme.foldText])
+        drawLine(
+            CTLineCreateWithAttributedString(attributed), at: CGPoint(x: textX + 6, y: rowRect.minY + 2 + ascent),
+            context: context)
     }
 
     private func drawChevrons(for control: FoldControl, in rect: NSRect, context: CGContext) {
@@ -344,9 +358,13 @@ final class DiffPaneView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let onFoldAction, let (index, hidden) = separatorHidden(at: point) else { return super.mouseDown(with: event) }
+        guard let onFoldAction, let (index, hidden) = separatorHidden(at: point) else {
+            return super.mouseDown(with: event)
+        }
         if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
-        let control = controlRects(for: hidden, rowRect: separatorRowRect(at: index)).first(where: { $0.rect.contains(point) })?.control
+        let control = controlRects(for: hidden, rowRect: separatorRowRect(at: index)).first(where: {
+            $0.rect.contains(point)
+        })?.control
         onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
     }
 
@@ -396,10 +414,12 @@ final class DiffPaneView: NSView {
         if lineCache.count > 4000 { lineCache.removeAll(keepingCapacity: true) }
         let raw = model.lines[lineIndex]
         let expanded = TabExpander.expand(raw, tabWidth: DiffTheme.tabWidth)
-        let attributed = NSMutableAttributedString(string: expanded.text, attributes: [
-            .font: font,
-            .foregroundColor: DiffTheme.text,
-        ])
+        let attributed = NSMutableAttributedString(
+            string: expanded.text,
+            attributes: [
+                .font: font,
+                .foregroundColor: DiffTheme.text,
+            ])
         if let styles, lineIndex < styles.count {
             let runs = styles[lineIndex]
             let length = attributed.length
@@ -409,7 +429,9 @@ final class DiffPaneView: NSView {
                 let clampedLower = min(max(lower, 0), length)
                 let clampedUpper = min(max(upper, clampedLower), length)
                 guard clampedUpper > clampedLower else { continue }
-                attributed.addAttribute(.foregroundColor, value: DiffTheme.color(for: run.style), range: NSRange(location: clampedLower, length: clampedUpper - clampedLower))
+                attributed.addAttribute(
+                    .foregroundColor, value: DiffTheme.color(for: run.style),
+                    range: NSRange(location: clampedLower, length: clampedUpper - clampedLower))
             }
         }
         let line = CTLineCreateWithAttributedString(attributed)
@@ -423,10 +445,12 @@ final class DiffPaneView: NSView {
         let key = changed ? -number : number
         if let line = numberCache[key] { return line }
         if numberCache.count > 4000 { numberCache.removeAll(keepingCapacity: true) }
-        let attributed = NSAttributedString(string: String(number), attributes: [
-            .font: font,
-            .foregroundColor: changed ? DiffTheme.lineNumberChanged : DiffTheme.lineNumber,
-        ])
+        let attributed = NSAttributedString(
+            string: String(number),
+            attributes: [
+                .font: font,
+                .foregroundColor: changed ? DiffTheme.lineNumberChanged : DiffTheme.lineNumber,
+            ])
         let line = CTLineCreateWithAttributedString(attributed)
         numberCache[key] = line
         return line
