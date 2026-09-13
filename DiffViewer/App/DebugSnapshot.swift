@@ -3,7 +3,10 @@ import Foundation
 
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
-///   (ids look like `unstaged:src/app.swift`).
+///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`).
+/// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
+///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
+///   commit's sidebar and diffs can be screenshotted.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
@@ -50,7 +53,9 @@ enum DebugLaunchOptions {
             let opens = decodeStringArray(env["DIFFVIEWER_OPEN"])
             let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
             let selection = env["DIFFVIEWER_SELECT"] ?? ""
-            guard !opens.isEmpty || dump || !selection.isEmpty || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
+            let scopeSha = env["DIFFVIEWER_SCOPE"] ?? ""
+            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty
+            guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -92,7 +97,7 @@ enum DebugLaunchOptions {
                         dumpWindows(services)
                     }
                 }
-                guard !selection.isEmpty else { return }
+                guard needsWindow else { return }
                 @MainActor func target() -> WindowState? {
                     let key = coordinator.keyWindowState
                     return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
@@ -102,7 +107,12 @@ enum DebugLaunchOptions {
                 guard let windowState = target(), let window = services.windows[windowState.id] else { return }
                 // The snapshot renders offscreen, so lift the visibility gate for this window.
                 windowState.isVisible = true
-                windowState.selectedFileID = selection
+                if !scopeSha.isEmpty {
+                    await selectScope(scopeSha, in: windowState)
+                }
+                if !selection.isEmpty {
+                    windowState.selectedFileID = selection
+                }
                 if nextCount > 0 {
                     try? await Task.sleep(for: .seconds(2))
                     for _ in 0..<nextCount { windowState.nextChange() }
@@ -275,6 +285,19 @@ enum DebugLaunchOptions {
         )
         print(lines.joined(separator: "\n"))
         fflush(stdout)
+    }
+
+    /// Points the commit picker at `sha` (a prefix is enough) once the history that
+    /// contains it has loaded, then gives the commit's file list a moment to arrive.
+    @MainActor
+    private static func selectScope(_ sha: String, in windowState: WindowState) async {
+        _ = await eventually(attempts: 100) { windowState.history.commits.contains { $0.ref.sha.hasPrefix(sha) } }
+        guard let commit = windowState.history.commits.first(where: { $0.ref.sha.hasPrefix(sha) }) else {
+            print("### DIFFVIEWER_SCOPE: no commit matching \(sha) in the loaded history")
+            return
+        }
+        windowState.select(commit: commit)
+        try? await Task.sleep(for: .seconds(1))
     }
 
     @MainActor

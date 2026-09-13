@@ -21,6 +21,25 @@ actor StubRepoClient: RepoClient {
     private(set) var numstatCalls = 0
     /// Worktree contents by path, overriding the default "new \(path)" body.
     private var worktree: [String: Data?] = [:]
+    private var head: String? = String(repeating: "a", count: 40)
+    private var commits: [CommitSummary] = []
+    /// Files each commit changed, by sha.
+    private var commitFiles: [String: [ChangedFile]] = [:]
+    private var failsHistory = false
+    private var failsCommitFiles = false
+    private var holdsCommitFiles = false
+    private var heldCommitFiles: [CheckedContinuation<Void, Never>] = []
+    private var holdsHead = false
+    private var heldHead: [CheckedContinuation<Void, Never>] = []
+    private var holdsHistory = false
+    private var heldHistory: [CheckedContinuation<Void, Never>] = []
+    private(set) var headCalls = 0
+    private(set) var historyCalls = 0
+    private(set) var lastHistoryRevision: String?
+    private(set) var lastHistoryLimit: Int?
+    private(set) var commitFileCalls = 0
+    /// Every `(path, revision)` pair `contents(of:at:)` was asked for, in order.
+    private(set) var contentRevisions: [(path: String, revision: String)] = []
 
     init(files: [ChangedFile]) { self.files = files }
 
@@ -64,6 +83,80 @@ actor StubRepoClient: RepoClient {
         let waiting = heldReads
         heldReads = []
         for continuation in waiting { continuation.resume() }
+    }
+
+    // MARK: History and commits
+
+    func set(head sha: String?) { head = sha }
+    func set(commits list: [CommitSummary]) { commits = list }
+    func set(files list: [ChangedFile], forCommit sha: String) { commitFiles[sha] = list }
+    func fail(history on: Bool) { failsHistory = on }
+    func fail(commitFiles on: Bool) { failsCommitFiles = on }
+    func holdCommitFiles(_ on: Bool) { holdsCommitFiles = on }
+    var heldCommitFileCount: Int { heldCommitFiles.count }
+    func releaseCommitFiles() {
+        let waiting = heldCommitFiles
+        heldCommitFiles = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func holdHead(_ on: Bool) { holdsHead = on }
+    var heldHeadCount: Int { heldHead.count }
+    func releaseHead() {
+        let waiting = heldHead
+        heldHead = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Releases the oldest held HEAD read, so completion order can be chosen.
+    func releaseFirstHead() { if !heldHead.isEmpty { heldHead.removeFirst().resume() } }
+
+    func holdHistory(_ on: Bool) { holdsHistory = on }
+    var heldHistoryCount: Int { heldHistory.count }
+    func releaseHistory() {
+        let waiting = heldHistory
+        heldHistory = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func headSha() async throws -> String? {
+        headCalls += 1
+        // Snapshot before suspending, the way `status()` does: a held read must report
+        // the revision it was asked about, not whatever HEAD became while it waited.
+        let snapshot = head
+        if holdsHead {
+            await withCheckedContinuation { heldHead.append($0) }
+        }
+        if failsHistory { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
+        return snapshot
+    }
+
+    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
+        historyCalls += 1
+        lastHistoryRevision = revision
+        lastHistoryLimit = limit
+        let snapshot = commits
+        if holdsHistory {
+            await withCheckedContinuation { heldHistory.append($0) }
+        }
+        if failsHistory { throw ProcessError.failed(command: "git log", status: 128, stderr: "gone") }
+        return Array(snapshot.prefix(limit))
+    }
+
+    func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {
+        commitFileCalls += 1
+        if holdsCommitFiles {
+            await withCheckedContinuation { heldCommitFiles.append($0) }
+        }
+        if failsCommitFiles {
+            throw ProcessError.failed(command: "git diff-tree", status: 128, stderr: "bad object")
+        }
+        return commitFiles[commit.sha] ?? []
+    }
+
+    func contents(of path: String, at revision: String) async throws -> Data {
+        contentReads += 1
+        contentRevisions.append((path, revision))
+        return Data("\(revision):\(path)".utf8)
     }
 
     func indexContents(of path: String) async throws -> Data? {

@@ -24,6 +24,7 @@ Where DiffViewer already stands versus the bar:
 | Find in diff | yes | no | no | **no** |
 | Jump to line | yes | no | no | **no** |
 | Wrap long lines | yes | yes | no | **no** |
+| Browse a previous commit's diffs | yes (changesets) | yes (graph) | yes (tabs) | **yes** (picker) |
 | Sidebar filter (name / ext / kind) | yes | partial | yes | **no** |
 | Folder outline in sidebar | yes | no (long-requested) | no | **no** |
 | Rename / move detection | yes | yes | yes | **no** (`--no-renames`) |
@@ -361,13 +362,38 @@ Roughly in priority order.
   `diffviewer <repo>` opener plus a `kaleidoscope://changeset?path=` style URL scheme
   is the minimum. Listed in README as a non-goal for now.
 
+## Landed since this list was written
+
+### Commit picker (2026-09-13)
+
+A popup at the top of the sidebar scopes the file list and the diffs to the working tree
+(the default, unchanged) or to one commit from the branch's first-parent history, shown
+against its first parent.
+
+**Scope change.** This reverses the commit-browsing half of the "Commit browsing,
+ref-range compare, folder compare, blame, file history" entry under *Not doing*, the way
+Requested item B revises the read-only principle. What stays out: comparing two arbitrary
+commits, folder compare, blame, and per-file history. `CLAUDE.md` carries the same
+non-goal list and needs the same edit — it is not in the repository, so it could not be
+updated here.
+
+**Notes for whatever builds on this.** A commit is named by a `CommitRef` carrying its
+first parent, so every read states both sides explicitly: `git diff-tree` prints nothing
+at all for a merge given only the commit, and git reports an unreadable revision as though
+the *path* were missing, which would otherwise render an unreachable commit as a file
+added wholesale. History loading has its own generation counter, separate from the file
+list's, and a watcher tick in commit scope does nothing unless HEAD has moved.
+
+Follow-ups it leaves open: a keyboard shortcut for the picker, a filter over the commit
+list once it is long, and the ⌘R-only path for re-reading a commit's files.
+
 ## Not doing (and why)
 
 - **Inline / unified text layout.** Side by side only (CLAUDE.md). Sublime Merge's
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
-- **Commit browsing, ref-range compare, folder compare, blame, file history.** Non-goals
-  in CLAUDE.md. Kaleidoscope 6.7's commit-history pane and Sublime Merge's blame are
-  git-client features, not viewer features.
+- **Ref-range compare, folder compare, blame, file history.** Non-goals in CLAUDE.md.
+  Sublime Merge's blame and Kaleidoscope's two-commit Compare are git-client features, not
+  viewer features. Commit *browsing* has moved into scope — see below.
 - **Hunk-level staging, discarding, or cherry-picking** from the changeset headers
   (Sublime Merge). Whole-file stage / unstage / discard / delete is now in scope via the
   sidebar context menu (Requested B); anything finer than a file is not.
