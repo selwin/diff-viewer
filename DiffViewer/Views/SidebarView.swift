@@ -42,6 +42,8 @@ struct SidebarView: View {
             if !windowState.isEmpty {
                 VStack(spacing: 0) {
                     CommitPickerView()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                     Divider()
                 }
                 .background(.bar)
@@ -90,7 +92,8 @@ private struct FileRow: View {
     }
 }
 
-private struct ChurnLabel: View {
+/// Shared with the scope button in `CommitPickerView`, which sums the list it scopes.
+struct ChurnLabel: View {
     let stats: LineStats?
 
     var body: some View {
