@@ -26,46 +26,6 @@ final class WindowCoordinator {
         case app
     }
 
-    struct OpenRequest: Sendable {
-        let url: URL
-        let origin: OpenOrigin
-        var purpose: OpenPurpose = .user
-        /// The saved root this request restores, if any; what `settle` refers to.
-        var restoreEntry: RepositoryRoot?
-
-        /// Restoration opens adopt only the window named as their origin (the initial
-        /// window); the rest always create, so saved repositories never race for an
-        /// empty window and the restored order does not depend on discovery order.
-        var canAdoptEmptyOrigin: Bool {
-            purpose == .user || origin != .app
-        }
-    }
-
-    /// A window has been asked for but has not registered its state yet.
-    struct PendingWindowOpen {
-        let root: RepositoryRoot
-        let client: any RepoClient
-        /// Upgraded to `.user` if a user request joins a restoration create.
-        var purpose: OpenPurpose
-        /// Set when a restoration request joins a create a user started.
-        var restoreEntry: RepositoryRoot?
-        /// Known once the window's accessor attaches, before its state registers.
-        var windowID: WindowID?
-    }
-
-    /// The presentation the coordinator needs but does not own.
-    struct Hooks {
-        var createWindow: @MainActor (RepositoryRoot) -> Void
-        var focusWindow: @MainActor (WindowID) -> Void
-        var presentError: @MainActor (String) -> Void
-    }
-
-    /// Defaults keys for the persisted session.
-    enum SessionKeys {
-        static let openRoots = "openRepositoryRoots"
-        static let lastActive = "lastActiveRepositoryRoot"
-    }
-
     let preferences: Preferences
     private let prefetcher: any Prefetching
     private let discover: Discoverer
@@ -572,5 +532,49 @@ final class WindowCoordinator {
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.runModal()
+    }
+}
+
+// MARK: - Supporting types
+
+extension WindowCoordinator {
+    struct OpenRequest: Sendable {
+        let url: URL
+        let origin: OpenOrigin
+        var purpose: OpenPurpose = .user
+        /// The saved root this request restores, if any; what `settle` refers to.
+        var restoreEntry: RepositoryRoot?
+
+        /// Restoration opens adopt only the window named as their origin (the initial
+        /// window); the rest always create, so saved repositories never race for an
+        /// empty window and the restored order does not depend on discovery order.
+        var canAdoptEmptyOrigin: Bool {
+            purpose == .user || origin != .app
+        }
+    }
+
+    /// A window has been asked for but has not registered its state yet.
+    struct PendingWindowOpen {
+        let root: RepositoryRoot
+        let client: any RepoClient
+        /// Upgraded to `.user` if a user request joins a restoration create.
+        var purpose: OpenPurpose
+        /// Set when a restoration request joins a create a user started.
+        var restoreEntry: RepositoryRoot?
+        /// Known once the window's accessor attaches, before its state registers.
+        var windowID: WindowID?
+    }
+
+    /// The presentation the coordinator needs but does not own.
+    struct Hooks {
+        var createWindow: @MainActor (RepositoryRoot) -> Void
+        var focusWindow: @MainActor (WindowID) -> Void
+        var presentError: @MainActor (String) -> Void
+    }
+
+    /// Defaults keys for the persisted session.
+    enum SessionKeys {
+        static let openRoots = "openRepositoryRoots"
+        static let lastActive = "lastActiveRepositoryRoot"
     }
 }
