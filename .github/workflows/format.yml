@@ -38,10 +38,6 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # TEMPORARY: prints the formatter's own defaults so .swift-format can stay minimal.
-      - name: Dump default configuration
-        run: swift format dump-configuration || true
-
       - name: Check formatting
         run: swift format lint --strict --parallel --recursive --configuration .swift-format $SOURCES
 
