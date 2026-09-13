@@ -83,6 +83,7 @@ targets:
     platform: macOS
     sources:
       - path: DiffViewer
+        type: syncedFolder
         excludes:
           - "Resources/bin/**"
       - path: DiffViewer/Resources/bin/difft
@@ -143,6 +144,7 @@ targets:
     platform: macOS
     sources:
       - path: DiffViewerTests
+        type: syncedFolder
     dependencies:
       - target: DiffViewer
     settings:
