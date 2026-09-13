@@ -108,7 +108,8 @@ enum LineDiff {
                         x = vf[offset + k - 1] + 1
                     }
                     var y = x - k
-                    let sx = x, sy = y
+                    let sx = x
+                    let sy = y
                     while x < n, y < m, a[a0 + x] == b[b0 + y] { x += 1; y += 1 }
                     vf[offset + k] = x
                     if odd, (k - delta) >= -(d - 1), (k - delta) <= (d - 1),
@@ -127,7 +128,8 @@ enum LineDiff {
                         x = vb[offset + k - 1] + 1
                     }
                     var y = x - k
-                    let sx = x, sy = y
+                    let sx = x
+                    let sy = y
                     while x < n, y < m, a[a1 - 1 - x] == b[b1 - 1 - y] { x += 1; y += 1 }
                     vb[offset + k] = x
                     if !odd, (k - delta) >= -d, (k - delta) <= d,

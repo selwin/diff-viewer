@@ -66,7 +66,7 @@ enum DiffAligner {
             var pairs: [(old: Int, new: Int)] = []
             var lastNew = -1
             for pair in hints.pairs where deleteSet.contains(pair.old) && insertSet.contains(pair.new) {
-                if pair.new > lastNew, (pairs.last.map { pair.old > $0.old } ?? true) {
+                if pair.new > lastNew, pairs.last.map { pair.old > $0.old } ?? true {
                     pairs.append(pair)
                     lastNew = pair.new
                 }

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// Holds discovery for chosen URLs until released, or fails them.

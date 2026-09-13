@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import DiffViewer
 
 /// Polls `condition` for up to two seconds.

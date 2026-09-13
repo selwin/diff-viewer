@@ -1,4 +1,5 @@
 import Testing
+
 @testable import DiffViewer
 
 struct LineDiffTests {
@@ -8,7 +9,8 @@ struct LineDiffTests {
         let ops = LineDiff.diff(a, b)
         var rebuilt: [String] = []
         var edits = 0
-        var lastOld = -1, lastNew = -1
+        var lastOld = -1
+        var lastNew = -1
         for op in ops {
             switch op {
             case let .equal(o, n):

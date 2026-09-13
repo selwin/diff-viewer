@@ -121,8 +121,8 @@ enum ProcessRunner {
     }
 }
 
-private extension QualityOfService {
-    var dispatchQoS: DispatchQoS.QoSClass {
+extension QualityOfService {
+    fileprivate var dispatchQoS: DispatchQoS.QoSClass {
         switch self {
         case .userInteractive: .userInteractive
         case .userInitiated: .userInitiated

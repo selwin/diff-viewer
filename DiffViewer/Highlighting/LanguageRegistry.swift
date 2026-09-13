@@ -6,9 +6,9 @@ import TreeSitterCPP
 import TreeSitterCSS
 import TreeSitterGo
 import TreeSitterHTML
+import TreeSitterJSON
 import TreeSitterJava
 import TreeSitterJavaScript
-import TreeSitterJSON
 import TreeSitterKotlin
 import TreeSitterMarkdown
 import TreeSitterPHP

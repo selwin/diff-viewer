@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// A repository whose status call and worktree reads can be held open and released.

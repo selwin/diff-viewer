@@ -1,6 +1,5 @@
-import Foundation
-
 import AppKit
+import Foundation
 
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
@@ -337,8 +336,8 @@ enum DebugLaunchOptions {
     }
 }
 
-private extension NSView {
-    func descendant<T: NSView>(_ type: T.Type) -> T? {
+extension NSView {
+    fileprivate func descendant<T: NSView>(_ type: T.Type) -> T? {
         if let match = self as? T { return match }
         for child in subviews { if let match = child.descendant(type) { return match } }
         return nil

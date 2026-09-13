@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// Stand-in for git reads: records which files were asked for, can hold loads open,
