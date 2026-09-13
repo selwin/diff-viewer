@@ -54,9 +54,13 @@ struct TaggedClient: RepoClient {
     var tag = "A"
 
     func status() async throws -> [ChangedFile] { [] }
+    func headSha() async throws -> String? { nil }
+    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] { [] }
+    func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
     func indexContents(of path: String) async throws -> Data? { nil }
     func headContents(of path: String) async throws -> Data? { nil }
+    func contents(of path: String, at revision: String) async throws -> Data { Data() }
     func worktreeContents(of path: String) async -> Data? { nil }
 }
 

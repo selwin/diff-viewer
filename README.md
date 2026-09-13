@@ -1,7 +1,9 @@
 # DiffViewer
 
-A native macOS 26 app for viewing git working-tree diffs side by side.
+A native macOS 26 app for viewing git diffs side by side.
 
+- **Commit picker** at the top of the sidebar: show the working tree, as always, or pick a
+  commit from the branch's history and see what it changed against its first parent.
 - **Syntax-aware diffs** via a bundled [difftastic](https://difftastic.wilfred.me.uk) (`difft`)
   binary: token-level highlights that understand the language's structure.
 - **Hide whitespace** toggle (⇧⌘W), like GitHub's diff viewer.
@@ -60,22 +62,32 @@ them. Opening a repository that is already open focuses its tab. On quit the set
 repositories and the active one are saved and restored on the next launch; launching by
 opening a folder from Finder shows that repository instead of the saved set.
 
+The picker above the file list chooses what the sidebar and the diffs are comparing.
+**Working Tree** is the default and behaves exactly as before: unstaged and staged
+sections, refreshed live as the repository changes. Picking a commit instead shows the
+files that commit changed, compared against its first parent — the root commit against the
+empty tree, and a merge against the branch it was merged onto, which is the same thing
+`git log --first-parent` shows. Commits merged in from side branches are therefore not
+listed individually. The list holds 50 commits at a time, with Load More below it, and
+follows the branch you check out. A commit's diffs cannot change, so nothing about that
+view reloads until HEAD moves.
+
 ## Layout
 
 | Directory | Contents |
 |-----------|----------|
 | `DiffViewer/App` | App entry, `Preferences` (app-wide settings), `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, session persistence), `DiffLoader` |
-| `DiffViewer/Git` | `git` CLI wrapper, status parser, FSEvents watcher |
+| `DiffViewer/Git` | `git` CLI wrapper, status / numstat / name-status / log parsers, commit refs, FSEvents watcher |
 | `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine |
 | `DiffViewer/Highlighting` | tree-sitter grammar registry, highlighter, token theme |
 | `DiffViewer/Views` | SwiftUI shell plus the AppKit pane renderer and overview strip |
 | `DiffViewerTests` | Swift Testing suites for the non-UI layers |
 
-Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_NEXT`, `DIFFVIEWER_FOLD`,
-`DIFFVIEWER_APPEARANCE`, and `DIFFVIEWER_SNAPSHOT` environment variables for scripted
-screenshots, and `DIFFVIEWER_OPEN`, `DIFFVIEWER_TAB_STEPS`, and `DIFFVIEWER_DUMP_WINDOWS`
-for scripted checks of tabs, restoration, and diff latency (see `scripts/` and
-`DebugLaunchOptions`).
+Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_SCOPE`, `DIFFVIEWER_NEXT`,
+`DIFFVIEWER_FOLD`, `DIFFVIEWER_APPEARANCE`, and `DIFFVIEWER_SNAPSHOT` environment
+variables for scripted screenshots, and `DIFFVIEWER_OPEN`, `DIFFVIEWER_TAB_STEPS`, and
+`DIFFVIEWER_DUMP_WINDOWS` for scripted checks of tabs, restoration, and diff latency (see
+`scripts/` and `DebugLaunchOptions`).
 
 ## Known limitations / next steps
 
@@ -92,4 +104,6 @@ for scripted checks of tabs, restoration, and diff latency (see `scripts/` and
 - Foreground difft runs are unbounded: several visible windows reloading at once, or
   rapid selection changes, can overlap difft processes (background prefetch runs share
   three slots). A foreground difft scheduler is a follow-up.
-- Not yet built: `git difftool` CLI integration, commit/ref-range browsing, folder compare.
+- Not yet built: `git difftool` CLI integration, ref-range compare, folder compare. The
+  commit picker browses one branch's first-parent history; comparing two arbitrary commits
+  is not in scope.

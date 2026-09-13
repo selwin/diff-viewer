@@ -7,7 +7,7 @@ struct SidebarView: View {
         @Bindable var windowState = windowState
         List(selection: $windowState.selectedFileID) {
             if !windowState.isEmpty, windowState.files.isEmpty {
-                Text("No changes")
+                Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
                     .foregroundStyle(.secondary)
             }
             if !windowState.unstagedFiles.isEmpty {
@@ -20,8 +20,23 @@ struct SidebarView: View {
                     ForEach(windowState.stagedFiles) { FileRow(file: $0) }
                 }
             }
+            // A commit has one list: its own staging is long settled.
+            if !windowState.commitFiles.isEmpty {
+                Section("Changed (\(windowState.commitFiles.count))") {
+                    ForEach(windowState.commitFiles) { FileRow(file: $0) }
+                }
+            }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !windowState.isEmpty {
+                VStack(spacing: 0) {
+                    CommitPickerView()
+                    Divider()
+                }
+                .background(.bar)
+            }
+        }
     }
 }
 

@@ -32,7 +32,7 @@ struct DiffDetailView: View {
                 }
                 HStack(spacing: 8) {
                     Text(file.kind.label)
-                    Text(file.area == .staged ? "HEAD → Index" : "Index → Working Tree")
+                    Text(file.area.comparisonLabel)
                     if case let .text(doc)? = loader.content, let language = doc.language {
                         Text(language)
                     }
