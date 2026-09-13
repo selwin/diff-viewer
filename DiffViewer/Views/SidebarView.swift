@@ -47,6 +47,8 @@ private struct FileRow: View {
                         .truncationMode(.head)
                 }
             }
+            Spacer(minLength: 8)
+            ChurnLabel(stats: file.lineStats)
         }
         .tag(file.id)
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
@@ -60,5 +62,44 @@ private struct FileRow: View {
         case .renamed, .copied: .blue
         case .unmerged: .purple
         }
+    }
+}
+
+private struct ChurnLabel: View {
+    let stats: LineStats?
+
+    var body: some View {
+        switch stats {
+        case nil:
+            EmptyView()
+        case .binary:
+            Text("binary")
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+                .lineLimit(1)
+                .help("Binary file")
+        case .counted(let added, let deleted):
+            // A side that did not change is left out, so a pure addition reads "+12"
+            // rather than "+12 −0"; a file with no churn at all shows nothing.
+            HStack(spacing: 4) {
+                if added > 0 {
+                    Text("+\(added)").foregroundStyle(.green)
+                }
+                if deleted > 0 {
+                    Text("−\(deleted)").foregroundStyle(.red)
+                }
+            }
+            .font(.system(.callout, design: .monospaced))
+            .fixedSize()
+            .lineLimit(1)
+            .help(countedHelpText(added: added, deleted: deleted))
+        }
+    }
+
+    private func countedHelpText(added: Int, deleted: Int) -> String {
+        let addedLabel = added == 1 ? "1 line added" : "\(added) lines added"
+        let deletedLabel = deleted == 1 ? "1 line deleted" : "\(deleted) lines deleted"
+        return "\(addedLabel), \(deletedLabel)"
     }
 }

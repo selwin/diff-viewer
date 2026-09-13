@@ -15,7 +15,8 @@ struct ContentView: View {
         } detail: {
             detail
         }
-        .navigationTitle(windowState.repoName)
+        .navigationTitle(windowState.title)
+        .navigationSubtitle(windowState.subtitle)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
             let coordinator = services.coordinator

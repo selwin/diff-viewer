@@ -17,7 +17,7 @@ Where DiffViewer already stands versus the bar:
 | Live working-copy refresh | yes (7.0 headline) | yes | yes | yes |
 | Multiple repos at once | tabs | repo tabs | tabs + windows | **no** |
 | Aggregate +/- churn | counts by kind only | per-commit only | none | **no** |
-| Per-file +/- churn in sidebar | no | no | no | **no** (Requested A) |
+| Per-file +/- churn in sidebar | no | no | no | **yes** |
 | Stage / unstage / discard from file list | no (viewer) | yes | no | **no** (Requested B) |
 | All files in one scroll | no (per file) | yes (default view) | no | **no** |
 | Collapse unchanged / context expansion | yes | yes (default) | no | **no** |
@@ -36,7 +36,13 @@ Where DiffViewer already stands versus the bar:
 
 Three items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
 
-### A. Per-file churn in the sidebar
+### A. Per-file churn in the sidebar (done 2026-09-13)
+
+Shipped as designed below, with two changes: `LineStats` is an enum (`.counted` /
+`.binary`) so that `nil` can mean "unknown" (numstat failed, unmerged, unreadable), and
+only untracked files need a worktree line count because git's numstat already covers
+tracked added and deleted files. Section-header sums, the grand total, and the
+detail-header counts remain under feature 2.
 
 **Goal.** Every changed, added, or deleted file in the sidebar shows how much churn it
 has: a trailing `+12 −4` in monospaced caption, green/red, on each `FileRow`.
@@ -55,6 +61,31 @@ aggregate totals, section-header sums, and detail-header counts for a follow-up.
 
 **Tests.** `GitNumstatParser` (rename lines, binary `-`, `-z` framing), join of numstat
 rows to status rows, untracked/deleted line counting.
+
+#### A.1 Follow-up: sizes for binary files (requested 2026-09-13)
+
+**Goal.** A binary row currently says only `binary`. Show its size instead, in KB, so an
+image or asset change is as informative as a `+12 −4` text change: `48 KB` for an added
+or deleted file, `48 KB → 51 KB` for a modified one.
+
+**Design.**
+- Sizes come from git objects, not the worktree, so staged and unstaged rows agree with
+  what the diff shows. Old side: `HEAD:path` (unstaged and staged rows); new side:
+  `:path` (the index) for staged rows, the worktree file for unstaged rows, `FileManager`
+  for untracked. Deleted files have only an old side, added files only a new side.
+- One `git cat-file --batch-check` call per refresh, fed every needed object spec on
+  stdin, returns `<oid> <type> <size>` lines; parse with a `GitCatFileSizeParser` in the
+  style of the numstat parser. Worktree sizes come from `FileManager.attributesOfItem`.
+- Model: `LineStats.binary` gains `(oldBytes: Int?, newBytes: Int?)`. Format with
+  `ByteCountFormatter` in decimal KB, one decimal below 100 KB, switching to MB above
+  1 MB (`1.2 MB`). Keep the `binary` word only when both sizes are unknown.
+- `ChurnLabel` renders the size in the same tertiary monospaced caption. Modified rows
+  colour the arrow's right side green or red depending on whether the file grew or
+  shrank; equal sizes show one value.
+- Only run cat-file when the status contains at least one binary row.
+
+**Tests.** `GitCatFileSizeParser` (missing objects, `-z` framing), size formatting
+thresholds, old/new pairing per `Kind` and `Area`.
 
 ### B. Right-click actions on sidebar files
 

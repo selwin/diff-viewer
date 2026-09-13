@@ -54,6 +54,7 @@ struct TaggedClient: RepoClient {
     var tag = "A"
 
     func status() async throws -> [ChangedFile] { [] }
+    func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
     func indexContents(of path: String) async throws -> Data? { nil }
     func headContents(of path: String) async throws -> Data? { nil }
     func worktreeContents(of path: String) async -> Data? { nil }

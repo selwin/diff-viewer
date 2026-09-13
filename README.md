@@ -5,6 +5,8 @@ A native macOS 26 app for viewing git working-tree diffs side by side.
 - **Syntax-aware diffs** via a bundled [difftastic](https://difftastic.wilfred.me.uk) (`difft`)
   binary: token-level highlights that understand the language's structure.
 - **Hide whitespace** toggle (⇧⌘W), like GitHub's diff viewer.
+- **Per-file line counts** in the sidebar (`+12 −4`, or "binary"), from `git diff --numstat`
+  (with `-w` when Hide whitespace is on — it means exactly git's `-w`: ASCII whitespace only).
 - **Collapse unchanged lines** (⇧⌘U, on by default): only changed hunks plus 5 lines of
   context are shown; each hidden run is one separator with expand-up / expand-down
   controls (20 lines at a time), click the text to reveal the run, ⌥-click to reveal the
