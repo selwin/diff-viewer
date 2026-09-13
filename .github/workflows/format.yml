@@ -41,6 +41,14 @@ jobs:
       - name: Check formatting
         run: swift format lint --strict --parallel --recursive --configuration .swift-format $SOURCES
 
+      # TEMPORARY: prints the patch that would fix a failure, so it can be applied locally.
+      - name: Show the changes swift-format would make
+        if: failure()
+        run: |
+          cp -R "$GITHUB_WORKSPACE" /tmp/before
+          swift format --in-place --parallel --recursive --configuration .swift-format $SOURCES
+          git --no-pager diff --no-index /tmp/before "$GITHUB_WORKSPACE" || true
+
       - name: How to fix
         if: failure()
         run: echo "Run 'make format' locally and commit the result."
