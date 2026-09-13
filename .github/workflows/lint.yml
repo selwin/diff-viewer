@@ -1,9 +1,18 @@
 name: Lint
 
+# GitHub's workflow parser does not support YAML anchors, so the path list is repeated.
 on:
   push:
     branches: [main]
+    paths:
+      - '**.swift'
+      - '**.swiftlint.yml'
+      - .github/workflows/lint.yml
   pull_request:
+    paths:
+      - '**.swift'
+      - '**.swiftlint.yml'
+      - .github/workflows/lint.yml
   workflow_dispatch:
 
 permissions:

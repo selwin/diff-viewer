@@ -1,9 +1,18 @@
 name: Format
 
+# GitHub's workflow parser does not support YAML anchors, so the path list is repeated.
 on:
   push:
     branches: [main]
+    paths:
+      - '**.swift'
+      - .swift-format
+      - .github/workflows/format.yml
   pull_request:
+    paths:
+      - '**.swift'
+      - .swift-format
+      - .github/workflows/format.yml
   workflow_dispatch:
 
 permissions:
@@ -29,15 +38,13 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # TEMPORARY: prints the formatter's own defaults so .swift-format can stay minimal.
+      - name: Dump default configuration
+        run: swift format dump-configuration || true
+
       - name: Check formatting
         run: swift format lint --strict --parallel --recursive --configuration .swift-format $SOURCES
 
-      # The job container checks out a plain tree rather than a git repository, so the diff
-      # compares a formatted copy against the original. Apply it locally with `git apply -p2`.
-      - name: Show the changes swift-format would make
+      - name: How to fix
         if: failure()
-        run: |
-          cp -R "$GITHUB_WORKSPACE" /tmp/before
-          cp -R "$GITHUB_WORKSPACE" /tmp/after
-          cd /tmp/after && swift format --in-place --parallel --recursive --configuration .swift-format $SOURCES
-          cd /tmp && git --no-pager diff --no-index before after || true
+        run: echo "Run 'make format' locally and commit the result."
