@@ -80,7 +80,7 @@ final class DiffPrefetcher: Prefetching {
 
     /// Loads and classifies off the main actor: the identical-content check compares
     /// whole buffers, which must not stall the UI for a speculative read.
-    private nonisolated static func candidate(_ file: ChangedFile, client: any RepoClient, loader: SourceLoader) async -> DiffEngine.Sources? {
+    nonisolated private static func candidate(_ file: ChangedFile, client: any RepoClient, loader: SourceLoader) async -> DiffEngine.Sources? {
         guard let sources = try? await loader(file, client), DiffEngine.needsDifft(sources) else { return nil }
         return sources
     }

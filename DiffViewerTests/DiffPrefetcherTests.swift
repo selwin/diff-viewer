@@ -42,7 +42,7 @@ actor LoaderProbe {
     func release() {
         let waiting = held
         held = []
-        waiting.forEach { $0.resume() }
+        for continuation in waiting { continuation.resume() }
     }
 }
 

@@ -1,0 +1,39 @@
+name: Format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOURCES: DiffViewer DiffViewerTests
+
+jobs:
+  swift-format:
+    name: swift-format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # swift-format ships inside the Swift toolchain, so the check runs in the official Swift
+    # image on a Linux runner. Xcode 26.6 bundles Swift 6.3; keep this tag on the same minor.
+    container:
+      image: swift:6.3.3-noble@sha256:dd115b20969a2acf74c8dcf6da7c4aeda086053c27453dad59052a65bafc8d0c
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check formatting
+        run: swift format lint --strict --parallel --recursive --configuration .swift-format $SOURCES
+
+      - name: Show the changes swift-format would make
+        if: failure()
+        run: |
+          swift format --in-place --parallel --recursive --configuration .swift-format $SOURCES
+          git --no-pager diff

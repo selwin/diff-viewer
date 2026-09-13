@@ -97,8 +97,8 @@ struct DifftCacheTests {
 
     @Test func keyDependsOnSideBoundaries() {
         let ab = DifftCache.key(old: Data("ab".utf8), new: Data("c".utf8), fileName: "f")
-        let a_bc = DifftCache.key(old: Data("a".utf8), new: Data("bc".utf8), fileName: "f")
-        #expect(ab != a_bc)
+        let aBc = DifftCache.key(old: Data("a".utf8), new: Data("bc".utf8), fileName: "f")
+        #expect(ab != aBc)
         #expect(ab == DifftCache.key(old: Data("ab".utf8), new: Data("c".utf8), fileName: "f"))
     }
 

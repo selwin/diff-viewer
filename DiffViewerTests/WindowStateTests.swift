@@ -40,7 +40,7 @@ actor StubRepoClient: RepoClient {
     func releaseReads() {
         let waiting = heldReads
         heldReads = []
-        waiting.forEach { $0.resume() }
+        for continuation in waiting { continuation.resume() }
     }
 
     func indexContents(of path: String) async throws -> Data? {

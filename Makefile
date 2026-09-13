@@ -11,7 +11,7 @@ CONFIG    ?= Debug
 APP       := $(DERIVED)/Build/Products/$(CONFIG)/DiffViewer.app
 XCB       := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) -configuration $(CONFIG)
 
-.PHONY: all gen difft build run test clean open
+.PHONY: all gen difft build run test lint format format-check clean open
 
 all: build
 
@@ -36,6 +36,18 @@ test: gen difft
 
 open: gen
 	open $(PROJECT)
+
+# Same checks CI runs (.github/workflows). swiftlint: `brew install swiftlint`; swift-format ships with Xcode.
+SOURCES := DiffViewer DiffViewerTests
+
+lint:
+	swiftlint lint --strict
+
+format:
+	swift format --in-place --parallel --recursive --configuration .swift-format $(SOURCES)
+
+format-check:
+	swift format lint --strict --parallel --recursive --configuration .swift-format $(SOURCES)
 
 clean:
 	rm -rf $(DERIVED) $(PROJECT)

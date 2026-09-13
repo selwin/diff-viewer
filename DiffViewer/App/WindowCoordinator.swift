@@ -31,7 +31,7 @@ final class WindowCoordinator {
         let origin: OpenOrigin
         var purpose: OpenPurpose = .user
         /// The saved root this request restores, if any; what `settle` refers to.
-        var restoreEntry: RepositoryRoot? = nil
+        var restoreEntry: RepositoryRoot?
 
         /// Restoration opens adopt only the window named as their origin (the initial
         /// window); the rest always create, so saved repositories never race for an

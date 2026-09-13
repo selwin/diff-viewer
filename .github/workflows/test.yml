@@ -1,0 +1,56 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pin the Xcode release rather than relying on the runner image's default.
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Fetch difft
+        run: scripts/fetch-difft.sh
+
+      - name: Run tests
+        run: |
+          xcodebuild test \
+            -project DiffViewer.xcodeproj \
+            -scheme DiffViewer \
+            -destination 'platform=macOS' \
+            -derivedDataPath build \
+            -configuration Debug \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            | xcbeautify --renderer github-actions
