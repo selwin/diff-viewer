@@ -19,8 +19,8 @@ final class AppServices {
     let coordinator: WindowCoordinator
     let windows = NativeWindowRegistry()
 
-    init(preferences: Preferences = Preferences(), cache: DifftCache = .bundled()) {
-        self.preferences = preferences
+    init(defaults: UserDefaults = .standard, cache: DifftCache = .bundled()) {
+        preferences = Preferences(defaults: defaults)
         self.cache = cache
         prefetcher = DiffPrefetcher(cache: cache)
         let windows = windows
@@ -28,6 +28,7 @@ final class AppServices {
         coordinator = WindowCoordinator(
             preferences: preferences,
             prefetcher: prefetcher,
+            defaults: defaults,
             hooks: WindowCoordinator.Hooks(
                 createWindow: { root in opener.action?(value: root) },
                 focusWindow: { id in windows[id]?.makeKeyAndOrderFront(nil) },
@@ -38,9 +39,20 @@ final class AppServices {
     }
 
     private let opener: WindowOpener
+    private var hooksInstalled = false
 
-    func installOpenWindow(_ action: OpenWindowAction) {
-        opener.action = action
+    /// Connects the app delegate and SwiftUI's window opener to the coordinator. Runs
+    /// once; the first window's task calls it because only a view can obtain the
+    /// opener. Setting `launchHandler` delivers a launch that already finished.
+    func installAppHooks(delegate: AppDelegate, openWindow: OpenWindowAction) {
+        opener.action = openWindow
+        guard !hooksInstalled else { return }
+        hooksInstalled = true
+        let coordinator = coordinator
+        delegate.openHandler = { url in coordinator.openFromApp(url) }
+        delegate.newTabHandler = { [weak self] in self?.openEmptyWindow() }
+        delegate.terminationHandler = { coordinator.applicationWillTerminate() }
+        delegate.launchHandler = { coordinator.applicationDidFinishLaunching() }
     }
 
     /// Opens an empty window, which becomes a tab of the key window. It adopts the

@@ -30,7 +30,11 @@ final class DiffPrefetcher: Prefetching {
     private let loadSources: SourceLoader
     private var pending: [ChangedFile] = []
     private var client: (any RepoClient)?
-    private var activeWorkers = 0
+    private var activeWorkers = 0 {
+        didSet { peakActiveWorkers = max(peakActiveWorkers, activeWorkers) }
+    }
+    /// The most workers ever busy at once; at most `maxConcurrentPrefetchJobs`.
+    private(set) var peakActiveWorkers = 0
     /// Files accepted by the last `prefetch` call, in order (set synchronously).
     private(set) var acceptedFileIDs: [ChangedFile.ID] = []
     /// Files dequeued since the last `prefetch` call, in dequeue order.

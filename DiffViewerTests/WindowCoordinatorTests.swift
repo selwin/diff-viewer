@@ -61,7 +61,7 @@ final class PresentationLog {
 @MainActor
 final class CoordinatorHarness {
     let defaults: UserDefaults
-    let suite = "DiffViewerTests.Coordinator.\(UUID().uuidString)"
+    private(set) var suite = "DiffViewerTests.Coordinator.\(UUID().uuidString)"
     let gate = OpenGate()
     let registry = RepoRegistry()
     let runner = RunnerProbe()
@@ -73,8 +73,19 @@ final class CoordinatorHarness {
     /// Scene values written by the coordinator, by window.
     private(set) var sceneRoots: [WindowID: RepositoryRoot?] = [:]
 
-    init() {
-        defaults = UserDefaults(suiteName: suite)!
+    /// `savedRoots` and `savedActive` seed the persisted session the coordinator
+    /// reads at init; `suite` reuses another harness's defaults. Launch is reported
+    /// as finished up front unless `launchFinished` is false.
+    init(suite: String? = nil, savedRoots: [RepositoryRoot] = [], savedPaths: [String] = [], savedActive: RepositoryRoot? = nil, launchFinished: Bool = true) {
+        if let suite { self.suite = suite }
+        defaults = UserDefaults(suiteName: self.suite)!
+        let paths = savedRoots.map(\.path) + savedPaths
+        if !paths.isEmpty {
+            defaults.set(paths, forKey: WindowCoordinator.SessionKeys.openRoots)
+        }
+        if let savedActive {
+            defaults.set(savedActive.path, forKey: WindowCoordinator.SessionKeys.lastActive)
+        }
         preferences = Preferences(defaults: defaults)
         let runner = runner
         cache = DifftCache(runner: { old, new, fileName, qos in
@@ -86,6 +97,7 @@ final class CoordinatorHarness {
         coordinator = WindowCoordinator(
             preferences: preferences,
             prefetcher: prefetcher,
+            defaults: defaults,
             discover: { url in
                 try await gate.pass(url)
                 guard let entry = await registry.lookup(url) else { throw ProcessError.failed(command: "test", status: 1, stderr: "no stub") }
@@ -97,6 +109,7 @@ final class CoordinatorHarness {
                 presentError: { log.errors.append($0) }
             )
         )
+        if launchFinished { coordinator.applicationDidFinishLaunching() }
     }
 
     deinit {
@@ -105,10 +118,31 @@ final class CoordinatorHarness {
 
     var recent: [RepositoryRoot] { preferences.recentRepositoryRoots }
 
+    /// The persisted session as the next launch would read it.
+    var savedRoots: [RepositoryRoot]? {
+        defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots)?.map { RepositoryRoot(path: $0) }
+    }
+
+    var savedActive: RepositoryRoot? {
+        defaults.string(forKey: WindowCoordinator.SessionKeys.lastActive).map { RepositoryRoot(path: $0) }
+    }
+
+    /// The root `repo(name)` will have, for seeding a session before the repo exists.
+    nonisolated static func savedRoot(_ name: String) -> RepositoryRoot {
+        RepositoryRoot(path: "/tmp/\(name)")
+    }
+
     func repo(_ name: String, files: [ChangedFile] = []) -> URL {
         let url = URL(fileURLWithPath: "/tmp/\(name)", isDirectory: true)
-        registry.entries[url] = (RepositoryRoot(url), StubRepoClient(files: files))
+        let entry = (RepositoryRoot(url), StubRepoClient(files: files))
+        registry.entries[url] = entry
+        // Restoration asks for the saved root's own URL.
+        registry.entries[entry.0.url] = entry
         return url
+    }
+
+    func running() async -> Bool {
+        await eventually { await self.coordinator.phase == .running }
     }
 
     /// A path inside `repo` that discovery resolves to the same root and client.
@@ -342,6 +376,15 @@ struct WindowCoordinatorTests {
         #expect(!stranger.isClosed)
     }
 
+    @Test func aClosedStateCannotRegister() async {
+        let h = CoordinatorHarness()
+        let w1 = h.makeWindow()
+        h.coordinator.windowWillClose(w1.id, sceneRoot: nil)
+        #expect(w1.isClosed)
+        h.register(w1, sceneRoot: nil)
+        #expect(h.coordinator.windows.isEmpty, "a window presented again gets a fresh state instead")
+    }
+
     @Test func originClosedWhileDiscoveryIsHeldDropsTheResult() async {
         let h = CoordinatorHarness()
         let a = h.repo("A", files: filesA)
@@ -402,22 +445,6 @@ struct WindowCoordinatorTests {
         #expect(h.recent == [h.root(x)])
         h.registerCreated(h.root(a))
         #expect(h.recent == [h.root(a), h.root(x)])
-    }
-
-    @Test func queuedFinderURLSkipsTheRecentRepositoryAtLaunch() async {
-        let h = CoordinatorHarness()
-        let a = h.repo("A", files: filesA)
-        let b = h.repo("B", files: filesB)
-        h.preferences.noteOpened(h.root(a))
-        #expect(h.coordinator.phase == .restoring)
-        h.coordinator.openFromApp(b)
-        let w1 = h.makeWindow()
-        #expect(h.coordinator.phase == .running)
-        #expect(await eventually { await w1.repositoryRoot == h.root(b) })
-        try? await Task.sleep(for: .milliseconds(50))
-        #expect(h.log.created.isEmpty, "the recent repository is not reopened")
-        #expect(h.registry.lookups[a] == nil)
-        #expect(h.coordinator.openOrder == [h.root(b)])
     }
 
     @Test func appOriginFallsBackToTheLastActiveWindow() async {
@@ -678,6 +705,371 @@ struct WindowCoordinatorTests {
         h.coordinator.windowOcclusionChanged(w2.id, visible: true)
         #expect(await eventually { await h.client(b).contentReads == readsB + 2 })
         #expect(!w2.diffStale)
+    }
+
+    // MARK: Session and restoration
+
+    @Test func sessionRoundTripsOpenOrderAndActiveRoot() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        #expect(await h.running())
+        await h.openAndSettle(a, into: w1)
+        await h.open(b, from: w1)
+        let wb = h.registerCreated(h.root(b))
+        h.coordinator.windowDidBecomeKey(wb.id)
+        #expect(h.savedRoots == [h.root(a), h.root(b)])
+        #expect(h.savedActive == h.root(b))
+
+        let next = CoordinatorHarness(suite: h.suite)
+        #expect(next.coordinator.restoreList == [h.root(a), h.root(b)])
+        #expect(next.coordinator.restoreActive == h.root(b))
+        #expect(next.coordinator.phase == .restoring)
+    }
+
+    @Test func noSessionWriteWhileRestoringAndSavedOrderComesFirst() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let c = h.repo("C")
+        await h.gate.hold(a)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await h.gate.waitingURLs == [a] })
+        #expect(h.savedRoots == saved, "the initial empty registration leaves the saved list intact")
+        #expect(h.coordinator.phase == .restoring)
+        #expect(h.registry.lookups[b] == nil, "saved repositories are discovered one at a time, in order")
+
+        let w2 = h.makeWindow()
+        await h.openAndSettle(c, into: w2)
+        #expect(h.savedRoots == saved, "nothing is written while restoring")
+        #expect(h.recent == [h.root(c)], "a user open during restoration still counts for recency")
+
+        await h.gate.release(a)
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        #expect(h.coordinator.phase == .restoring, "B's window has not registered")
+        h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)], "saved roots keep their order ahead of what was opened meanwhile")
+        #expect(h.savedRoots == [h.root(a), h.root(b), h.root(c)])
+        #expect(h.recent == [h.root(c)], "restoration never touches recency")
+    }
+
+    @Test func restoringOneRepositoryIntoTheInitialWindowSettles() async {
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")])
+        let a = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await h.running())
+        #expect(h.log.created.isEmpty)
+        #expect(h.coordinator.openOrder == [h.root(a)])
+        #expect(h.savedRoots == [h.root(a)])
+        #expect(h.registry.lookups[h.root(a).url] == 1)
+    }
+
+    @Test func initialWindowIsTheAdoptionTargetEvenWhenNotKey() async {
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")])
+        let a = h.repo("A", files: filesA)
+        await h.gate.hold(a)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await h.gate.waitingURLs == [a] })
+        let w2 = h.makeWindow()
+        h.coordinator.windowDidBecomeKey(w2.id)
+        await h.gate.release(a)
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(w2.isEmpty)
+        #expect(h.log.created.isEmpty)
+        #expect(await h.running())
+    }
+
+    @Test func restoreWithAMissingPathDropsItAndSettles() async {
+        let missing = CoordinatorHarness.savedRoot("gone")
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A"), missing])
+        let a = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await h.running())
+        #expect(h.log.errors.isEmpty, "restoration failures are silent")
+        #expect(h.log.created.isEmpty)
+        #expect(h.coordinator.openOrder == [h.root(a)])
+        #expect(h.savedRoots == [h.root(a)], "the missing path is dropped from the session")
+    }
+
+    @Test func windowClosedDuringRestorationStillSettles() async {
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        #expect(h.coordinator.phase == .restoring)
+
+        let late = h.makeState()
+        h.coordinator.windowDidAttach(late.id, sceneRoot: h.root(b))
+        h.coordinator.windowWillClose(late.id, sceneRoot: h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.coordinator.pendingCreates.isEmpty)
+        #expect(h.coordinator.openOrder == [h.root(a)])
+        #expect(h.savedRoots == [h.root(a)])
+    }
+
+    @Test func batchSettlesOnlyWhenEveryRootIsAccountedForRegardlessOfOrder() async {
+        let saved = ["A", "B", "C"].map(CoordinatorHarness.savedRoot)
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let c = h.repo("C")
+        await h.gate.hold(c)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        #expect(await eventually { await h.gate.waitingURLs == [c] })
+        #expect(h.coordinator.phase == .restoring, "B is pending and C is still discovering")
+
+        // C's window registers before B's: registration order is not saved order.
+        await h.gate.release(c)
+        #expect(await eventually { await h.log.created == [h.root(b), h.root(c)] })
+        let wc = h.registerCreated(h.root(c))
+        #expect(h.coordinator.phase == .restoring, "B is still pending")
+        #expect(h.savedRoots == saved)
+
+        let wb = h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.coordinator.openOrder == saved, "the saved order survives out-of-order registration")
+        #expect(h.savedRoots == saved)
+        #expect(wc.repositoryRoot == h.root(c))
+        #expect(wb.repositoryRoot == h.root(b))
+        #expect(h.recent.isEmpty)
+    }
+
+    @Test func activeRootIsFocusedAfterSettle() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        let wb = h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.log.focused.last == wb.id)
+        #expect(h.coordinator.lastActiveRepositoryRoot == h.root(b))
+        #expect(h.savedActive == h.root(b))
+    }
+
+    @Test func duplicateRequestForAPendingRestoredRootKeepsRestorationActive() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+
+        await h.open(b, from: w1)
+        #expect(h.coordinator.phase == .restoring)
+        #expect(h.log.created == [h.root(b)], "the duplicate joins the pending create")
+        #expect(h.recent.isEmpty, "recency waits for the window")
+        h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.recent == [h.root(b)], "the joining user request counts once the window exists")
+    }
+
+    @Test func restorationJoiningAUserCreateSettlesWhenThatWindowRegisters() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let c = h.repo("C")
+        await h.gate.hold(a)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await h.gate.waitingURLs == [a] })
+        // The user opens C into a second window and B from it, before restoration
+        // reaches B: B's window is a pending user create.
+        let w2 = h.makeWindow()
+        await h.openAndSettle(c, into: w2)
+        await h.open(b, from: w2)
+        #expect(h.log.created == [h.root(b)])
+        #expect(h.coordinator.pendingCreates[h.root(b)]?.restoreEntry == nil)
+
+        await h.gate.release(a)
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.coordinator.pendingCreates[h.root(b)]?.restoreEntry == h.root(b) }, "restoration joins the pending create and hands it the saved entry")
+        #expect(h.log.created == [h.root(b)], "no second window for B")
+        #expect(h.coordinator.phase == .restoring)
+
+        h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)])
+        #expect(h.recent == [h.root(b), h.root(c)], "the user's request keeps its recency")
+    }
+
+    @Test func savedPathThatBecameASymlinkToAnotherRepositoryIsDropped() async throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "DiffViewerTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let bDirectory = base.appending(path: "B", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: bDirectory, withIntermediateDirectories: true)
+        let bRoot = RepositoryRoot(bDirectory)
+        // The session was saved with A's canonical path; A has since become a symlink to B.
+        let savedPath = RepositoryRoot(base).path + "/A"
+        try FileManager.default.createSymbolicLink(atPath: savedPath, withDestinationPath: bDirectory.path)
+
+        let h = CoordinatorHarness(savedPaths: [savedPath])
+        #expect(h.coordinator.restoreList == [bRoot], "the resolved identity already reads as B")
+        h.registry.entries[URL(fileURLWithPath: savedPath, isDirectory: true)] = (bRoot, StubRepoClient(files: filesB))
+        let w1 = h.makeWindow()
+        #expect(await h.running())
+        #expect(w1.isEmpty, "B was not what the user had open")
+        #expect(h.log.created.isEmpty)
+        #expect(h.coordinator.rootIndex[bRoot] == nil)
+        #expect(h.savedRoots == [])
+
+        // The same repository saved under its own path restores.
+        let h2 = CoordinatorHarness(savedPaths: [bRoot.path])
+        h2.registry.entries[bRoot.url] = (bRoot, StubRepoClient(files: filesB))
+        let w2 = h2.makeWindow()
+        #expect(await eventually { await w2.repositoryRoot == bRoot })
+    }
+
+    @Test func terminatingWhileRestoringWritesTheSavedPathsUnchanged() async {
+        let a = CoordinatorHarness.savedRoot("A")
+        let rawPath = a.path + "/."
+        let h = CoordinatorHarness(savedPaths: [rawPath], launchFinished: false)
+        _ = h.repo("A", files: filesA)
+        h.makeWindow()
+        h.coordinator.applicationWillTerminate()
+        #expect(h.defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) == [rawPath], "the persisted spelling survives a quit before restoration")
+    }
+
+    @Test func savedPathResolvingToADifferentRootIsDropped() async {
+        let a = CoordinatorHarness.savedRoot("A")
+        let stale = RepositoryRoot(path: "/tmp/A/src")
+        let h = CoordinatorHarness(savedRoots: [stale])
+        _ = h.subdirectory(of: h.repo("A", files: filesA), "src")
+        let w1 = h.makeWindow()
+        #expect(await h.running())
+        #expect(w1.isEmpty, "the saved entry is not migrated to the repository that now contains it")
+        #expect(h.log.created.isEmpty)
+        #expect(h.coordinator.rootIndex[a] == nil)
+        #expect(h.coordinator.openOrder.isEmpty)
+        #expect(h.savedRoots == [])
+    }
+
+    @Test func savedListWithADuplicateRestoresOneWindow() async {
+        let a = CoordinatorHarness.savedRoot("A")
+        let h = CoordinatorHarness(savedRoots: [a, a])
+        _ = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == a })
+        #expect(await h.running())
+        #expect(h.log.created.isEmpty)
+        #expect(h.coordinator.openOrder == [a])
+        #expect(h.registry.watchers.count == 1)
+    }
+
+    @Test func launchByOpenSkipsTheSavedSet() async {
+        // The real order: the launch window registers, the launch URL arrives, then
+        // launch finishes.
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")], launchFinished: false)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        #expect(h.coordinator.phase == .restoring, "nothing restores before launch finishes")
+        h.coordinator.openFromApp(b)
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(h.registry.lookups[b] == nil, "queued until launch finishes")
+
+        h.coordinator.applicationDidFinishLaunching()
+        #expect(h.coordinator.phase == .running)
+        #expect(await eventually { await w1.repositoryRoot == h.root(b) })
+        #expect(h.log.created.isEmpty, "the saved repository is not reopened")
+        #expect(h.registry.lookups[a] == nil && h.registry.lookups[h.root(a).url] == nil)
+        #expect(h.coordinator.openOrder == [h.root(b)])
+        #expect(h.savedRoots == [h.root(b)])
+    }
+
+    @Test func restorationWaitsForLaunchToFinishAndForAWindow() async {
+        let a = CoordinatorHarness.savedRoot("A")
+        let h = CoordinatorHarness(savedRoots: [a], launchFinished: false)
+        _ = h.repo("A", files: filesA)
+        h.coordinator.applicationDidFinishLaunching()
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(h.registry.lookups.isEmpty, "no window to restore into yet")
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == a })
+        #expect(await h.running())
+
+        // A launch window that closes and registers again as a fresh state.
+        let h2 = CoordinatorHarness(savedRoots: [a], launchFinished: false)
+        _ = h2.repo("A", files: filesA)
+        let first = h2.makeWindow()
+        h2.coordinator.windowWillClose(first.id, sceneRoot: nil)
+        let second = h2.makeWindow()
+        h2.coordinator.applicationDidFinishLaunching()
+        #expect(await eventually { await second.repositoryRoot == a })
+        #expect(first.isEmpty && first.isClosed)
+        #expect(h2.coordinator.windows.count == 1)
+    }
+
+    @Test func finderURLReceivedWhileRestoringOpensAfterSettle() async {
+        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        await h.gate.hold(a)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await h.gate.waitingURLs == [a] })
+        h.coordinator.openFromApp(b)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.registry.lookups[b] == nil, "queued until the batch settles")
+        #expect(h.log.created.isEmpty)
+
+        await h.gate.release(a)
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await h.running())
+        #expect(await eventually { await h.log.created == [h.root(b)] }, "opened after settle, alongside the restored window")
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
+    }
+
+    @Test func terminatingWhileDiscoveryIsHeldKeepsTheSavedSession() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        await h.gate.hold(b)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.gate.waitingURLs == [b] })
+        h.coordinator.windowDidBecomeKey(w1.id)
+
+        h.coordinator.applicationWillTerminate()
+        #expect(h.coordinator.isTerminating)
+        #expect(h.savedRoots == saved, "B is still in the written session")
+        #expect(h.savedActive == saved[1], "the saved active root is kept")
+        h.coordinator.windowWillClose(w1.id, sceneRoot: h.root(a))
+        #expect(h.savedRoots == saved, "closes during termination do not rewrite the session")
+        await h.gate.release(b)
+    }
+
+    @Test func removesWhileTerminatingDoNotRewriteTheSession() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let w1 = h.makeWindow()
+        let w2 = h.makeWindow()
+        await h.openAndSettle(a, into: w1)
+        await h.openAndSettle(b, into: w2)
+        h.coordinator.windowDidBecomeKey(w1.id)
+        #expect(h.savedRoots == [h.root(a), h.root(b)])
+        #expect(h.savedActive == h.root(a))
+
+        h.coordinator.applicationWillTerminate()
+        h.coordinator.windowWillClose(w1.id, sceneRoot: h.root(a))
+        h.coordinator.windowWillClose(w2.id, sceneRoot: h.root(b))
+        #expect(h.coordinator.windows.isEmpty)
+        #expect(h.savedRoots == [h.root(a), h.root(b)])
+        #expect(h.savedActive == h.root(a))
     }
 
     // MARK: Discovery against real repositories

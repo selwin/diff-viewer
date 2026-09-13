@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct ProcessResult: Sendable {
     let stdout: Data
@@ -21,6 +22,30 @@ enum ProcessError: Error, LocalizedError {
     }
 }
 
+/// Counts subprocesses between a successful launch and their exit, and remembers
+/// the most that were alive at once. An observation for measurement, not a limit.
+final class ProcessGauge: Sendable {
+    struct Reading: Sendable, Equatable {
+        var running = 0
+        var peak = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: Reading())
+
+    var reading: Reading { state.withLock { $0 } }
+
+    fileprivate func launched() {
+        state.withLock {
+            $0.running += 1
+            $0.peak = max($0.peak, $0.running)
+        }
+    }
+
+    fileprivate func exited() {
+        state.withLock { $0.running -= 1 }
+    }
+}
+
 /// Runs a subprocess to completion off the main thread, draining stdout and stderr
 /// concurrently so large outputs never deadlock on a full pipe.
 enum ProcessRunner {
@@ -29,7 +54,8 @@ enum ProcessRunner {
         arguments: [String],
         currentDirectory: URL? = nil,
         environment: [String: String] = [:],
-        qualityOfService: QualityOfService = .userInitiated
+        qualityOfService: QualityOfService = .userInitiated,
+        gauge: ProcessGauge? = nil
     ) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
@@ -54,6 +80,7 @@ enum ProcessRunner {
                     continuation.resume(throwing: error)
                     return
                 }
+                gauge?.launched()
 
                 let group = DispatchGroup()
                 nonisolated(unsafe) var stderrData = Data()
@@ -64,6 +91,7 @@ enum ProcessRunner {
                 }
                 let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                gauge?.exited()
                 group.wait()
 
                 continuation.resume(returning: ProcessResult(

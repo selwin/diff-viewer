@@ -21,6 +21,13 @@ struct WindowAccessor: NSViewRepresentable {
 
     func updateNSView(_ view: AccessorView, context: Context) {
         context.coordinator.sceneRoot = sceneRoot
+        // A window that SwiftUI closed and presented again got a fresh state and id;
+        // its observers were removed on close, so attach again under the new id.
+        if context.coordinator.windowID != windowID {
+            context.coordinator.detach()
+            context.coordinator.windowID = windowID
+            context.coordinator.attach(to: view.window)
+        }
     }
 
     static func dismantleNSView(_ view: AccessorView, coordinator: Coordinator) {
@@ -46,7 +53,7 @@ struct WindowAccessor: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
-        let windowID: WindowID
+        var windowID: WindowID
         var sceneRoot: RepositoryRoot?
         private let services: AppServices
         private weak var window: NSWindow?

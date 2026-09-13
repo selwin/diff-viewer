@@ -1,12 +1,22 @@
 import AppKit
 import SwiftUI
 
-/// Handles folders opened from Finder or the Dock icon, and the tab bar's "+" button.
-/// URLs that arrive before the app has wired its handler are kept until it does.
+/// Handles folders opened from Finder or the Dock icon, the tab bar's "+" button, and
+/// the session snapshot written at quit. URLs that arrive before the app has wired its
+/// handler are kept until it does.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Opens an empty window; set once the app's services exist.
     var newTabHandler: (@MainActor () -> Void)?
+    /// Writes the session snapshot; set once the app's services exist.
+    var terminationHandler: (@MainActor () -> Void)?
+
+    /// The one place the session is written at quit. Window closes AppKit performs
+    /// afterwards do not rewrite it.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminationHandler?()
+        return .terminateNow
+    }
 
     /// AppKit sends this up the responder chain from the tab bar's "+" button; the
     /// button is only shown when something implements it.
@@ -24,6 +34,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var queuedURLs: [URL] = []
+
+    /// Tells the coordinator launch has finished; set once the app's services exist.
+    /// The first window registers before launch finishes, so the coordinator waits
+    /// for this before deciding whether to restore the saved session.
+    var launchHandler: (@MainActor () -> Void)? {
+        didSet {
+            if hasFinishedLaunching { launchHandler?() }
+        }
+    }
+
+    private var hasFinishedLaunching = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        hasFinishedLaunching = true
+        launchHandler?()
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
@@ -71,14 +97,21 @@ struct RepositoryWindow: View {
             .environment(state)
             .background(WindowAccessor(windowID: state.id, sceneRoot: sceneRoot, services: services))
             .focusedSceneValue(\.windowState, state)
+            // Folders opened from Finder reach `AppDelegate.application(_:open:)` and
+            // are routed by the coordinator. Letting every window "handle" the external
+            // event keeps SwiftUI from presenting an extra empty window for it; a
+            // scene-level `handlesExternalEvents(matching: [])` would instead present no
+            // window at all when the app is launched by opening a folder.
+            .handlesExternalEvents(preferring: [], allowing: ["*"])
             .task {
-                let coordinator = services.coordinator
-                // Finder URLs queued in the delegate must reach the coordinator before the
-                // first registration decides whether to reopen the recent repository.
-                delegate.openHandler = { url in coordinator.openFromApp(url) }
-                delegate.newTabHandler = { [services] in services.openEmptyWindow() }
-                services.installOpenWindow(openWindow)
-                coordinator.register(state, sceneRoot: sceneRoot) { sceneRoot = $0 }
+                // When the app is launched by opening a folder, SwiftUI closes the launch
+                // window and presents it again for the external event, so this task runs
+                // twice for one window. The closed state is torn down; start over.
+                if state.isClosed { state = services.makeWindowState() }
+                // Before registering: Finder URLs queued in the delegate must reach the
+                // coordinator before launch finishes, when it decides whether to restore.
+                services.installAppHooks(delegate: delegate, openWindow: openWindow)
+                services.coordinator.register(state, sceneRoot: sceneRoot) { sceneRoot = $0 }
                 DebugLaunchOptions.apply(to: services)
             }
     }
