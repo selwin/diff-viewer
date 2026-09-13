@@ -402,7 +402,9 @@ extension WindowState {
         // happen before the target is recorded or the observer would discard it.
         let previous = selectedFile.map { PendingSelection(path: $0.path, area: $0.area) }
         selectedFileID = nil
-        pendingReselect = previous
+        // A second scope change before the first finished has no selection to read — the
+        // list was cleared — so the target recorded by that first change still stands.
+        if let previous { pendingReselect = previous }
         session.statsTask?.cancel()
 
         scope = newScope
@@ -419,7 +421,7 @@ extension WindowState {
     ///
     /// Called by whichever refresh publishes the new scope's files, which is not always
     /// the one the scope change started: a watcher refresh can overtake it.
-    func reselect(_ previous: PendingSelection) {
+    private func reselect(_ previous: PendingSelection) {
         guard !isClosed, selectedFileID == nil else { return }
         let matches = files.filter { $0.path == previous.path }
         let match =
@@ -436,7 +438,7 @@ extension WindowState {
     /// user gets for the sidebar changing under them. The scope generation is checked
     /// after the await too — by then the user may have picked another commit, and an
     /// alert about the old one would be both wrong and obstructive.
-    func fallBackToWorkingTree(session: RepoSession, from ref: CommitRef, error: Error) async {
+    private func fallBackToWorkingTree(session: RepoSession, from ref: CommitRef, error: Error) async {
         session.scopeSerial += 1
         let serial = session.scopeSerial
         scope = .workingTree
@@ -453,7 +455,7 @@ extension WindowState {
     // MARK: - History
 
     /// Resolves HEAD and loads its history: adoption and ⌘R.
-    func refreshHistory(session: RepoSession) {
+    private func refreshHistory(session: RepoSession) {
         startHistoryLoad(session: session, source: .currentHead)
     }
 
@@ -471,12 +473,13 @@ extension WindowState {
 
     /// Reloads the commit list only when HEAD has moved since the page was read. One
     /// `rev-parse` per watcher tick, instead of a full log on every edit to the tree.
-    func reloadHistoryIfHeadMoved(session: RepoSession) async {
-        // The generation is read before the await and checked after it. Without that,
-        // two overlapping checks can resolve different revisions, and the slower one —
-        // holding the older answer — would start the last load and leave the picker
-        // showing a branch the repository has already left.
-        let serialBefore = session.historySerial
+    private func reloadHistoryIfHeadMoved(session: RepoSession) async {
+        // Each check takes its own ticket, so the newest one wins whatever order they
+        // finish in. Sharing the history generation let completion order decide instead:
+        // whichever check resolved first started a load, and a check holding a fresher
+        // HEAD was discarded behind it.
+        session.headCheckSerial += 1
+        let ticket = session.headCheckSerial
         // `try?` would flatten a thrown error and an unborn HEAD into the same nil, and
         // checking out an unborn branch has to clear the list rather than leave the old
         // one up. A failure here is transient by assumption; the next tick tries again.
@@ -486,18 +489,37 @@ extension WindowState {
         } catch {
             return
         }
-        guard session === self.session, !isClosed, serialBefore == session.historySerial else { return }
+        guard session === self.session, !isClosed, ticket == session.headCheckSerial else { return }
 
-        let headMoved = head != history.revision
+        let displayed = history.revision
+        // Where the picker is heading, which is not always what it shows.
+        let loading = historyRequestInFlight?.revision
+
+        // Checked out elsewhere and back again while a load was running: comparing only
+        // against what is displayed would find nothing to do and let that load land,
+        // publishing another branch's commits over the right ones.
+        if head == displayed, let loading, loading != head {
+            cancelHistoryLoad(session: session)
+            return
+        }
         // Retry a failed read too, or one bad moment would leave the picker empty until
         // HEAD happened to move.
-        guard headMoved || historyErrorMessage != nil else { return }
+        guard head != displayed || historyErrorMessage != nil else { return }
         // A different HEAD is a different branch or a new commit: start from page one.
-        if headMoved { commitLimit = Self.commitPageSize }
+        if head != displayed { commitLimit = Self.commitPageSize }
         // Several ticks can arrive while one `git log` is still running; restarting it
         // for the answer it is already fetching only burns processes.
         guard historyRequestInFlight != HistoryRequest(revision: head, limit: commitLimit) else { return }
         startHistoryLoad(session: session, source: .revision(head))
+    }
+
+    /// Drops a history read whose answer is no longer wanted, and settles the state its
+    /// completion would have cleared.
+    private func cancelHistoryLoad(session: RepoSession) {
+        session.historySerial += 1
+        session.historyTask?.cancel()
+        historyRequestInFlight = nil
+        isLoadingHistory = false
     }
 
     private func startHistoryLoad(session: RepoSession, source: HistorySource) {

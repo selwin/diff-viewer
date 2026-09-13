@@ -418,4 +418,96 @@ struct WindowStateScopeTests {
         let readsAfter = await client.historyCalls
         #expect(readsAfter - readsBefore == 1, "four ticks, one log read")
     }
+
+    /// The mirror of the test above: the *older* check finishes first. Completion order
+    /// must not decide — the newest HEAD read wins either way.
+    @Test func anEarlyFinishingOlderCheckDoesNotBeatTheNewerOne() async {
+        let h = Harness()
+        let state = h.makeState()
+        let start = commitSummary("c0")
+        let client = await adopt(h, state, commit: start, commitFiles: [])
+        #expect(await eventually { state.history.revision == start.ref.sha })
+
+        let older = commitSummary("c1", subject: "Older")
+        let newer = commitSummary("c2", subject: "Newer")
+        await client.holdHead(true)
+
+        // Both checks resolve revisions that differ from what is displayed.
+        await client.set(head: older.ref.sha)
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.heldHeadCount == 1 })
+        await client.set(head: newer.ref.sha)
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.heldHeadCount == 2 })
+
+        await client.set(commits: [newer, older, start])
+        await client.holdHead(false)
+        // The older check completes first and must be ignored anyway.
+        await client.releaseFirstHead()
+        try? await Task.sleep(for: .milliseconds(60))
+        await client.releaseHead()
+
+        #expect(await eventually { state.history.revision == newer.ref.sha })
+        #expect(state.history.revision != older.ref.sha, "the first to finish does not win")
+    }
+
+    /// Checked out elsewhere and back again while the load for "elsewhere" is running.
+    /// Comparing only against the displayed revision finds nothing to do, and that load
+    /// then publishes the wrong branch's commits.
+    @Test func returningToTheDisplayedHeadDropsTheObsoleteLoad() async {
+        let h = Harness()
+        let state = h.makeState()
+        let onA = commitSummary("a1", subject: "On A")
+        let client = await adopt(h, state, commit: onA, commitFiles: [])
+        #expect(await eventually { state.history.revision == onA.ref.sha })
+
+        // Check out B; its history read blocks part-way.
+        let onB = commitSummary("b1", subject: "On B")
+        await client.holdHistory(true)
+        await client.set(head: onB.ref.sha)
+        await client.set(commits: [onB])
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.heldHistoryCount == 1 })
+
+        // Back to A before B's history arrives.
+        await client.set(head: onA.ref.sha)
+        await client.set(commits: [onA])
+        h.watcherCallbacks.values.first?()
+        try? await Task.sleep(for: .milliseconds(60))
+
+        await client.holdHistory(false)
+        await client.releaseHistory()
+        try? await Task.sleep(for: .milliseconds(80))
+
+        #expect(state.history.revision == onA.ref.sha, "B's load does not land on A")
+        #expect(state.history.commits.first?.ref == onA.ref)
+        #expect(!state.isLoadingHistory, "and the picker is not left spinning")
+    }
+
+    /// A second scope change has no selection left to read, because the first cleared
+    /// the list; the path the user was on must survive both hops.
+    @Test func aPendingSelectionSurvivesASecondScopeChange() async {
+        let h = Harness()
+        let state = h.makeState()
+        let first = commitSummary("c1")
+        let second = commitSummary("c2", subject: "Second")
+        let client = await adopt(h, state, commit: first, commitFiles: [commitFile("a1.swift", first)])
+        await client.set(files: [commitFile("a1.swift", second)], forCommit: second.ref.sha)
+        await client.set(commits: [second, first])
+
+        state.selectedFileID = state.files.first { $0.path == "a1.swift" }?.id
+        #expect(state.selectedFile?.path == "a1.swift")
+
+        // Two scope changes back to back, the second while the first is still loading.
+        await client.holdCommitFiles(true)
+        state.select(commit: first)
+        #expect(await eventually { await client.heldCommitFileCount == 1 })
+        state.select(commit: second)
+        await client.holdCommitFiles(false)
+        await client.releaseCommitFiles()
+
+        #expect(await eventually { state.files.map(\.path) == ["a1.swift"] })
+        #expect(await eventually { state.selectedFileID != nil }, "the path survives both hops")
+        #expect(state.selectedFile?.area == .commit(second.ref))
+    }
 }

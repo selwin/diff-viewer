@@ -31,6 +31,8 @@ actor StubRepoClient: RepoClient {
     private var heldCommitFiles: [CheckedContinuation<Void, Never>] = []
     private var holdsHead = false
     private var heldHead: [CheckedContinuation<Void, Never>] = []
+    private var holdsHistory = false
+    private var heldHistory: [CheckedContinuation<Void, Never>] = []
     private(set) var headCalls = 0
     private(set) var historyCalls = 0
     private(set) var lastHistoryRevision: String?
@@ -105,6 +107,16 @@ actor StubRepoClient: RepoClient {
         heldHead = []
         for continuation in waiting { continuation.resume() }
     }
+    /// Releases the oldest held HEAD read, so completion order can be chosen.
+    func releaseFirstHead() { if !heldHead.isEmpty { heldHead.removeFirst().resume() } }
+
+    func holdHistory(_ on: Bool) { holdsHistory = on }
+    var heldHistoryCount: Int { heldHistory.count }
+    func releaseHistory() {
+        let waiting = heldHistory
+        heldHistory = []
+        for continuation in waiting { continuation.resume() }
+    }
 
     func headSha() async throws -> String? {
         headCalls += 1
@@ -122,8 +134,12 @@ actor StubRepoClient: RepoClient {
         historyCalls += 1
         lastHistoryRevision = revision
         lastHistoryLimit = limit
+        let snapshot = commits
+        if holdsHistory {
+            await withCheckedContinuation { heldHistory.append($0) }
+        }
         if failsHistory { throw ProcessError.failed(command: "git log", status: 128, stderr: "gone") }
-        return Array(commits.prefix(limit))
+        return Array(snapshot.prefix(limit))
     }
 
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {

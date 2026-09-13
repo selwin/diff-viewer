@@ -24,6 +24,10 @@ final class RepoSession {
     /// tick that only reloads the commit list must not invalidate an in-flight scope
     /// change and leave the sidebar empty.
     var historySerial = 0
+    /// Incremented per HEAD check, so the newest check wins whatever order the checks
+    /// finish in. Separate from `historySerial` on purpose: a page load must not cancel
+    /// a check, nor a check a page load.
+    var headCheckSerial = 0
     /// The commit-list read in flight, if any.
     var historyTask: Task<Void, Never>?
 
