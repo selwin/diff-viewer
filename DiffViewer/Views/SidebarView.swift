@@ -7,8 +7,18 @@ struct SidebarView: View {
         @Bindable var windowState = windowState
         List(selection: $windowState.selectedFileID) {
             if !windowState.isEmpty, windowState.files.isEmpty {
-                Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
-                    .foregroundStyle(.secondary)
+                // A scope change empties the list before the read that refills it
+                // returns; on a slow repository, saying "no changes" in that gap would
+                // report a result nobody has yet.
+                if windowState.isLoadingScope {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading…").foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
+                        .foregroundStyle(.secondary)
+                }
             }
             if !windowState.unstagedFiles.isEmpty {
                 Section("Unstaged (\(windowState.unstagedFiles.count))") {

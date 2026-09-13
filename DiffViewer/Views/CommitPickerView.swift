@@ -74,15 +74,20 @@ struct CommitPickerView: View {
         }
     }
 
+    /// Shared rather than built per label: the button's own title is formatted on every
+    /// redraw, not only while the menu is open. Confined to the main actor because
+    /// `RelativeDateTimeFormatter` is a reference type, and every caller is a view body.
+    @MainActor private static let ages: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
     /// One line per row: menus on macOS do not lay out stacked text the way an ordinary
     /// view does, so everything a row shows goes into a single string.
     private func label(for commit: CommitSummary) -> String {
         let subject = commit.subject.count > 60 ? String(commit.subject.prefix(59)) + "…" : commit.subject
-        // Built per call rather than shared: a formatter is a reference type, and this
-        // runs only while a menu is open.
-        let ages = RelativeDateTimeFormatter()
-        ages.unitsStyle = .abbreviated
-        let age = ages.localizedString(for: commit.authoredAt, relativeTo: .now)
+        let age = Self.ages.localizedString(for: commit.authoredAt, relativeTo: .now)
         var line = "\(commit.ref.shortSha)  \(subject) · \(age)"
         if commit.isMerge { line += "  (merge)" }
         return line

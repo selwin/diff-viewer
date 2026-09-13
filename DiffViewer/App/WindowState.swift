@@ -2,62 +2,6 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// Identifies one window for the lifetime of the app.
-struct WindowID: Hashable, Sendable {
-    private let uuid = UUID()
-}
-
-/// An opened repository: its root, client, and watcher. Refreshes are bound to the
-/// session they started in, so a result for a repository that has since been replaced
-/// is discarded.
-@MainActor
-final class RepoSession {
-    let root: RepositoryRoot
-    let client: any RepoClient
-    var watcher: (any RepoWatching)?
-    /// Incremented per refresh; only the latest may publish.
-    var refreshSerial = 0
-    /// The line-stats work of the latest refresh; cancelled when a newer one starts.
-    var statsTask: Task<Void, Never>?
-    /// Incremented per history read, and deliberately separate from `refreshSerial`: a
-    /// tick that only reloads the commit list must not invalidate an in-flight scope
-    /// change and leave the sidebar empty.
-    var historySerial = 0
-    /// The commit-list read in flight, if any.
-    var historyTask: Task<Void, Never>?
-
-    init(root: RepositoryRoot, client: any RepoClient) {
-        self.root = root
-        self.client = client
-    }
-}
-
-/// Why a refresh ran. Reported with every published file list.
-enum RefreshCause: Sendable {
-    /// The first status read after `adopt`.
-    case initial
-    /// Cmd+R or the toolbar button.
-    case manual
-    /// The repository watcher fired.
-    case watcher
-    /// A setting that changes diff content (Hide Whitespace) changed.
-    case settings
-    /// The commit picker changed what the sidebar is showing.
-    case scope
-}
-
-/// One page of the branch's history: the commits, the revision they were read from,
-/// and whether older commits exist beyond the page. Published as one value so the
-/// three can never describe different moments.
-struct CommitHistory: Sendable, Equatable {
-    /// The revision these commits were read from, or nil when HEAD is unborn. Set only
-    /// on a successful read, so a failed one leaves the last good revision in place and
-    /// the next tick sees HEAD as still unvisited and retries.
-    var revision: String?
-    var commits: [CommitSummary] = []
-    var hasMore = false
-}
-
 /// Everything one window holds for its repository: the session, the changed-file
 /// list, the selection, the diff loader, and change navigation.
 ///
@@ -84,6 +28,9 @@ final class WindowState {
             if selectedFileID != oldValue {
                 currentChangeIndex = nil
                 scrollTarget = nil
+                // Someone chose a file; whatever the last scope change meant to restore
+                // is now out of date.
+                if selectedFileID != nil { pendingReselect = nil }
                 reloadDiff()
             }
         }
@@ -118,6 +65,23 @@ final class WindowState {
     private(set) var commitLimit = Self.commitPageSize
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
+    /// The read a history load is serving, so an identical repeat can be skipped instead
+    /// of cancelling and restarting a `git log` that would produce the same answer.
+    /// `ProcessRunner` does not kill the subprocess it cancels, so restarts accumulate.
+    private var historyRequestInFlight: HistoryRequest?
+    /// True from a scope change until that scope's file list arrives, so an unfinished
+    /// read is not drawn as a commit that changed nothing.
+    private(set) var isLoadingScope = false
+    /// The file to select again once the new scope's list arrives. Held here rather than
+    /// after the scope task's own `refresh`, which may be superseded by a watcher refresh
+    /// that publishes the files instead.
+    private var pendingReselect: PendingSelection?
+
+    /// A path to find again in a new scope, and the area it came from.
+    struct PendingSelection: Equatable, Sendable {
+        let path: String
+        let area: ChangedFile.Area
+    }
 
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
@@ -164,8 +128,8 @@ final class WindowState {
     /// Files worth warming in the difft cache: everything in the current scope but the
     /// selection, which is the loader's job at foreground priority.
     var filesToWarm: [ChangedFile] {
-        // Unstaged first, as before: that is the list a reader works down. Exactly one of
-        // these three is non-empty for a given scope.
+        // Unstaged first, as before: that is the list a reader works down. The working
+        // tree can fill both of its lists at once; a commit fills only the third.
         (unstagedFiles + stagedFiles + commitFiles).filter { $0.id != selectedFileID }
     }
 
@@ -200,7 +164,7 @@ final class WindowState {
             await self?.refresh(session: session, cause: .initial)
             self?.isLoading = false
         }
-        startHistoryLoad(session: session, resolvingHead: true)
+        refreshHistory(session: session)
         return true
     }
 
@@ -226,7 +190,7 @@ final class WindowState {
         guard let session else { return }
         // ⌘R re-reads everything, including a commit's files: the user asked.
         await refresh(session: session, cause: .manual)
-        startHistoryLoad(session: session, resolvingHead: true)
+        refreshHistory(session: session)
     }
 
     /// Something under `.git` or in the working tree changed.
@@ -280,16 +244,28 @@ final class WindowState {
         // nobody is showing any more.
         guard scope == self.scope else { return }
 
+        isLoadingScope = false
         switch outcome {
         case let .success(newFiles):
-            let known = Dictionary(files.map { ($0.id, $0.lineStats) }, uniquingKeysWith: { first, _ in first })
-            files = newFiles.map { $0.with(lineStats: known[$0.id] ?? nil) }
+            // Taken before the list is published: clearing a selection that vanished
+            // runs the observer above, which would discard the restoration first.
+            let pending = pendingReselect
+            pendingReselect = nil
+            let selectionBefore = selectedFileID
+            // Only the files whose counts are known, so the lookup below is a plain
+            // optional rather than a nested one.
+            let known = Dictionary(
+                files.compactMap { file in file.lineStats.map { (file.id, $0) } },
+                uniquingKeysWith: { first, _ in first })
+            files = newFiles.map { $0.with(lineStats: known[$0.id]) }
             if let selectedFileID, !newFiles.contains(where: { $0.id == selectedFileID }) {
                 self.selectedFileID = nil
             }
+            if let pending { reselect(pending) }
             errorMessage = nil
-            // A settings change reloaded the diff before starting its refresh.
-            if cause != .settings { reloadDiff() }
+            // A settings change reloaded the diff before starting its refresh, and any
+            // change to the selection above already reloaded it through the observer.
+            if cause != .settings, selectedFileID == selectionBefore { reloadDiff() }
             onRefreshPublished?(self, cause)
             session.statsTask = Task { [weak self] in
                 await self?.attachLineStats(
@@ -306,21 +282,6 @@ final class WindowState {
                 errorMessage = error.localizedDescription
             }
         }
-    }
-
-    /// Returns to the working tree after a commit could not be read.
-    ///
-    /// The message is assigned *after* the refresh, not before: a successful refresh
-    /// clears `errorMessage`, so setting it first would wipe the only explanation the
-    /// user gets for the sidebar changing under them.
-    private func fallBackToWorkingTree(session: RepoSession, from ref: CommitRef, error: Error) async {
-        scope = .workingTree
-        selectedCommit = nil
-        selectedFileID = nil
-        files = []
-        await refresh(session: session, cause: .scope)
-        guard session === self.session, !isClosed else { return }
-        errorMessage = "Couldn't read commit \(ref.shortSha): \(error.localizedDescription)"
     }
 
     /// Runs numstat for the scope's areas and counts untracked files, then replaces
@@ -408,6 +369,17 @@ final class WindowState {
 /// runs on its own generation counter, so reloading the commit list can never
 /// invalidate an in-flight scope change.
 extension WindowState {
+    /// Where a history read gets its revision. Separating the two removes the
+    /// combination a single "resolve HEAD?" flag allowed, where a caller could ask to
+    /// resolve HEAD *and* name a revision.
+    private enum HistorySource {
+        /// Read HEAD first. Adoption and ⌘R, where the revision is not known yet.
+        case currentHead
+        /// A revision the caller already resolved, so the commits and the revision they
+        /// describe come from one reading of HEAD rather than two.
+        case revision(String?)
+    }
+
     // MARK: - Scope
 
     /// Shows the working tree again.
@@ -422,29 +394,33 @@ extension WindowState {
 
     private func select(scope newScope: DiffScope, commit: CommitSummary?) {
         guard let session, !isClosed, newScope != scope else { return }
+        session.scopeSerial += 1
 
-        // Remember what was selected before anything is cleared, so the same file can be
-        // found again in the new list.
-        let previous = selectedFile.map { (path: $0.path, area: $0.area) }
-        // Clearing `files` does not run `selectedFileID`'s observer, so the previous
-        // scope's diff load has to be stopped by hand; assigning nil does exactly that
-        // through `reloadDiff`.
+        // Remember what was selected before anything is cleared. Clearing `files` does
+        // not run `selectedFileID`'s observer, so the previous scope's diff load has to
+        // be stopped by hand; assigning nil does that through `reloadDiff`, and it must
+        // happen before the target is recorded or the observer would discard it.
+        let previous = selectedFile.map { PendingSelection(path: $0.path, area: $0.area) }
         selectedFileID = nil
+        pendingReselect = previous
         session.statsTask?.cancel()
 
         scope = newScope
         selectedCommit = commit
         files = []
+        isLoadingScope = true
         Task { [weak self] in
             await self?.refresh(session: session, cause: .scope)
-            self?.reselect(previous, in: newScope)
         }
     }
 
     /// Puts the selection back on the same path in the new scope. A path can appear in
     /// two areas at once, so the old area wins, then unstaged, then staged.
-    private func reselect(_ previous: (path: String, area: ChangedFile.Area)?, in newScope: DiffScope) {
-        guard let previous, !isClosed, scope == newScope, selectedFileID == nil else { return }
+    ///
+    /// Called by whichever refresh publishes the new scope's files, which is not always
+    /// the one the scope change started: a watcher refresh can overtake it.
+    func reselect(_ previous: PendingSelection) {
+        guard !isClosed, selectedFileID == nil else { return }
         let matches = files.filter { $0.path == previous.path }
         let match =
             matches.first { $0.area == previous.area }
@@ -453,7 +429,33 @@ extension WindowState {
         selectedFileID = match?.id
     }
 
+    /// Returns to the working tree after a commit could not be read.
+    ///
+    /// The message is assigned after the refresh, not before: a successful refresh
+    /// clears `errorMessage`, so setting it first would wipe the only explanation the
+    /// user gets for the sidebar changing under them. The scope generation is checked
+    /// after the await too — by then the user may have picked another commit, and an
+    /// alert about the old one would be both wrong and obstructive.
+    func fallBackToWorkingTree(session: RepoSession, from ref: CommitRef, error: Error) async {
+        session.scopeSerial += 1
+        let serial = session.scopeSerial
+        scope = .workingTree
+        selectedCommit = nil
+        selectedFileID = nil
+        pendingReselect = nil
+        files = []
+        isLoadingScope = true
+        await refresh(session: session, cause: .scope)
+        guard session === self.session, !isClosed, serial == session.scopeSerial else { return }
+        errorMessage = "Couldn't read commit \(ref.shortSha): \(error.localizedDescription)"
+    }
+
     // MARK: - History
+
+    /// Resolves HEAD and loads its history: adoption and ⌘R.
+    func refreshHistory(session: RepoSession) {
+        startHistoryLoad(session: session, source: .currentHead)
+    }
 
     /// Reads another page of commits. Ignored while a page is already loading:
     /// `ProcessRunner` does not kill a subprocess when its task is cancelled, so
@@ -464,77 +466,92 @@ extension WindowState {
         commitLimit += Self.commitPageSize
         // Page against the revision already on show, so a checkout mid-scroll cannot
         // splice two branches' commits into one list.
-        startHistoryLoad(session: session, revision: history.revision)
+        startHistoryLoad(session: session, source: .revision(history.revision))
     }
 
     /// Reloads the commit list only when HEAD has moved since the page was read. One
     /// `rev-parse` per watcher tick, instead of a full log on every edit to the tree.
-    private func reloadHistoryIfHeadMoved(session: RepoSession) async {
-        // A failure here is transient by assumption; the next tick tries again. `try?`
-        // would flatten a thrown error and an unborn HEAD into the same nil, and checking
-        // out an unborn branch has to clear the list rather than leave the old one up.
+    func reloadHistoryIfHeadMoved(session: RepoSession) async {
+        // The generation is read before the await and checked after it. Without that,
+        // two overlapping checks can resolve different revisions, and the slower one —
+        // holding the older answer — would start the last load and leave the picker
+        // showing a branch the repository has already left.
+        let serialBefore = session.historySerial
+        // `try?` would flatten a thrown error and an unborn HEAD into the same nil, and
+        // checking out an unborn branch has to clear the list rather than leave the old
+        // one up. A failure here is transient by assumption; the next tick tries again.
         let head: String?
         do {
             head = try await session.client.headSha()
         } catch {
             return
         }
-        guard session === self.session, !isClosed else { return }
+        guard session === self.session, !isClosed, serialBefore == session.historySerial else { return }
+
         let headMoved = head != history.revision
         // Retry a failed read too, or one bad moment would leave the picker empty until
         // HEAD happened to move.
         guard headMoved || historyErrorMessage != nil else { return }
         // A different HEAD is a different branch or a new commit: start from page one.
         if headMoved { commitLimit = Self.commitPageSize }
-        startHistoryLoad(session: session, revision: head)
+        // Several ticks can arrive while one `git log` is still running; restarting it
+        // for the answer it is already fetching only burns processes.
+        guard historyRequestInFlight != HistoryRequest(revision: head, limit: commitLimit) else { return }
+        startHistoryLoad(session: session, source: .revision(head))
     }
 
-    /// Starts a history read. `resolvingHead` reads HEAD first; pass `revision` directly
-    /// when it has already been resolved, so the commits and the revision they describe
-    /// always come from one reading of HEAD rather than two.
-    private func startHistoryLoad(session: RepoSession, resolvingHead: Bool = false, revision: String? = nil) {
+    private func startHistoryLoad(session: RepoSession, source: HistorySource) {
         session.historySerial += 1
         let serial = session.historySerial
         session.historyTask?.cancel()
         isLoadingHistory = true
         historyErrorMessage = nil
         let limit = commitLimit
+        historyRequestInFlight =
+            if case let .revision(revision) = source { HistoryRequest(revision: revision, limit: limit) } else { nil }
         session.historyTask = Task { [weak self] in
-            await self?.loadHistory(
-                session: session, serial: serial, resolvingHead: resolvingHead, revision: revision, limit: limit)
+            await self?.loadHistory(session: session, serial: serial, source: source, limit: limit)
         }
     }
 
-    private func loadHistory(
-        session: RepoSession, serial: Int, resolvingHead: Bool, revision: String?, limit: Int
-    ) async {
+    private func loadHistory(session: RepoSession, serial: Int, source: HistorySource, limit: Int) async {
         func isCurrent() -> Bool {
             session === self.session && !isClosed && serial == session.historySerial && !Task.isCancelled
         }
 
         do {
-            var head = revision
-            if resolvingHead {
-                head = try await session.client.headSha()
+            let revision: String?
+            switch source {
+            case .currentHead:
+                revision = try await session.client.headSha()
                 guard isCurrent() else { return }
+                historyRequestInFlight = HistoryRequest(revision: revision, limit: limit)
+            case let .revision(value):
+                revision = value
             }
-            guard let head else {
+
+            guard let revision else {
                 // An unborn HEAD: a real, settled answer, not a failure.
                 guard isCurrent() else { return }
                 history = CommitHistory()
-                isLoadingHistory = false
+                finishHistoryLoad()
                 return
             }
             // One extra tells us whether another page exists without a second query.
-            let page = try await session.client.recentCommits(startingAt: head, limit: limit + 1)
+            let page = try await session.client.recentCommits(startingAt: revision, limit: limit + 1)
             guard isCurrent() else { return }
             history = CommitHistory(
-                revision: head, commits: Array(page.prefix(limit)), hasMore: page.count > limit)
-            isLoadingHistory = false
+                revision: revision, commits: Array(page.prefix(limit)), hasMore: page.count > limit)
+            finishHistoryLoad()
         } catch {
             guard isCurrent() else { return }
             historyErrorMessage = error.localizedDescription
-            isLoadingHistory = false
+            finishHistoryLoad()
         }
+    }
+
+    private func finishHistoryLoad() {
+        isLoadingHistory = false
+        historyRequestInFlight = nil
     }
 }

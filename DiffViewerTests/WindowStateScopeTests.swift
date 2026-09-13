@@ -280,4 +280,142 @@ struct WindowStateScopeTests {
         state.select(commit: commit)
         #expect(await eventually { state.files.first?.lineStats == .counted(added: 4, deleted: 2) })
     }
+
+    // MARK: Ordering
+
+    /// The generation guard around the HEAD read. Two overlapping checks resolve
+    /// different revisions; the slower one holds the older answer and must not use it to
+    /// reinstate a branch the repository has already left.
+    @Test func aSlowHeadCheckCannotReinstateOlderHistory() async {
+        let h = Harness()
+        let state = h.makeState()
+        let first = commitSummary("c1")
+        let client = await adopt(h, state, commit: first, commitFiles: [])
+        #expect(await eventually { state.history.revision == first.ref.sha })
+
+        // Tick one reads HEAD and blocks, having seen the old revision.
+        await client.holdHead(true)
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.heldHeadCount == 1 })
+
+        // Tick two resolves the new revision and publishes it while tick one waits.
+        let later = commitSummary("c2", subject: "Newer")
+        await client.holdHead(false)
+        await client.set(head: later.ref.sha)
+        await client.set(commits: [later, first])
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { state.history.revision == later.ref.sha })
+
+        await client.releaseHead()
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(state.history.revision == later.ref.sha, "the older check does not start a load")
+        #expect(state.history.commits.first?.ref == later.ref)
+    }
+
+    /// The scope change records what to re-select, but the refresh it starts is not
+    /// always the one that publishes: a watcher refresh can overtake it, and then the
+    /// restoration has to happen there instead.
+    @Test func selectionIsRestoredByWhicheverRefreshPublishes() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("a1.swift", commit)])
+
+        state.select(commit: commit)
+        #expect(await eventually { state.files.count == 1 })
+        state.selectedFileID = state.files.first?.id
+        #expect(state.selectedFile?.path == "a1.swift")
+
+        // Both working-tree reads block, so their completion order can be chosen.
+        await client.hold(true)
+        state.selectWorkingTree()
+        #expect(await eventually { await client.heldCount == 1 })
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.heldCount == 2 })
+
+        // The newer refresh finishes first and is the one that publishes.
+        await client.releaseLast()
+        #expect(await eventually { state.files.count == workingFiles.count })
+        await client.hold(false)
+        await client.releaseFirst()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(state.selectedFile?.path == "a1.swift", "the overtaking refresh restores the selection")
+        #expect(state.selectedFile?.area == .unstaged)
+    }
+
+    /// An alert about a commit the user has already moved on from is both wrong and in
+    /// the way, so the fallback checks that its transition is still the current one.
+    @Test func aStaleFallbackDoesNotRaiseAnErrorOverANewerCommit() async {
+        let h = Harness()
+        let state = h.makeState()
+        let broken = commitSummary("c1")
+        let good = commitSummary("c2", subject: "Readable")
+        let client = await adopt(h, state, commit: broken, commitFiles: [])
+        await client.set(commits: [good, broken])
+        await client.set(files: [commitFile("ok.swift", good)], forCommit: good.ref.sha)
+
+        // The failing commit starts a fallback whose working-tree read blocks.
+        await client.fail(commitFiles: true)
+        await client.hold(true)
+        state.select(commit: broken)
+        #expect(await eventually { await client.heldCount == 1 })
+
+        // Meanwhile the user picks a commit that reads cleanly.
+        await client.fail(commitFiles: false)
+        state.select(commit: good)
+        #expect(await eventually { state.files.map(\.path) == ["ok.swift"] })
+
+        await client.hold(false)
+        await client.releaseFirst()
+        try? await Task.sleep(for: .milliseconds(80))
+
+        #expect(state.scope == .commit(good.ref))
+        #expect(state.errorMessage == nil, "the abandoned fallback stays quiet")
+    }
+
+    /// An unfinished read must not be drawn as a commit that changed nothing.
+    @Test func scopeLoadingIsDistinctFromAnEmptyCommit() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [])
+        #expect(!state.isLoadingScope)
+
+        await client.holdCommitFiles(true)
+        state.select(commit: commit)
+        #expect(await eventually { await client.heldCommitFileCount == 1 })
+        #expect(state.isLoadingScope, "still reading, not yet an answer")
+        #expect(state.files.isEmpty)
+
+        await client.holdCommitFiles(false)
+        await client.releaseCommitFiles()
+        #expect(await eventually { !state.isLoadingScope })
+        #expect(state.files.isEmpty, "and now it really is an empty commit")
+    }
+
+    /// Repeated ticks while one `git log` is running would otherwise cancel and relaunch
+    /// it each time, and a cancelled `ProcessRunner` subprocess keeps running.
+    @Test func repeatedTicksDoNotRestartTheSameHistoryRead() async {
+        let h = Harness()
+        let state = h.makeState()
+        let first = commitSummary("c1")
+        let client = await adopt(h, state, commit: first, commitFiles: [])
+        #expect(await eventually { state.history.revision == first.ref.sha })
+
+        let later = commitSummary("c2")
+        await client.set(head: later.ref.sha)
+        await client.set(commits: [later, first])
+        await client.holdHead(true)
+        for _ in 0..<4 { h.watcherCallbacks.values.first?() }
+        #expect(await eventually { await client.heldHeadCount == 4 })
+
+        let readsBefore = await client.historyCalls
+        await client.holdHead(false)
+        await client.releaseHead()
+        #expect(await eventually { state.history.revision == later.ref.sha })
+        try? await Task.sleep(for: .milliseconds(80))
+        let readsAfter = await client.historyCalls
+        #expect(readsAfter - readsBefore == 1, "four ticks, one log read")
+    }
 }

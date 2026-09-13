@@ -54,9 +54,8 @@ enum DebugLaunchOptions {
             let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
             let selection = env["DIFFVIEWER_SELECT"] ?? ""
             let scopeSha = env["DIFFVIEWER_SCOPE"] ?? ""
-            guard !opens.isEmpty || dump || !selection.isEmpty || !scopeSha.isEmpty
-                || env["DIFFVIEWER_TAB_STEPS"] != nil
-            else { return }
+            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty
+            guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -98,7 +97,7 @@ enum DebugLaunchOptions {
                         dumpWindows(services)
                     }
                 }
-                guard !selection.isEmpty || !scopeSha.isEmpty else { return }
+                guard needsWindow else { return }
                 @MainActor func target() -> WindowState? {
                     let key = coordinator.keyWindowState
                     return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }

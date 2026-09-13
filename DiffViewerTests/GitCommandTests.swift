@@ -247,6 +247,18 @@ import Testing
         #expect(try await repo.client.headSha() == sha)
     }
 
+    /// A repository whose HEAD points at a malformed ref must not read as "no commits
+    /// yet": `symbolic-ref` exits non-zero for it, so it reaches the throw.
+    @Test func headShaThrowsForADamagedRef() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try Data("not-a-sha-at-all\n".utf8).write(to: repo.url.appendingPathComponent(".git/refs/heads/main"))
+
+        await #expect(throws: (any Error).self) { try await repo.client.headSha() }
+    }
+
     @Test func headShaThrowsOutsideARepository() async throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("DiffViewerNotARepo-\(UUID().uuidString)", isDirectory: true)

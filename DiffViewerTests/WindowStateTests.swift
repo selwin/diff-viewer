@@ -29,6 +29,8 @@ actor StubRepoClient: RepoClient {
     private var failsCommitFiles = false
     private var holdsCommitFiles = false
     private var heldCommitFiles: [CheckedContinuation<Void, Never>] = []
+    private var holdsHead = false
+    private var heldHead: [CheckedContinuation<Void, Never>] = []
     private(set) var headCalls = 0
     private(set) var historyCalls = 0
     private(set) var lastHistoryRevision: String?
@@ -96,10 +98,24 @@ actor StubRepoClient: RepoClient {
         for continuation in waiting { continuation.resume() }
     }
 
+    func holdHead(_ on: Bool) { holdsHead = on }
+    var heldHeadCount: Int { heldHead.count }
+    func releaseHead() {
+        let waiting = heldHead
+        heldHead = []
+        for continuation in waiting { continuation.resume() }
+    }
+
     func headSha() async throws -> String? {
         headCalls += 1
+        // Snapshot before suspending, the way `status()` does: a held read must report
+        // the revision it was asked about, not whatever HEAD became while it waited.
+        let snapshot = head
+        if holdsHead {
+            await withCheckedContinuation { heldHead.append($0) }
+        }
         if failsHistory { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
-        return head
+        return snapshot
     }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {

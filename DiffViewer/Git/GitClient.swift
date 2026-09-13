@@ -47,10 +47,15 @@ struct GitClient: RepoClient {
         if result.status == 0 {
             return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        // `--quiet` suppressed the diagnostic, so empty output proves nothing on its own.
-        // HEAD is unborn only if it is a symbolic ref to a branch that does not exist yet;
-        // anything else here is a real failure. This second process runs only on failure,
-        // so the common case stays a single call.
+        // `--quiet` suppressed the diagnostic, so empty output proves nothing on its own;
+        // this second process runs only on the failure path, so the common case stays a
+        // single call.
+        //
+        // HEAD is unborn only when it is a symbolic ref to a branch with no commits yet.
+        // A damaged ref does not slip through as "no commits": `symbolic-ref` itself
+        // exits 128 when HEAD's target is malformed, so it reaches the throw below.
+        // (`show-ref --verify` cannot sharpen this — it exits non-zero for an absent ref
+        // and a corrupt one alike, so it would separate nothing.)
         let symbolic = try await ProcessRunner.run(
             Self.executable,
             arguments: ["symbolic-ref", "--quiet", "HEAD"],
@@ -80,8 +85,8 @@ struct GitClient: RepoClient {
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["diff-tree"] + Self.commitRange(commit) + ["-r", "-z", "--name-status", "--no-renames"]
-                + Self.commitOperands(commit),
+            arguments: ["diff-tree"] + Self.commitComparisonFlags(commit)
+                + ["-r", "-z", "--name-status", "--no-renames"] + Self.commitOperands(commit),
             currentDirectory: repoRoot,
             environment: Self.environment
         )
@@ -103,7 +108,7 @@ struct GitClient: RepoClient {
         case .staged:
             flags = ["diff", "--cached", "--numstat", "-z", "--no-renames"]
         case let .commit(ref):
-            flags = ["diff-tree"] + Self.commitRange(ref) + ["-r", "--numstat", "-z", "--no-renames"]
+            flags = ["diff-tree"] + Self.commitComparisonFlags(ref) + ["-r", "--numstat", "-z", "--no-renames"]
             operands = Self.commitOperands(ref)
         }
         if ignoreWhitespace { flags.append("-w") }
@@ -120,7 +125,7 @@ struct GitClient: RepoClient {
     /// Flags that select what a commit is compared against. A root commit needs `--root`
     /// to be diffed against the empty tree, and `--no-commit-id` to suppress the header
     /// line that form prints.
-    private static func commitRange(_ commit: CommitRef) -> [String] {
+    private static func commitComparisonFlags(_ commit: CommitRef) -> [String] {
         commit.firstParentSHA == nil ? ["--no-commit-id", "--root"] : []
     }
 
