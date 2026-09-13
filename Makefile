@@ -11,7 +11,7 @@ CONFIG    ?= Debug
 APP       := $(DERIVED)/Build/Products/$(CONFIG)/DiffViewer.app
 XCB       := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) -configuration $(CONFIG)
 
-.PHONY: all gen difft build run test lint format format-check clean open
+.PHONY: all gen difft build run test lint format format-check hooks hooks-all clean open
 
 all: build
 
@@ -48,6 +48,13 @@ format:
 
 format-check:
 	swift format lint --strict --parallel --recursive --configuration .swift-format $(SOURCES)
+
+# Git hooks running format and lint over the staged files: `brew install pre-commit`.
+hooks:
+	pre-commit install
+
+hooks-all:
+	pre-commit run --all-files
 
 clean:
 	rm -rf $(DERIVED) $(PROJECT)

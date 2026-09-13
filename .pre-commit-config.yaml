@@ -1,0 +1,39 @@
+# Runs the same formatter and linter as `make format` / `make lint` and the Format and
+# Lint workflows, but only over the files being committed. Install once with `make hooks`.
+#
+# `unsupported_script` (spelled `script` before the rename) needs pre-commit 4.4.
+minimum_pre_commit_version: 4.4.0
+
+repos:
+  # Cheap text hygiene first, so the Swift hooks below see the final bytes.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # swift-format rewrites the file and fails the commit (re-stage and commit again);
+  # SwiftLint only reports. Both wrappers check that the local tool matches CI.
+  #
+  # `files` keeps them to the Makefile's SOURCES, the only paths `make` and CI look at:
+  # `types: [swift]` alone would also reach scripts/windowid.swift, which neither checks.
+  - repo: local
+    hooks:
+      - id: swift-format
+        name: swift-format
+        entry: scripts/swift-format.sh
+        language: unsupported_script
+        types: [swift]
+        files: ^(DiffViewer|DiffViewerTests)/
+
+      - id: swiftlint
+        name: SwiftLint
+        entry: scripts/swiftlint.sh
+        language: unsupported_script
+        types: [swift]
+        files: ^(DiffViewer|DiffViewerTests)/

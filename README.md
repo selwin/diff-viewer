@@ -25,10 +25,24 @@ make test     # run the unit tests
 make open     # open the generated Xcode project
 make lint     # SwiftLint (brew install swiftlint), same rules as CI
 make format   # rewrite sources with swift-format; `make format-check` only reports
+make hooks    # install the git hooks; `make hooks-all` runs them over every file
 ```
 
 CI runs the same three checks as separate workflows under `.github/workflows/`: SwiftLint and
 swift-format on Linux, and `xcodebuild test` on a macOS 26 runner.
+
+After cloning, install the development tools and the git hooks once:
+
+```bash
+brew install pre-commit swiftlint
+make hooks
+```
+
+Committing then runs, over the staged files only, text hygiene (trailing whitespace, final
+newline, line endings, YAML) followed by swift-format and SwiftLint, with the same
+configuration as the Format and Lint workflows. swift-format rewrites the file and stops the
+commit, so re-stage and commit again. The tests are left to CI. CI pins SwiftLint 0.65.1 and
+Swift 6.3 (Xcode 26.6), and the hooks warn when the local versions differ.
 
 `make` points `DEVELOPER_DIR` at `/Applications/Xcode.app` so it works even when
 `xcode-select` is set to the Command Line Tools.
