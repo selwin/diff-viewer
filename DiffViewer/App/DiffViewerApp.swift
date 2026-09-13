@@ -162,15 +162,21 @@ struct RepositoryCommands: Commands {
             Button("Refresh") { Task { await windowState?.refresh() } }
                 .keyboardShortcut("r")
                 .disabled(windowState == nil)
-            Toggle("Hide Whitespace Changes", isOn: Binding(
-                get: { preferences.hideWhitespace },
-                set: { preferences.hideWhitespace = $0 }
-            ))
+            Toggle(
+                "Hide Whitespace Changes",
+                isOn: Binding(
+                    get: { preferences.hideWhitespace },
+                    set: { preferences.hideWhitespace = $0 }
+                )
+            )
             .keyboardShortcut("w", modifiers: [.command, .shift])
-            Toggle("Collapse Unchanged Lines", isOn: Binding(
-                get: { preferences.collapseUnchanged },
-                set: { preferences.collapseUnchanged = $0 }
-            ))
+            Toggle(
+                "Collapse Unchanged Lines",
+                isOn: Binding(
+                    get: { preferences.collapseUnchanged },
+                    set: { preferences.collapseUnchanged = $0 }
+                )
+            )
             .keyboardShortcut("u", modifiers: [.command, .shift])
             Divider()
             Button("Next Change") { windowState?.nextChange() }

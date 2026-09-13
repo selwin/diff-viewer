@@ -216,11 +216,15 @@ final class WindowState {
     }
 
     func nextChange() {
-        jump(to: ChangeNavigator.next(after: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
+        jump(
+            to: ChangeNavigator.next(
+                after: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
     }
 
     func previousChange() {
-        jump(to: ChangeNavigator.previous(before: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
+        jump(
+            to: ChangeNavigator.previous(
+                before: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
     }
 
     private func jump(to index: Int?) {

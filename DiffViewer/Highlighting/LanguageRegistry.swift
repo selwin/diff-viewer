@@ -6,9 +6,9 @@ import TreeSitterCPP
 import TreeSitterCSS
 import TreeSitterGo
 import TreeSitterHTML
+import TreeSitterJSON
 import TreeSitterJava
 import TreeSitterJavaScript
-import TreeSitterJSON
 import TreeSitterKotlin
 import TreeSitterMarkdown
 import TreeSitterPHP
@@ -37,8 +37,10 @@ enum LanguageRegistry {
         let precedence: Precedence
         let language: @Sendable () -> OpaquePointer?
 
-        init(_ name: String, bundleName: String? = nil, precedence: Precedence = .laterPatternWins,
-             _ language: @escaping @Sendable () -> OpaquePointer?) {
+        init(
+            _ name: String, bundleName: String? = nil, precedence: Precedence = .laterPatternWins,
+            _ language: @escaping @Sendable () -> OpaquePointer?
+        ) {
             self.name = name
             self.bundleName = bundleName ?? "TreeSitter\(name)_TreeSitter\(name)"
             self.precedence = precedence
@@ -97,7 +99,8 @@ enum LanguageRegistry {
         if let resources = Bundle.main.resourceURL { containers.append(resources) }
         containers.append(Bundle.main.bundleURL.deletingLastPathComponent())
         for container in containers {
-            let url = container
+            let url =
+                container
                 .appendingPathComponent("\(bundleName).bundle", isDirectory: true)
                 .appendingPathComponent("Contents/Resources/queries", isDirectory: true)
             if FileManager.default.fileExists(atPath: url.path) { return url }

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// Stand-in for the difft process: records launches in submission order, can hold
@@ -37,7 +38,8 @@ actor RunnerProbe {
             DifftFile.Change(start: $0 * 2, end: $0 * 2 + 1, content: "x", highlight: "normal")
         }
         let line = DifftFile.Line(lineNumber: 0, changes: changes)
-        return DifftFile(language: "Swift", path: fileName, status: "changed", chunks: [[DifftFile.LinePair(lhs: line, rhs: line)]])
+        return DifftFile(
+            language: "Swift", path: fileName, status: "changed", chunks: [[DifftFile.LinePair(lhs: line, rhs: line)]])
     }
 
     /// Releases held launches in the order they arrived.
@@ -58,7 +60,9 @@ final class TestClock: @unchecked Sendable {
     func advance(_ duration: Duration) { lock.withLock { offset += duration } }
 }
 
-private func makeCache(_ probe: RunnerProbe, limits: DifftCache.Limits = DifftCache.Limits(), clock: TestClock = TestClock()) -> DifftCache {
+private func makeCache(
+    _ probe: RunnerProbe, limits: DifftCache.Limits = DifftCache.Limits(), clock: TestClock = TestClock()
+) -> DifftCache {
     DifftCache(
         runner: { old, new, fileName, qualityOfService in
             try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qualityOfService)
@@ -69,7 +73,9 @@ private func makeCache(_ probe: RunnerProbe, limits: DifftCache.Limits = DifftCa
 }
 
 /// Requests a diff whose content is derived from `name`, so distinct names are distinct keys.
-private func request(_ cache: DifftCache, _ name: String, _ priority: DifftCache.Priority = .foreground, fileName: String = "a.swift") async -> DifftResult? {
+private func request(
+    _ cache: DifftCache, _ name: String, _ priority: DifftCache.Priority = .foreground, fileName: String = "a.swift"
+) async -> DifftResult? {
     await cache.result(old: Data(name.utf8), new: Data("\(name)!".utf8), fileName: fileName, priority: priority)
 }
 
@@ -97,8 +103,8 @@ struct DifftCacheTests {
 
     @Test func keyDependsOnSideBoundaries() {
         let ab = DifftCache.key(old: Data("ab".utf8), new: Data("c".utf8), fileName: "f")
-        let a_bc = DifftCache.key(old: Data("a".utf8), new: Data("bc".utf8), fileName: "f")
-        #expect(ab != a_bc)
+        let aBc = DifftCache.key(old: Data("a".utf8), new: Data("bc".utf8), fileName: "f")
+        #expect(ab != aBc)
         #expect(ab == DifftCache.key(old: Data("ab".utf8), new: Data("c".utf8), fileName: "f"))
     }
 
@@ -107,7 +113,9 @@ struct DifftCacheTests {
         let cache = makeCache(probe)
         await probe.hold(true)
         let tasks = (0..<5).map { _ in Task { await request(cache, "a", .background) } }
-        #expect(await eventually { await cache.stats.inFlightJoins == 4 }, "all callers must reach the cache while the run is held")
+        #expect(
+            await eventually { await cache.stats.inFlightJoins == 4 },
+            "all callers must reach the cache while the run is held")
         #expect(await probe.launches.count == 1)
         await probe.release()
         for task in tasks { #expect(await task.value != nil) }
@@ -253,7 +261,9 @@ struct DifftCacheTests {
         let probe = RunnerProbe()
         let cache = makeCache(probe)
         await probe.hold(true)
-        let background = ["a", "b", "c"].map { name in Task { await request(cache, name, .background, fileName: "\(name).swift") } }
+        let background = ["a", "b", "c"].map { name in
+            Task { await request(cache, name, .background, fileName: "\(name).swift") }
+        }
         #expect(await eventually { await probe.launches.count == 3 })
 
         let foreground = Task { await request(cache, "x", .foreground, fileName: "x.swift") }

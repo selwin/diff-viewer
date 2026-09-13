@@ -58,10 +58,13 @@ struct ContentView: View {
                 .help("Refresh (⌘R)")
             }
         }
-        .alert("Error", isPresented: Binding(
-            get: { windowState.errorMessage != nil },
-            set: { if !$0 { windowState.errorMessage = nil } }
-        )) {
+        .alert(
+            "Error",
+            isPresented: Binding(
+                get: { windowState.errorMessage != nil },
+                set: { if !$0 { windowState.errorMessage = nil } }
+            )
+        ) {
             Button("OK") { windowState.errorMessage = nil }
         } message: {
             Text(windowState.errorMessage ?? "")

@@ -94,7 +94,8 @@ struct FoldedRows: Sendable {
     /// Half-open; empty ranges stay empty at the corresponding position.
     func displayRange(forDocumentRange range: Range<Int>) -> Range<Int> {
         guard !range.isEmpty else {
-            let start = range.lowerBound < documentRowCount ? displayIndex(forDocumentRow: range.lowerBound) : displayRows.count
+            let start =
+                range.lowerBound < documentRowCount ? displayIndex(forDocumentRow: range.lowerBound) : displayRows.count
             return start..<start
         }
         let first = displayIndex(forDocumentRow: range.lowerBound)
@@ -105,7 +106,8 @@ struct FoldedRows: Sendable {
     /// Half-open; a trailing separator contributes all of its hidden rows.
     func documentRange(forDisplayRange range: Range<Int>) -> Range<Int> {
         guard !range.isEmpty else {
-            let start = range.lowerBound < displayRows.count ? documentRow(forDisplayIndex: range.lowerBound) : documentRowCount
+            let start =
+                range.lowerBound < displayRows.count ? documentRow(forDisplayIndex: range.lowerBound) : documentRowCount
             return start..<start
         }
         let first = documentRow(forDisplayIndex: range.lowerBound)
@@ -132,7 +134,9 @@ enum RowFolding {
     /// Hides equal rows outside `contextLines` of every change block, except rows the
     /// user revealed and gaps too small to be worth a separator. A document with no
     /// change blocks is shown in full.
-    static func fold(changeBlocks: [Range<Int>], documentRowCount: Int, state: FoldState, options: FoldOptions) -> FoldedRows {
+    static func fold(changeBlocks: [Range<Int>], documentRowCount: Int, state: FoldState, options: FoldOptions)
+        -> FoldedRows
+    {
         guard !changeBlocks.isEmpty, documentRowCount > 0 else {
             return .identity(documentRowCount: documentRowCount)
         }

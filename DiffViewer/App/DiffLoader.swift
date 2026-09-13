@@ -62,7 +62,8 @@ final class DiffLoader {
             do {
                 let sources = try await DiffEngine.sources(for: file, client: client)
                 try Task.checkCancellation()
-                let result = await DiffEngine.build(sources, hideWhitespace: hideWhitespace, cache: cache, priority: .foreground)
+                let result = await DiffEngine.build(
+                    sources, hideWhitespace: hideWhitespace, cache: cache, priority: .foreground)
                 try Task.checkCancellation()
                 guard gen == generation else { return }
                 content = result

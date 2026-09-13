@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// Holds discovery for chosen URLs until released, or fails them.
@@ -16,7 +17,9 @@ actor OpenGate {
         if heldURLs.contains(url) {
             await withCheckedContinuation { waiting[url] = $0 }
         }
-        if failing.contains(url) { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "not a repo") }
+        if failing.contains(url) {
+            throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "not a repo")
+        }
     }
 
     func release(_ url: URL) { waiting.removeValue(forKey: url)?.resume() }
@@ -76,7 +79,10 @@ final class CoordinatorHarness {
     /// `savedRoots` and `savedActive` seed the persisted session the coordinator
     /// reads at init; `suite` reuses another harness's defaults. Launch is reported
     /// as finished up front unless `launchFinished` is false.
-    init(suite: String? = nil, savedRoots: [RepositoryRoot] = [], savedPaths: [String] = [], savedActive: RepositoryRoot? = nil, launchFinished: Bool = true) {
+    init(
+        suite: String? = nil, savedRoots: [RepositoryRoot] = [], savedPaths: [String] = [],
+        savedActive: RepositoryRoot? = nil, launchFinished: Bool = true
+    ) {
         if let suite { self.suite = suite }
         defaults = UserDefaults(suiteName: self.suite)!
         let paths = savedRoots.map(\.path) + savedPaths
@@ -100,7 +106,9 @@ final class CoordinatorHarness {
             defaults: defaults,
             discover: { url in
                 try await gate.pass(url)
-                guard let entry = await registry.lookup(url) else { throw ProcessError.failed(command: "test", status: 1, stderr: "no stub") }
+                guard let entry = await registry.lookup(url) else {
+                    throw ProcessError.failed(command: "test", status: 1, stderr: "no stub")
+                }
                 return (entry.root, entry.client)
             },
             hooks: WindowCoordinator.Hooks(
@@ -258,7 +266,9 @@ struct WindowCoordinatorTests {
         let wa = h.registerCreated(h.root(a))
         #expect(wb.repositoryRoot == h.root(b))
         #expect(wa.repositoryRoot == h.root(a))
-        #expect(h.coordinator.openOrder == [h.root(x), h.root(a), h.root(b)], "registration order never reorders the session")
+        #expect(
+            h.coordinator.openOrder == [h.root(x), h.root(a), h.root(b)],
+            "registration order never reorders the session")
         #expect(h.coordinator.pendingCreates.isEmpty)
         #expect(h.sceneRoots[wa.id] == h.root(a))
         #expect(await eventually { await wa.files == self.filesA })
@@ -597,7 +607,9 @@ struct WindowCoordinatorTests {
         #expect(!w1.isKey)
         #expect(w2.isKey)
         #expect(h.prefetcher.events == [.prefetch(filesA.map(\.id)), .cancel])
-        #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a), "an empty key window does not change the last active root")
+        #expect(
+            h.coordinator.lastActiveRepositoryRoot == h.root(a),
+            "an empty key window does not change the last active root")
     }
 
     @Test func registrationReconcilesAWindowThatIsAlreadyKey() async {
@@ -683,8 +695,10 @@ struct WindowCoordinatorTests {
         await h.openAndSettle(b, into: w2)
         w1.selectedFileID = filesA[0].id
         w2.selectedFileID = filesB[0].id
-        #expect(await eventually { await MainActor.run { w1.diffLoader.content != nil && w2.diffLoader.content != nil } })
-        #expect(await eventually { await MainActor.run { !w1.diffLoader.hasActiveWork && !w2.diffLoader.hasActiveWork } })
+        #expect(
+            await eventually { await MainActor.run { w1.diffLoader.content != nil && w2.diffLoader.content != nil } })
+        #expect(
+            await eventually { await MainActor.run { !w1.diffLoader.hasActiveWork && !w2.diffLoader.hasActiveWork } })
         h.coordinator.windowOcclusionChanged(w2.id, visible: false)
         let readsA = await h.client(a).contentReads
         let readsB = await h.client(b).contentReads
@@ -697,7 +711,8 @@ struct WindowCoordinatorTests {
         h.preferences.hideWhitespace = true
         h.preferences.hideWhitespace = false
         h.preferences.hideWhitespace = true
-        #expect(await eventually { await MainActor.run { !w1.diffLoader.hasActiveWork && w1.diffLoader.content != nil } })
+        #expect(
+            await eventually { await MainActor.run { !w1.diffLoader.hasActiveWork && w1.diffLoader.content != nil } })
         #expect(await h.client(a).contentReads >= readsA + 4, "every real toggle reloads the visible window")
         #expect(h.preferences.hideWhitespace)
         #expect(await h.client(b).contentReads == readsB, "the hidden window loads nothing")
@@ -752,7 +767,9 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.phase == .restoring, "B's window has not registered")
         h.registerCreated(h.root(b))
         #expect(h.coordinator.phase == .running)
-        #expect(h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)], "saved roots keep their order ahead of what was opened meanwhile")
+        #expect(
+            h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)],
+            "saved roots keep their order ahead of what was opened meanwhile")
         #expect(h.savedRoots == [h.root(a), h.root(b), h.root(c)])
         #expect(h.recent == [h.root(c)], "restoration never touches recency")
     }
@@ -896,7 +913,9 @@ struct WindowCoordinatorTests {
 
         await h.gate.release(a)
         #expect(await eventually { await w1.repositoryRoot == h.root(a) })
-        #expect(await eventually { await h.coordinator.pendingCreates[h.root(b)]?.restoreEntry == h.root(b) }, "restoration joins the pending create and hands it the saved entry")
+        #expect(
+            await eventually { await h.coordinator.pendingCreates[h.root(b)]?.restoreEntry == h.root(b) },
+            "restoration joins the pending create and hands it the saved entry")
         #expect(h.log.created == [h.root(b)], "no second window for B")
         #expect(h.coordinator.phase == .restoring)
 
@@ -907,7 +926,8 @@ struct WindowCoordinatorTests {
     }
 
     @Test func savedPathThatBecameASymlinkToAnotherRepositoryIsDropped() async throws {
-        let base = FileManager.default.temporaryDirectory.appending(path: "DiffViewerTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let base = FileManager.default.temporaryDirectory.appending(
+            path: "DiffViewerTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: base) }
         let bDirectory = base.appending(path: "B", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: bDirectory, withIntermediateDirectories: true)
@@ -940,7 +960,9 @@ struct WindowCoordinatorTests {
         _ = h.repo("A", files: filesA)
         h.makeWindow()
         h.coordinator.applicationWillTerminate()
-        #expect(h.defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) == [rawPath], "the persisted spelling survives a quit before restoration")
+        #expect(
+            h.defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) == [rawPath],
+            "the persisted spelling survives a quit before restoration")
     }
 
     @Test func savedPathResolvingToADifferentRootIsDropped() async {
@@ -1028,7 +1050,9 @@ struct WindowCoordinatorTests {
         await h.gate.release(a)
         #expect(await eventually { await w1.repositoryRoot == h.root(a) })
         #expect(await h.running())
-        #expect(await eventually { await h.log.created == [h.root(b)] }, "opened after settle, alongside the restored window")
+        #expect(
+            await eventually { await h.log.created == [h.root(b)] },
+            "opened after settle, alongside the restored window")
         #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
     }
 
@@ -1075,7 +1099,8 @@ struct WindowCoordinatorTests {
     // MARK: Discovery against real repositories
 
     @Test func symlinkAndSubdirectoryResolveToOneRootWhileWorktreesStayDistinct() async throws {
-        let base = FileManager.default.temporaryDirectory.appending(path: "DiffViewerTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let base = FileManager.default.temporaryDirectory.appending(
+            path: "DiffViewerTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: base) }
         let repo = base.appending(path: "repo", directoryHint: .isDirectory)
         let sub = repo.appending(path: "sub", directoryHint: .isDirectory)
@@ -1083,10 +1108,14 @@ struct WindowCoordinatorTests {
         let worktree = base.appending(path: "wt", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
         func git(_ arguments: [String], in directory: URL) async throws {
-            _ = try await ProcessRunner.check(GitClient.executable, arguments: ["-c", "commit.gpgsign=false"] + arguments, currentDirectory: directory)
+            _ = try await ProcessRunner.check(
+                GitClient.executable, arguments: ["-c", "commit.gpgsign=false"] + arguments, currentDirectory: directory
+            )
         }
         try await git(["init", "-q"], in: repo)
-        try await git(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"], in: repo)
+        try await git(
+            ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "init"],
+            in: repo)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: repo)
         try await git(["worktree", "add", "-q", worktree.path], in: repo)
 

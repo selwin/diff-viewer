@@ -61,7 +61,8 @@ struct DiffDetailView: View {
     @ViewBuilder
     private func content(loader: DiffLoader) -> some View {
         if let message = loader.errorMessage {
-            ContentUnavailableView("Couldn't load diff", systemImage: "exclamationmark.triangle", description: Text(message))
+            ContentUnavailableView(
+                "Couldn't load diff", systemImage: "exclamationmark.triangle", description: Text(message))
         } else {
             switch loader.content {
             case let .text(document)?:
@@ -75,9 +76,12 @@ struct DiffDetailView: View {
                     foldOptions: preferences.foldOptions
                 )
             case .binary?:
-                ContentUnavailableView("Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
+                ContentUnavailableView(
+                    "Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
             case .identical?:
-                ContentUnavailableView("No differences", systemImage: "equal.circle", description: Text("Both versions have identical content."))
+                ContentUnavailableView(
+                    "No differences", systemImage: "equal.circle",
+                    description: Text("Both versions have identical content."))
             case nil:
                 Color.clear
             }

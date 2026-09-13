@@ -9,8 +9,9 @@ enum Highlighter {
 
     static func highlight(lines: [String], fileName: String) -> [[StyleRun]]? {
         guard !lines.isEmpty,
-              let config = LanguageRegistry.configuration(forFileNamed: fileName),
-              let query = config.queries[.highlights] else { return nil }
+            let config = LanguageRegistry.configuration(forFileNamed: fileName),
+            let query = config.queries[.highlights]
+        else { return nil }
 
         let text = lines.joined(separator: "\n")
         guard text.utf8.count <= maxBytes else { return nil }
@@ -31,7 +32,8 @@ enum Highlighter {
             guard match.allowed(in: context) else { continue }
             for capture in match.captures {
                 guard let name = capture.name,
-                      let style = TokenStyle.paintStyle(forCaptureName: name) else { continue }
+                    let style = TokenStyle.paintStyle(forCaptureName: name)
+                else { continue }
                 let range = capture.range
                 guard range.length > 0 else { continue }
                 captures.append((range.location, range.location + range.length, match.patternIndex, style))
@@ -78,7 +80,8 @@ enum Highlighter {
         }
 
         private func line(containing offset: Int) -> Int {
-            var low = 0, high = lineStarts.count - 1
+            var low = 0
+            var high = lineStarts.count - 1
             while low < high {
                 let mid = (low + high + 1) / 2
                 if lineStarts[mid] <= offset { low = mid } else { high = mid - 1 }

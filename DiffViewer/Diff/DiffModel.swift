@@ -25,7 +25,8 @@ struct DiffRow: Sendable, Equatable {
     let new: DiffSide?
 
     static func equal(old: Int, new: Int) -> DiffRow {
-        DiffRow(kind: .equal, old: DiffSide(lineIndex: old, highlights: []), new: DiffSide(lineIndex: new, highlights: []))
+        DiffRow(
+            kind: .equal, old: DiffSide(lineIndex: old, highlights: []), new: DiffSide(lineIndex: new, highlights: []))
     }
 }
 

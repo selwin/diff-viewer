@@ -1,6 +1,5 @@
-import Foundation
-
 import AppKit
+import Foundation
 
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
@@ -25,7 +24,8 @@ import AppKit
 ///   `open:<path>` (as from Finder), `shot:<path.png>` (renders the key window),
 ///   `measure:<changed file id>` (selects that file in the key window and prints the
 ///   selection-to-content latency with the difft cache stats delta, so a hit and a miss
-///   can be told apart; the file must not be selected already), `sleep:<seconds>`, and `quit` (Cmd+Q, through the delegate, so
+///   can be told apart; the file must not be selected already), `sleep:<seconds>`, and
+///   `quit` (Cmd+Q, through the delegate, so
 ///   the session snapshot is written). Tab actions are the `NSWindow` actions the
 ///   Window menu items invoke; `newTab` goes through the responder chain like the "+"
 ///   button. A step that cannot run (no key window in time, unknown command, unknown
@@ -39,85 +39,90 @@ enum DebugLaunchOptions {
     @MainActor
     static func apply(to services: AppServices) {
         #if DEBUG
-        guard !applied else { return }
-        applied = true
-        let env = ProcessInfo.processInfo.environment
-        switch env["DIFFVIEWER_APPEARANCE"] {
-        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
-        case "light": NSApp.appearance = NSAppearance(named: .aqua)
-        default: break
-        }
-        let opens = decodeStringArray(env["DIFFVIEWER_OPEN"])
-        let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
-        let selection = env["DIFFVIEWER_SELECT"] ?? ""
-        guard !opens.isEmpty || dump || !selection.isEmpty || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
-        let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
-        let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
-        // One ordered sequence: opens finish before the target window is chosen, so the
-        // selection, folding, and snapshot all act on the same window.
-        Task { @MainActor in
-            let coordinator = services.coordinator
-            // Opens during restoration would race the saved repositories for the
-            // initial window; wait for the batch to settle first.
-            _ = await eventually(attempts: 300) { coordinator.phase == .running }
-            for path in opens {
-                let request = WindowCoordinator.OpenRequest(url: URL(fileURLWithPath: path, isDirectory: true), origin: .app)
-                await coordinator.open(request)
-                try? await Task.sleep(for: .seconds(1))
+            guard !applied else { return }
+            applied = true
+            let env = ProcessInfo.processInfo.environment
+            switch env["DIFFVIEWER_APPEARANCE"] {
+            case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+            case "light": NSApp.appearance = NSAppearance(named: .aqua)
+            default: break
             }
-            if dump {
-                try? await Task.sleep(for: .seconds(2))
-                dumpWindows(services)
-                dumpOnSignal(services)
-            }
-            let steps = decodeStringArray(env["DIFFVIEWER_TAB_STEPS"])
-            if !steps.isEmpty {
-                // Activation must come from outside (`osascript -e 'tell application
-                // "DiffViewer" to activate'`); a script-launched process cannot make
-                // itself active on current macOS.
-                for step in steps {
-                    let needsKeyWindow = step != "quit" && !step.hasPrefix("sleep:")
-                    let hasKeyWindow = needsKeyWindow ? await eventually({ NSApp.keyWindow != nil }) : true
-                    guard hasKeyWindow else {
-                        fail(step, "no key window; activate the app first")
-                        break
-                    }
-                    if let failure = await runTabStep(step, services: services) {
-                        fail(step, failure)
-                        break
-                    }
+            let opens = decodeStringArray(env["DIFFVIEWER_OPEN"])
+            let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
+            let selection = env["DIFFVIEWER_SELECT"] ?? ""
+            guard !opens.isEmpty || dump || !selection.isEmpty || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
+            let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
+            let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
+            // One ordered sequence: opens finish before the target window is chosen, so the
+            // selection, folding, and snapshot all act on the same window.
+            Task { @MainActor in
+                let coordinator = services.coordinator
+                // Opens during restoration would race the saved repositories for the
+                // initial window; wait for the batch to settle first.
+                _ = await eventually(attempts: 300) { coordinator.phase == .running }
+                for path in opens {
+                    let request = WindowCoordinator.OpenRequest(
+                        url: URL(fileURLWithPath: path, isDirectory: true), origin: .app)
+                    await coordinator.open(request)
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                if dump {
                     try? await Task.sleep(for: .seconds(2))
-                    print("### \(step)")
                     dumpWindows(services)
+                    dumpOnSignal(services)
+                }
+                let steps = decodeStringArray(env["DIFFVIEWER_TAB_STEPS"])
+                if !steps.isEmpty {
+                    // Activation must come from outside (`osascript -e 'tell application
+                    // "DiffViewer" to activate'`); a script-launched process cannot make
+                    // itself active on current macOS.
+                    for step in steps {
+                        let needsKeyWindow = step != "quit" && !step.hasPrefix("sleep:")
+                        let hasKeyWindow = needsKeyWindow ? await eventually({ NSApp.keyWindow != nil }) : true
+                        guard hasKeyWindow else {
+                            fail(step, "no key window; activate the app first")
+                            break
+                        }
+                        if let failure = await runTabStep(step, services: services) {
+                            fail(step, failure)
+                            break
+                        }
+                        try? await Task.sleep(for: .seconds(2))
+                        print("### \(step)")
+                        dumpWindows(services)
+                    }
+                }
+                guard !selection.isEmpty else { return }
+                @MainActor func target() -> WindowState? {
+                    let key = coordinator.keyWindowState
+                    return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
+                }
+                _ = await eventually { target() != nil }
+                try? await Task.sleep(for: .seconds(0.5))
+                guard let windowState = target(), let window = services.windows[windowState.id] else { return }
+                // The snapshot renders offscreen, so lift the visibility gate for this window.
+                windowState.isVisible = true
+                windowState.selectedFileID = selection
+                if nextCount > 0 {
+                    try? await Task.sleep(for: .seconds(2))
+                    for _ in 0..<nextCount { windowState.nextChange() }
+                }
+                if !folds.isEmpty {
+                    try? await Task.sleep(for: .seconds(nextCount > 0 ? 0.5 : 2))
+                    for fold in folds {
+                        if fold == "toggle" {
+                            services.preferences.collapseUnchanged.toggle()
+                        } else {
+                            clickSeparator(fold, in: window)
+                        }
+                        try? await Task.sleep(for: .seconds(0.2))
+                    }
+                }
+                if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
+                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 1 : 3))
+                    snapshot(window, to: path)
                 }
             }
-            guard !selection.isEmpty else { return }
-            @MainActor func target() -> WindowState? {
-                let key = coordinator.keyWindowState
-                return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
-            }
-            _ = await eventually { target() != nil }
-            try? await Task.sleep(for: .seconds(0.5))
-            guard let windowState = target(), let window = services.windows[windowState.id] else { return }
-            // The snapshot renders offscreen, so lift the visibility gate for this window.
-            windowState.isVisible = true
-            windowState.selectedFileID = selection
-            if nextCount > 0 {
-                try? await Task.sleep(for: .seconds(2))
-                for _ in 0..<nextCount { windowState.nextChange() }
-            }
-            if !folds.isEmpty {
-                try? await Task.sleep(for: .seconds(nextCount > 0 ? 0.5 : 2))
-                for fold in folds {
-                    if fold == "toggle" { services.preferences.collapseUnchanged.toggle() } else { clickSeparator(fold, in: window) }
-                    try? await Task.sleep(for: .seconds(0.2))
-                }
-            }
-            if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
-                try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 1 : 3))
-                snapshot(window, to: path)
-            }
-        }
         #endif
     }
 
@@ -157,15 +162,20 @@ enum DebugLaunchOptions {
             guard parts.count == 2 else { return "unknown step" }
             switch parts[0] {
             case "key":
-                guard let window = NSApp.windows.first(where: { $0.title == parts[1] }) else { return "no window titled \(parts[1])" }
+                guard let window = NSApp.windows.first(where: { $0.title == parts[1] }) else {
+                    return "no window titled \(parts[1])"
+                }
                 window.makeKeyAndOrderFront(nil)
             case "open":
                 // Same request `openFromApp` makes, awaited so the next step sees the
                 // result; then wait for a created window to register.
                 let coordinator = services.coordinator
-                let request = WindowCoordinator.OpenRequest(url: URL(fileURLWithPath: parts[1], isDirectory: true), origin: .app)
+                let request = WindowCoordinator.OpenRequest(
+                    url: URL(fileURLWithPath: parts[1], isDirectory: true), origin: .app)
                 await coordinator.open(request)
-                guard await eventually({ coordinator.pendingCreates.isEmpty }) else { return "window for \(parts[1]) did not register" }
+                guard await eventually({ coordinator.pendingCreates.isEmpty }) else {
+                    return "window for \(parts[1]) did not register"
+                }
             case "shot":
                 snapshot(targetWindow, to: parts[1])
             case "measure":
@@ -183,21 +193,32 @@ enum DebugLaunchOptions {
     @MainActor
     private static func measureSelection(_ fileID: String, services: AppServices) async -> String? {
         guard let state = services.coordinator.keyWindowState, !state.isEmpty else { return "the key window is empty" }
-        guard state.files.contains(where: { $0.id == fileID }) else { return "no changed file \(fileID) in \(state.repoName)" }
+        guard state.files.contains(where: { $0.id == fileID }) else {
+            return "no changed file \(fileID) in \(state.repoName)"
+        }
         guard state.selectedFileID != fileID else { return "\(fileID) is already selected; nothing would load" }
         let before = await services.cache.stats
         let start = ContinuousClock.now
         state.selectedFileID = fileID
         // Poll finely: a cache hit publishes in well under the dump loop's 100 ms tick.
-        guard await eventually(attempts: 12000, every: .milliseconds(5), { state.diffLoader.contentFileID == fileID && state.diffLoader.content != nil && !state.diffLoader.isLoading }) else {
+        guard
+            await eventually(
+                attempts: 12000, every: .milliseconds(5),
+                {
+                    state.diffLoader.contentFileID == fileID && state.diffLoader.content != nil
+                        && !state.diffLoader.isLoading
+                })
+        else {
             return "no content for \(fileID) within 60 s"
         }
         let elapsed = ContinuousClock.now - start
         let after = await services.cache.stats
         let ms = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
-        print(String(format: "measure %@ content=%.0fms hits=+%d misses=+%d joins=+%d launches=+%d",
-                     fileID, ms, after.hits - before.hits, after.misses - before.misses,
-                     after.inFlightJoins - before.inFlightJoins, after.launches - before.launches))
+        print(
+            String(
+                format: "measure %@ content=%.0fms hits=+%d misses=+%d joins=+%d launches=+%d",
+                fileID, ms, after.hits - before.hits, after.misses - before.misses,
+                after.inFlightJoins - before.inFlightJoins, after.launches - before.launches))
         fflush(stdout)
         return nil
     }
@@ -228,22 +249,38 @@ enum DebugLaunchOptions {
             }
         }
         let states = coordinator.windows.values.map { state in
-            "state repo=\(state.repoName) key=\(state.isKey) visible=\(state.isVisible) files=\(state.files.count) stale=\(state.diffStale)"
+            "state repo=\(state.repoName) key=\(state.isKey) visible=\(state.isVisible) "
+                + "files=\(state.files.count) stale=\(state.diffStale)"
         }
         lines.append(contentsOf: states.sorted())
-        lines.append("openOrder=\(coordinator.openOrder.map(\.name)) rootIndex=\(coordinator.rootIndex.keys.map(\.name).sorted()) pending=\(coordinator.pendingCreates.count) lastActive=\(coordinator.lastActiveRepositoryRoot?.name ?? "nil") phase=\(coordinator.phase)")
+        lines.append(
+            "openOrder=\(coordinator.openOrder.map(\.name)) "
+                + "rootIndex=\(coordinator.rootIndex.keys.map(\.name).sorted()) "
+                + "pending=\(coordinator.pendingCreates.count) "
+                + "lastActive=\(coordinator.lastActiveRepositoryRoot?.name ?? "nil") "
+                + "phase=\(coordinator.phase)"
+        )
         let defaults = UserDefaults.standard
-        let saved = (defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) ?? []).map { RepositoryRoot(path: $0).name }
-        let savedActive = defaults.string(forKey: WindowCoordinator.SessionKeys.lastActive).map { RepositoryRoot(path: $0).name } ?? "nil"
+        let saved = (defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) ?? []).map {
+            RepositoryRoot(path: $0).name
+        }
+        let savedActive =
+            defaults.string(forKey: WindowCoordinator.SessionKeys.lastActive).map { RepositoryRoot(path: $0).name }
+            ?? "nil"
         lines.append("saved=\(saved) savedActive=\(savedActive)")
         let gauge = DifftRunner.processGauge
-        lines.append("prefetchWorkersPeak=\(services.prefetcher.peakActiveWorkers) difftRunning=\(gauge.running) difftPeak=\(gauge.peak)")
+        lines.append(
+            "prefetchWorkersPeak=\(services.prefetcher.peakActiveWorkers) "
+                + "difftRunning=\(gauge.running) difftPeak=\(gauge.peak)"
+        )
         print(lines.joined(separator: "\n"))
         fflush(stdout)
     }
 
     @MainActor
-    private static func eventually(attempts: Int = 50, every interval: Duration = .milliseconds(100), _ condition: @MainActor () -> Bool) async -> Bool {
+    private static func eventually(
+        attempts: Int = 50, every interval: Duration = .milliseconds(100), _ condition: @MainActor () -> Bool
+    ) async -> Bool {
         for _ in 0..<attempts {
             if condition() { return true }
             try? await Task.sleep(for: interval)
@@ -255,16 +292,19 @@ enum DebugLaunchOptions {
     private static func clickSeparator(_ control: String, in window: NSWindow) {
         guard let container = window.contentView?.descendant(SideBySideContainerView.self) else { return }
         let pane = container.rightPane
-        let wanted: FoldControl? = switch control {
-        case "up": .expandUp
-        case "down": .expandDown
-        case "run": .expandRun
-        default: nil
-        }
+        let wanted: FoldControl? =
+            switch control {
+            case "up": .expandUp
+            case "down": .expandDown
+            case "run": .expandRun
+            default: nil
+            }
         let visible = container.visibleDisplayRange
         for index in visible {
             guard case let .separator(hidden) = pane.displayRows[index] else { continue }
-            let rowRect = NSRect(x: pane.visibleRect.minX, y: pane.layout.y(forRow: index), width: pane.visibleRect.width, height: pane.layout.rowHeight)
+            let rowRect = NSRect(
+                x: pane.visibleRect.minX, y: pane.layout.y(forRow: index), width: pane.visibleRect.width,
+                height: pane.layout.rowHeight)
             let rects = pane.controlRects(for: hidden, rowRect: rowRect)
             let point: NSPoint
             if let wanted, let hit = rects.first(where: { $0.control == wanted }) {
@@ -274,7 +314,11 @@ enum DebugLaunchOptions {
             }
             let windowPoint = pane.convert(point, to: nil)
             let flags: NSEvent.ModifierFlags = control == "all" ? [.option] : []
-            guard let event = NSEvent.mouseEvent(with: .leftMouseDown, location: windowPoint, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+            guard
+                let event = NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: windowPoint, modifierFlags: flags, timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            else { return }
             pane.mouseDown(with: event)
             return
         }
@@ -283,7 +327,8 @@ enum DebugLaunchOptions {
     @MainActor
     private static func snapshot(_ window: NSWindow, to path: String) {
         guard let view = window.contentView?.superview ?? window.contentView,
-              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         if let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: path))
@@ -291,8 +336,8 @@ enum DebugLaunchOptions {
     }
 }
 
-private extension NSView {
-    func descendant<T: NSView>(_ type: T.Type) -> T? {
+extension NSView {
+    fileprivate func descendant<T: NSView>(_ type: T.Type) -> T? {
         if let match = self as? T { return match }
         for child in subviews { if let match = child.descendant(type) { return match } }
         return nil

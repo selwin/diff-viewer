@@ -1,0 +1,13 @@
+# Test suites are long by nature; length limits from the root configuration do not apply here.
+disabled_rules:
+  - file_length
+  - function_body_length
+  - type_body_length
+
+# Nested configurations replace a rule's settings wholesale, so the root values are repeated.
+# Fixture names such as `a_bc` mirror the file names they stand for.
+identifier_name:
+  min_length: 1
+  max_length: 60
+  allowed_symbols:
+    - "_"

@@ -94,11 +94,12 @@ enum ProcessRunner {
                 gauge?.exited()
                 group.wait()
 
-                continuation.resume(returning: ProcessResult(
-                    stdout: stdoutData,
-                    stderr: stderrData,
-                    status: process.terminationStatus
-                ))
+                continuation.resume(
+                    returning: ProcessResult(
+                        stdout: stdoutData,
+                        stderr: stderrData,
+                        status: process.terminationStatus
+                    ))
             }
         }
     }
@@ -110,7 +111,8 @@ enum ProcessRunner {
         currentDirectory: URL? = nil,
         environment: [String: String] = [:]
     ) async throws -> ProcessResult {
-        let result = try await run(executable, arguments: arguments, currentDirectory: currentDirectory, environment: environment)
+        let result = try await run(
+            executable, arguments: arguments, currentDirectory: currentDirectory, environment: environment)
         guard result.status == 0 else {
             let command = ([executable.lastPathComponent] + arguments).joined(separator: " ")
             throw ProcessError.failed(command: command, status: result.status, stderr: result.stderrString)
@@ -119,8 +121,8 @@ enum ProcessRunner {
     }
 }
 
-private extension QualityOfService {
-    var dispatchQoS: DispatchQoS.QoSClass {
+extension QualityOfService {
+    fileprivate var dispatchQoS: DispatchQoS.QoSClass {
         switch self {
         case .userInteractive: .userInteractive
         case .userInitiated: .userInitiated

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 /// A repository whose status call and worktree reads can be held open and released.
@@ -40,7 +41,7 @@ actor StubRepoClient: RepoClient {
     func releaseReads() {
         let waiting = heldReads
         heldReads = []
-        waiting.forEach { $0.resume() }
+        for continuation in waiting { continuation.resume() }
     }
 
     func indexContents(of path: String) async throws -> Data? {
@@ -93,12 +94,14 @@ final class Harness {
         let cache = DifftCache(runner: { old, new, fileName, qos in
             try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
         })
-        let state = WindowState(preferences: preferences, cache: cache, watchRepository: { [weak self] root, onChange in
-            let watcher = NoopWatcher()
-            self?.watchers[root] = watcher
-            self?.watcherCallbacks[root] = onChange
-            return watcher
-        })
+        let state = WindowState(
+            preferences: preferences, cache: cache,
+            watchRepository: { [weak self] root, onChange in
+                let watcher = NoopWatcher()
+                self?.watchers[root] = watcher
+                self?.watcherCallbacks[root] = onChange
+                return watcher
+            })
         state.onRefreshPublished = { [weak self] state, cause in
             self?.published.append((state.files, cause))
         }
@@ -111,7 +114,9 @@ final class Harness {
 
     /// Adopts and waits for the initial refresh to publish.
     @discardableResult
-    func adopt(_ state: WindowState, _ name: String, files: [ChangedFile]) async -> (root: RepositoryRoot, client: StubRepoClient) {
+    func adopt(_ state: WindowState, _ name: String, files: [ChangedFile]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
         let repo = repo(name, files: files)
         let before = published.count
         #expect(state.adopt(root: repo.root, client: repo.client))

@@ -60,7 +60,9 @@ struct GitClient: RepoClient {
         )
         if result.status == 0 { return result.stdout }
         let stderr = result.stderrString
-        if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in") || stderr.contains("is in the index, but not at stage") || stderr.contains("Invalid object name") {
+        if stderr.contains("does not exist") || stderr.contains("exists on disk, but not in")
+            || stderr.contains("is in the index, but not at stage") || stderr.contains("Invalid object name")
+        {
             return nil
         }
         throw ProcessError.failed(command: "git show \(spec)", status: result.status, stderr: stderr)

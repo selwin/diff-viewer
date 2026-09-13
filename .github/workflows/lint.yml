@@ -1,0 +1,39 @@
+name: Lint
+
+# GitHub's workflow parser does not support YAML anchors, so the path list is repeated.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.swift'
+      - '**.swiftlint.yml'
+      - .github/workflows/lint.yml
+  pull_request:
+    paths:
+      - '**.swift'
+      - '**.swiftlint.yml'
+      - .github/workflows/lint.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swiftlint:
+    name: SwiftLint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # SwiftLint does not need Xcode, so the check runs in the official image on a Linux runner.
+    # Keep this version in sync with the one installed locally (`brew install swiftlint`).
+    container:
+      image: ghcr.io/realm/swiftlint:0.65.1@sha256:f47e083201e47a136cda5ae847595bfe00226c444ca226fa74fa5dc648a9b057
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run SwiftLint
+        run: swiftlint lint --strict --reporter github-actions-logging

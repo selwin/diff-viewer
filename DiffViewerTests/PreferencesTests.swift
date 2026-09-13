@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import DiffViewer
 
 @MainActor
@@ -21,7 +22,8 @@ struct PreferencesTests {
         #expect(!preferences.hideWhitespace)
         #expect(!preferences.collapseUnchanged)
         #expect(preferences.fontSize == 15)
-        #expect(preferences.recentRepositoryRoots == [RepositoryRoot(path: "/tmp/one"), RepositoryRoot(path: "/tmp/two")])
+        #expect(
+            preferences.recentRepositoryRoots == [RepositoryRoot(path: "/tmp/one"), RepositoryRoot(path: "/tmp/two")])
     }
 
     @Test func defaultsWhenNothingIsStored() {

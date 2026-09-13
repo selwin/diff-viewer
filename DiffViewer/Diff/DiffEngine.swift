@@ -39,21 +39,25 @@ enum DiffEngine {
 
     /// Builds the document, taking difft hints from `cache` (which runs difft on a
     /// miss). Without hints the view still works as a plain line diff.
-    static func build(_ sources: Sources, hideWhitespace: Bool, cache: DifftCache, priority: DifftCache.Priority) async -> DiffContent {
+    static func build(_ sources: Sources, hideWhitespace: Bool, cache: DifftCache, priority: DifftCache.Priority) async
+        -> DiffContent
+    {
         if isBinary(sources.old) || isBinary(sources.new) { return .binary }
         if sources.old == sources.new { return .identical }
 
         let oldText = String(decoding: sources.old, as: UTF8.self)
         let newText = String(decoding: sources.new, as: UTF8.self)
 
-        let difft = await cache.result(old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
+        let difft = await cache.result(
+            old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
         let hints = difft?.hints ?? DifftHints()
         let language = difft?.language
 
         let document = await Task.detached(priority: .userInitiated) {
             let oldLines = TextLines.split(oldText)
             let newLines = TextLines.split(newText)
-            let rows = DiffAligner.align(oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
+            let rows = DiffAligner.align(
+                oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
             return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language)
         }.value
         return .text(document)

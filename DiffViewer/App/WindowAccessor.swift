@@ -90,13 +90,15 @@ struct WindowAccessor: NSViewRepresentable {
                 center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { _ in
                     MainActor.assumeIsolated { coordinator.windowDidResignKey(id) }
                 },
-                center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak window] _ in
+                center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main)
+                { [weak window] _ in
                     MainActor.assumeIsolated {
                         guard let window else { return }
                         coordinator.windowOcclusionChanged(id, visible: window.occlusionState.contains(.visible))
                     }
                 },
-                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
+                    [weak self] _ in
                     MainActor.assumeIsolated {
                         guard let self else { return }
                         coordinator.windowWillClose(id, sceneRoot: self.sceneRoot)
