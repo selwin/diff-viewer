@@ -36,6 +36,21 @@ struct GitClient: RepoClient {
             .sorted { ($0.area.rawValue, $0.path) < ($1.area.rawValue, $1.path) }
     }
 
+    /// Per-file added/deleted line counts for `area`: HEAD → index for `.staged`,
+    /// index → worktree for `.unstaged`. Untracked files never appear.
+    func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
+        var arguments = ["diff", "--numstat", "-z", "--no-renames"]
+        if area == .staged { arguments.insert("--cached", at: 1) }
+        if ignoreWhitespace { arguments.append("-w") }
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: arguments,
+            currentDirectory: repoRoot,
+            environment: Self.environment
+        )
+        return GitNumstatParser.parse(result.stdout)
+    }
+
     /// Contents of `path` in the index, or nil if the path is not in the index.
     func indexContents(of path: String) async throws -> Data? {
         try await show(":\(path)")

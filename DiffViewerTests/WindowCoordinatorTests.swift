@@ -225,6 +225,22 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
     }
 
+    @Test func titlesDisambiguateSameNamedRepositoriesAndRelaxOnClose() async {
+        let h = CoordinatorHarness()
+        let work = h.repo("work/app")
+        let personal = h.repo("personal/app")
+        let w1 = h.makeWindow()
+        let w2 = h.makeWindow()
+        await h.open(work, from: w1)
+        #expect(w1.title == "app", "alone, the bare name")
+        await h.open(personal, from: w2)
+        #expect(w1.title == "app — work")
+        #expect(w2.title == "app — personal")
+
+        h.coordinator.remove(w2.id)
+        #expect(w1.title == "app", "the survivor drops the parent folder")
+    }
+
     @Test func emptyOriginAdoptsWithoutCreate() async {
         let h = CoordinatorHarness()
         let a = h.repo("A", files: filesA)
@@ -429,8 +445,10 @@ struct WindowCoordinatorTests {
         #expect(h.registry.lookups[a] == 1)
         #expect(h.recent.first == h.root(a))
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a))
-        #expect(await eventually { await h.prefetcher.events.count > before })
-        #expect(h.prefetcher.events.last == .prefetch(filesA.map(\.id)))
+        // Attach prefetches the still-empty list at once; the refresh's prefetch follows
+        // after status and numstat have both returned.
+        let expected = RecordingPrefetcher.Event.prefetch(filesA.map(\.id))
+        #expect(await eventually { await MainActor.run { h.prefetcher.events.last == expected } })
     }
 
     @Test func userRequestJoiningARestorationCreateUpgradesRecency() async {
@@ -691,14 +709,14 @@ struct WindowCoordinatorTests {
 
         h.preferences.hideWhitespace = false
         #expect(await eventually { await h.client(a).contentReads == readsA + 2 })
-        #expect(w2.diffStale)
+        #expect(await eventually { await MainActor.run { w2.diffStale } })
         #expect(await h.client(b).contentReads == readsB)
 
         h.preferences.hideWhitespace = true
         h.preferences.hideWhitespace = false
         h.preferences.hideWhitespace = true
+        #expect(await eventually { await h.client(a).contentReads >= readsA + 4 }, "every real toggle reloads the visible window")
         #expect(await eventually { await MainActor.run { !w1.diffLoader.hasActiveWork && w1.diffLoader.content != nil } })
-        #expect(await h.client(a).contentReads >= readsA + 4, "every real toggle reloads the visible window")
         #expect(h.preferences.hideWhitespace)
         #expect(await h.client(b).contentReads == readsB, "the hidden window loads nothing")
 

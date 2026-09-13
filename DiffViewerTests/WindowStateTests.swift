@@ -13,10 +13,31 @@ actor StubRepoClient: RepoClient {
     private var heldReads: [CheckedContinuation<Void, Never>] = []
     /// Content reads of any kind since creation.
     private(set) var contentReads = 0
+    private var numstatEntries: [ChangedFile.Area: [NumstatEntry]] = [:]
+    private var failsNumstat = false
+    /// The `ignoreWhitespace` argument of the most recent numstat call.
+    private(set) var lastIgnoreWhitespace: Bool?
+    private(set) var numstatCalls = 0
+    /// Worktree contents by path, overriding the default "new \(path)" body.
+    private var worktree: [String: Data?] = [:]
 
     init(files: [ChangedFile]) { self.files = files }
 
     func set(files: [ChangedFile]) { self.files = files }
+    func set(numstat entries: [NumstatEntry], area: ChangedFile.Area) { numstatEntries[area] = entries }
+    func fail(numstat on: Bool) { failsNumstat = on }
+    func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
+
+    func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
+        numstatCalls += 1
+        lastIgnoreWhitespace = ignoreWhitespace
+        // An area no test configured is unknown, not empty: the joiner treats an empty
+        // list as "git saw no churn" and would stamp every file with +0 −0.
+        guard !failsNumstat, let entries = numstatEntries[area] else {
+            throw ProcessError.failed(command: "git diff --numstat", status: 128, stderr: "gone")
+        }
+        return entries
+    }
     var currentFiles: [ChangedFile] { files }
     func hold(_ on: Bool) { holds = on }
     func fail(_ on: Bool) { fails = on }
@@ -58,6 +79,7 @@ actor StubRepoClient: RepoClient {
         if holdsReads {
             await withCheckedContinuation { heldReads.append($0) }
         }
+        if let override = worktree[path] { return override }
         return Data("new \(path)".utf8)
     }
 }
@@ -361,8 +383,108 @@ struct WindowStateTests {
 
         state.isVisible = false
         state.diffSettingsChanged()
-        #expect(state.diffStale)
+        // The reload now rides on a settings refresh, so staleness lands asynchronously.
+        #expect(await eventually { await state.diffStale })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads + 2)
+    }
+
+    // MARK: Line stats
+
+    @Test func publishedFilesCarryLineStats() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.set(numstat: [NumstatEntry(path: "a1.swift", stats: .counted(added: 12, deleted: 4))], area: .unstaged)
+        await repo.client.set(numstat: [NumstatEntry(path: "a2.swift", stats: .binary)], area: .staged)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.files.map(\.id) == filesA.map(\.id))
+
+        // Stats follow the publish; the list itself does not change again.
+        #expect(await eventually { await state.files.first { $0.path == "a1.swift" }?.lineStats == .counted(added: 12, deleted: 4) })
+        #expect(state.files.first { $0.path == "a2.swift" }?.lineStats == .binary)
+        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(h.published.count == before + 1)
+    }
+
+    @Test func failingNumstatStillPublishesFilesWithoutStats() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.fail(numstat: true)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+
+        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(state.files.allSatisfy { $0.lineStats == nil })
+        #expect(state.errorMessage == nil, "stats are decoration and must not fail the refresh")
+    }
+
+    @Test func whitespaceChangeRefreshesStatsWithTheNewSetting() async {
+        let h = Harness()
+        h.preferences.hideWhitespace = true
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(await repo.client.lastIgnoreWhitespace == true)
+
+        let before = h.published.count
+        h.preferences.hideWhitespace = false
+        state.diffSettingsChanged()
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .settings)
+        #expect(await eventually { await repo.client.lastIgnoreWhitespace == false })
+    }
+
+    @Test func whitespaceChangeReloadsDiffEvenWhenStatusFails() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        await repo.client.fail(true)
+        h.preferences.hideWhitespace.toggle()
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.contentReads == reads + 2 }, "the diff reloads without waiting for status")
+        #expect(await eventually { await state.errorMessage != nil })
+        #expect(state.files.map(\.id) == filesA.map(\.id))
+    }
+
+    @Test func closingDuringUntrackedReadsAttachesNothing() async {
+        let h = Harness()
+        let state = h.makeState()
+        let fresh = changedFile("fresh.txt", kind: .untracked)
+        let repo = h.repo("A", files: [fresh])
+        await repo.client.holdReads(true)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        #expect(await eventually { await repo.client.heldReadCount == 1 }, "the untracked count starts after the publish")
+
+        state.close()
+        await repo.client.releaseReads()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(state.files.first?.lineStats == nil)
+    }
+
+    @Test func settingsRefreshWhileHiddenMarksStaleAndLoadsNothing() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        state.isVisible = false
+        #expect(!state.diffStale)
+        let before = h.published.count
+
+        state.diffSettingsChanged()
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .settings)
+        #expect(state.diffStale)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.contentReads == reads, "a hidden window loads no diff")
     }
 }

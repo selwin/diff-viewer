@@ -105,11 +105,18 @@ enum DiffAligner {
         return rows
     }
 
-    /// The comparison key for a line. With whitespace hidden, all whitespace is
-    /// dropped so indentation and spacing differences align as equal lines.
+    /// ASCII whitespace, the only characters `git diff -w` ignores under LC_ALL=C:
+    /// space, tab, CR, LF, form feed and vertical tab.
+    private static let asciiWhitespace: Set<Unicode.Scalar> = [
+        " ", "\t", "\r", "\n", "\u{000C}", "\u{000B}",
+    ]
+
+    /// The comparison key for a line. Hide Whitespace means the same as `git diff -w`:
+    /// only ASCII whitespace is ignored, so indentation and spacing differences align as
+    /// equal lines while a non-breaking or em space swapped for a space is a real change.
     static func key(_ line: String, _ hideWhitespace: Bool) -> String {
         guard hideWhitespace else { return line }
-        return String(line.unicodeScalars.filter { !$0.properties.isWhitespace })
+        return String(line.unicodeScalars.filter { !asciiWhitespace.contains($0) })
     }
 
     /// Converts UTF-8 byte ranges from difftastic into UTF-16 ranges, merging overlaps.

@@ -288,7 +288,16 @@ final class WindowCoordinator {
             lastActiveRepositoryRoot = root
             prefetch(for: id)
         }
+        updateTitles()
         persist()
+    }
+
+    /// Recomputes every populated window's title so repositories with the same name
+    /// stay distinguishable. Called after every attach and removal.
+    private func updateTitles() {
+        for (root, title) in WindowTitles.assign(Array(rootIndex.keys)) {
+            windows[rootIndex[root]!]?.title = title
+        }
     }
 
     // MARK: - Window lifecycle
@@ -372,6 +381,7 @@ final class WindowCoordinator {
         }
         sceneRootSetters[id] = nil
         visibility[id] = nil
+        updateTitles()
         persist()
     }
 

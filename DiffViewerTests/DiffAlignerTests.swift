@@ -8,6 +8,15 @@ struct DiffAlignerTests {
         #expect(rows.map(\.kind) == [.equal, .equal])
     }
 
+    @Test func hidingWhitespaceIgnoresOnlyASCIIWhitespace() {
+        // Hide Whitespace means `git diff -w`, which ignores ASCII whitespace only.
+        let nonBreaking = DiffAligner.align(oldLines: ["ab"], newLines: ["a\u{00A0}b"], hideWhitespace: true, hints: DifftHints())
+        #expect(nonBreaking.map(\.kind) == [.modified])
+
+        let spaces = DiffAligner.align(oldLines: ["a b"], newLines: ["a  b"], hideWhitespace: true, hints: DifftHints())
+        #expect(spaces.map(\.kind) == [.equal])
+    }
+
     @Test func whitespaceOnlyChangeShownHighlightsSpaces() {
         let rows = DiffAligner.align(oldLines: ["x = 1"], newLines: ["x  =  1"], hideWhitespace: false, hints: DifftHints())
         #expect(rows.count == 1)

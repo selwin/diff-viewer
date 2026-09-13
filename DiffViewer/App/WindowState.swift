@@ -17,6 +17,8 @@ final class RepoSession {
     var watcher: (any RepoWatching)?
     /// Incremented per refresh; only the latest may publish.
     var refreshSerial = 0
+    /// The line-stats work of the latest refresh; cancelled when a newer one starts.
+    var statsTask: Task<Void, Never>?
 
     init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root
@@ -32,6 +34,8 @@ enum RefreshCause: Sendable {
     case manual
     /// The repository watcher fired.
     case watcher
+    /// A setting that changes diff content (Hide Whitespace) changed.
+    case settings
 }
 
 /// Everything one window holds for its repository: the session, the changed-file
@@ -115,6 +119,13 @@ final class WindowState {
 
     var repoName: String { repositoryRoot?.name ?? "DiffViewer" }
 
+    /// The window and tab title. The repository name, extended with parent folders by
+    /// the coordinator when another open repository has the same name.
+    var title = "DiffViewer"
+
+    /// The window subtitle: the selected file's path, or nothing.
+    var subtitle: String { selectedFile?.path ?? "" }
+
     // MARK: - Lifecycle
 
     /// Installs `root` as this window's repository and starts its first refresh.
@@ -129,6 +140,7 @@ final class WindowState {
             Task { await self.refresh(session: session, cause: .watcher) }
         }
         self.session = session
+        title = root.name
         selectedFileID = nil
         errorMessage = nil
         isLoading = true
@@ -146,6 +158,7 @@ final class WindowState {
         isClosed = true
         initialRefresh?.cancel()
         session?.refreshSerial += 1
+        session?.statsTask?.cancel()
         session?.watcher?.stop()
         session?.watcher = nil
         diffLoader.cancelActiveWork()
@@ -162,14 +175,24 @@ final class WindowState {
     /// Reloads the file list for `session`. The result is published only if the
     /// session is still current, the window is open, and no newer refresh of it has
     /// started since.
+    ///
+    /// Line stats are decoration and arrive separately: the list is published as soon
+    /// as `status()` returns, carrying the counts already known for each file, and a
+    /// follow-up task runs numstat and the untracked line counts and updates `files`
+    /// in place. A newer refresh cancels that task; a failed numstat leaves its area
+    /// unknown and never fails the refresh, which is driven by `status()` alone.
     func refresh(session: RepoSession, cause: RefreshCause) async {
         // A watcher callback queued before its window closed: skip the read.
         guard session === self.session, !isClosed else { return }
         session.refreshSerial += 1
         let serial = session.refreshSerial
+        session.statsTask?.cancel()
+        let ignoreWhitespace = preferences.hideWhitespace
+        let client = session.client
+
         let outcome: Result<[ChangedFile], Error>
         do {
-            outcome = .success(try await session.client.status())
+            outcome = .success(try await client.status())
         } catch {
             outcome = .failure(error)
         }
@@ -177,23 +200,49 @@ final class WindowState {
 
         switch outcome {
         case let .success(newFiles):
-            files = newFiles
+            let known = Dictionary(files.map { ($0.id, $0.lineStats) }, uniquingKeysWith: { first, _ in first })
+            files = newFiles.map { $0.with(lineStats: known[$0.id] ?? nil) }
             if let selectedFileID, !newFiles.contains(where: { $0.id == selectedFileID }) {
                 self.selectedFileID = nil
             }
             errorMessage = nil
-            reloadDiff()
+            // A settings change reloaded the diff before starting its refresh.
+            if cause != .settings { reloadDiff() }
             onRefreshPublished?(self, cause)
+            session.statsTask = Task { [weak self] in
+                await self?.attachLineStats(to: newFiles, session: session, serial: serial, ignoreWhitespace: ignoreWhitespace)
+            }
         case let .failure(error):
             errorMessage = error.localizedDescription
         }
     }
 
+    /// Runs numstat for both areas and counts untracked files, then replaces `files`
+    /// with the same list carrying the fresh stats, if this refresh still owns the
+    /// window. Not a publish: the list itself did not change.
+    private func attachLineStats(to newFiles: [ChangedFile], session: RepoSession, serial: Int, ignoreWhitespace: Bool) async {
+        let client = session.client
+        async let unstaged = client.numstat(area: .unstaged, ignoreWhitespace: ignoreWhitespace)
+        async let staged = client.numstat(area: .staged, ignoreWhitespace: ignoreWhitespace)
+        // A failed numstat leaves its area out, which the joiner reports as unknown.
+        var numstat: [ChangedFile.Area: [NumstatEntry]] = [:]
+        numstat[.unstaged] = try? await unstaged
+        numstat[.staged] = try? await staged
+        guard !Task.isCancelled else { return }
+        let joined = await LineStatsJoiner.attach(numstat: numstat, to: newFiles, client: client)
+        guard !Task.isCancelled, session === self.session, !isClosed, serial == session.refreshSerial else { return }
+        files = joined
+    }
+
     // MARK: - Diff
 
-    /// A setting that changes diff content changed.
+    /// A setting that changes diff content changed. The diff reloads at once (or is
+    /// marked stale while hidden); the line counts depend on Hide Whitespace too, so
+    /// a refresh follows to recompute them.
     func diffSettingsChanged() {
         reloadDiff()
+        guard let session else { return }
+        Task { await refresh(session: session, cause: .settings) }
     }
 
     /// Loads the selected file's diff when visible; when hidden, records that a load
