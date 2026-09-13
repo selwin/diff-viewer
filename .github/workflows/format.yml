@@ -2,7 +2,7 @@ name: Format
 
 on:
   push:
-    branches: [main]
+    branches: [main, claude/github-actions-workflows-eu9tui] # TEMPORARY: removed before merge
   pull_request:
   workflow_dispatch:
 
