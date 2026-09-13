@@ -48,7 +48,7 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     let area: Area
     /// Added/deleted line counts, or nil while unknown. Last property so the
     /// memberwise initialiser keeps working without it.
-    var lineStats: LineStats? = nil
+    var lineStats: LineStats?
 
     var id: String { "\(area.rawValue):\(path)" }
 

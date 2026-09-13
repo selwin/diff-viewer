@@ -5,6 +5,12 @@ set -eu
 
 EXPECTED=0.65.1
 
+# As in the Makefile: use the real Xcode even when xcode-select points at the CLT.
+# SwiftLint loads sourcekitd from DEVELOPER_DIR's toolchain and the CLT does not ship it.
+if [[ -z ${DEVELOPER_DIR:-} && -d /Applications/Xcode.app/Contents/Developer ]]; then
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+fi
+
 if ! command -v swiftlint >/dev/null; then
     print -u2 "swiftlint not found: brew install swiftlint"
     exit 1
