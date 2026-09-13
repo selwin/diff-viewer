@@ -25,13 +25,13 @@ $(PROJECT): project.yml $(shell find DiffViewer DiffViewerTests -type d)
 
 gen: $(PROJECT)
 
-build: gen difft
+build: difft gen
 	$(XCB) build | scripts/xcfilter.sh
 
 run: build
 	open $(APP)
 
-test: gen difft
+test: difft gen
 	$(XCB) test | scripts/xcfilter.sh
 
 open: gen

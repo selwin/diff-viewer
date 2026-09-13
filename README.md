@@ -23,7 +23,12 @@ Requires Xcode 26 and [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew i
 make run      # generate the project, fetch difft, build, launch
 make test     # run the unit tests
 make open     # open the generated Xcode project
+make lint     # SwiftLint (brew install swiftlint), same rules as CI
+make format   # rewrite sources with swift-format; `make format-check` only reports
 ```
+
+CI runs the same three checks as separate workflows under `.github/workflows/`: SwiftLint and
+swift-format on Linux, and `xcodebuild test` on a macOS 26 runner.
 
 `make` points `DEVELOPER_DIR` at `/Applications/Xcode.app` so it works even when
 `xcode-select` is set to the Command Line Tools.

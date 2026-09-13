@@ -32,8 +32,12 @@ jobs:
       - name: Check formatting
         run: swift format lint --strict --parallel --recursive --configuration .swift-format $SOURCES
 
+      # The job container checks out a plain tree rather than a git repository, so the diff
+      # compares a formatted copy against the original. Apply it locally with `git apply -p2`.
       - name: Show the changes swift-format would make
         if: failure()
         run: |
-          swift format --in-place --parallel --recursive --configuration .swift-format $SOURCES
-          git --no-pager diff
+          cp -R "$GITHUB_WORKSPACE" /tmp/before
+          cp -R "$GITHUB_WORKSPACE" /tmp/after
+          cd /tmp/after && swift format --in-place --parallel --recursive --configuration .swift-format $SOURCES
+          cd /tmp && git --no-pager diff --no-index before after || true

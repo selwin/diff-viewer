@@ -37,11 +37,12 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Generate the Xcode project
-        run: xcodegen generate
-
+      # project.yml lists the difft binary as a source, so it must exist before XcodeGen runs.
       - name: Fetch difft
         run: scripts/fetch-difft.sh
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
 
       - name: Run tests
         run: |
