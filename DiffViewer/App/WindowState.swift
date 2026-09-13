@@ -201,7 +201,7 @@ final class WindowState {
         switch outcome {
         case let .success(newFiles):
             let known = Dictionary(files.map { ($0.id, $0.lineStats) }, uniquingKeysWith: { first, _ in first })
-            files = newFiles.map { $0.with(lineStats: known[$0.id] ?? nil) }
+            files = newFiles.map { $0.with(lineStats: known[$0.id, default: nil]) }
             if let selectedFileID, !newFiles.contains(where: { $0.id == selectedFileID }) {
                 self.selectedFileID = nil
             }
