@@ -1,23 +1,23 @@
 import SwiftUI
 
 struct SidebarView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(WindowState.self) private var windowState
 
     var body: some View {
-        @Bindable var appState = appState
-        List(selection: $appState.selectedFileID) {
-            if appState.repoRoot != nil, appState.files.isEmpty {
+        @Bindable var windowState = windowState
+        List(selection: $windowState.selectedFileID) {
+            if !windowState.isEmpty, windowState.files.isEmpty {
                 Text("No changes")
                     .foregroundStyle(.secondary)
             }
-            if !appState.unstagedFiles.isEmpty {
-                Section("Unstaged (\(appState.unstagedFiles.count))") {
-                    ForEach(appState.unstagedFiles) { FileRow(file: $0) }
+            if !windowState.unstagedFiles.isEmpty {
+                Section("Unstaged (\(windowState.unstagedFiles.count))") {
+                    ForEach(windowState.unstagedFiles) { FileRow(file: $0) }
                 }
             }
-            if !appState.stagedFiles.isEmpty {
-                Section("Staged (\(appState.stagedFiles.count))") {
-                    ForEach(appState.stagedFiles) { FileRow(file: $0) }
+            if !windowState.stagedFiles.isEmpty {
+                Section("Staged (\(windowState.stagedFiles.count))") {
+                    ForEach(windowState.stagedFiles) { FileRow(file: $0) }
                 }
             }
         }

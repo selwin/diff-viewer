@@ -2,11 +2,12 @@ import SwiftUI
 
 /// Header plus side-by-side panes for the selected file.
 struct DiffDetailView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(WindowState.self) private var windowState
+    @Environment(Preferences.self) private var preferences
     let file: ChangedFile
 
     var body: some View {
-        let loader = appState.diffLoader
+        let loader = windowState.diffLoader
         VStack(spacing: 0) {
             header(loader: loader)
             Divider()
@@ -37,7 +38,7 @@ struct DiffDetailView: View {
                     }
                     if case let .text(doc)? = loader.content {
                         let count = doc.changeBlocks.count
-                        if let index = appState.currentChangeIndex, index < count {
+                        if let index = windowState.currentChangeIndex, index < count {
                             Text("Change \(index + 1) of \(count)")
                         } else {
                             Text("\(count) change\(count == 1 ? "" : "s")")
@@ -67,11 +68,11 @@ struct DiffDetailView: View {
                 SideBySideView(
                     document: document,
                     styles: loader.styles,
-                    fontSize: appState.fontSize,
-                    scrollTarget: appState.scrollTarget,
-                    currentBlock: appState.currentChangeIndex,
-                    collapseUnchanged: appState.collapseUnchanged,
-                    foldOptions: appState.foldOptions
+                    fontSize: preferences.fontSize,
+                    scrollTarget: windowState.scrollTarget,
+                    currentBlock: windowState.currentChangeIndex,
+                    collapseUnchanged: preferences.collapseUnchanged,
+                    foldOptions: preferences.foldOptions
                 )
             case .binary?:
                 ContentUnavailableView("Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))

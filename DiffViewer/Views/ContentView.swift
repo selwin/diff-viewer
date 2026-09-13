@@ -2,52 +2,56 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @Environment(AppState.self) private var appState
+    @Environment(AppServices.self) private var services
+    @Environment(WindowState.self) private var windowState
+    @Environment(Preferences.self) private var preferences
 
     var body: some View {
-        @Bindable var appState = appState
+        @Bindable var windowState = windowState
+        @Bindable var preferences = preferences
         NavigationSplitView {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         } detail: {
             detail
         }
-        .navigationTitle(appState.repoName)
+        .navigationTitle(windowState.repoName)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
-            let state = appState
+            let coordinator = services.coordinator
+            let origin = WindowCoordinator.OpenOrigin.window(windowState.id)
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in await state.openRepo(at: url) }
+                Task { @MainActor in await coordinator.open(WindowCoordinator.OpenRequest(url: url, origin: origin)) }
             }
             return true
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    appState.previousChange()
+                    windowState.previousChange()
                 } label: {
                     Label("Previous Change", systemImage: "chevron.up")
                 }
                 .help("Previous change (⌘↑)")
-                .disabled(appState.changeBlockCount == 0)
+                .disabled(windowState.changeBlockCount == 0)
                 Button {
-                    appState.nextChange()
+                    windowState.nextChange()
                 } label: {
                     Label("Next Change", systemImage: "chevron.down")
                 }
                 .help("Next change (⌘↓)")
-                .disabled(appState.changeBlockCount == 0)
-                Toggle(isOn: $appState.hideWhitespace) {
+                .disabled(windowState.changeBlockCount == 0)
+                Toggle(isOn: $preferences.hideWhitespace) {
                     Label("Hide Whitespace", systemImage: "arrow.left.and.right.text.vertical")
                 }
                 .help("Hide whitespace-only changes (⇧⌘W)")
-                Toggle(isOn: $appState.collapseUnchanged) {
+                Toggle(isOn: $preferences.collapseUnchanged) {
                     Label("Collapse Unchanged", systemImage: "rectangle.compress.vertical")
                 }
                 .help("Collapse unchanged lines (⇧⌘U)")
                 Button {
-                    Task { await appState.refresh() }
+                    Task { await windowState.refresh() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -55,27 +59,27 @@ struct ContentView: View {
             }
         }
         .alert("Error", isPresented: Binding(
-            get: { appState.errorMessage != nil },
-            set: { if !$0 { appState.errorMessage = nil } }
+            get: { windowState.errorMessage != nil },
+            set: { if !$0 { windowState.errorMessage = nil } }
         )) {
-            Button("OK") { appState.errorMessage = nil }
+            Button("OK") { windowState.errorMessage = nil }
         } message: {
-            Text(appState.errorMessage ?? "")
+            Text(windowState.errorMessage ?? "")
         }
     }
 
     @ViewBuilder
     private var detail: some View {
-        if appState.repoRoot == nil {
+        if windowState.isEmpty {
             ContentUnavailableView {
                 Label("No Repository", systemImage: "folder.badge.questionmark")
             } description: {
                 Text("Open a git repository to view its changes.")
             } actions: {
-                Button("Open Repository…") { appState.presentOpenPanel() }
+                Button("Open Repository…") { services.coordinator.presentOpenPanel(from: .window(windowState.id)) }
                     .keyboardShortcut(.defaultAction)
             }
-        } else if let file = appState.selectedFile {
+        } else if let file = windowState.selectedFile {
             DiffDetailView(file: file)
                 .id(file.id)
         } else {

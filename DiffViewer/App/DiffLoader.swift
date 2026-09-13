@@ -12,6 +12,11 @@ final class DiffLoader {
     private(set) var errorMessage: String?
     /// Syntax styles for `content`, arriving shortly after the diff itself.
     private(set) var styles: DocumentStyles?
+    /// True while styles for the published content are being computed.
+    private(set) var isHighlighting = false
+
+    /// True while a diff or its highlighting is in flight.
+    var hasActiveWork: Bool { isLoading || isHighlighting }
 
     private let cache: DifftCache
     private var task: Task<Void, Never>?
@@ -22,10 +27,22 @@ final class DiffLoader {
         self.cache = cache
     }
 
-    func load(file: ChangedFile?, client: (any RepoClient)?, hideWhitespace: Bool) {
+    /// Stops any in-flight diff and highlight. Published content and styles stay as
+    /// they are; the cancelled generation can no longer publish or start highlighting.
+    /// Returns whether anything was actually in flight.
+    @discardableResult
+    func cancelActiveWork() -> Bool {
+        let wasActive = hasActiveWork
         task?.cancel()
         highlightTask?.cancel()
         generation += 1
+        isLoading = false
+        isHighlighting = false
+        return wasActive
+    }
+
+    func load(file: ChangedFile?, client: (any RepoClient)?, hideWhitespace: Bool) {
+        cancelActiveWork()
         let gen = generation
         guard let file, let client else {
             content = nil
@@ -68,6 +85,7 @@ final class DiffLoader {
         let oldLines = document.oldLines
         let newLines = document.newLines
         let documentID = document.id
+        isHighlighting = true
         highlightTask = Task {
             // Both sides are independent parses; run them in parallel.
             async let old = Task.detached(priority: .userInitiated) {
@@ -79,6 +97,7 @@ final class DiffLoader {
             let result = await DocumentStyles(documentID: documentID, old: old, new: new)
             guard !Task.isCancelled, gen == generation else { return }
             styles = result
+            isHighlighting = false
         }
     }
 }

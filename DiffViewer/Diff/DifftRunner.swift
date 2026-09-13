@@ -62,6 +62,14 @@ struct DifftHints: Sendable {
 }
 
 enum DifftRunner {
+    /// difft processes alive right now and the most that were alive at once, counted
+    /// from launch to exit. Foreground runs are not bounded, so the peak is an
+    /// observation, not a limit (`DifftCache.Limits.backgroundProcesses` bounds
+    /// background runs only).
+    private static let gauge = ProcessGauge()
+
+    static var processGauge: ProcessGauge.Reading { gauge.reading }
+
     enum Failure: Error, LocalizedError {
         case binaryNotFound
         case badOutput(String)
@@ -109,7 +117,8 @@ enum DifftRunner {
                 "DFT_GRAPH_LIMIT": "6000000",
                 "DFT_PARSE_ERROR_LIMIT": "5",
             ],
-            qualityOfService: qualityOfService
+            qualityOfService: qualityOfService,
+            gauge: gauge
         )
         guard result.status == 0 else {
             throw ProcessError.failed(command: "difft", status: result.status, stderr: result.stderrString)

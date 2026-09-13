@@ -34,13 +34,18 @@ difftastic GitHub release, into `DiffViewer/Resources/bin/` (git-ignored).
 ## Use
 
 Open a repository with ⌘O, drag a folder onto the window, or `open -a DiffViewer <repo>`.
-The last repository reopens on launch.
+Each repository gets its own window, and windows are tabs of one window by default:
+⌘T opens an empty tab that adopts the next repository you open, ⇧⌘] / ⇧⌘[ cycle tabs,
+and the Window menu's Move Tab to New Window and Merge All Windows detach and regroup
+them. Opening a repository that is already open focuses its tab. On quit the set of open
+repositories and the active one are saved and restored on the next launch; launching by
+opening a folder from Finder shows that repository instead of the saved set.
 
 ## Layout
 
 | Directory | Contents |
 |-----------|----------|
-| `DiffViewer/App` | App entry, `AppState`, `DiffLoader` |
+| `DiffViewer/App` | App entry, `Preferences` (app-wide settings), `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, session persistence), `DiffLoader` |
 | `DiffViewer/Git` | `git` CLI wrapper, status parser, FSEvents watcher |
 | `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine |
 | `DiffViewer/Highlighting` | tree-sitter grammar registry, highlighter, token theme |
@@ -49,7 +54,9 @@ The last repository reopens on launch.
 
 Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_NEXT`, `DIFFVIEWER_FOLD`,
 `DIFFVIEWER_APPEARANCE`, and `DIFFVIEWER_SNAPSHOT` environment variables for scripted
-screenshots (see `scripts/`).
+screenshots, and `DIFFVIEWER_OPEN`, `DIFFVIEWER_TAB_STEPS`, and `DIFFVIEWER_DUMP_WINDOWS`
+for scripted checks of tabs, restoration, and diff latency (see `scripts/` and
+`DebugLaunchOptions`).
 
 ## Known limitations / next steps
 
@@ -57,4 +64,13 @@ screenshots (see `scripts/`).
   query predicates are regex-heavy); both sides run in parallel and never block scrolling.
   Possible follow-ups: cache compiled predicates, or highlight visible rows first.
 - Separator controls are exposed to VoiceOver as buttons but have no keyboard shortcut yet.
+- Tabs are the policy, not the system preference: repository windows always prefer
+  tabbing, whatever System Settings > Desktop & Dock > "Prefer tabs when opening
+  documents" says. Honouring the system tab preference is a follow-up.
+- Highlighting runs in detached tasks the loader cannot stop: a hidden or closed window
+  starts no new highlight, but one already computing runs to completion. Bounded
+  highlighting concurrency with cooperative cancellation is a follow-up.
+- Foreground difft runs are unbounded: several visible windows reloading at once, or
+  rapid selection changes, can overlap difft processes (background prefetch runs share
+  three slots). A foreground difft scheduler is a follow-up.
 - Not yet built: `git difftool` CLI integration, commit/ref-range browsing, folder compare.
