@@ -29,7 +29,7 @@ Where DiffViewer already stands versus the bar:
 | Folder outline in sidebar | yes | no (long-requested) | no | **no** |
 | Rename / move detection | yes | yes | yes | **no** (`--no-renames`) |
 | Image diff | no | yes | no (top request) | **no** |
-| Text selection / copy from panes | yes | yes | yes | **no** |
+| Text selection / copy from panes | yes | yes | yes | **yes** |
 
 ---
 
@@ -306,11 +306,12 @@ Roughly in priority order.
   Sublime Merge users complain it is missing, so it is a visible win. Add an option to
   search only changed lines.
 - **Jump to line (⌘L).** Pick old or new line number; scroll and flash the row.
-- **Text selection and copy.** The custom `NSView` renderer has no selection today. Add
-  per-pane click-drag selection over the visible CTLines, ⌘C copying plain text (one side
-  only), and ⌘A selecting the current pane. Context menu: Copy, Copy Path, Copy Line
-  Number, Reveal in Finder, Open in Default Editor. All three competitors support
-  selecting text.
+- **Text selection and copy.** Per-pane click-drag selection, double-click word select,
+  triple-click line select, ⌘C copying plain text (one side only), and ⌘A selecting the
+  current pane have landed. Remaining: the context menu (Copy, Copy Path, Copy Line
+  Number, Reveal in Finder, Open in Default Editor) and the deferred conventions
+  (shift-click extend, Escape to clear, dimming when the window is not key, autoscroll
+  while the mouse is held still).
 - **Rename and move detection.** Status currently runs with `--no-renames`. Switch to
   `--find-renames` and show `old → new` in the sidebar and header (already supported by
   `ChangedFile.originalPath`); diff the renamed pair instead of showing a delete plus an
