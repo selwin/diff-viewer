@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct SidebarView: View {
+    @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
+    @Environment(Preferences.self) private var preferences
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -38,6 +40,14 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        // Keyed on the ids, not the files: staging moves a row between sections and should
+        // slide, while line counts arriving for the same rows should not start a transaction.
+        .animation(.default, value: windowState.files.map(\.id))
+        // The list-level form hands over the row that was right-clicked even when it is
+        // not the selected one, which is what a Finder-shaped sidebar is expected to do.
+        .contextMenu(forSelectionType: ChangedFile.ID.self) { ids in
+            contextMenu(for: ids)
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !windowState.isEmpty {
                 VStack(spacing: 0) {
@@ -49,6 +59,47 @@ struct SidebarView: View {
                 .background(.bar)
             }
         }
+    }
+
+    /// The menu for exactly one row. A header, blank space, a placeholder row, or a
+    /// multiple selection hands over an empty or larger set and has nothing to act on.
+    @ViewBuilder
+    private func contextMenu(for ids: Set<ChangedFile.ID>) -> some View {
+        if ids.count == 1, let id = ids.first, let file = windowState.files.first(where: { $0.id == id }) {
+            // Whether the file is on disk is the view's question, not the model's: it is
+            // true only at the moment the menu is built, and one stat per right-click is
+            // cheap, where keeping it on `ChangedFile` would mean statting every row on
+            // every refresh to hold an answer that goes stale anyway.
+            let existsOnDisk =
+                windowState.repositoryRoot.map {
+                    FileManager.default.fileExists(atPath: $0.url.appendingPathComponent(file.path).path)
+                } ?? false
+            let actions = FileAction.menu(for: file, existsOnDisk: existsOnDisk)
+            let writes = actions.filter(\.isRepositoryWrite)
+            let harmless = actions.filter { !$0.isRepositoryWrite }
+            ForEach(writes, id: \.self) { action in
+                Button(action.title(for: file)) { run(action, on: file) }
+            }
+            // Separate what changes the repository from what only looks at the file.
+            if !writes.isEmpty, !harmless.isEmpty {
+                Divider()
+            }
+            ForEach(harmless, id: \.self) { action in
+                Button(action.title(for: file)) { run(action, on: file) }
+            }
+        } else {
+            EmptyView()
+        }
+    }
+
+    /// The runner confirms first, so it needs this window to hang the sheet on.
+    private func run(_ action: FileAction, on file: ChangedFile) {
+        let runner = FileActionRunner(
+            windowState: windowState,
+            preferences: preferences,
+            window: services.windows[windowState.id]
+        )
+        Task { await runner.run(action, on: file) }
     }
 }
 

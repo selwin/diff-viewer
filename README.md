@@ -15,6 +15,11 @@ A native macOS 26 app for viewing git diffs side by side.
   whole file. The hidden `collapseContextLines` default overrides the context size.
 - **Full syntax highlighting** of both sides with tree-sitter (Swift, Python, JS, TS/TSX,
   JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, Kotlin, PHP, Markdown).
+- **Sidebar context menu**: right-click a file to stage it, unstage it, discard its changes,
+  restore it after a delete, or move an untracked file to the Trash, plus Reveal in Finder,
+  Open in Default Editor, and Copy Path. Discard and Delete ask first; "Don't ask again"
+  turns the question off and View › Confirm Destructive File Actions turns it back on.
+  Whole files only: the app never edits file contents and never commits.
 - **Fast**: custom AppKit renderer draws only visible rows; a 20k-line file scrolls smoothly.
 - Unstaged / staged file list, live refresh when the repo changes, next/previous change
   (⌘↓ / ⌘↑), change overview strip, font size (⌘+ / ⌘- / ⌘0), light and dark mode.

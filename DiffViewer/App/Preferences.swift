@@ -25,6 +25,13 @@ final class Preferences {
         didSet { defaults.set(collapseUnchanged, forKey: Keys.collapseUnchanged) }
     }
 
+    /// Destructive sidebar actions (Discard Changes, Delete File) ask before running.
+    /// The alert's "Don't ask again" box turns this off; the View-menu toggle turns it
+    /// back on, which is the only way back — there is no Settings scene.
+    var confirmDestructiveFileActions: Bool {
+        didSet { defaults.set(confirmDestructiveFileActions, forKey: Keys.confirmDestructiveFileActions) }
+    }
+
     var fontSize: Double {
         didSet { defaults.set(fontSize, forKey: Keys.fontSize) }
     }
@@ -49,6 +56,7 @@ final class Preferences {
         static let fontSize = "fontSize"
         static let collapseUnchanged = "collapseUnchanged"
         static let collapseContextLines = "collapseContextLines"
+        static let confirmDestructiveFileActions = "confirmDestructiveFileActions"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -59,6 +67,8 @@ final class Preferences {
         let storedSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 12
         fontSize = min(max(storedSize, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         collapseUnchanged = defaults.object(forKey: Keys.collapseUnchanged) as? Bool ?? true
+        confirmDestructiveFileActions =
+            defaults.object(forKey: Keys.confirmDestructiveFileActions) as? Bool ?? true
         foldOptions = FoldOptions.validated(contextLines: defaults.object(forKey: Keys.collapseContextLines) as? Int)
     }
 

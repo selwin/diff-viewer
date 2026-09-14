@@ -16,11 +16,13 @@ struct PreferencesTests {
         defaults.set(false, forKey: "hideWhitespace")
         defaults.set(false, forKey: "collapseUnchanged")
         defaults.set(15.0, forKey: "fontSize")
+        defaults.set(false, forKey: "confirmDestructiveFileActions")
         defaults.set(["/tmp/one", "/tmp/two"], forKey: "recentRepos")
 
         let preferences = Preferences(defaults: defaults)
         #expect(!preferences.hideWhitespace)
         #expect(!preferences.collapseUnchanged)
+        #expect(!preferences.confirmDestructiveFileActions)
         #expect(preferences.fontSize == 15)
         #expect(
             preferences.recentRepositoryRoots == [RepositoryRoot(path: "/tmp/one"), RepositoryRoot(path: "/tmp/two")])
@@ -32,8 +34,18 @@ struct PreferencesTests {
         let preferences = Preferences(defaults: defaults)
         #expect(preferences.hideWhitespace)
         #expect(preferences.collapseUnchanged)
+        #expect(preferences.confirmDestructiveFileActions)
         #expect(preferences.fontSize == 12)
         #expect(preferences.recentRepositoryRoots.isEmpty)
+    }
+
+    @Test func confirmDestructiveFileActionsRoundTrips() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+        preferences.confirmDestructiveFileActions = false
+        #expect(defaults.bool(forKey: "confirmDestructiveFileActions") == false)
+        #expect(!Preferences(defaults: defaults).confirmDestructiveFileActions)
     }
 
     @Test func clampsStoredFontSize() {

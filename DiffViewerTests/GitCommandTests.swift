@@ -289,4 +289,127 @@ import Testing
             try await repo.client.contents(of: "a.txt", at: String(repeating: "0", count: 40))
         }
     }
+
+    // MARK: File actions
+
+    /// `git add` on a path that is gone records the deletion; nothing should be left
+    /// unstaged afterwards.
+    @Test func stageRecordsADeletion() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.delete("a.txt")
+
+        try await repo.client.perform(.stage, on: "a.txt")
+
+        let files = try await repo.client.status()
+        #expect(files.count == 1, "nothing should be left unstaged")
+        #expect(files.first?.path == "a.txt")
+        #expect(files.first?.kind == .deleted)
+        #expect(files.first?.area == .staged)
+    }
+
+    /// Unstaging an add leaves the file on disk and unknown to git, not deleted.
+    @Test func unstageReturnsAStagedAddToUntracked() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.write("new.txt", "fresh\n")
+        try await repo.git(["add", "new.txt"])
+
+        try await repo.client.perform(.unstage, on: "new.txt")
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["new.txt"])
+        #expect(files.first?.kind == .untracked)
+        #expect(files.first?.area == .unstaged)
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("new.txt").path))
+    }
+
+    /// Before the first commit there is no HEAD to restore the index from, and every
+    /// staged file is a staged add. `git restore --staged` fails outright there
+    /// ("fatal: could not resolve 'HEAD'"); `git reset` drops the index entry and leaves
+    /// the file untracked on disk, which is what unstaging an add means anywhere else.
+    @Test func unstageWorksInARepositoryWithNoCommits() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("new.txt", "fresh\n")
+        try await repo.git(["add", "new.txt"])
+
+        try await repo.client.perform(.unstage, on: "new.txt")
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["new.txt"])
+        #expect(files.first?.kind == .untracked)
+        #expect(files.first?.area == .unstaged)
+        #expect(try Data(contentsOf: repo.url.appendingPathComponent("new.txt")) == Data("fresh\n".utf8))
+    }
+
+    @Test func discardRestoresADeletedFile() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.delete("a.txt")
+
+        try await repo.client.perform(.discard, on: "a.txt")
+
+        let restored = try Data(contentsOf: repo.url.appendingPathComponent("a.txt"))
+        #expect(restored == Data("one\n".utf8))
+        #expect(try await repo.client.status().isEmpty)
+    }
+
+    /// `git restore` rewrites the worktree from the index, so a staged change survives:
+    /// discarding throws away only what was never staged.
+    @Test func discardOverAStagedChangeKeepsTheIndexVersion() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "a\n")
+        try await repo.commit("Root commit")
+        try repo.write("a.txt", "b\n")
+        try await repo.git(["add", "a.txt"])
+        try repo.write("a.txt", "c\n")
+
+        try await repo.client.perform(.discard, on: "a.txt")
+
+        #expect(try Data(contentsOf: repo.url.appendingPathComponent("a.txt")) == Data("b\n".utf8))
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["a.txt"])
+        #expect(files.first?.area == .staged)
+        #expect(files.first?.kind == .modified)
+    }
+
+    @Test func trashRemovesTheFileFromTheWorktree() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("junk.txt", "throw me away\n")
+
+        try await repo.client.trash("junk.txt")
+
+        #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("junk.txt").path))
+        #expect(try await repo.client.status().isEmpty)
+    }
+
+    /// The error alert shows the error's description, so git's own words have to reach it.
+    /// Discard, not unstage: `git reset` accepts a pathspec that matches nothing and exits
+    /// zero, so it is the wrong command to test a refusal with.
+    @Test func aRefusedActionThrowsWithGitsStderr() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.perform(.discard, on: "missing.txt")
+        }
+        do {
+            try await repo.client.perform(.discard, on: "missing.txt")
+            Issue.record("discarding an unknown path should fail")
+        } catch {
+            #expect(error.localizedDescription.contains("did not match"), "\(error.localizedDescription)")
+            #expect(error.localizedDescription.contains("missing.txt"))
+        }
+    }
 }

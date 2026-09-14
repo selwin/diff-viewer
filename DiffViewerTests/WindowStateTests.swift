@@ -40,10 +40,24 @@ actor StubRepoClient: RepoClient {
     private(set) var commitFileCalls = 0
     /// Every `(path, revision)` pair `contents(of:at:)` was asked for, in order.
     private(set) var contentRevisions: [(path: String, revision: String)] = []
+    /// Every git write asked for, in order.
+    private(set) var performed: [(action: GitFileAction, path: String)] = []
+    /// Every path asked to be trashed, in order.
+    private(set) var trashed: [String] = []
+    private var failsActions = false
+    private var holdsActions = false
+    private var heldActions: [CheckedContinuation<Void, Never>] = []
+    /// What the repository becomes once a write succeeds, standing in for git's own
+    /// effect on it. Nil leaves `files` alone.
+    private var filesAfterWrite: [ChangedFile]?
 
     init(files: [ChangedFile]) { self.files = files }
 
     func set(files: [ChangedFile]) { self.files = files }
+    /// The list `status()` reports from the moment a `perform` or `trash` completes, so
+    /// a test says what the write did to the repository instead of pre-seeding a status
+    /// read that the write's own validation would see too early.
+    func set(filesAfterWrite list: [ChangedFile]?) { filesAfterWrite = list }
     var currentFiles: [ChangedFile] { files }
     func hold(_ on: Bool) { holds = on }
     func fail(_ on: Bool) { fails = on }
@@ -51,6 +65,17 @@ actor StubRepoClient: RepoClient {
 
     func set(numstat entries: [NumstatEntry], area: ChangedFile.Area) { numstatEntries[area] = entries }
     func fail(numstat on: Bool) { failsNumstat = on }
+    /// Makes both `perform` and `trash` throw, after recording the call.
+    func fail(actions on: Bool) { failsActions = on }
+    /// Suspends `perform` and `trash` after they record the call, so a second write can
+    /// be queued behind one that is still running.
+    func holdActions(_ on: Bool) { holdsActions = on }
+    var heldActionCount: Int { heldActions.count }
+    func releaseActions() {
+        let waiting = heldActions
+        heldActions = []
+        for continuation in waiting { continuation.resume() }
+    }
     func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
 
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
@@ -176,6 +201,26 @@ actor StubRepoClient: RepoClient {
         }
         if let override = worktree[path] { return override }
         return Data("new \(path)".utf8)
+    }
+
+    func perform(_ action: GitFileAction, on path: String) async throws {
+        performed.append((action, path))
+        if holdsActions {
+            await withCheckedContinuation { heldActions.append($0) }
+        }
+        if failsActions { throw ProcessError.failed(command: "git add", status: 128, stderr: "index.lock exists") }
+        if let filesAfterWrite { files = filesAfterWrite }
+    }
+
+    func trash(_ path: String) async throws {
+        trashed.append(path)
+        if holdsActions {
+            await withCheckedContinuation { heldActions.append($0) }
+        }
+        if failsActions {
+            throw ProcessError.failed(command: "trash", status: 1, stderr: "could not move to Trash")
+        }
+        if let filesAfterWrite { files = filesAfterWrite }
     }
 }
 

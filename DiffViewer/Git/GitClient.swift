@@ -177,6 +177,24 @@ struct GitClient: RepoClient {
         try? Data(contentsOf: repoRoot.appendingPathComponent(path))
     }
 
+    /// Runs `action` on one path. `check` turns a refusal into a `ProcessError.failed`
+    /// that already carries git's stderr, which is the text the error alert shows.
+    func perform(_ action: GitFileAction, on path: String) async throws {
+        _ = try await ProcessRunner.check(
+            Self.executable,
+            arguments: action.arguments(for: path),
+            currentDirectory: repoRoot,
+            environment: Self.environment
+        )
+    }
+
+    /// Moves the worktree file to the Trash rather than unlinking it, so an accidental
+    /// delete is recoverable from Finder.
+    func trash(_ path: String) async throws {
+        try FileManager.default.trashItem(
+            at: repoRoot.appendingPathComponent(path), resultingItemURL: nil)
+    }
+
     private func show(_ spec: String) async throws -> Data? {
         let result = try await ProcessRunner.run(
             Self.executable,

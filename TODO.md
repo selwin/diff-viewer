@@ -18,7 +18,7 @@ Where DiffViewer already stands versus the bar:
 | Multiple repos at once | tabs | repo tabs | tabs + windows | **no** |
 | Aggregate +/- churn | counts by kind only | per-commit only | none | **no** |
 | Per-file +/- churn in sidebar | no | no | no | **yes** |
-| Stage / unstage / discard from file list | no (viewer) | yes | no | **no** (Requested B) |
+| Stage / unstage / discard from file list | no (viewer) | yes | no | **yes** (whole file) |
 | All files in one scroll | no (per file) | yes (default view) | no | **no** |
 | Collapse unchanged / context expansion | yes | yes (default) | no | **no** |
 | Find in diff | yes | no | no | **no** |
@@ -36,6 +36,8 @@ Where DiffViewer already stands versus the bar:
 ## Requested: sidebar churn and sidebar actions
 
 Three items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
+A and B have landed; B is written up under "Landed since this list was written".
+D was added on 2026-09-14, after B shipped single-select.
 
 ### A. Per-file churn in the sidebar (done 2026-09-13)
 
@@ -88,56 +90,6 @@ or deleted file, `48 KB → 51 KB` for a modified one.
 **Tests.** `GitCatFileSizeParser` (missing objects, `-z` framing), size formatting
 thresholds, old/new pairing per `Kind` and `Area`.
 
-### B. Right-click actions on sidebar files
-
-**Goal.** Right-clicking a file in the sidebar shows the actions that make sense for its
-state: stage, unstage, discard (reset) changes, delete file, plus the harmless ones
-(Reveal in Finder, Open in Default Editor, Copy Path).
-
-**Scope note.** This is the first feature that writes to the repository, so it revises
-the "Read-only" principle in CLAUDE.md and the "Staging, discarding, cherry-picking hunks"
-entry under Not doing. The rule becomes: the app never edits file *contents* and never
-commits, but it may move whole files between the working tree, index, and HEAD, because
-those are the actions a reader takes right after reading a diff. Update CLAUDE.md and
-README when this lands. Hunk-level staging stays out.
-
-**Design.**
-- `.contextMenu` on `FileRow`, with the menu built from the file's `Area` and `Kind`:
-
-  | State | Actions |
-  |---|---|
-  | Unstaged, modified / typeChanged | Stage, Discard Changes… |
-  | Unstaged, deleted | Stage Deletion, Restore File |
-  | Untracked | Stage (add), Delete File… |
-  | Staged, any kind | Unstage |
-  | Staged, added | Unstage (then the file becomes untracked) |
-  | Unmerged | Stage (mark resolved) only |
-  | Every row | Reveal in Finder, Open in Default Editor, Copy Path |
-
-- Git commands, all whole-file and all added to `RepoClient` so tests can stub them:
-  `git add -- <path>` (stage), `git restore --staged -- <path>` (unstage, also covers a
-  staged add), `git restore -- <path>` (discard unstaged changes, also restores a deleted
-  file), `git restore --staged --worktree -- <path>` (discard a staged change). Deleting
-  an untracked file uses `FileManager.trashItem` so it is recoverable from the Trash.
-- Destructive actions (Discard Changes, Delete File) get a confirmation alert with the
-  file name and a Don't Ask Again toggle, persisted in `Preferences`. Stage / unstage
-  need no confirmation because they are reversible from the same menu.
-- Multi-selection: the sidebar is single-select today; keep it that way for the first
-  cut and act on the clicked row (macOS convention when the right-clicked row is not the
-  selected one).
-- After an action, run `status()` immediately rather than waiting for `RepoWatcher`, and
-  keep the selection on the same path if it still exists in either section; otherwise
-  select the next row. The detail pane reloads via `DiffLoader` as usual.
-- Keyboard: ⌘⌫ deletes / discards the selected file (with the same confirmation), ⌘S
-  stages, ⌘⇧S unstages. Mirror the menu in a File › menu so the shortcuts are
-  discoverable.
-- Errors (index lock, permission) surface as an alert with git's stderr; never retry
-  silently.
-
-**Tests.** Menu-model derivation from `(Area, Kind)` to action list, post-action
-selection rule, and the git argument builder per action. The UI is verified by
-screenshots.
-
 ### C. Show the current branch
 
 **Goal.** The window always shows which branch the open repository is on, and updates
@@ -157,7 +109,7 @@ switching branches, a rebase in progress).
   the git prompt scripts do. Cheap file-exists checks, no extra git calls.
 - Refresh: `RepoWatcher` already fires on `.git` changes; `.git/HEAD` rewrites cover
   checkouts, so no new watcher is needed. Read-only, so it fits the current scope
-  regardless of item B.
+  regardless of the sidebar context menu.
 - Optional later: clicking the subtitle copies the branch name; upstream ahead/behind
   counts (`git rev-list --left-right --count @{u}...HEAD`) if they stay cheap.
 
@@ -165,6 +117,43 @@ switching branches, a rebase in progress).
 state suffix from a set of existing marker files.
 
 ---
+
+### D. Multi-selection in the sidebar, with bulk context-menu actions
+
+**Goal.** ⇧-click and ⌘-click select several files in the sidebar, and the context menu
+acts on all of them at once: stage five files, discard three, trash every untracked
+file in a folder, or copy all their paths, in one gesture and one confirmation.
+
+**Design.**
+- `List(selection:)` binds a `Set<ChangedFile.ID>` instead of the optional id. The
+  detail pane still shows one file: keep `selectedFileID` as the row the reader is
+  reading and derive it from the set (the most recently added id when several are
+  selected; the only one when one is). `DIFFVIEWER_SELECT` and the reselect rule keep
+  working through that single id.
+- `.contextMenu(forSelectionType:)` already hands over the whole selection when the
+  right-clicked row is part of it, and the clicked row alone when it is not, which is
+  the macOS convention; nothing changes there.
+- Menu model: the actions offered are the ones every selected row offers
+  (`FileAction.menu(for:)` intersected across the set), so a mixed staged/unstaged
+  selection gets only the harmless items. Titles pluralise with the count: "Stage 3
+  Files", "Discard Changes to 3 Files…", "Move 3 Files to the Trash…", "Copy 3 Paths".
+  Reveal in Finder selects all of them; Open opens each.
+- One git process per action, not one per file: `git add -- a b c`, `git reset -q --`,
+  `git restore --` all take several pathspecs, so `GitFileAction.arguments(for paths:)`
+  takes a list and `RepoClient.perform(_:on:)` takes `[String]`. Trash goes through
+  `NSWorkspace.recycle` (one call, one undo). The per-write status read validates
+  every row by id and kind; rows that changed meaning while the action waited are
+  dropped from the batch and the rest run, so a stale row never blocks the others.
+- One confirmation for the batch, naming the count, with the same "Don't ask again".
+  One refresh after the batch, not one per file.
+- Selection afterwards: whatever survived stays selected; if nothing did, the row at
+  the first removed index, as today for one file.
+- ⌘A selects every row when the sidebar has focus (the panes keep their own ⌘A for
+  text). Copy Path joins the absolute paths with newlines.
+
+**Tests.** Menu intersection across mixed selections, pluralised titles, the
+multi-path argument builder, batch validation dropping only the changed rows, and the
+post-batch selection rule. UI by screenshots.
 
 ## Now: the three planned features
 
@@ -373,7 +362,7 @@ against its first parent.
 
 **Scope change.** This reverses the commit-browsing half of the "Commit browsing,
 ref-range compare, folder compare, blame, file history" entry under *Not doing*, the way
-Requested item B revises the read-only principle. What stays out: comparing two arbitrary
+the sidebar context menu below revises the read-only principle. What stays out: comparing two arbitrary
 commits, folder compare, blame, and per-file history. `CLAUDE.md` carries the same
 non-goal list and needs the same edit — it is not in the repository, so it could not be
 updated here.
@@ -388,6 +377,34 @@ list's, and a watcher tick in commit scope does nothing unless HEAD has moved.
 Follow-ups it leaves open: a keyboard shortcut for the picker, a filter over the commit
 list once it is long, and the ⌘R-only path for re-reading a commit's files.
 
+### Sidebar context menu (2026-09-14)
+
+Right-clicking a file in the sidebar offers the whole-file writes its area and kind allow
+(Stage, spelled Stage Deletion or Mark Resolved where that is what `git add` means;
+Unstage; Discard Changes, spelled Restore File for a deleted one; Delete File) plus Reveal
+in Finder, Open in Default Editor, and Copy Path. The clicked row is acted on whether or
+not it is the selected one, and commit scope offers no writes at all.
+
+**Scope change.** This is the first feature that writes to the repository, so the
+"Read-only" principle in CLAUDE.md became a whole-file rule: never file contents, never a
+commit, but a file may move between the working tree, the index, and HEAD. CLAUDE.md and
+README were updated with it. Hunk-level staging stays out, as *Not doing* still says.
+
+**Deviations from the original design** (its text is in git history). Staged rows get
+Unstage only; the one-step discard of a staged change was dropped. The confirmation is an
+`NSAlert` sheet with a suppression checkbox, since SwiftUI's alerts cannot host one, and
+because there is no Settings scene a "Confirm Destructive File Actions" toggle in the View
+menu is the way back once it is suppressed. Deleting an untracked file goes through
+`FileManager.trashItem`. Every git command runs with `--literal-pathspecs`, or a real file
+named `a[1].txt` would be read as a glob and match nothing. The selection stays on the same
+path wherever it still exists and otherwise falls to the row at the same sidebar index. The
+refresh after a write is immediate and not an optimisation: `RepoWatcher` sets
+`kFSEventStreamCreateFlagIgnoreSelf`, so a write this process makes fires no event.
+
+Follow-ups it leaves open: the File-menu mirror with ⌘S / ⌘⇧S / ⌘⌫, so the actions are
+discoverable and reachable from the keyboard; one-step discard of a staged change
+(`git restore --staged --worktree`); and multi-selection with bulk actions (Requested D).
+
 ## Not doing (and why)
 
 - **Inline / unified text layout.** Side by side only (CLAUDE.md). Sublime Merge's
@@ -397,7 +414,8 @@ list once it is long, and the ⌘R-only path for re-reading a commit's files.
   viewer features. Commit *browsing* has moved into scope — see below.
 - **Hunk-level staging, discarding, or cherry-picking** from the changeset headers
   (Sublime Merge). Whole-file stage / unstage / discard / delete is now in scope via the
-  sidebar context menu (Requested B); anything finer than a file is not.
+  sidebar context menu (see "Sidebar context menu" under Landed); anything finer than a
+  file is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.
