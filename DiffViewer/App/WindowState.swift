@@ -62,7 +62,7 @@ final class WindowState {
     /// picker still has to label and tick the thing the user chose.
     private(set) var selectedCommit: CommitSummary?
     private(set) var history = CommitHistory()
-    private(set) var commitLimit = Self.commitPageSize
+    private(set) var commitLimit = WindowState.commitPageSize
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
     /// The read a history load is serving, so an identical repeat can be skipped instead

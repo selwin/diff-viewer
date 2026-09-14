@@ -8,6 +8,25 @@ enum LineStats: Hashable, Sendable {
     case binary
 }
 
+extension LineStats {
+    /// The churn of a whole list: the sum of every `.counted` entry. Nil when nothing is
+    /// counted yet — stats arrive after the list, and a binary-only or empty list has no
+    /// line counts — so a caller can show the identity alone rather than "+0 −0". A path
+    /// that is both staged and unstaged counts twice: those are two real diffs.
+    static func total(of files: [ChangedFile]) -> LineStats? {
+        var added = 0
+        var deleted = 0
+        var counted = false
+        for file in files {
+            guard case let .counted(a, d)? = file.lineStats else { continue }
+            added += a
+            deleted += d
+            counted = true
+        }
+        return counted ? .counted(added: added, deleted: deleted) : nil
+    }
+}
+
 /// One entry in the repository's change list. A path with both staged and unstaged
 /// changes appears twice, once per area.
 struct ChangedFile: Identifiable, Hashable, Sendable {

@@ -19,7 +19,7 @@ struct WindowStateScopeTests {
         let before = h.published.count
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count > before })
-        #expect(await eventually { !state.history.commits.isEmpty })
+        #expect(await eventually { await !state.history.commits.isEmpty })
         return repo.client
     }
 
@@ -37,14 +37,14 @@ struct WindowStateScopeTests {
         _ = await adopt(h, state, commit: commit, commitFiles: files)
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.map(\.path) == ["src/picker.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["src/picker.swift"] })
         #expect(state.scope == .commit(commit.ref))
         #expect(state.selectedCommit == commit)
         #expect(state.unstagedFiles.isEmpty)
         #expect(state.commitFiles.count == 1)
 
         state.selectWorkingTree()
-        #expect(await eventually { state.files.map(\.path) == workingFiles.map(\.path) })
+        #expect(await eventually { await state.files.map(\.path) == workingFiles.map(\.path) })
         #expect(state.selectedCommit == nil)
     }
 
@@ -56,7 +56,7 @@ struct WindowStateScopeTests {
         state.selectedFileID = workingFiles[0].id
 
         state.select(commit: commit)
-        #expect(await eventually { state.selectedFileID != nil })
+        #expect(await eventually { await state.selectedFileID != nil })
         #expect(state.selectedFile?.path == "a1.swift")
         #expect(state.selectedFile?.area == .commit(commit.ref))
     }
@@ -69,7 +69,7 @@ struct WindowStateScopeTests {
         state.selectedFileID = workingFiles[0].id
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.map(\.path) == ["other.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["other.swift"] })
         #expect(state.selectedFileID == nil)
     }
 
@@ -86,16 +86,16 @@ struct WindowStateScopeTests {
         let before = h.published.count
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count > before })
-        #expect(await eventually { !state.history.commits.isEmpty })
+        #expect(await eventually { await !state.history.commits.isEmpty })
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.count == 1 })
+        #expect(await eventually { await state.files.count == 1 })
         state.selectedFileID = state.files.first?.id
         #expect(state.selectedFile?.area == .commit(commit.ref))
 
         state.selectWorkingTree()
-        #expect(await eventually { state.files.count == 2 })
-        #expect(await eventually { state.selectedFileID != nil })
+        #expect(await eventually { await state.files.count == 2 })
+        #expect(await eventually { await state.selectedFileID != nil })
         #expect(state.selectedFile?.area == .unstaged)
     }
 
@@ -117,7 +117,7 @@ struct WindowStateScopeTests {
 
         await client.holdCommitFiles(false)
         await client.releaseCommitFiles()
-        #expect(await eventually { state.files.map(\.path) == ["src/held.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["src/held.swift"] })
     }
 
     @Test func rapidScopeSwitchingSettlesOnTheLastChoice() async {
@@ -129,7 +129,7 @@ struct WindowStateScopeTests {
         state.select(commit: commit)
         state.selectWorkingTree()
         state.select(commit: commit)
-        #expect(await eventually { state.files.map(\.path) == ["src/one.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["src/one.swift"] })
         #expect(state.scope == .commit(commit.ref))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(state.files.map(\.path) == ["src/one.swift"], "no stale working-tree publish arrives late")
@@ -144,7 +144,7 @@ struct WindowStateScopeTests {
         let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("src/one.swift", commit)])
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.count == 1 })
+        #expect(await eventually { await state.files.count == 1 })
         let publishes = h.published.count
         let reads = await client.commitFileCalls
         let historyReads = await client.historyCalls
@@ -167,7 +167,7 @@ struct WindowStateScopeTests {
         await client.set(commits: [later, commit])
 
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { state.history.commits.first?.ref == later.ref })
+        #expect(await eventually { await state.history.commits.first?.ref == later.ref })
         #expect(state.history.revision == later.ref.sha)
         #expect(state.commitLimit == WindowState.commitPageSize)
     }
@@ -180,8 +180,8 @@ struct WindowStateScopeTests {
         await client.fail(commitFiles: true)
 
         state.select(commit: commit)
-        #expect(await eventually { state.scope == .workingTree })
-        #expect(await eventually { state.files.map(\.path) == workingFiles.map(\.path) })
+        #expect(await eventually { await state.scope == .workingTree })
+        #expect(await eventually { await state.files.map(\.path) == workingFiles.map(\.path) })
         #expect(state.selectedCommit == nil)
         // The refresh that restored the working tree clears `errorMessage`; the
         // explanation has to outlive it.
@@ -199,7 +199,7 @@ struct WindowStateScopeTests {
         await client.set(head: objectID("moved"))
         h.watcherCallbacks.values.first?()
 
-        #expect(await eventually { state.history.hasMore })
+        #expect(await eventually { await state.history.hasMore })
         #expect(state.history.commits.count == WindowState.commitPageSize)
         #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
 
@@ -215,7 +215,7 @@ struct WindowStateScopeTests {
         let repo = h.repo("A", files: workingFiles)
         await repo.client.set(head: nil)
         #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { !state.isLoadingHistory })
+        #expect(await eventually { await !state.isLoadingHistory })
         #expect(state.history.commits.isEmpty)
         #expect(state.historyErrorMessage == nil)
         #expect(state.historyPlaceholder == .empty)
@@ -230,12 +230,12 @@ struct WindowStateScopeTests {
         await repo.client.set(commits: [commit])
         await repo.client.fail(history: true)
         #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { state.historyErrorMessage != nil })
+        #expect(await eventually { await state.historyErrorMessage != nil })
         #expect(state.historyPlaceholder == .failed)
 
         await repo.client.fail(history: false)
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { !state.history.commits.isEmpty }, "a failed read is not left standing")
+        #expect(await eventually { await !state.history.commits.isEmpty }, "a failed read is not left standing")
         #expect(state.historyErrorMessage == nil)
     }
 
@@ -262,7 +262,7 @@ struct WindowStateScopeTests {
         _ = await adopt(h, state, commit: commit, commitFiles: files)
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.count == 2 })
+        #expect(await eventually { await state.files.count == 2 })
         #expect(state.filesToWarm.map(\.path) == ["one.swift", "two.swift"])
         state.selectedFileID = state.files.first?.id
         #expect(state.filesToWarm.map(\.path) == ["two.swift"])
@@ -278,7 +278,7 @@ struct WindowStateScopeTests {
             area: .commit(commit.ref))
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.first?.lineStats == .counted(added: 4, deleted: 2) })
+        #expect(await eventually { await state.files.first?.lineStats == .counted(added: 4, deleted: 2) })
     }
 
     // MARK: Ordering
@@ -291,7 +291,7 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let first = commitSummary("c1")
         let client = await adopt(h, state, commit: first, commitFiles: [])
-        #expect(await eventually { state.history.revision == first.ref.sha })
+        #expect(await eventually { await state.history.revision == first.ref.sha })
 
         // Tick one reads HEAD and blocks, having seen the old revision.
         await client.holdHead(true)
@@ -304,7 +304,7 @@ struct WindowStateScopeTests {
         await client.set(head: later.ref.sha)
         await client.set(commits: [later, first])
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { state.history.revision == later.ref.sha })
+        #expect(await eventually { await state.history.revision == later.ref.sha })
 
         await client.releaseHead()
         try? await Task.sleep(for: .milliseconds(80))
@@ -322,7 +322,7 @@ struct WindowStateScopeTests {
         let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("a1.swift", commit)])
 
         state.select(commit: commit)
-        #expect(await eventually { state.files.count == 1 })
+        #expect(await eventually { await state.files.count == 1 })
         state.selectedFileID = state.files.first?.id
         #expect(state.selectedFile?.path == "a1.swift")
 
@@ -335,7 +335,7 @@ struct WindowStateScopeTests {
 
         // The newer refresh finishes first and is the one that publishes.
         await client.releaseLast()
-        #expect(await eventually { state.files.count == workingFiles.count })
+        #expect(await eventually { await state.files.count == workingFiles.count })
         await client.hold(false)
         await client.releaseFirst()
         try? await Task.sleep(for: .milliseconds(50))
@@ -364,7 +364,7 @@ struct WindowStateScopeTests {
         // Meanwhile the user picks a commit that reads cleanly.
         await client.fail(commitFiles: false)
         state.select(commit: good)
-        #expect(await eventually { state.files.map(\.path) == ["ok.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["ok.swift"] })
 
         await client.hold(false)
         await client.releaseFirst()
@@ -390,7 +390,7 @@ struct WindowStateScopeTests {
 
         await client.holdCommitFiles(false)
         await client.releaseCommitFiles()
-        #expect(await eventually { !state.isLoadingScope })
+        #expect(await eventually { await !state.isLoadingScope })
         #expect(state.files.isEmpty, "and now it really is an empty commit")
     }
 
@@ -401,7 +401,7 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let first = commitSummary("c1")
         let client = await adopt(h, state, commit: first, commitFiles: [])
-        #expect(await eventually { state.history.revision == first.ref.sha })
+        #expect(await eventually { await state.history.revision == first.ref.sha })
 
         let later = commitSummary("c2")
         await client.set(head: later.ref.sha)
@@ -413,7 +413,7 @@ struct WindowStateScopeTests {
         let readsBefore = await client.historyCalls
         await client.holdHead(false)
         await client.releaseHead()
-        #expect(await eventually { state.history.revision == later.ref.sha })
+        #expect(await eventually { await state.history.revision == later.ref.sha })
         try? await Task.sleep(for: .milliseconds(80))
         let readsAfter = await client.historyCalls
         #expect(readsAfter - readsBefore == 1, "four ticks, one log read")
@@ -426,7 +426,7 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let start = commitSummary("c0")
         let client = await adopt(h, state, commit: start, commitFiles: [])
-        #expect(await eventually { state.history.revision == start.ref.sha })
+        #expect(await eventually { await state.history.revision == start.ref.sha })
 
         let older = commitSummary("c1", subject: "Older")
         let newer = commitSummary("c2", subject: "Newer")
@@ -447,7 +447,7 @@ struct WindowStateScopeTests {
         try? await Task.sleep(for: .milliseconds(60))
         await client.releaseHead()
 
-        #expect(await eventually { state.history.revision == newer.ref.sha })
+        #expect(await eventually { await state.history.revision == newer.ref.sha })
         #expect(state.history.revision != older.ref.sha, "the first to finish does not win")
     }
 
@@ -459,7 +459,7 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let onA = commitSummary("a1", subject: "On A")
         let client = await adopt(h, state, commit: onA, commitFiles: [])
-        #expect(await eventually { state.history.revision == onA.ref.sha })
+        #expect(await eventually { await state.history.revision == onA.ref.sha })
 
         // Check out B; its history read blocks part-way.
         let onB = commitSummary("b1", subject: "On B")
@@ -506,8 +506,8 @@ struct WindowStateScopeTests {
         await client.holdCommitFiles(false)
         await client.releaseCommitFiles()
 
-        #expect(await eventually { state.files.map(\.path) == ["a1.swift"] })
-        #expect(await eventually { state.selectedFileID != nil }, "the path survives both hops")
+        #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
+        #expect(await eventually { await state.selectedFileID != nil }, "the path survives both hops")
         #expect(state.selectedFile?.area == .commit(second.ref))
     }
 }

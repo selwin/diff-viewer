@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Picks what the sidebar shows: the working tree, or one commit from the branch's
-/// history. Sits above the file list, which it scopes.
+/// history. Sits above the file list, which it scopes, and its face sums that list's churn.
 struct CommitPickerView: View {
     @Environment(WindowState.self) private var windowState
 
@@ -32,15 +32,15 @@ struct CommitPickerView: View {
                     .disabled(windowState.isLoadingHistory)
             }
         } label: {
-            Text(currentLabel)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ScopeLabel(
+                title: title, identity: identity, glyph: scopeIcon,
+                churn: LineStats.total(of: windowState.files))
         }
-        .menuStyle(.borderlessButton)
+        // `.plain` leaves the label to SwiftUI. The bordered menu style keeps one image and one
+        // text from its label and drops the rest, which rules out a two-line face.
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .help("Choose what to compare: the working tree, or a commit against its parent")
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
     }
 
     private var scopeBinding: Binding<DiffScope> {
@@ -67,16 +67,30 @@ struct CommitPickerView: View {
         return [selected] + page
     }
 
-    private var currentLabel: String {
+    private var title: String {
         switch windowState.scope {
         case .workingTree: "Working Tree"
-        case let .commit(ref): windowState.selectedCommit.map(label(for:)) ?? ref.shortSha
+        case let .commit(ref): windowState.selectedCommit?.subject ?? ref.shortSha
         }
     }
 
-    /// Shared rather than built per label: the button's own title is formatted on every
-    /// redraw, not only while the menu is open. Confined to the main actor because
-    /// `RelativeDateTimeFormatter` is a reference type, and every caller is a view body.
+    private var identity: String {
+        switch windowState.scope {
+        case .workingTree: "uncommitted"
+        case let .commit(ref): ref.shortSha
+        }
+    }
+
+    private var scopeIcon: String {
+        switch windowState.scope {
+        case .workingTree: "arrow.triangle.branch"
+        case .commit: "smallcircle.filled.circle"
+        }
+    }
+
+    /// Shared rather than built per row: a page of fifty rows is formatted each time the
+    /// menu opens. Confined to the main actor because `RelativeDateTimeFormatter` is a
+    /// reference type, and every caller is a view body.
     @MainActor private static let ages: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
@@ -91,6 +105,53 @@ struct CommitPickerView: View {
         var line = "\(commit.ref.shortSha)  \(subject) · \(age)"
         if commit.isMerge { line += "  (merge)" }
         return line
+    }
+}
+
+/// The button face: always two lines in a fixed box, so switching scope never moves the
+/// list below it. Plain data in, so it does not depend on `WindowState`.
+private struct ScopeLabel: View {
+    let title: String
+    let identity: String
+    let glyph: String
+    let churn: LineStats?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: glyph)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    // The sha and the counts never truncate; only the title gives way.
+                    Text(identity)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                    if churn != nil {
+                        Text("·").font(.callout).foregroundStyle(.secondary)
+                        ChurnLabel(stats: churn)
+                    }
+                }
+                .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity)
+        .frame(height: 42)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+        // The whole box opens the menu, not only the text.
+        .contentShape(Rectangle())
     }
 }
 
