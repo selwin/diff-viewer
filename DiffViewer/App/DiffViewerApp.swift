@@ -178,6 +178,13 @@ struct RepositoryCommands: Commands {
                 )
             )
             .keyboardShortcut("u", modifiers: [.command, .shift])
+            Toggle(
+                "Confirm Destructive File Actions",
+                isOn: Binding(
+                    get: { preferences.confirmDestructiveFileActions },
+                    set: { preferences.confirmDestructiveFileActions = $0 }
+                )
+            )
             Divider()
             Button("Next Change") { windowState?.nextChange() }
                 .keyboardShortcut(.downArrow, modifiers: .command)

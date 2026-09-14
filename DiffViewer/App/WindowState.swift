@@ -81,6 +81,11 @@ final class WindowState {
     struct PendingSelection: Equatable, Sendable {
         let path: String
         let area: ChangedFile.Area
+        /// Where the file sat in sidebar order, used only when the path is gone from the
+        /// new list: discarding or trashing the selected row leaves nothing to match, and
+        /// the reader expects the row that took its place. Nil for a scope change, where
+        /// the two lists describe different commits and an index means nothing.
+        var row: Int?
     }
 
     /// How many commits a page holds, and how many `Load More` adds.
@@ -125,12 +130,17 @@ final class WindowState {
     /// The selected commit's files. Empty in working-tree scope.
     var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
 
+    /// The files in the order the sidebar draws them, which is not the order of `files`:
+    /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.
+    /// Any rule that speaks of "the row above" or "the next row" means an index here.
+    var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
+
     /// Files worth warming in the difft cache: everything in the current scope but the
     /// selection, which is the loader's job at foreground priority.
     var filesToWarm: [ChangedFile] {
         // Unstaged first, as before: that is the list a reader works down. The working
         // tree can fill both of its lists at once; a commit fills only the third.
-        (unstagedFiles + stagedFiles + commitFiles).filter { $0.id != selectedFileID }
+        sidebarRows.filter { $0.id != selectedFileID }
     }
 
     var repoName: String { repositoryRoot?.name ?? "DiffViewer" }
@@ -416,19 +426,24 @@ extension WindowState {
         }
     }
 
-    /// Puts the selection back on the same path in the new scope. A path can appear in
-    /// two areas at once, so the old area wins, then unstaged, then staged.
+    /// Puts the selection back where `previous` says it belongs in the list just
+    /// published. The rule itself is `SidebarReselection`; this only decides whether it
+    /// is allowed to run.
     ///
-    /// Called by whichever refresh publishes the new scope's files, which is not always
-    /// the one the scope change started: a watcher refresh can overtake it.
+    /// Called by whichever refresh publishes the new files, which is not always the one
+    /// that recorded the target: a watcher refresh can overtake a scope change.
     private func reselect(_ previous: PendingSelection) {
         guard !isClosed, selectedFileID == nil else { return }
-        let matches = files.filter { $0.path == previous.path }
-        let match =
-            matches.first { $0.area == previous.area }
-            ?? matches.first { $0.area == .unstaged }
-            ?? matches.first
-        selectedFileID = match?.id
+        selectedFileID = SidebarReselection.target(for: previous, in: sidebarRows)
+    }
+
+    /// Asks the next refresh that publishes a file list to restore `selection`.
+    ///
+    /// Exists because `pendingReselect` is private to the class body and the file-action
+    /// extension lives in another file. Deliberately narrow: it records a wish, and the
+    /// refresh decides whether it can still be granted.
+    func restoreSelectionAfterNextRefresh(_ selection: PendingSelection) {
+        pendingReselect = selection
     }
 
     /// Returns to the working tree after a commit could not be read.
