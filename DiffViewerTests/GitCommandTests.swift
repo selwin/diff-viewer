@@ -247,6 +247,37 @@ import Testing
         #expect(try await repo.client.headSha() == sha)
     }
 
+    @Test func headStateNamesAnUnbornBranch() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        #expect(try await repo.client.headState() == .named("main"), "a branch with no commits yet")
+    }
+
+    @Test func headStateReportsTheDetachedCommit() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        let sha = try await repo.commit("Root commit")
+
+        try await repo.git(["checkout", "--detach"])
+        #expect(try await repo.client.headState() == .detached(sha: sha))
+
+        try await repo.git(["checkout", "main"])
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
+    /// `symbolic-ref --short` would answer `heads/main` here, to stay unambiguous with
+    /// the tag, and that is not a branch name anyone wants in the window subtitle.
+    @Test func headStateIgnoresATagNamedLikeTheBranch() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["tag", "main"])
+
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
     /// A repository whose HEAD points at a malformed ref must not read as "no commits
     /// yet": `symbolic-ref` exits non-zero for it, so it reaches the throw.
     @Test func headShaThrowsForADamagedRef() async throws {

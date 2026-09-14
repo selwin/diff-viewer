@@ -22,6 +22,9 @@ actor StubRepoClient: RepoClient {
     /// Worktree contents by path, overriding the default "new \(path)" body.
     private var worktree: [String: Data?] = [:]
     private var head: String? = String(repeating: "a", count: 40)
+    private var stubbedHeadState: HeadState = .named("main")
+    private var failsHeadState = false
+    private(set) var headStateCalls = 0
     private var commits: [CommitSummary] = []
     /// Files each commit changed, by sha.
     private var commitFiles: [String: [ChangedFile]] = [:]
@@ -113,6 +116,8 @@ actor StubRepoClient: RepoClient {
     // MARK: History and commits
 
     func set(head sha: String?) { head = sha }
+    func set(headState state: HeadState) { stubbedHeadState = state }
+    func fail(headState on: Bool) { failsHeadState = on }
     func set(commits list: [CommitSummary]) { commits = list }
     func set(files list: [ChangedFile], forCommit sha: String) { commitFiles[sha] = list }
     func fail(history on: Bool) { failsHistory = on }
@@ -153,6 +158,12 @@ actor StubRepoClient: RepoClient {
         }
         if failsHistory { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
         return snapshot
+    }
+
+    func headState() async throws -> HeadState {
+        headStateCalls += 1
+        if failsHeadState { throw ProcessError.failed(command: "git symbolic-ref", status: 128, stderr: "gone") }
+        return stubbedHeadState
     }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {

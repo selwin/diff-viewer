@@ -69,6 +69,80 @@ struct GitClient: RepoClient {
         return nil
     }
 
+    /// Where HEAD points: a branch name, or the commit a detached HEAD sits on. An
+    /// unborn branch still has a name.
+    func headState() async throws -> HeadState {
+        // The symbolic ref and the sha come from two separate processes, so the pair is
+        // never one atomic view of HEAD. A checkout landing between the reads would
+        // attach HEAD to a branch after its commit had already been read, and the answer
+        // would claim a detached HEAD sitting on that branch's tip. So a HEAD that reads
+        // as detached has its symbolic state read once more after the sha is known, and
+        // that confirming read settles it either way: still detached and the sha stands,
+        // attached and the branch it just named is the answer.
+        for _ in 0..<3 {
+            let result = try await readSymbolicHead()
+            switch result.status {
+            case 0:
+                return .named(branchName(from: result))
+            // `--quiet` promises exit 1 for a HEAD that is not a symbolic ref, which is
+            // exactly a detached HEAD. Every other status is a real failure — a missing
+            // repository, a damaged ref — and must not be reported as detached.
+            case 1:
+                // A switch to an unborn branch between the two reads leaves no commit to
+                // report, which is what nil means here. There is nothing to confirm, so
+                // read the whole state again.
+                guard let sha = try await headSha() else { continue }
+                let confirmation = try await readSymbolicHead()
+                switch confirmation.status {
+                case 1:
+                    return .detached(sha: sha)
+                // HEAD attached to a branch while the sha was being read, so that sha may
+                // be the branch's tip rather than a detached HEAD's commit. The confirming
+                // read already named the branch, so answer with that rather than re-reading.
+                case 0:
+                    return .named(branchName(from: confirmation))
+                default:
+                    throw ProcessError.failed(
+                        command: "git symbolic-ref HEAD", status: confirmation.status,
+                        stderr: confirmation.stderrString)
+                }
+            default:
+                throw ProcessError.failed(
+                    command: "git symbolic-ref HEAD", status: result.status, stderr: result.stderrString)
+            }
+        }
+        // Three passes, and each one found HEAD detached and then unborn, with no commit
+        // to report. A repository being rewritten this fast has no stable answer to give.
+        throw ProcessError.failed(
+            command: "git symbolic-ref HEAD", status: 1,
+            stderr: "HEAD kept changing between reads")
+    }
+
+    /// The branch a successful `git symbolic-ref HEAD` names.
+    private func branchName(from result: ProcessResult) -> String {
+        let trimmed = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "refs/heads/"
+        // A symbolic HEAD pointing outside `refs/heads/` is not a branch, and there is
+        // nothing better to call it than what git wrote.
+        guard trimmed.hasPrefix(prefix) else { return trimmed }
+        return String(trimmed.dropFirst(prefix.count))
+    }
+
+    /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headState()`
+    /// reads it twice and treats the statuses differently each time.
+    private func readSymbolicHead() async throws -> ProcessResult {
+        // Deliberately not `--short`: when a tag and a branch share a name, git shortens
+        // `refs/heads/main` only as far as `heads/main` to stay unambiguous, and the
+        // window subtitle would show that verbatim. Reading the full ref and stripping
+        // the prefix afterwards always yields the plain branch name.
+        try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["symbolic-ref", "--quiet", "HEAD"],
+            currentDirectory: repoRoot,
+            environment: Self.environment
+        )
+    }
+
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
         let result = try await ProcessRunner.check(
             Self.executable,

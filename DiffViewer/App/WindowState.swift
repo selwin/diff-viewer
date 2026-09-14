@@ -62,6 +62,8 @@ final class WindowState {
     /// picker still has to label and tick the thing the user chose.
     private(set) var selectedCommit: CommitSummary?
     private(set) var history = CommitHistory()
+    /// Where HEAD points, or nil until the first read returns: nil shows no subtitle, not a wrong one.
+    private(set) var headState: HeadState?
     private(set) var commitLimit = WindowState.commitPageSize
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
@@ -77,33 +79,8 @@ final class WindowState {
     /// that publishes the files instead.
     private var pendingReselect: PendingSelection?
 
-    /// A path to find again in a new scope, and the area it came from.
-    struct PendingSelection: Equatable, Sendable {
-        let path: String
-        let area: ChangedFile.Area
-        /// Where the file sat in sidebar order, used only when the path is gone from the
-        /// new list: discarding or trashing the selected row leaves nothing to match, and
-        /// the reader expects the row that took its place. Nil for a scope change, where
-        /// the two lists describe different commits and an index means nothing.
-        var row: Int?
-    }
-
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
-
-    /// What the picker shows in place of a commit list.
-    enum HistoryPlaceholder {
-        case loading
-        case empty
-        case failed
-    }
-
-    /// Nil when there are commits to list.
-    var historyPlaceholder: HistoryPlaceholder? {
-        guard history.commits.isEmpty else { return nil }
-        if isLoadingHistory { return .loading }
-        return historyErrorMessage == nil ? .empty : .failed
-    }
 
     /// Called after every refresh that publishes `files`, whether or not the list changed.
     @ObservationIgnored var onRefreshPublished: (@MainActor (WindowState, RefreshCause) -> Void)?
@@ -149,9 +126,6 @@ final class WindowState {
     /// the coordinator when another open repository has the same name.
     var title = "DiffViewer"
 
-    /// The window subtitle: the selected file's path, or nothing.
-    var subtitle: String { selectedFile?.path ?? "" }
-
     // MARK: - Lifecycle
 
     /// Installs `root` as this window's repository and starts its first refresh.
@@ -175,6 +149,7 @@ final class WindowState {
             self?.isLoading = false
         }
         refreshHistory(session: session)
+        Task { [weak self] in await self?.refreshHeadState(session: session) }
         return true
     }
 
@@ -188,6 +163,7 @@ final class WindowState {
         session?.statsTask?.cancel()
         session?.historySerial += 1
         session?.historyTask?.cancel()
+        session?.headStateCheckSerial += 1
         session?.watcher?.stop()
         session?.watcher = nil
         diffLoader.cancelActiveWork()
@@ -201,6 +177,7 @@ final class WindowState {
         // ⌘R re-reads everything, including a commit's files: the user asked.
         await refresh(session: session, cause: .manual)
         refreshHistory(session: session)
+        await refreshHeadState(session: session)
     }
 
     /// Something under `.git` or in the working tree changed.
@@ -217,6 +194,8 @@ final class WindowState {
         }
         guard session === self.session, !isClosed else { return }
         await reloadHistoryIfHeadMoved(session: session)
+        // Also in commit scope: a checkout under a selected commit still changes the branch.
+        await refreshHeadState(session: session)
     }
 
     /// Reloads the file list for `session`. The result is published only if the
@@ -526,6 +505,23 @@ extension WindowState {
         // for the answer it is already fetching only burns processes.
         guard historyRequestInFlight != HistoryRequest(revision: head, limit: commitLimit) else { return }
         startHistoryLoad(session: session, source: .revision(head))
+    }
+
+    /// Re-reads where HEAD points, on its own serial so a commit-list load cannot cancel it or be cancelled.
+    private func refreshHeadState(session: RepoSession) async {
+        // A watcher callback queued before its window closed: skip the read.
+        guard session === self.session, !isClosed else { return }
+        session.headStateCheckSerial += 1
+        let ticket = session.headStateCheckSerial
+        // A failure leaves the last known branch on show: the next tick reads again, and stale beats blank.
+        let state: HeadState
+        do {
+            state = try await session.client.headState()
+        } catch {
+            return
+        }
+        guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
+        headState = state
     }
 
     /// Drops a history read whose answer is no longer wanted, and settles the state its

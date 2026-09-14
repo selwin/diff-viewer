@@ -28,6 +28,10 @@ final class RepoSession {
     /// finish in. Separate from `historySerial` on purpose: a page load must not cancel
     /// a check, nor a check a page load.
     var headCheckSerial = 0
+    /// Incremented per HEAD-state read, so the newest read wins whatever order the reads
+    /// finish in. Separate from `headCheckSerial` because the two run independently: a
+    /// HEAD-state read must not cancel a HEAD check, nor a HEAD check a HEAD-state read.
+    var headStateCheckSerial = 0
     /// The commit-list read in flight, if any.
     var historyTask: Task<Void, Never>?
     /// The tail of the chain of sidebar file actions. Each new action waits for this

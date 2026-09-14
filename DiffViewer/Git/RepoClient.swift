@@ -1,5 +1,13 @@
 import Foundation
 
+/// Where HEAD points: a branch name, or the commit a detached HEAD sits on. An enum
+/// rather than `String?` so "not read yet" stays distinct from "detached": an unread
+/// state must not render as a detached HEAD.
+enum HeadState: Sendable, Equatable {
+    case named(String)
+    case detached(sha: String)
+}
+
 /// The repository operations the app needs. `GitClient` is the real one; tests use
 /// actor-backed stubs, which is why every method is async.
 protocol RepoClient: Sendable {
@@ -8,6 +16,9 @@ protocol RepoClient: Sendable {
     /// yet). Every other failure throws, so a broken repository is never reported as an
     /// empty history.
     func headSha() async throws -> String?
+    /// Where HEAD points: a branch name, or the commit a detached HEAD sits on. An
+    /// unborn branch still has a name.
+    func headState() async throws -> HeadState
     /// The branch's commits, newest first, following first parents only.
     ///
     /// Takes the revision to start from rather than reading HEAD itself: the caller
