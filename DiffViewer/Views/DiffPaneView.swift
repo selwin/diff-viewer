@@ -35,7 +35,13 @@ enum FoldAction: Equatable {
 final class DiffPaneView: NSView {
     /// Document content. Set once per document; recomputes metrics and clears caches.
     var model: PaneModel? {
-        didSet { lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true }
+        didSet {
+            selection = nil
+            lineCache.removeAll()
+            numberCache.removeAll()
+            recomputeMetrics()
+            needsDisplay = true
+        }
     }
 
     /// Syntax color runs per line index. Only the shaped-text cache is reset.
@@ -48,6 +54,14 @@ final class DiffPaneView: NSView {
     var displayRows: [DisplayRow] = [] {
         didSet { layout.rowCount = displayRows.count; needsDisplay = true }
     }
+
+    /// The text selected in this pane, in document rows and raw UTF-16 offsets.
+    var selection: PaneSelection? {
+        didSet { if selection != oldValue { needsDisplay = true } }
+    }
+
+    /// Called when a selection starts here, so the other pane can drop its own.
+    var onSelectionStart: (() -> Void)?
 
     var foldOptions = FoldOptions()
 
@@ -71,20 +85,23 @@ final class DiffPaneView: NSView {
     private(set) var contentWidth: CGFloat = 0
     private var font = DiffTheme.font(size: 12)
     private var ascent: CGFloat = 0
-    private var charWidth: CGFloat = 7
-    private var gutterWidth: CGFloat = 40
-    private let textInset: CGFloat = 8
+    private(set) var charWidth: CGFloat = 7
+    private(set) var gutterWidth: CGFloat = 40
+    let textInset: CGFloat = 8
     private var lineCache: [Int: CachedLine] = [:]
     private var numberCache: [Int: CTLine] = [:]
 
-    private struct CachedLine {
+    struct CachedLine {
         let line: CTLine
         let map: [Int]?
         let width: CGFloat
+        /// UTF-16 length of the raw (tab-unexpanded) line; selection offsets are clamped to it.
+        let rawLength: Int
     }
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
+    override var acceptsFirstResponder: Bool { model != nil }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -101,40 +118,8 @@ final class DiffPaneView: NSView {
         needsDisplay = true
     }
 
-    // MARK: - Cursor
-
-    private var trackingArea: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingArea { removeTrackingArea(trackingArea) }
-        let area = NSTrackingArea(
-            rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
-            owner: self, userInfo: nil)
-        addTrackingArea(area)
-        trackingArea = area
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        (separatorHidden(at: point) != nil ? NSCursor.pointingHand : NSCursor.arrow).set()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        NSCursor.arrow.set()
-    }
-
-    /// The hidden range of the separator row under `point`, if any.
-    private func separatorHidden(at point: NSPoint) -> (index: Int, hidden: Range<Int>)? {
-        guard onFoldAction != nil, point.y >= 0, point.y < layout.contentHeight else { return nil }
-        let index = layout.row(atY: point.y)
-        guard index < displayRows.count, case let .separator(hidden) = displayRows[index] else { return nil }
-        return (index, hidden)
-    }
-
-    private func separatorRowRect(at index: Int) -> NSRect {
-        NSRect(x: visibleRect.minX, y: layout.y(forRow: index), width: visibleRect.width, height: layout.rowHeight)
-    }
+    /// Owned here because stored properties cannot live in the input extension.
+    var trackingArea: NSTrackingArea?
 
     // MARK: - Metrics
 
@@ -180,7 +165,7 @@ final class DiffPaneView: NSView {
                 x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
             switch displayRows[displayIndex] {
             case let .documentRow(rowIndex):
-                drawDocumentRow(model.rows[rowIndex], in: rowRect, model: model, context: context)
+                drawDocumentRow(model.rows[rowIndex], at: rowIndex, in: rowRect, model: model, context: context)
             case let .separator(hidden):
                 drawSeparator(hidden, in: rowRect, context: context)
             }
@@ -194,7 +179,9 @@ final class DiffPaneView: NSView {
         context.fill(NSRect(x: visible.minX + gutterWidth - 1, y: dirtyRect.minY, width: 1, height: dirtyRect.height))
     }
 
-    private func drawDocumentRow(_ row: DiffRow, in rowRect: NSRect, model: PaneModel, context: CGContext) {
+    private func drawDocumentRow(
+        _ row: DiffRow, at index: Int, in rowRect: NSRect, model: PaneModel, context: CGContext
+    ) {
         let cell = model.cell(row)
         let (rowColor, tokenColor, gutterColor) = colors(for: row.kind, side: model.side, hasCell: cell != nil)
         if let cell {
@@ -202,7 +189,11 @@ final class DiffPaneView: NSView {
                 rowColor.setFill()
                 context.fill(fullWidthRect(rowRect))
             }
-            drawText(cell, in: rowRect, model: model, tokenColor: tokenColor, context: context)
+            let cached = cachedLine(for: cell.lineIndex, model: model)
+            drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
+            drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
+            drawLine(
+                cached.line, at: CGPoint(x: gutterWidth + textInset, y: rowRect.minY + 2 + ascent), context: context)
         } else {
             drawPad(rowRect, context: context)
         }
@@ -260,26 +251,36 @@ final class DiffPaneView: NSView {
             context: context)
     }
 
-    private func drawText(
-        _ cell: DiffSide, in rowRect: NSRect, model: PaneModel, tokenColor: NSColor, context: CGContext
+    private func drawHighlights(
+        _ highlights: [Range<Int>], cached: CachedLine, in rowRect: NSRect, tokenColor: NSColor, context: CGContext
     ) {
-        let cached = cachedLine(for: cell.lineIndex, model: model)
-        let textX = gutterWidth + textInset
-        let baseline = rowRect.minY + 2 + ascent
-
-        if !cell.highlights.isEmpty {
-            tokenColor.setFill()
-            for range in cell.highlights {
-                let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
-                let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
-                let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
-                let x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
-                guard x1 > x0 else { continue }
-                let rect = NSRect(x: textX + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2)
-                context.fill(rect)
-            }
+        guard !highlights.isEmpty else { return }
+        tokenColor.setFill()
+        for range in highlights {
+            let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
+            let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
+            let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
+            let x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
+            guard x1 > x0 else { continue }
+            context.fill(
+                NSRect(
+                    x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
         }
-        drawLine(cached.line, at: CGPoint(x: textX, y: baseline), context: context)
+    }
+
+    /// The selected span of one row, drawn over the token highlights and under the text.
+    /// A row whose newline is selected extends one character past the end of the line.
+    private func drawSelection(ofRow row: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext) {
+        guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength) else { return }
+        let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
+        let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
+        let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
+        var x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
+        if selection.includesLineEnd(ofRow: row) { x1 += charWidth }
+        guard x1 > x0 else { return }
+        NSColor.selectedTextBackgroundColor.setFill()
+        context.fill(
+            NSRect(x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
     }
 
     private func drawLine(_ line: CTLine, at point: CGPoint, context: CGContext) {
@@ -356,26 +357,6 @@ final class DiffPaneView: NSView {
         context.restoreGState()
     }
 
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        guard let onFoldAction, let (index, hidden) = separatorHidden(at: point) else {
-            return super.mouseDown(with: event)
-        }
-        if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
-        let control = controlRects(for: hidden, rowRect: separatorRowRect(at: index)).first(where: {
-            $0.rect.contains(point)
-        })?.control
-        onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
-    }
-
-    private static func action(for control: FoldControl, hidden: Range<Int>) -> FoldAction {
-        switch control {
-        case .expandUp: .expandUp(hidden)
-        case .expandDown: .expandDown(hidden)
-        case .expandRun: .expandRun(hidden)
-        }
-    }
-
     // MARK: - Accessibility
 
     /// One button per visible separator control, so VoiceOver can expand folded regions.
@@ -409,7 +390,7 @@ final class DiffPaneView: NSView {
 
     // MARK: - Caches
 
-    private func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
+    func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
         if let cached = lineCache[lineIndex] { return cached }
         if lineCache.count > 4000 { lineCache.removeAll(keepingCapacity: true) }
         let raw = model.lines[lineIndex]
@@ -436,7 +417,7 @@ final class DiffPaneView: NSView {
         }
         let line = CTLineCreateWithAttributedString(attributed)
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        let cached = CachedLine(line: line, map: expanded.map, width: width)
+        let cached = CachedLine(line: line, map: expanded.map, width: width, rawLength: raw.utf16.count)
         lineCache[lineIndex] = cached
         return cached
     }

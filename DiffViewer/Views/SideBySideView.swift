@@ -46,6 +46,8 @@ final class SideBySideContainerView: NSView {
             pane.onFoldAction = { [weak self] action in self?.handle(action) }
             addSubview(scroll)
         }
+        leftPane.onSelectionStart = { [weak self] in self?.rightPane.selection = nil }
+        rightPane.onSelectionStart = { [weak self] in self?.leftPane.selection = nil }
         divider.wantsLayer = true
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
         addSubview(divider)
