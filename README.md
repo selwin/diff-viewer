@@ -77,6 +77,9 @@ listed individually. The list holds 50 commits at a time, with Load More below i
 follows the branch you check out. A commit's diffs cannot change, so nothing about that
 view reloads until HEAD moves.
 
+The window subtitle, under the repository name, names the branch HEAD is on, or reads
+`detached at <sha>` on a detached HEAD, and follows a checkout made in the terminal.
+
 ## Layout
 
 | Directory | Contents |

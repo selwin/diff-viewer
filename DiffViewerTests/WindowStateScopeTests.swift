@@ -281,6 +281,65 @@ struct WindowStateScopeTests {
         #expect(await eventually { await state.files.first?.lineStats == .counted(added: 4, deleted: 2) })
     }
 
+    // MARK: Branch subtitle
+
+    @Test func adoptingPublishesTheBranchAsTheSubtitle() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: workingFiles)
+        await repo.client.set(headState: .named("sidebar-actions"))
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await state.subtitle == "sidebar-actions" })
+    }
+
+    /// The reason the branch is read on the HEAD tick rather than from the status
+    /// header: in commit scope the watcher never calls `status()`, so a checkout while a
+    /// commit is selected would otherwise leave the subtitle stale.
+    @Test func aWatcherTickUpdatesTheBranchInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("one.swift", commit)])
+        #expect(await eventually { await state.subtitle == "main" })
+
+        state.select(commit: commit)
+        #expect(await eventually { await state.files.count == 1 })
+
+        await client.set(headState: .named("other"))
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await state.subtitle == "other" })
+    }
+
+    /// The SHA deliberately differs from the loaded history's commit, so a subtitle that
+    /// read the history revision rather than HEAD would fail this.
+    @Test func aDetachedHeadNamesItsOwnCommitNotTheLoadedHistory() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [])
+        await client.set(headState: .detached(sha: String(repeating: "b", count: 40)))
+
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await state.subtitle == "detached at bbbbbbb" })
+    }
+
+    /// Blanking the subtitle for one failed read would be worse than a stale name.
+    @Test func aFailedHeadStateReadKeepsThePreviousSubtitle() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [])
+        #expect(await eventually { await state.subtitle == "main" })
+
+        await client.fail(headState: true)
+        // Waiting for the failing read to be counted, rather than for a duration, keeps
+        // the assertion below about the subtitle and not about timing.
+        let before = await client.headStateCalls
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await client.headStateCalls == before + 1 })
+        #expect(state.subtitle == "main")
+    }
+
     // MARK: Ordering
 
     /// The generation guard around the HEAD read. Two overlapping checks resolve

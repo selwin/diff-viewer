@@ -55,6 +55,7 @@ struct TaggedClient: RepoClient {
 
     func status() async throws -> [ChangedFile] { [] }
     func headSha() async throws -> String? { nil }
+    func headState() async throws -> HeadState { .named("main") }
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] { [] }
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
