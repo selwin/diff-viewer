@@ -74,11 +74,14 @@ struct DiffDocument: Sendable, Identifiable {
     }
 }
 
-/// What the detail area shows for a selected file.
+/// What the detail area shows: one file's diff, or every changed file in one document.
 enum DiffContent: Sendable {
     case text(DiffDocument)
     case binary
     case identical
+    /// All changes: one flat document with a section per file. Never the result of one
+    /// file's diff, so it never appears inside a `ChangesetSection`.
+    case changeset(ChangesetDocument)
 }
 
 enum TextLines {

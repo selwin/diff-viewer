@@ -12,8 +12,18 @@ actor StubRepoClient: RepoClient {
     private(set) var statusCalls = 0
     private var holdsReads = false
     private var heldReads: [CheckedContinuation<Void, Never>] = []
+    /// Worktree paths whose read suspends until the test releases them.
+    private var heldPaths: Set<String> = []
+    private var pathWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// Worktree paths whose read throws rather than returning contents.
+    private var failingWorktreePaths: Set<String> = []
     /// Content reads of any kind since creation.
     private(set) var contentReads = 0
+    /// Every path read, in order, whichever side it was read from.
+    private(set) var readPaths: [String] = []
+    /// Content reads running at once, and the most there have ever been.
+    private(set) var inFlightReads = 0
+    private(set) var peakInFlightReads = 0
     private var numstatEntries: [ChangedFile.Area: [NumstatEntry]] = [:]
     private var failsNumstat = false
     /// The `ignoreWhitespace` argument of the most recent numstat call.
@@ -113,6 +123,35 @@ actor StubRepoClient: RepoClient {
         for continuation in waiting { continuation.resume() }
     }
 
+    // MARK: Per-path worktree reads
+
+    /// Suspends the worktree read of each path until it is released, so one file's diff
+    /// can be held open while the others finish.
+    func hold(worktree paths: Set<String>) { heldPaths.formUnion(paths) }
+    /// The paths whose reads are suspended right now.
+    var waitingWorktreePaths: Set<String> { Set(pathWaiters.keys) }
+    func release(worktree path: String) {
+        heldPaths.remove(path)
+        for continuation in pathWaiters.removeValue(forKey: path) ?? [] { continuation.resume() }
+    }
+    func releaseAllWorktreeHolds() {
+        heldPaths.removeAll()
+        let waiting = pathWaiters
+        pathWaiters = [:]
+        for continuation in waiting.values.flatMap({ $0 }) { continuation.resume() }
+    }
+    /// Paths whose worktree read throws: a file that is there but cannot be read.
+    func fail(worktree paths: Set<String>) { failingWorktreePaths = paths }
+
+    private func beginRead(_ path: String) {
+        contentReads += 1
+        readPaths.append(path)
+        inFlightReads += 1
+        peakInFlightReads = max(peakInFlightReads, inFlightReads)
+    }
+
+    private func endRead() { inFlightReads -= 1 }
+
     // MARK: History and commits
 
     func set(head sha: String?) { head = sha }
@@ -190,25 +229,35 @@ actor StubRepoClient: RepoClient {
     }
 
     func contents(of path: String, at revision: String) async throws -> Data {
-        contentReads += 1
+        beginRead(path)
+        defer { endRead() }
         contentRevisions.append((path, revision))
         return Data("\(revision):\(path)".utf8)
     }
 
     func indexContents(of path: String) async throws -> Data? {
-        contentReads += 1
+        beginRead(path)
+        defer { endRead() }
         return Data("old \(path)".utf8)
     }
 
     func headContents(of path: String) async throws -> Data? {
-        contentReads += 1
+        beginRead(path)
+        defer { endRead() }
         return Data("head \(path)".utf8)
     }
 
-    func worktreeContents(of path: String) async -> Data? {
-        contentReads += 1
+    func worktreeContents(of path: String) async throws -> Data? {
+        beginRead(path)
+        defer { endRead() }
         if holdsReads {
             await withCheckedContinuation { heldReads.append($0) }
+        }
+        if heldPaths.contains(path) {
+            await withCheckedContinuation { pathWaiters[path, default: []].append($0) }
+        }
+        if failingWorktreePaths.contains(path) {
+            throw ProcessError.failed(command: "read \(path)", status: 1, stderr: "permission denied")
         }
         if let override = worktree[path] { return override }
         return Data("new \(path)".utf8)
@@ -293,6 +342,9 @@ final class Harness {
         let before = published.count
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await self.published.count > before })
+        // The first list lands on All changes, which reads every file. Waiting for that
+        // load to settle keeps later read counts about what the test itself asked for.
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
         return repo
     }
 }
@@ -387,9 +439,12 @@ struct WindowStateTests {
         let h = Harness()
         let state = h.makeState()
         await h.adopt(state, "A", files: filesA)
-        #expect(state.filesToWarm == filesA)
-        state.selectedFileID = filesA[0].id
+        // All changes is reading every file itself, so there is nothing to warm.
+        #expect(state.filesToWarm.isEmpty)
+        state.selection = .file(filesA[0].id)
         #expect(state.filesToWarm == [filesA[1]])
+        state.selection = nil
+        #expect(state.filesToWarm == filesA)
     }
 
     // MARK: Closing
@@ -453,7 +508,7 @@ struct WindowStateTests {
 
     /// Selects `file` and waits for its diff to be published.
     private func select(_ file: ChangedFile, in state: WindowState) async {
-        state.selectedFileID = file.id
+        state.selection = .file(file.id)
         #expect(await eventually { await self.hasContent(state, for: file) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
     }
@@ -509,17 +564,19 @@ struct WindowStateTests {
         state.isVisible = false
         let reads = await repo.client.contentReads
 
-        state.selectedFileID = filesA[0].id
+        state.selection = .file(filesA[0].id)
         #expect(state.diffStale)
         await state.refresh()
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads)
-        #expect(!hasContent(state))
+        // The changeset from adoption is still on show; what did not happen is the load
+        // for the file just selected.
+        #expect(!hasContent(state, for: filesA[0]))
         #expect(h.published.count == 2, "hidden refreshes still publish their file list")
 
         state.isVisible = true
         #expect(!state.diffStale)
-        #expect(await eventually { await self.hasContent(state) })
+        #expect(await eventually { await self.hasContent(state, for: self.filesA[0]) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         #expect(await repo.client.contentReads == reads + 2, "one load: index plus worktree")
     }
@@ -624,7 +681,8 @@ struct WindowStateTests {
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count > before })
         #expect(
-            await eventually { await repo.client.heldReadCount == 1 }, "the untracked count starts after the publish")
+            await eventually { await repo.client.heldReadCount >= 1 },
+            "the untracked count starts after the publish")
 
         state.close()
         await repo.client.releaseReads()

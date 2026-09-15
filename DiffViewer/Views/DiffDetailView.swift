@@ -82,6 +82,9 @@ struct DiffDetailView: View {
                 ContentUnavailableView(
                     "No differences", systemImage: "equal.circle",
                     description: Text("Both versions have identical content."))
+            case .changeset?:
+                // Stage 3 draws the changeset; this view only ever shows one file.
+                Color.clear
             case nil:
                 Color.clear
             }

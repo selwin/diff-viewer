@@ -62,7 +62,7 @@ struct TaggedClient: RepoClient {
     func indexContents(of path: String) async throws -> Data? { nil }
     func headContents(of path: String) async throws -> Data? { nil }
     func contents(of path: String, at revision: String) async throws -> Data { Data() }
-    func worktreeContents(of path: String) async -> Data? { nil }
+    func worktreeContents(of path: String) async throws -> Data? { nil }
     func perform(_ action: GitFileAction, on path: String) async throws {}
     func trash(_ path: String) async throws {}
 }

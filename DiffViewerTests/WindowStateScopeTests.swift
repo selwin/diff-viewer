@@ -48,55 +48,38 @@ struct WindowStateScopeTests {
         #expect(state.selectedCommit == nil)
     }
 
-    @Test func selectionFollowsThePathIntoTheNewScope() async {
+    /// The scope change no longer hunts for the same path in the new list: the whole
+    /// point of a new scope is a new set of changes, and All changes shows all of them.
+    @Test func everyScopeChangeLandsOnAllChanges() async {
         let h = Harness()
         let state = h.makeState()
         let commit = commitSummary("c1")
         _ = await adopt(h, state, commit: commit, commitFiles: [commitFile("a1.swift", commit)])
-        state.selectedFileID = workingFiles[0].id
+        #expect(state.selection == .allChanges, "the first list selects All changes")
+        state.selection = .file(workingFiles[0].id)
 
         state.select(commit: commit)
-        #expect(await eventually { await state.selectedFileID != nil })
-        #expect(state.selectedFile?.path == "a1.swift")
-        #expect(state.selectedFile?.area == .commit(commit.ref))
-    }
-
-    @Test func selectionClearsWhenThePathIsNotInTheNewScope() async {
-        let h = Harness()
-        let state = h.makeState()
-        let commit = commitSummary("c1")
-        _ = await adopt(h, state, commit: commit, commitFiles: [commitFile("other.swift", commit)])
-        state.selectedFileID = workingFiles[0].id
-
-        state.select(commit: commit)
-        #expect(await eventually { await state.files.map(\.path) == ["other.swift"] })
+        #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
+        #expect(await eventually { await state.selection == .allChanges })
         #expect(state.selectedFileID == nil)
+
+        state.selection = state.files.first.map { .file($0.id) }
+        state.selectWorkingTree()
+        #expect(await eventually { await state.files.count == workingFiles.count })
+        #expect(await eventually { await state.selection == .allChanges }, "and on the way back too")
     }
 
-    /// A path staged and unstaged at once has a defined winner on the way back.
-    @Test func returningToTheWorkingTreePrefersTheUnstagedEntry() async {
+    /// All changes reads every file itself, so the prefetcher has nothing to warm.
+    @Test func allChangesWarmsNothing() async {
         let h = Harness()
         let state = h.makeState()
-        let both = [changedFile("dup.swift"), changedFile("dup.swift", area: .staged)]
         let commit = commitSummary("c1")
-        let repo = h.repo("A", files: both)
-        await repo.client.set(head: commit.ref.sha)
-        await repo.client.set(commits: [commit])
-        await repo.client.set(files: [commitFile("dup.swift", commit)], forCommit: commit.ref.sha)
-        let before = h.published.count
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await h.published.count > before })
-        #expect(await eventually { await !state.history.commits.isEmpty })
+        _ = await adopt(h, state, commit: commit, commitFiles: [])
+        #expect(state.selection == .allChanges)
+        #expect(state.filesToWarm.isEmpty)
 
-        state.select(commit: commit)
-        #expect(await eventually { await state.files.count == 1 })
-        state.selectedFileID = state.files.first?.id
-        #expect(state.selectedFile?.area == .commit(commit.ref))
-
-        state.selectWorkingTree()
-        #expect(await eventually { await state.files.count == 2 })
-        #expect(await eventually { await state.selectedFileID != nil })
-        #expect(state.selectedFile?.area == .unstaged)
+        state.selection = .file(workingFiles[0].id)
+        #expect(state.filesToWarm.map(\.path) == ["a2.swift"])
     }
 
     /// The race the separate history generation exists for: a watcher tick that only
@@ -263,8 +246,12 @@ struct WindowStateScopeTests {
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.count == 2 })
+        #expect(await eventually { await state.selection == .allChanges })
+        // All changes warms nothing, so the list is checked with a file selected and with
+        // nothing selected at all.
+        state.selection = nil
         #expect(state.filesToWarm.map(\.path) == ["one.swift", "two.swift"])
-        state.selectedFileID = state.files.first?.id
+        state.selection = state.files.first.map { .file($0.id) }
         #expect(state.filesToWarm.map(\.path) == ["two.swift"])
     }
 
@@ -371,10 +358,9 @@ struct WindowStateScopeTests {
         #expect(state.history.commits.first?.ref == later.ref)
     }
 
-    /// The scope change records what to re-select, but the refresh it starts is not
-    /// always the one that publishes: a watcher refresh can overtake it, and then the
-    /// restoration has to happen there instead.
-    @Test func selectionIsRestoredByWhicheverRefreshPublishes() async {
+    /// A watcher refresh can overtake the one a scope change started. Whichever publishes
+    /// the new list, the window lands on All changes and stays there.
+    @Test func anOvertakingRefreshStillLandsOnAllChanges() async {
         let h = Harness()
         let state = h.makeState()
         let commit = commitSummary("c1")
@@ -382,7 +368,7 @@ struct WindowStateScopeTests {
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.count == 1 })
-        state.selectedFileID = state.files.first?.id
+        state.selection = state.files.first.map { .file($0.id) }
         #expect(state.selectedFile?.path == "a1.swift")
 
         // Both working-tree reads block, so their completion order can be chosen.
@@ -399,8 +385,8 @@ struct WindowStateScopeTests {
         await client.releaseFirst()
         try? await Task.sleep(for: .milliseconds(50))
 
-        #expect(state.selectedFile?.path == "a1.swift", "the overtaking refresh restores the selection")
-        #expect(state.selectedFile?.area == .unstaged)
+        #expect(state.selection == .allChanges)
+        #expect(state.selectedFileID == nil)
     }
 
     /// An alert about a commit the user has already moved on from is both wrong and in
@@ -543,9 +529,9 @@ struct WindowStateScopeTests {
         #expect(!state.isLoadingHistory, "and the picker is not left spinning")
     }
 
-    /// A second scope change has no selection left to read, because the first cleared
-    /// the list; the path the user was on must survive both hops.
-    @Test func aPendingSelectionSurvivesASecondScopeChange() async {
+    /// Two scope changes back to back, the second while the first is still loading: the
+    /// list that finally arrives is the second one's, and it lands on All changes.
+    @Test func aSecondScopeChangeAlsoLandsOnAllChanges() async {
         let h = Harness()
         let state = h.makeState()
         let first = commitSummary("c1")
@@ -554,10 +540,9 @@ struct WindowStateScopeTests {
         await client.set(files: [commitFile("a1.swift", second)], forCommit: second.ref.sha)
         await client.set(commits: [second, first])
 
-        state.selectedFileID = state.files.first { $0.path == "a1.swift" }?.id
+        state.selection = state.files.first { $0.path == "a1.swift" }.map { .file($0.id) }
         #expect(state.selectedFile?.path == "a1.swift")
 
-        // Two scope changes back to back, the second while the first is still loading.
         await client.holdCommitFiles(true)
         state.select(commit: first)
         #expect(await eventually { await client.heldCommitFileCount == 1 })
@@ -566,7 +551,107 @@ struct WindowStateScopeTests {
         await client.releaseCommitFiles()
 
         #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
-        #expect(await eventually { await state.selectedFileID != nil }, "the path survives both hops")
-        #expect(state.selectedFile?.area == .commit(second.ref))
+        #expect(await eventually { await state.selection == .allChanges })
+        #expect(state.scope == .commit(second.ref))
+    }
+
+    // MARK: All changes
+
+    /// A watcher tick in All-changes mode republishes the list and reloads the changeset;
+    /// what it must not do is move the selection off All changes.
+    @Test func aWatcherRefreshInAllChangesModeKeepsTheSelectionAndReloads() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: workingFiles)
+        #expect(state.selection == .allChanges)
+        let reads = await repo.client.contentReads
+
+        let updated = [changedFile("a1.swift"), changedFile("new.swift")]
+        await repo.client.set(files: updated)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await state.files == updated })
+        #expect(state.selection == .allChanges)
+        #expect(await eventually { await repo.client.contentReads > reads }, "the changeset is read again")
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+    }
+
+    /// A settings refresh reloads the diff before it re-reads the list, so in All-changes
+    /// mode the changeset it built can already be out of date by the time the new list
+    /// lands. A single file's diff is unaffected, which is why the reload is conditional.
+    @Test func aSettingsRefreshInAllChangesModeReloadsAChangedList() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: [changedFile("a.swift")])
+        #expect(state.selection == .allChanges)
+
+        await repo.client.set(files: [changedFile("a.swift"), changedFile("b.swift")])
+        state.diffSettingsChanged()
+
+        #expect(
+            await eventually {
+                guard case let .changeset(document)? = await state.diffLoader.content else { return false }
+                return document.sections.map(\.file.path) == ["a.swift", "b.swift"]
+            })
+    }
+
+    @Test func aFileActionOnAnUnselectedRowKeepsAllChanges() async {
+        let h = Harness()
+        let state = h.makeState()
+        let files = [changedFile("a.swift"), changedFile("b.swift")]
+        let repo = await h.adopt(state, "A", files: files)
+        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1]])
+        #expect(state.selection == .allChanges)
+
+        await state.perform(.stage, on: files[0])
+
+        #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(state.selection == .allChanges, "no row was selected, so nothing is restored")
+    }
+
+    /// The reselection rule still applies to a file the reader was actually on.
+    @Test func aFileActionOnTheSelectedFileStillReselectsByPath() async {
+        let h = Harness()
+        let state = h.makeState()
+        let files = [changedFile("a.swift"), changedFile("b.swift")]
+        let staged = changedFile("a.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: files)
+        await repo.client.set(filesAfterWrite: [staged, files[1]])
+        state.selection = .file(files[0].id)
+
+        await state.perform(.stage, on: files[0])
+
+        #expect(await eventually { await state.selection == .file(staged.id) })
+    }
+
+    /// The case a computed `selectedFileID` would get wrong: All changes and "nothing
+    /// selected" both read as no file, but only the second one may be overwritten.
+    @Test func allChangesChosenDuringAWriteIsNotOverridden() async {
+        let h = Harness()
+        let state = h.makeState()
+        let files = [changedFile("a.swift"), changedFile("b.swift")]
+        let staged = changedFile("a.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: files)
+        let client = repo.client
+        state.selection = .file(files[0].id)
+        await client.holdActions(true)
+
+        let write = Task { await state.perform(.stage, on: files[0]) }
+        #expect(await eventually { await client.heldActionCount == 1 })
+        // A watcher refresh lands while git runs and clears the selection, because the
+        // row the reader was on has gone.
+        let afterWatcher = [staged, files[1]]
+        await client.set(files: afterWatcher)
+        h.watcherCallbacks[repo.root]?()
+        #expect(
+            await eventually {
+                guard await state.selection == nil else { return false }
+                return await state.files == afterWatcher
+            })
+        state.selection = .allChanges
+        await client.releaseActions()
+        await write.value
+
+        #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(state.selection == .allChanges, "the reader's own choice outranks the write")
     }
 }

@@ -70,10 +70,10 @@ extension WindowState {
 
         // Captured before the write, not after it: while the client call is suspended
         // another refresh — ⌘R, a settings change, the watcher — can publish the list the
-        // write produced and clear `selectedFileID`, because the id the reader was on is
+        // write produced and clear the selection, because the id the reader was on is
         // gone from it. Read afterwards, this row would no longer look selected and the
         // detail pane would stay empty.
-        let wasSelected = file.id == selectedFileID
+        let wasSelected = selection == .file(file.id)
         let row = sidebarRows.firstIndex(where: { $0.id == file.id })
 
         do {
@@ -98,9 +98,11 @@ extension WindowState {
         // request and apply it to the list from before the write.
         //
         // A nil selection still restores — a refresh that overtook this write cleared it,
-        // the reader did not — but a selection that has moved to another file does not:
-        // that one was the reader's own choice and outranks the row being written.
-        if wasSelected, selectedFileID == nil || selectedFileID == file.id, let row {
+        // the reader did not — but a selection that has moved elsewhere does not: that one
+        // was the reader's own choice and outranks the row being written. All changes is
+        // such a choice, which is why the test is on `selection` and not on a computed
+        // file id that reads the same as nil.
+        if wasSelected, selection == nil || selection == .file(file.id), let row {
             restoreSelectionAfterNextRefresh(PendingSelection(path: file.path, area: file.area, row: row))
         }
         // Required, not an optimisation: `RepoWatcher` sets `kFSEventStreamCreateFlagIgnoreSelf`,

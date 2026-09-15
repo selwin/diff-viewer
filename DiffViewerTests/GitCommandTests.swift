@@ -423,6 +423,39 @@ import Testing
         #expect(try await repo.client.status().isEmpty)
     }
 
+    // MARK: Worktree reads
+
+    /// The distinction the diff engine depends on: a missing file is a side that does not
+    /// exist, and anything else is a failure. Reporting a read error as "missing" would
+    /// draw a modified file as deleted.
+    @Test func worktreeContentsIsNilOnlyForAMissingFile() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("there.txt", "one\n")
+
+        #expect(try await repo.client.worktreeContents(of: "there.txt") == Data("one\n".utf8))
+        #expect(try await repo.client.worktreeContents(of: "gone.txt") == nil)
+    }
+
+    @Test func worktreeContentsThrowsForAFileItCannotRead() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("secret.txt", "one\n")
+        let secret = repo.url.appendingPathComponent("secret.txt")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: secret.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: secret.path) }
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.worktreeContents(of: "secret.txt")
+        }
+        // A directory where a file is expected is the other shape of "there, unreadable".
+        try FileManager.default.createDirectory(
+            at: repo.url.appendingPathComponent("adir"), withIntermediateDirectories: true)
+        await #expect(throws: (any Error).self) {
+            try await repo.client.worktreeContents(of: "adir")
+        }
+    }
+
     /// The error alert shows the error's description, so git's own words have to reach it.
     /// Discard, not unstage: `git reset` accepts a pathspec that matches nothing and exits
     /// zero, so it is the wrong command to test a refusal with.

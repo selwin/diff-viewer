@@ -23,7 +23,7 @@ struct WindowStateFileActionTests {
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
         let client = await adopt(h, state, after: [staged, files[1], files[2]])
-        state.selectedFileID = files[0].id
+        state.selection = .file(files[0].id)
 
         await state.perform(.stage, on: files[0])
 
@@ -40,7 +40,7 @@ struct WindowStateFileActionTests {
         let h = Harness()
         let state = h.makeState()
         let client = await adopt(h, state, after: [files[1], files[2]])
-        state.selectedFileID = files[0].id
+        state.selection = .file(files[0].id)
         let next = files[1].id
 
         await state.perform(.discard, on: files[0])
@@ -56,7 +56,7 @@ struct WindowStateFileActionTests {
         let only = [changedFile("a.swift")]
         let repo = await h.adopt(state, "A", files: only)
         await repo.client.set(filesAfterWrite: [])
-        state.selectedFileID = only[0].id
+        state.selection = .file(only[0].id)
 
         await state.perform(.discard, on: only[0])
 
@@ -70,7 +70,7 @@ struct WindowStateFileActionTests {
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
         _ = await adopt(h, state, after: [staged, files[1], files[2]])
-        state.selectedFileID = files[2].id
+        state.selection = .file(files[2].id)
 
         await state.perform(.stage, on: files[0])
 
@@ -227,7 +227,7 @@ struct WindowStateFileActionTests {
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
-        state.selectedFileID = files[0].id
+        state.selection = .file(files[0].id)
         await client.holdActions(true)
 
         let write = Task { await state.perform(.stage, on: files[0]) }
@@ -255,7 +255,7 @@ struct WindowStateFileActionTests {
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
-        state.selectedFileID = files[0].id
+        state.selection = .file(files[0].id)
         await client.holdActions(true)
 
         let write = Task { await state.perform(.stage, on: files[0]) }
@@ -268,7 +268,7 @@ struct WindowStateFileActionTests {
                 guard await state.selectedFileID == nil else { return false }
                 return await state.files == afterWatcher
             })
-        state.selectedFileID = files[1].id
+        state.selection = .file(files[1].id)
         await client.releaseActions()
         await write.value
 

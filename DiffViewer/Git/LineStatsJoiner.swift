@@ -92,7 +92,9 @@ enum LineStatsJoiner {
     }
 
     private static func stats(of path: String, client: any RepoClient) async -> LineStats? {
-        guard let data = await client.worktreeContents(of: path) else { return nil }
+        // `try?`: a file that cannot be read has unknown counts, exactly as a missing
+        // one does. Counting is decoration and must not fail the list.
+        guard let data = try? await client.worktreeContents(of: path) else { return nil }
         if DiffEngine.isBinary(data) { return .binary }
         return .counted(added: lineCount(data), deleted: 0)
     }

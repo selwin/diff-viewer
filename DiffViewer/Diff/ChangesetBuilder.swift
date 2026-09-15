@@ -105,6 +105,7 @@ enum ChangesetBuilder {
         case .content(.text): .noVisibleChanges
         case .content(.binary): .binary
         case .content(.identical): .identical
+        case .content(.changeset): preconditionFailure("a section is one file, never a changeset")
         case .tooLarge: .tooLarge
         case .notShown: .notShown
         case let .failed(message): .failed(message)

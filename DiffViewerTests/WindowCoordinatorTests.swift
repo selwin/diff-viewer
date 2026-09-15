@@ -202,6 +202,12 @@ final class CoordinatorHarness {
         #expect(window.repositoryRoot == root(url))
         let expected = await client(url).currentFiles
         #expect(await eventually { await window.files == expected })
+        // The first list lands on All changes, which reads every file. Waiting for that
+        // load keeps later read counts about what the test itself asked for, and clearing
+        // the selection leaves a warm list to prefetch: All changes warms nothing, and
+        // these tests are about which window is prefetched and when.
+        #expect(await eventually { await MainActor.run { !window.diffLoader.hasActiveWork } })
+        window.selection = nil
     }
 }
 
@@ -455,9 +461,11 @@ struct WindowCoordinatorTests {
         #expect(h.recent.first == h.root(a))
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a))
         // Attach prefetches the still-empty list at once; the refresh's prefetch follows
-        // after status and numstat have both returned.
-        let expected = RecordingPrefetcher.Event.prefetch(filesA.map(\.id))
-        #expect(await eventually { await MainActor.run { h.prefetcher.events.last == expected } })
+        // after status and numstat have both returned. Both lists are empty, because the
+        // first list to arrive selects All changes, which warms nothing.
+        #expect(await eventually { await MainActor.run { h.prefetcher.events.count == 2 } })
+        #expect(h.prefetcher.events.allSatisfy { $0 == .prefetch([]) })
+        #expect(state.selection == .allChanges)
     }
 
     @Test func userRequestJoiningARestorationCreateUpgradesRecency() async {
@@ -575,7 +583,14 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.lastActiveRepositoryRoot == nil)
         await h.openAndSettle(a, into: w1)
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a))
-        #expect(h.prefetcher.events.contains(.prefetch(filesA.map(\.id))))
+        // The list that arrives selects All changes, which warms nothing. `openAndSettle`
+        // clears that selection, so the next refresh prefetches the whole list.
+        #expect(!h.prefetcher.events.isEmpty)
+        h.registry.watcherCallbacks[h.root(a)]!()
+        #expect(
+            await eventually {
+                await MainActor.run { h.prefetcher.events.last == .prefetch(filesA.map(\.id)) }
+            })
     }
 
     @Test func keyHandoffCancelsThenPrefetchesTheNewKeyWindow() async {
@@ -710,8 +725,8 @@ struct WindowCoordinatorTests {
         let w2 = h.makeWindow()
         await h.openAndSettle(a, into: w1)
         await h.openAndSettle(b, into: w2)
-        w1.selectedFileID = filesA[0].id
-        w2.selectedFileID = filesB[0].id
+        w1.selection = .file(filesA[0].id)
+        w2.selection = .file(filesB[0].id)
         #expect(
             await eventually { await MainActor.run { w1.diffLoader.content != nil && w2.diffLoader.content != nil } })
         #expect(
