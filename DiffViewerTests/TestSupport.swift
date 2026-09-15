@@ -16,6 +16,33 @@ func changedFile(_ path: String, area: ChangedFile.Area = .unstaged, kind: Chang
     ChangedFile(path: path, originalPath: nil, kind: kind, area: area)
 }
 
+// MARK: Diff rows
+
+func addedRow(_ new: Int) -> DiffRow {
+    DiffRow(kind: .added, old: nil, new: DiffSide(lineIndex: new, highlights: []))
+}
+
+func deletedRow(_ old: Int) -> DiffRow {
+    DiffRow(kind: .deleted, old: DiffSide(lineIndex: old, highlights: []), new: nil)
+}
+
+func modifiedRow(_ old: Int, _ new: Int, highlights: [Range<Int>] = []) -> DiffRow {
+    DiffRow(
+        kind: .modified,
+        old: DiffSide(lineIndex: old, highlights: highlights),
+        new: DiffSide(lineIndex: new, highlights: highlights))
+}
+
+/// A text diff of `count` aligned rows, modified at the given row indices, with one
+/// line per row on each side.
+func textContent(rows count: Int, modified: [Range<Int>], language: String? = "Swift") -> DiffContent {
+    var changed = IndexSet()
+    for range in modified { changed.insert(integersIn: range) }
+    let rows = (0..<count).map { changed.contains($0) ? modifiedRow($0, $0) : DiffRow.equal(old: $0, new: $0) }
+    let lines = (0..<count).map { "line \($0)" }
+    return .text(DiffDocument(oldLines: lines, newLines: lines, rows: rows, language: language))
+}
+
 /// A 40-character object id from a short seed, so tests can use readable names where
 /// git would use a hash.
 func objectID(_ seed: String) -> String {

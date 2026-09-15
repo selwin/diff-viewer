@@ -168,6 +168,8 @@ final class DiffPaneView: NSView {
                 drawDocumentRow(model.rows[rowIndex], at: rowIndex, in: rowRect, model: model, context: context)
             case let .separator(hidden):
                 drawSeparator(hidden, in: rowRect, context: context)
+            case .fileHeader, .spacer, .notice:
+                break  // Drawn in Stage 3.
             }
             if let current = currentChangeRows, current.contains(displayIndex) {
                 NSColor.controlAccentColor.setFill()

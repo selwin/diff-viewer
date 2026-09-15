@@ -42,22 +42,27 @@ struct DiffDocument: Sendable, Identifiable {
     /// Consecutive runs of non-equal rows.
     let changeBlocks: [Range<Int>]
 
-    init(oldLines: [String], newLines: [String], rows: [DiffRow], language: String?) {
+    /// `blockBoundaries` are row indices a change block may not span: a run of non-equal
+    /// rows is split at every boundary, so a changeset's files never share a block. The
+    /// boundaries themselves are not stored, only the blocks they produce.
+    init(oldLines: [String], newLines: [String], rows: [DiffRow], language: String?, blockBoundaries: [Int] = []) {
         self.oldLines = oldLines
         self.newLines = newLines
         self.rows = rows
         self.language = language
-        self.changeBlocks = Self.computeChangeBlocks(rows)
+        self.changeBlocks = Self.computeChangeBlocks(rows, boundaries: blockBoundaries)
     }
 
     static func empty() -> DiffDocument {
         DiffDocument(oldLines: [], newLines: [], rows: [], language: nil)
     }
 
-    private static func computeChangeBlocks(_ rows: [DiffRow]) -> [Range<Int>] {
+    private static func computeChangeBlocks(_ rows: [DiffRow], boundaries: [Int]) -> [Range<Int>] {
+        let splits = Set(boundaries)
         var blocks: [Range<Int>] = []
         var start: Int?
         for (index, row) in rows.enumerated() {
+            if let s = start, splits.contains(index) { blocks.append(s..<index); start = nil }
             if row.kind == .equal {
                 if let s = start { blocks.append(s..<index); start = nil }
             } else if start == nil {
