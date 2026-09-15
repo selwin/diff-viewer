@@ -22,6 +22,16 @@ struct SidebarView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // Outside every section, so the whole-list row sits above the headings
+            // rather than inside one of them.
+            if !windowState.files.isEmpty {
+                HStack(spacing: 8) {
+                    Label("All changes", systemImage: "square.stack")
+                    Spacer(minLength: 8)
+                    ChurnLabel(stats: LineStats.total(of: windowState.files))
+                }
+                .tag(DiffSelection.allChanges)
+            }
             if !windowState.unstagedFiles.isEmpty {
                 Section("Unstaged (\(windowState.unstagedFiles.count))") {
                     ForEach(windowState.unstagedFiles) { FileRow(file: $0) }
@@ -133,13 +143,7 @@ private struct FileRow: View {
     }
 
     private var badgeColor: Color {
-        switch file.kind {
-        case .modified, .typeChanged: .orange
-        case .added, .untracked: .green
-        case .deleted: .red
-        case .renamed, .copied: .blue
-        case .unmerged: .purple
-        }
+        Color(nsColor: DiffTheme.badge(for: file.kind))
     }
 }
 

@@ -5,11 +5,13 @@ import Foundation
 /// blocks, or one notice row for every other outcome. Folding per section is what keeps
 /// a gap that straddles two files two separators rather than one.
 enum ChangesetProjection {
-    static func build(document changeset: ChangesetDocument, options: FoldOptions) -> FoldedRows {
+    /// Built from the flat document and its sections rather than from a `ChangesetDocument`,
+    /// so a changeset can call it while it is still being initialised.
+    static func build(document: DiffDocument, sections: [ChangesetSection], options: FoldOptions) -> FoldedRows {
         var displayRows: [DisplayRow] = []
         var boundaries: [Int] = []
 
-        for (index, section) in changeset.sections.enumerated() {
+        for (index, section) in sections.enumerated() {
             let boundary = section.rowRange.lowerBound
             if index > 0 {
                 displayRows.append(.spacer(section: index))
@@ -25,7 +27,7 @@ enum ChangesetProjection {
             }
 
             let folded = RowFolding.fold(
-                changeBlocks: localBlocks(changeset.document.changeBlocks, in: section.rowRange),
+                changeBlocks: localBlocks(document.changeBlocks, in: section.rowRange),
                 documentRowCount: section.rowRange.count,
                 state: FoldState(),
                 options: options)
@@ -44,8 +46,13 @@ enum ChangesetProjection {
 
         return FoldedRows(
             displayRows: displayRows,
-            documentRowCount: changeset.document.rows.count,
+            documentRowCount: document.rows.count,
             syntheticBoundaries: boundaries)
+    }
+
+    /// The same projection for a changeset that is already built.
+    static func build(document changeset: ChangesetDocument, options: FoldOptions) -> FoldedRows {
+        build(document: changeset.document, sections: changeset.sections, options: options)
     }
 
     /// The flat document's blocks clipped to one section and shifted to section-local

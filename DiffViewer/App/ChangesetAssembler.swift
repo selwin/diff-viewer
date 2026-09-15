@@ -26,6 +26,9 @@ actor ChangesetAssembler {
     private let files: [ChangedFile]
     private let client: any RepoClient
     private let hideWhitespace: Bool
+    /// The fold options every published revision is projected with, so the view installs
+    /// a projection it never has to rebuild.
+    private let foldOptions: FoldOptions
     private let cache: DifftCache
     private let clock: any Clock<Duration>
     private let highlight: @Sendable ([String], String) async -> [[StyleRun]]?
@@ -113,6 +116,7 @@ actor ChangesetAssembler {
         files: [ChangedFile],
         client: any RepoClient,
         hideWhitespace: Bool,
+        foldOptions: FoldOptions = FoldOptions(),
         cache: DifftCache,
         clock: any Clock<Duration> = ContinuousClock(),
         highlight: @escaping @Sendable ([String], String) async -> [[StyleRun]]? = { lines, fileName in
@@ -125,6 +129,7 @@ actor ChangesetAssembler {
         self.files = files
         self.client = client
         self.hideWhitespace = hideWhitespace
+        self.foldOptions = foldOptions
         self.cache = cache
         self.clock = clock
         self.highlight = highlight
@@ -268,7 +273,8 @@ actor ChangesetAssembler {
             revision += 1
             publishedCount = prefix
             let document = ChangesetBuilder.build(
-                results: (0..<prefix).map { (files[$0], results[$0]!) }, loadID: loadID, revision: revision)
+                results: (0..<prefix).map { (files[$0], results[$0]!) }, loadID: loadID, revision: revision,
+                foldOptions: foldOptions)
             checkAppendOnly(document)
             published = document
             hasPendingStyles = false

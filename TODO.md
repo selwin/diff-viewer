@@ -280,6 +280,32 @@ which we keep.
 arithmetic when a section resizes, change-block navigation across sections, scroll-spy
 mapping from row to file.
 
+#### 3.1 Follow-up: keep the All-changes document across selection changes (requested 2026-09-15)
+
+**Problem.** Clicking a file in the sidebar and then All changes again reloads the whole
+changeset from scratch: `DiffLoader.load(changeset:)` clears its content and starts a new
+`ChangesetAssembler`, which reads every file from git again, realigns, rebuilds the flat
+document and re-highlights each file, streaming sections in from an empty view. Only
+`DifftCache` is memoised, so the difft subprocesses are skipped but everything else runs
+twice. The reader sees a visible reload for a document that has not changed.
+
+**Design.**
+- `DiffLoader` keeps the last *completed* `ChangesetDocument` and its final
+  `DocumentStyles`, keyed by the sidebar's file ids in order, `hideWhitespace`, and the
+  fold options it was projected with. Reselecting All changes with the same key publishes
+  the retained document and styles at once, with no assembler; a different key runs the
+  load as today. A watcher refresh or a scope change produces a different list, so the key
+  invalidates itself; a cancelled or partial load is never retained.
+- One retained changeset per window (the loader is per window), released when the
+  window's list changes, so the bound is the last admitted changeset (200 files × 1 MB).
+- Optional, larger: the per-file `DiffDocument` cache already deferred from Stage 3, so
+  that opening a single file after All changes has loaded it is instant too. That touches
+  `DiffEngine` and the prefetcher and should be its own item.
+
+**Tests.** `DiffLoaderTests`: same key → the retained document is published synchronously
+and no assembler runs (the fake client sees no reads); changed list, whitespace mode, or
+fold options → a fresh load; a load cancelled before completion retains nothing.
+
 ---
 
 ## Next: high-value features the competitors have and we lack

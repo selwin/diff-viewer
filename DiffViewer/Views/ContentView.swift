@@ -83,11 +83,29 @@ struct ContentView: View {
                 Button("Open Repository…") { services.coordinator.presentOpenPanel(from: .window(windowState.id)) }
                     .keyboardShortcut(.defaultAction)
             }
-        } else if let file = windowState.selectedFile {
-            DiffDetailView(file: file)
-                .id(file.id)
         } else {
-            ContentUnavailableView("Select a file", systemImage: "doc.text.magnifyingglass")
+            // Identified by the selection so switching detail views starts a fresh
+            // renderer rather than reusing the previous one's state.
+            switch windowState.selection {
+            case .allChanges:
+                ChangesetDetailView()
+                    .id(DiffSelection.allChanges)
+            case .file:
+                if let file = windowState.selectedFile {
+                    DiffDetailView(file: file)
+                        .id(file.id)
+                } else {
+                    // The selected file is gone from the list; the next refresh decides
+                    // where the selection lands.
+                    selectFilePlaceholder
+                }
+            case nil:
+                selectFilePlaceholder
+            }
         }
+    }
+
+    private var selectFilePlaceholder: some View {
+        ContentUnavailableView("Select a file", systemImage: "doc.text.magnifyingglass")
     }
 }

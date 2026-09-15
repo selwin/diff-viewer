@@ -99,7 +99,10 @@ final class DiffLoader {
     }
 
     /// Loads every file as one changeset, publishing it as sections complete.
-    func load(changeset files: [ChangedFile], client: (any RepoClient)?, hideWhitespace: Bool) {
+    func load(
+        changeset files: [ChangedFile], client: (any RepoClient)?, hideWhitespace: Bool,
+        foldOptions: FoldOptions = FoldOptions()
+    ) {
         cancelActiveWork()
         let gen = generation
         content = nil
@@ -110,7 +113,7 @@ final class DiffLoader {
         guard let client else { return }
         isLoading = true
         let assembler = ChangesetAssembler(
-            files: files, client: client, hideWhitespace: hideWhitespace, cache: cache)
+            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions, cache: cache)
         task = Task { [weak self] in
             guard let self else { return }
             await assembler.run { [self] publication in
@@ -159,6 +162,8 @@ final class DiffLoader {
 /// for, so a snapshot can be matched to the document installed in the panes; a single-file
 /// document has only one revision, 0.
 struct DocumentStyles: Sendable {
+    /// Identifies this style snapshot independently of its document revision.
+    let id = UUID()
     let documentID: UUID
     let revision: Int
     let old: [[StyleRun]]?

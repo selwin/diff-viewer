@@ -186,6 +186,20 @@ struct ChangesetBuilderTests {
         #expect(changeset.revision == 1)
     }
 
+    // MARK: Projection
+
+    @Test func theChangesetCarriesItsOwnProjection() {
+        let a = text(["a0"], ["A0"], [modifiedRow(0, 0)])
+        let b = text(["b0"], ["B0"], [modifiedRow(0, 0)])
+        let changeset = build([(changedFile("a.swift"), a), (changedFile("b.swift"), b)])
+
+        #expect(
+            changeset.folded.displayRows
+                == ChangesetProjection.build(document: changeset, options: FoldOptions()).displayRows)
+        #expect(changeset.folded.displayRows.first == .fileHeader(section: 0))
+        #expect(changeset.folded.displayRows.contains(.spacer(section: 1)))
+    }
+
     // MARK: Identity
 
     @Test func aPathInBothAreasYieldsTwoSections() {

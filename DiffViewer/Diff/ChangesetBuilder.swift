@@ -12,9 +12,10 @@ enum ChangesetBuilder {
         case failed(String)
     }
 
-    static func build(results: [(file: ChangedFile, result: FileResult)], loadID: UUID, revision: Int)
-        -> ChangesetDocument
-    {
+    static func build(
+        results: [(file: ChangedFile, result: FileResult)], loadID: UUID, revision: Int,
+        foldOptions: FoldOptions = FoldOptions()
+    ) -> ChangesetDocument {
         var oldLines: [String] = []
         var newLines: [String] = []
         var rows: [DiffRow] = []
@@ -72,7 +73,8 @@ enum ChangesetBuilder {
 
         let flat = DiffDocument(
             oldLines: oldLines, newLines: newLines, rows: rows, language: nil, blockBoundaries: boundaries)
-        return ChangesetDocument(document: flat, sections: sections, loadID: loadID, revision: revision)
+        return ChangesetDocument(
+            document: flat, sections: sections, loadID: loadID, revision: revision, foldOptions: foldOptions)
     }
 
     /// A section that contributed no rows and no lines. Its counts fall back to numstat,

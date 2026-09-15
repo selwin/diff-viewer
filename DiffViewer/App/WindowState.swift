@@ -321,7 +321,8 @@ final class WindowState {
         diffStale = false
         if selection == .allChanges {
             diffLoader.load(
-                changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace)
+                changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+                foldOptions: preferences.foldOptions)
         } else {
             diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
         }
