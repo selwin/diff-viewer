@@ -4,6 +4,9 @@ A native macOS 26 app for viewing git diffs side by side.
 
 - **Commit picker** at the top of the sidebar: show the working tree, as always, or pick a
   commit from the branch's history and see what it changed against its first parent.
+- **All changes**, selected by default: every changed file's hunks stacked in one
+  side-by-side scroll, each under a header with its kind badge, name, `+12 −4` and
+  language. Line numbers restart per file and ⌘↓ / ⌘↑ walk changes across files.
 - **Syntax-aware diffs** via a bundled [difftastic](https://difftastic.wilfred.me.uk) (`difft`)
   binary: token-level highlights that understand the language's structure.
 - **Hide whitespace** toggle (⇧⌘W), like GitHub's diff viewer.
@@ -80,13 +83,20 @@ view reloads until HEAD moves.
 The window subtitle, under the repository name, names the branch HEAD is on, or reads
 `detached at <sha>` on a detached HEAD, and follows a checkout made in the terminal.
 
+**All changes**, the first row of the sidebar, is selected whenever a list arrives. It
+shows every file in the list in sidebar order, streaming in as each diff finishes
+("Loading 7 of 12…" in the header). Hunks are shown with fixed context and their
+separators cannot be expanded there; click a file in the sidebar to read it in full.
+A file over 1 MB of source, or past the 200th, shows a one-line notice instead and is
+still readable from the sidebar. Text selection and ⌘C span the whole changeset.
+
 ## Layout
 
 | Directory | Contents |
 |-----------|----------|
-| `DiffViewer/App` | App entry, `Preferences` (app-wide settings), `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, session persistence), `DiffLoader` |
+| `DiffViewer/App` | App entry, `Preferences` (app-wide settings), `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, session persistence), `DiffLoader`, `ChangesetAssembler` (streams All changes) |
 | `DiffViewer/Git` | `git` CLI wrapper, status / numstat / name-status / log parsers, commit refs, FSEvents watcher |
-| `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine |
+| `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine, changeset builder and projection |
 | `DiffViewer/Highlighting` | tree-sitter grammar registry, highlighter, token theme |
 | `DiffViewer/Views` | SwiftUI shell plus the AppKit pane renderer and overview strip |
 | `DiffViewerTests` | Swift Testing suites for the non-UI layers |
@@ -103,6 +113,9 @@ variables for scripted screenshots, and `DIFFVIEWER_OPEN`, `DIFFVIEWER_TAB_STEPS
   query predicates are regex-heavy); both sides run in parallel and never block scrolling.
   Possible follow-ups: cache compiled predicates, or highlight visible rows first.
 - Separator controls are exposed to VoiceOver as buttons but have no keyboard shortcut yet.
+- All changes is rebuilt from scratch every time it is selected or the list changes;
+  its file headers do not stick to the top while scrolling, and its hunks cannot be
+  expanded in place. See `TODO.md` item 3 for the follow-ups.
 - Tabs are the policy, not the system preference: repository windows always prefer
   tabbing, whatever System Settings > Desktop & Dock > "Prefer tabs when opening
   documents" says. Honouring the system tab preference is a follow-up.
