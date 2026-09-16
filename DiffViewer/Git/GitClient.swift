@@ -3,15 +3,36 @@ import Foundation
 /// Thin wrapper over the `git` CLI for one repository.
 struct GitClient: RepoClient {
     let repoRoot: URL
+    /// Merged over `baseEnvironment` on every call, so tests can hand git a neutral identity
+    /// and keep the developer's own config out.
+    private let environmentOverrides: [String: String]
+    /// Awaited only by `commit`, which is the one call that runs the user's hooks.
+    private let resolveCommitEnvironment: @Sendable () async -> [String: String]
+
+    init(
+        repoRoot: URL,
+        environment: [String: String] = [:],
+        resolveCommitEnvironment: @escaping @Sendable () async -> [String: String] = LoginShellPath.environment
+    ) {
+        self.repoRoot = repoRoot
+        self.environmentOverrides = environment
+        self.resolveCommitEnvironment = resolveCommitEnvironment
+    }
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")
 
     /// Environment that avoids git taking the index lock or paging.
-    private static let environment = [
+    private static let baseEnvironment = [
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_PAGER": "cat",
         "LC_ALL": "C",
     ]
+
+    /// What every instance call passes to git: the static settings with this client's
+    /// overrides on top.
+    private var callEnvironment: [String: String] {
+        Self.baseEnvironment.merging(environmentOverrides) { _, instance in instance }
+    }
 
     /// Resolves the repository root containing `url`, or throws if it isn't inside a repo.
     static func discoverRoot(from url: URL) async throws -> URL {
@@ -19,7 +40,7 @@ struct GitClient: RepoClient {
             executable,
             arguments: ["rev-parse", "--show-toplevel"],
             currentDirectory: url,
-            environment: environment
+            environment: baseEnvironment
         )
         let path = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
         return URL(fileURLWithPath: path, isDirectory: true)
@@ -30,7 +51,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         return GitStatusParser.parse(result.stdout)
             .sorted { ($0.area.sortOrder, $0.path) < ($1.area.sortOrder, $1.path) }
@@ -42,7 +63,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: ["rev-parse", "--verify", "--quiet", "HEAD"],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         if result.status == 0 {
             return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -60,7 +81,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: ["symbolic-ref", "--quiet", "HEAD"],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         guard symbolic.status == 0 else {
             throw ProcessError.failed(
@@ -139,7 +160,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: ["symbolic-ref", "--quiet", "HEAD"],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
     }
 
@@ -151,7 +172,7 @@ struct GitClient: RepoClient {
                 "--format=%H%x00%h%x00%P%x00%an%x00%aI%x00%s", revision,
             ],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         return try GitLogParser.parse(result.stdout)
     }
@@ -162,7 +183,7 @@ struct GitClient: RepoClient {
             arguments: ["diff-tree"] + Self.commitComparisonFlags(commit)
                 + ["-r", "-z", "--name-status", "--no-renames"] + Self.commitOperands(commit),
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         return GitNameStatusParser.parse(result.stdout, area: .commit(commit))
     }
@@ -191,7 +212,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: arguments,
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         return GitNumstatParser.parse(result.stdout)
     }
@@ -237,7 +258,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: ["show", spec],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         guard result.status == 0 else {
             throw ProcessError.failed(
@@ -282,7 +303,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: action.arguments(for: paths),
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
     }
 
@@ -296,12 +317,118 @@ struct GitClient: RepoClient {
         }
     }
 
+    /// Merge/squash/template metadata the commit box prefills from, and whether a merge is
+    /// in progress.
+    func commitDefaults() async throws -> CommitDefaults {
+        // One `rev-parse` for all three: only git knows where they live, which is not
+        // `<root>/.git` in a linked worktree.
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: [
+                "rev-parse", "--git-path", "MERGE_HEAD", "--git-path", "MERGE_MSG",
+                "--git-path", "SQUASH_MSG",
+            ],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        let files = result.stdoutString.split(whereSeparator: \.isNewline).map { gitPath(String($0)) }
+        guard files.count == 3 else {
+            throw ProcessError.failed(
+                command: "git rev-parse --git-path", status: result.status,
+                stderr: "expected three paths, got \(files.count)")
+        }
+        // MERGE_HEAD's existence is the merge, whatever the message files say.
+        let isMerging = FileManager.default.fileExists(atPath: files[0].path)
+        let merge = try Self.readText(at: files[1])
+        let squash = try Self.readText(at: files[2])
+        var template: String?
+        if merge == nil, squash == nil {
+            template = try await templateMessage()
+        }
+        return CommitDefaults(
+            suggestion: CommitDefaults.resolveMessage(merge: merge, squash: squash, template: template),
+            isMerging: isMerging)
+    }
+
+    /// Records the index using a temporary message file and git's strip cleanup mode. The
+    /// file keeps the message out of a refusal's diagnostics; `strip` matches what an edited
+    /// message gets in the editor flow.
+    func commit(message: String) async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiffViewer-commit-\(UUID().uuidString)")
+        try message.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        // Later wins: hooks need the login shell's PATH, and a caller's own overrides still
+        // beat both.
+        var commitEnvironment = Self.baseEnvironment.merging(await resolveCommitEnvironment()) { _, resolved in
+            resolved
+        }
+        commitEnvironment.merge(environmentOverrides) { _, instance in instance }
+
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["commit", "--cleanup=strip", "-F", file.path],
+            currentDirectory: repoRoot,
+            environment: commitEnvironment
+        )
+        // Not `check`: its label would echo the temp file's path into the alert. Both streams
+        // go into the message because hooks often explain themselves on stdout while git
+        // warns on stderr.
+        guard result.status == 0 else {
+            let diagnostics = [result.stderrString, result.stdoutString]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            throw ProcessError.failed(command: "git commit", status: result.status, stderr: diagnostics)
+        }
+    }
+
+    /// `commit.template`'s text, or nil when no template is set or its file is gone. Read
+    /// only when nothing outranks it.
+    private func templateMessage() async throws -> String? {
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["config", "-z", "--path", "--get", "commit.template"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // Status 1 is "no such key"; any other non-zero is a real config failure.
+        if result.status == 1 { return nil }
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git config commit.template", status: result.status, stderr: result.stderrString)
+        }
+        // `-z` and a single NUL stripped, not trimming: whitespace in a filename is meaningful.
+        var path = result.stdoutString
+        if path.hasSuffix("\0") { path.removeLast() }
+        guard !path.isEmpty else { return nil }
+        return try Self.readText(at: gitPath(path))
+    }
+
+    /// Resolves a git-reported path against the repository root; a linked worktree's are
+    /// already absolute.
+    private func gitPath(_ path: String) -> URL {
+        URL(fileURLWithPath: path, relativeTo: repoRoot).absoluteURL
+    }
+
+    /// Text of a git metadata file, or nil when it is not there. Every other read failure
+    /// throws rather than becoming an empty message.
+    private static func readText(at url: URL) throws -> String? {
+        do {
+            let data = try Data(contentsOf: url)
+            return String(decoding: data, as: UTF8.self)
+        } catch {
+            guard isMissingFile(error) else { throw error }
+            return nil
+        }
+    }
+
     private func show(_ spec: String) async throws -> Data? {
         let result = try await ProcessRunner.run(
             Self.executable,
             arguments: ["show", spec],
             currentDirectory: repoRoot,
-            environment: Self.environment
+            environment: callEnvironment
         )
         if result.status == 0 { return result.stdout }
         let stderr = result.stderrString

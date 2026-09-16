@@ -65,6 +65,8 @@ struct TaggedClient: RepoClient {
     func worktreeContents(of path: String) async throws -> Data? { nil }
     func perform(_ action: GitFileAction, on paths: [String]) async throws {}
     func trash(_ paths: [String]) async throws {}
+    func commitDefaults() async throws -> CommitDefaults { .none }
+    func commit(message: String) async throws {}
 }
 
 @MainActor

@@ -16,11 +16,20 @@ import Testing
         let url: URL
         let client: GitClient
 
+        /// A fixed identity and none of the developer's own configuration, for the test
+        /// process's git calls and for the client's alike.
+        static let environment = [
+            "GIT_AUTHOR_NAME": "Tester", "GIT_AUTHOR_EMAIL": "tester@example.com",
+            "GIT_COMMITTER_NAME": "Tester", "GIT_COMMITTER_EMAIL": "tester@example.com",
+            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+            "LC_ALL": "C",
+        ]
+
         init() throws {
             url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("DiffViewerGitTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            client = GitClient(repoRoot: url)
+            client = GitClient(repoRoot: url, environment: Self.environment, resolveCommitEnvironment: { [:] })
         }
 
         deinit {
@@ -28,17 +37,12 @@ import Testing
         }
 
         @discardableResult
-        func git(_ arguments: [String]) async throws -> String {
+        func git(_ arguments: [String], extraEnvironment: [String: String] = [:]) async throws -> String {
             let result = try await ProcessRunner.run(
                 GitClient.executable,
                 arguments: arguments,
                 currentDirectory: url,
-                environment: [
-                    "GIT_AUTHOR_NAME": "Tester", "GIT_AUTHOR_EMAIL": "tester@example.com",
-                    "GIT_COMMITTER_NAME": "Tester", "GIT_COMMITTER_EMAIL": "tester@example.com",
-                    "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
-                    "LC_ALL": "C",
-                ]
+                environment: Self.environment.merging(extraEnvironment) { _, extra in extra }
             )
             guard result.status == 0 else {
                 throw ProcessError.failed(
@@ -50,6 +54,17 @@ import Testing
 
         func initialize() async throws {
             try await git(["init", "-b", "main"])
+        }
+
+        /// Local configuration a commit needs, with hooks pointed at an empty directory
+        /// inside `.git` so the developer's own hooks never run and status stays clean.
+        func prepareForCommits() async throws {
+            try await git(["config", "user.name", "Tester"])
+            try await git(["config", "user.email", "tester@example.com"])
+            try await git(["config", "commit.gpgsign", "false"])
+            let hooks = url.appendingPathComponent(".git/empty-hooks", isDirectory: true)
+            try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+            try await git(["config", "core.hooksPath", hooks.path])
         }
 
         func write(_ path: String, _ contents: String) throws {

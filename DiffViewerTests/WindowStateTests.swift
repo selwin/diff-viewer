@@ -63,6 +63,14 @@ actor StubRepoClient: RepoClient {
     /// What the repository becomes once a write succeeds, standing in for git's own
     /// effect on it. Nil leaves `files` alone.
     private var filesAfterWrite: [ChangedFile]?
+    /// Every message a commit was asked for, in order, whether or not it succeeded.
+    private(set) var commitMessages: [String] = []
+    private var stubbedDefaults = CommitDefaults.none
+    private var failsCommit = false
+    private var failsCommitDefaults = false
+    private var holdsCommitDefaults = false
+    private var heldCommitDefaults: [CheckedContinuation<Void, Never>] = []
+    private(set) var commitDefaultsCalls = 0
 
     init(files: [ChangedFile]) { self.files = files }
 
@@ -279,6 +287,48 @@ actor StubRepoClient: RepoClient {
         }
         if failsActions {
             throw ProcessError.failed(command: "trash", status: 1, stderr: "could not move to Trash")
+        }
+        if let filesAfterWrite { files = filesAfterWrite }
+    }
+
+    // MARK: Commits
+
+    func set(commitDefaults defaults: CommitDefaults) { stubbedDefaults = defaults }
+    func fail(commitDefaults on: Bool) { failsCommitDefaults = on }
+    /// Makes `commit` throw, after recording the message.
+    func fail(commit on: Bool) { failsCommit = on }
+    /// Suspends `commitDefaults` after it records the call, so the read can still be in
+    /// flight while the test drives something else.
+    func holdCommitDefaults(_ on: Bool) { holdsCommitDefaults = on }
+    var heldCommitDefaultsCount: Int { heldCommitDefaults.count }
+    func releaseCommitDefaults() {
+        let waiting = heldCommitDefaults
+        heldCommitDefaults = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func commitDefaults() async throws -> CommitDefaults {
+        commitDefaultsCalls += 1
+        // Snapshot before suspending, the way `status()` does: a held read reports what
+        // the repository looked like when it was asked.
+        let snapshot = stubbedDefaults
+        if holdsCommitDefaults {
+            await withCheckedContinuation { heldCommitDefaults.append($0) }
+        }
+        if failsCommitDefaults {
+            throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone")
+        }
+        return snapshot
+    }
+
+    /// Held and released with the other writes, so a commit can be queued behind a stage.
+    func commit(message: String) async throws {
+        commitMessages.append(message)
+        if holdsActions {
+            await withCheckedContinuation { heldActions.append($0) }
+        }
+        if failsCommit {
+            throw ProcessError.failed(command: "git commit", status: 1, stderr: "pre-commit hook failed")
         }
         if let filesAfterWrite { files = filesAfterWrite }
     }
