@@ -53,10 +53,10 @@ actor StubRepoClient: RepoClient {
     private(set) var commitFileCalls = 0
     /// Every `(path, revision)` pair `contents(of:at:)` was asked for, in order.
     private(set) var contentRevisions: [(path: String, revision: String)] = []
-    /// Every git write asked for, in order.
-    private(set) var performed: [(action: GitFileAction, path: String)] = []
-    /// Every path asked to be trashed, in order.
-    private(set) var trashed: [String] = []
+    /// Every git write asked for, in order: one entry per call, holding the whole batch.
+    private(set) var performed: [(action: GitFileAction, paths: [String])] = []
+    /// Every trash call, in order: one entry per call, holding the whole batch.
+    private(set) var trashed: [[String]] = []
     private var failsActions = false
     private var holdsActions = false
     private var heldActions: [CheckedContinuation<Void, Never>] = []
@@ -263,8 +263,8 @@ actor StubRepoClient: RepoClient {
         return Data("new \(path)".utf8)
     }
 
-    func perform(_ action: GitFileAction, on path: String) async throws {
-        performed.append((action, path))
+    func perform(_ action: GitFileAction, on paths: [String]) async throws {
+        performed.append((action, paths))
         if holdsActions {
             await withCheckedContinuation { heldActions.append($0) }
         }
@@ -272,8 +272,8 @@ actor StubRepoClient: RepoClient {
         if let filesAfterWrite { files = filesAfterWrite }
     }
 
-    func trash(_ path: String) async throws {
-        trashed.append(path)
+    func trash(_ paths: [String]) async throws {
+        trashed.append(paths)
         if holdsActions {
             await withCheckedContinuation { heldActions.append($0) }
         }
@@ -441,9 +441,9 @@ struct WindowStateTests {
         await h.adopt(state, "A", files: filesA)
         // All changes is reading every file itself, so there is nothing to warm.
         #expect(state.filesToWarm.isEmpty)
-        state.selection = .file(filesA[0].id)
+        state.selection = [.file(filesA[0].id)]
         #expect(state.filesToWarm == [filesA[1]])
-        state.selection = nil
+        state.selection = []
         #expect(state.filesToWarm == filesA)
     }
 
@@ -508,7 +508,7 @@ struct WindowStateTests {
 
     /// Selects `file` and waits for its diff to be published.
     private func select(_ file: ChangedFile, in state: WindowState) async {
-        state.selection = .file(file.id)
+        state.selection = [.file(file.id)]
         #expect(await eventually { await self.hasContent(state, for: file) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
     }
@@ -564,7 +564,7 @@ struct WindowStateTests {
         state.isVisible = false
         let reads = await repo.client.contentReads
 
-        state.selection = .file(filesA[0].id)
+        state.selection = [.file(filesA[0].id)]
         #expect(state.diffStale)
         await state.refresh()
         try? await Task.sleep(for: .milliseconds(50))

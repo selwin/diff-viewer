@@ -23,6 +23,11 @@ A native macOS 26 app for viewing git diffs side by side.
   Open in Default Editor, and Copy Path. Discard and Delete ask first; "Don't ask again"
   turns the question off and View › Confirm Destructive File Actions turns it back on.
   Whole files only: the app never edits file contents and never commits.
+- **Multi-selection**: ⌘-click, ⇧-click, or ⌘A to select several files; the detail pane
+  shows them as one changeset, and the context menu acts on all of them in one git
+  command with one confirmation ("Stage 3 Files", "Discard Changes to 3 Files…", "Copy 3
+  Paths"). Only the actions every selected row allows are offered, so a mixed staged and
+  unstaged selection gets the read-only items.
 - **Fast**: custom AppKit renderer draws only visible rows; a 20k-line file scrolls smoothly.
 - Unstaged / staged file list, live refresh when the repo changes, next/previous change
   (⌘↓ / ⌘↑), change overview strip, font size (⌘+ / ⌘- / ⌘0), light and dark mode.

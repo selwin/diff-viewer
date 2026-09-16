@@ -20,19 +20,46 @@ final class WindowState {
     private(set) var files: [ChangedFile] = []
     private(set) var isLoading = false
     private(set) var isClosed = false
-    var errorMessage: String?
-    /// All changes, one file, or nothing yet. Writing it reloads the diff.
-    var selection: DiffSelection? {
-        didSet {
-            if selection != oldValue {
-                currentChangeIndex = nil
-                scrollTarget = nil
-                // Someone chose a file; whatever a file action meant to restore is now
-                // out of date. All changes is not a file and leaves the wish standing.
-                if case .file = selection { pendingReselect = nil }
-                reloadDiff()
-            }
+    var errorMessage: String? {
+        didSet { errorRaisedByRefresh = false }
+    }
+    /// True only while `errorMessage` holds a refresh's own error; a later successful
+    /// refresh clears just that. Every assignment above clears it, so only the refresh
+    /// failure branch, which sets it afterwards, can turn it on.
+    private var errorRaisedByRefresh = false
+    /// Bumped by every user write to `selection`, so a file action can tell whether the
+    /// reader changed it while git ran. Writable only here; the action extension reads it.
+    private(set) var selectionRevision = 0
+    private var storedSelection: Set<DiffSelection> = []
+
+    /// The rows highlighted in the sidebar: All changes, any number of files, or nothing.
+    ///
+    /// The setter is the user's path — the List binding, a scope change, the debug hooks,
+    /// tests — so it records the intent and drops whatever a file action meant to restore,
+    /// which the reader has now overruled. A refresh puts the selection back by another
+    /// route, `applySelection`, which does neither.
+    var selection: Set<DiffSelection> {
+        get { storedSelection }
+        set {
+            selectionRevision += 1
+            pendingReselections = []
+            if applySelection(newValue, from: detailIdentity) { reloadDiff() }
         }
+    }
+
+    /// The one place the stored selection changes. Resets change navigation when the
+    /// identity moved away from `keyBefore` and reports whether it did; never reloads, so
+    /// that a refresh can apply a selection and then decide about the reload once, at the end.
+    ///
+    /// The caller supplies `keyBefore` because a refresh replaces `files` first: read here,
+    /// the "before" identity would already describe the new list.
+    @discardableResult
+    private func applySelection(_ new: Set<DiffSelection>, from keyBefore: DetailIdentity) -> Bool {
+        storedSelection = new
+        guard detailIdentity != keyBefore else { return false }
+        currentChangeIndex = nil
+        scrollTarget = nil
+        return true
     }
 
     /// Keyboard focus. Informational for the view; nothing in the model branches on it.
@@ -73,10 +100,10 @@ final class WindowState {
     /// True from a scope change until that scope's file list arrives, so an unfinished
     /// read is not drawn as a commit that changed nothing.
     private(set) var isLoadingScope = false
-    /// The file to select again once the new scope's list arrives. Held here rather than
-    /// after the scope task's own `refresh`, which may be superseded by a watcher refresh
-    /// that publishes the files instead.
-    private var pendingReselect: PendingSelection?
+    /// The rows to select again once the new list arrives. Held here rather than after the
+    /// scope task's own `refresh`, which may be superseded by a watcher refresh that
+    /// publishes the files instead.
+    private var pendingReselections: [PendingSelection] = []
     /// Set when a window or a scope is about to show its first list, and consumed by
     /// whichever refresh publishes one, for the same reason as `pendingReselect`.
     private var pendingAllChanges = false
@@ -87,9 +114,12 @@ final class WindowState {
     /// Called after every refresh that publishes `files`, whether or not the list changed.
     @ObservationIgnored var onRefreshPublished: (@MainActor (WindowState, RefreshCause) -> Void)?
 
-    /// Index into the current document's change blocks, for next/previous navigation.
-    private(set) var currentChangeIndex: Int?
-    private(set) var scrollTarget: ScrollTarget?
+    /// Index into the current document's change blocks, for next/previous navigation, and
+    /// the row the panes should bring into view. Written by `applySelection`, which resets
+    /// both when the pane's content changes, and by `WindowState+Navigation`. Nothing else
+    /// should write them; they are `var` only because that extension is in another file.
+    var currentChangeIndex: Int?
+    var scrollTarget: ScrollTarget?
 
     private let watchRepository: WatcherFactory
     private var initialRefresh: Task<Void, Never>?
@@ -119,7 +149,7 @@ final class WindowState {
         }
         self.session = session
         title = root.name
-        selection = nil
+        selection = []
         pendingAllChanges = true
         errorMessage = nil
         isLoading = true
@@ -215,35 +245,43 @@ final class WindowState {
         isLoadingScope = false
         switch outcome {
         case let .success(newFiles):
-            // Taken before the list is published: clearing a selection that vanished
-            // runs the observer above, which would discard the restoration first.
-            let pending = pendingReselect
-            pendingReselect = nil
+            // Taken before anything is applied: a restoration describes the list this
+            // refresh is about to replace, and only this refresh can grant it.
+            let pending = pendingReselections
+            pendingReselections = []
             let wantsAllChanges = pendingAllChanges
             pendingAllChanges = false
-            let selectionBefore = selection
-            let rowIDsBefore = sidebarRows.map(\.id)
+            // Taken before `files` is replaced, so it describes the pane on screen.
+            let keyBefore = detailIdentity
+            let selectionBeforeWasEmpty = storedSelection.isEmpty
             // Only the files whose counts are known, so the lookup below is a plain
             // optional rather than a nested one.
             let known = Dictionary(
                 files.compactMap { file in file.lineStats.map { (file.id, $0) } },
                 uniquingKeysWith: { first, _ in first })
             files = newFiles.map { $0.with(lineStats: known[$0.id]) }
-            if let selectedFileID, !newFiles.contains(where: { $0.id == selectedFileID }) {
-                selection = nil
-            }
-            if let pending { reselect(pending) }
+            // One set for the whole selection rather than a scan of the list per row:
+            // All changes is not a file and always survives.
+            let liveIDs = Set(newFiles.map(\.id))
+            let surviving = storedSelection.filter { $0.fileID.map(liveIDs.contains) ?? true }
+            applySelection(
+                SidebarReselection.selection(after: pending, surviving: surviving, in: sidebarRows),
+                from: keyBefore)
             // Only the first list for a window or a scope lands on All changes: a
-            // selection a *later* refresh cleared because its file vanished stays nil,
+            // selection a *later* refresh emptied because its files vanished stays empty,
             // which is what the restoration rule and the detail area both read.
-            // `selectionBefore` guards a choice made while this read was in flight.
-            if wantsAllChanges, selection == nil, selectionBefore == nil { selection = .allChanges }
-            errorMessage = nil
-            // A settings change reloaded the diff before starting its refresh, and any
-            // change to the selection above already reloaded it through the observer.
-            // All changes is the exception: its diff is built from the whole list, so a
-            // list that gained, lost or renamed a file has to be loaded again.
-            if selection == selectionBefore, cause != .settings || changesetListChanged(rowIDsBefore) {
+            // `selectionBeforeWasEmpty` guards a choice made while this read was in flight.
+            if wantsAllChanges, storedSelection.isEmpty, selectionBeforeWasEmpty {
+                applySelection([.allChanges], from: keyBefore)
+            }
+            // A refresh clears the error a refresh raised, and only that one: an action's
+            // failure is news the reader has not seen yet and outlives a status read.
+            if errorRaisedByRefresh { errorMessage = nil }
+            // The refresh alone decides, because applying a selection above never reloads.
+            // A settings change reloaded the diff before it started this refresh, so it
+            // reloads a second time only when the identity actually moved; every other
+            // cause re-reads content that may have changed on disk.
+            if detailIdentity != keyBefore || cause != .settings {
                 reloadDiff()
             }
             onRefreshPublished?(self, cause)
@@ -260,14 +298,9 @@ final class WindowState {
                 await fallBackToWorkingTree(session: session, from: ref, error: error)
             } else {
                 errorMessage = error.localizedDescription
+                errorRaisedByRefresh = true
             }
         }
-    }
-
-    /// Whether All changes is showing a changeset built from a list the refresh just
-    /// replaced. Order counts as a change: the sections are drawn in sidebar order.
-    private func changesetListChanged(_ before: [ChangedFile.ID]) -> Bool {
-        selection == .allChanges && sidebarRows.map(\.id) != before
     }
 
     /// Runs numstat for the scope's areas and counts untracked files, then replaces
@@ -319,44 +352,20 @@ final class WindowState {
             return
         }
         diffStale = false
-        if selection == .allChanges {
+        switch detailSelection {
+        case .allChanges:
             diffLoader.load(
                 changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace,
                 foldOptions: preferences.foldOptions)
-        } else {
+        case .files:
+            diffLoader.load(
+                changeset: selectedFiles, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+                foldOptions: preferences.foldOptions)
+        case .file, .nothing:
+            // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
+            // either way the loader is told to show nothing, which also cancels its work.
             diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
         }
-    }
-
-    // MARK: - Change navigation
-
-    /// The document navigation walks: one file's, or the whole changeset's.
-    private var navigableDocument: DiffDocument? {
-        switch diffLoader.content {
-        case let .text(document): document
-        case let .changeset(changeset): changeset.document
-        default: nil
-        }
-    }
-
-    var changeBlockCount: Int { navigableDocument?.changeBlocks.count ?? 0 }
-
-    func nextChange() {
-        jump(
-            to: ChangeNavigator.next(
-                after: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
-    }
-
-    func previousChange() {
-        jump(
-            to: ChangeNavigator.previous(
-                before: ChangeNavigator.clamp(currentChangeIndex, count: changeBlockCount), count: changeBlockCount))
-    }
-
-    private func jump(to index: Int?) {
-        guard let index, let document = navigableDocument, index < document.changeBlocks.count else { return }
-        currentChangeIndex = index
-        scrollTarget = ScrollTarget(row: document.changeBlocks[index].lowerBound)
     }
 }
 
@@ -394,13 +403,12 @@ extension WindowState {
         guard let session, !isClosed, newScope != scope else { return }
         session.scopeSerial += 1
 
-        // Clearing `files` does not run the selection's observer, so the previous scope's
-        // diff load has to be stopped by hand; assigning nil does that through
-        // `reloadDiff`. Nothing is remembered to restore: the new scope's list lands on
-        // All changes, a better answer than hunting for the same path in a different set
-        // of files, and a pending restoration belongs to the list being left behind.
-        selection = nil
-        pendingReselect = nil
+        // Clearing `files` does not touch the selection, so the previous scope's diff load
+        // has to be stopped by hand; emptying the selection does that through `reloadDiff`.
+        // Nothing is remembered to restore: the new scope's list lands on All changes, a
+        // better answer than hunting for the same paths in a different set of files, and
+        // the setter drops a pending restoration, which belongs to the list being left.
+        selection = []
         pendingAllChanges = true
         session.statsTask?.cancel()
 
@@ -413,32 +421,24 @@ extension WindowState {
         }
     }
 
-    /// Puts the selection back where `previous` says it belongs in the list just
-    /// published. The rule itself is `SidebarReselection`; this only decides whether it
-    /// is allowed to run.
+    /// Asks the next refresh that publishes a file list to put the selection back on
+    /// `selections`. The rule itself is `SidebarReselection`.
     ///
-    /// Called by whichever refresh publishes the new files, which is not always the one
-    /// that recorded the target: a watcher refresh can overtake a scope change.
-    private func reselect(_ previous: PendingSelection) {
-        guard !isClosed, selection == nil else { return }
-        guard let target = SidebarReselection.target(for: previous, in: sidebarRows) else { return }
-        selection = .file(target)
-    }
-
-    /// Asks the next refresh that publishes a file list to restore `selection`.
-    ///
-    /// Exists because `pendingReselect` is private to the class body and the file-action
-    /// extension lives in another file. Deliberately narrow: it records a wish, and the
-    /// refresh decides whether it can still be granted.
-    func restoreSelectionAfterNextRefresh(_ selection: PendingSelection) {
-        pendingReselect = selection
+    /// Exists because `pendingReselections` is private to the class body and the
+    /// file-action extension lives in another file. Deliberately narrow: it records a
+    /// wish, and whichever refresh publishes the new list decides whether it can still be
+    /// granted — not always the refresh that recorded it, since a watcher refresh can
+    /// overtake a scope change or a file action.
+    func restoreSelectionAfterNextRefresh(_ selections: [PendingSelection]) {
+        pendingReselections = selections
     }
 
     /// Returns to the working tree after a commit could not be read.
     ///
-    /// The message is assigned after the refresh, not before: a successful refresh
-    /// clears `errorMessage`, so setting it first would wipe the only explanation the
-    /// user gets for the sidebar changing under them. The scope generation is checked
+    /// The message is assigned after the refresh, not before: a successful refresh clears
+    /// whatever error a refresh raised, so setting it first could wipe the only
+    /// explanation the user gets for the sidebar changing under them. Assigned afterwards
+    /// it stands until the reader dismisses it. The scope generation is checked
     /// after the await too — by then the user may have picked another commit, and an
     /// alert about the old one would be both wrong and obstructive.
     private func fallBackToWorkingTree(session: RepoSession, from ref: CommitRef, error: Error) async {
@@ -446,8 +446,7 @@ extension WindowState {
         let serial = session.scopeSerial
         scope = .workingTree
         selectedCommit = nil
-        selection = nil
-        pendingReselect = nil
+        selection = []
         pendingAllChanges = true
         files = []
         isLoadingScope = true

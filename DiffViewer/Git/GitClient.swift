@@ -270,22 +270,30 @@ struct GitClient: RepoClient {
         return false
     }
 
-    /// Runs `action` on one path. `check` turns a refusal into a `ProcessError.failed`
-    /// that already carries git's stderr, which is the text the error alert shows.
-    func perform(_ action: GitFileAction, on path: String) async throws {
+    /// Runs `action` over every path in one git process. `check` turns a refusal into a
+    /// `ProcessError.failed` that already carries git's stderr, which is the text the
+    /// error alert shows.
+    func perform(_ action: GitFileAction, on paths: [String]) async throws {
+        // Never launch git for an empty list: `git reset -q --` with no pathspec resets
+        // the whole index, and the other verbs fail with a usage error. The caller's
+        // empty checks are not the boundary that matters; this is.
+        guard !paths.isEmpty else { return }
         _ = try await ProcessRunner.check(
             Self.executable,
-            arguments: action.arguments(for: path),
+            arguments: action.arguments(for: paths),
             currentDirectory: repoRoot,
             environment: Self.environment
         )
     }
 
-    /// Moves the worktree file to the Trash rather than unlinking it, so an accidental
-    /// delete is recoverable from Finder.
-    func trash(_ path: String) async throws {
-        try FileManager.default.trashItem(
-            at: repoRoot.appendingPathComponent(path), resultingItemURL: nil)
+    /// Moves each worktree file to the Trash rather than unlinking it, so an accidental
+    /// delete is recoverable from Finder. The first failure throws and the rest are left
+    /// alone: the caller refreshes after a failed batch, so a half-done loop is visible.
+    func trash(_ paths: [String]) async throws {
+        for path in paths {
+            try FileManager.default.trashItem(
+                at: repoRoot.appendingPathComponent(path), resultingItemURL: nil)
+        }
     }
 
     private func show(_ spec: String) async throws -> Data? {

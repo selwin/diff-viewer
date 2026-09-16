@@ -81,6 +81,44 @@ struct FileActionTests {
         }
     }
 
+    // MARK: The menu for a selection
+
+    /// The batch menu offers what every row offers, so two rows of the same shape keep
+    /// their whole menu and a mixed selection loses the writes the two halves disagree on.
+    @Test func aSelectionsMenuIsTheIntersectionOfItsRows() {
+        let readOnly: [FileAction] = [.revealInFinder, .openInEditor, .copyPath]
+        let modified = changedFile("a.txt", kind: .modified)
+        let otherModified = changedFile("b.txt", kind: .modified)
+        let untracked = changedFile("c.txt", kind: .untracked)
+        let staged = changedFile("d.txt", area: .staged, kind: .modified)
+        #expect(menu([modified, otherModified]) == [.stage, .discard] + readOnly)
+        // Untracked offers Trash where modified offers Discard; only Stage is common.
+        #expect(menu([modified, untracked]) == [.stage] + readOnly)
+        // Stage and Unstage mean opposite things across the two areas, so neither is offered.
+        #expect(menu([modified, staged]) == readOnly)
+        #expect(FileAction.menu(for: [], existsOnDisk: { _ in true }) == [])
+    }
+
+    /// One row missing from disk drops Reveal and Open for the whole batch: the menu
+    /// promises the same thing for every row in it.
+    @Test func oneMissingFileDropsRevealAndOpenForTheBatch() {
+        let present = changedFile("a.txt", kind: .modified)
+        let missing = changedFile("b.txt", kind: .modified)
+        let menu = FileAction.menu(for: [present, missing], existsOnDisk: { $0.path == "a.txt" })
+        #expect(menu == [.stage, .discard, .copyPath])
+    }
+
+    /// The divider depends on it, exactly as for one row.
+    @Test func aSelectionsWritesComeFirst() {
+        let files = [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .modified)]
+        let menu = FileAction.menu(for: files, existsOnDisk: { _ in true })
+        #expect(menu.prefix { $0.isRepositoryWrite }.count == menu.filter(\.isRepositoryWrite).count)
+    }
+
+    private func menu(_ files: [ChangedFile]) -> [FileAction] {
+        FileAction.menu(for: files, existsOnDisk: { _ in true })
+    }
+
     // MARK: Titles
 
     @Test func stageIsNamedForWhatItDoes() {
@@ -104,6 +142,34 @@ struct FileActionTests {
         #expect(FileAction.copyPath.title(for: file) == "Copy Path")
     }
 
+    /// A batch is counted rather than named, and Copy Path counts paths: a file with both
+    /// staged and unstaged edits is two rows but one path on the pasteboard.
+    @Test func batchTitlesCountRowsAndPaths() {
+        let two = [changedFile("a.txt"), changedFile("b.txt")]
+        #expect(FileAction.stage.title(for: two) == "Stage 2 Files")
+        #expect(FileAction.unstage.title(for: two) == "Unstage 2 Files")
+        #expect(FileAction.discard.title(for: two) == "Discard Changes to 2 Files…")
+        #expect(FileAction.trash.title(for: two) == "Delete 2 Files…")
+        #expect(FileAction.revealInFinder.title(for: two) == "Reveal in Finder")
+        #expect(FileAction.openInEditor.title(for: two) == "Open in Default Editor")
+        #expect(FileAction.copyPath.title(for: two) == "Copy 2 Paths")
+
+        let deleted = [changedFile("a.txt", kind: .deleted), changedFile("b.txt", kind: .deleted)]
+        #expect(FileAction.discard.title(for: deleted) == "Restore 2 Files")
+
+        let samePath = [changedFile("a.txt"), changedFile("a.txt", area: .staged)]
+        #expect(FileAction.copyPath.title(for: samePath) == "Copy Path")
+    }
+
+    /// One row still reads as one row, whichever form the view calls.
+    @Test func aSingleFileKeepsItsOwnTitles() {
+        let file = changedFile("a.txt", kind: .deleted)
+        #expect(FileAction.stage.title(for: [file]) == "Stage Deletion")
+        #expect(FileAction.discard.title(for: [file]) == "Restore File")
+        #expect(FileAction.trash.title(for: [changedFile("a.txt")]) == "Delete File…")
+        #expect(FileAction.copyPath.title(for: [file]) == "Copy Path")
+    }
+
     // MARK: Destructiveness and git commands
 
     @Test func onlyTrashAndALosingDiscardConfirm() {
@@ -115,6 +181,17 @@ struct FileActionTests {
         for action in [FileAction.stage, .unstage, .revealInFinder, .openInEditor, .copyPath] {
             #expect(!action.isDestructive(for: modified), "\(action)")
         }
+    }
+
+    /// One row with something to lose is enough to ask, and a batch that loses nothing
+    /// asks nothing.
+    @Test func aBatchConfirmsWhenAnyRowHasSomethingToLose() {
+        let modified = [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .modified)]
+        let deleted = [changedFile("a.txt", kind: .deleted), changedFile("b.txt", kind: .deleted)]
+        #expect(FileAction.discard.isDestructive(for: modified))
+        #expect(!FileAction.discard.isDestructive(for: deleted))
+        #expect(FileAction.discard.isDestructive(for: [deleted[0], modified[1]]))
+        #expect(!FileAction.stage.isDestructive(for: modified))
     }
 
     @Test func gitActionsMapToTheirCommands() {

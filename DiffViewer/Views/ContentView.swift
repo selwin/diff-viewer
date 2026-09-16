@@ -86,10 +86,13 @@ struct ContentView: View {
         } else {
             // Identified by the selection so switching detail views starts a fresh
             // renderer rather than reusing the previous one's state.
-            switch windowState.selection {
-            case .allChanges:
+            switch windowState.detailSelection {
+            case .allChanges, .files:
+                // One id for every changeset, All changes included: the loader clears its
+                // content the moment a new one starts, so the same view takes the next
+                // document in place instead of being rebuilt around it.
                 ChangesetDetailView()
-                    .id(DiffSelection.allChanges)
+                    .id("changeset")
             case .file:
                 if let file = windowState.selectedFile {
                     DiffDetailView(file: file)
@@ -99,7 +102,7 @@ struct ContentView: View {
                     // where the selection lands.
                     selectFilePlaceholder
                 }
-            case nil:
+            case .nothing:
                 selectFilePlaceholder
             }
         }

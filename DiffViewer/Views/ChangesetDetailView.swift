@@ -20,7 +20,7 @@ struct ChangesetDetailView: View {
             // The same two-line stack as `DiffDetailView`, so the header keeps its height
             // when the reader switches between All changes and a file.
             VStack(alignment: .leading, spacing: 2) {
-                Text("All changes")
+                Text(title)
                     .font(.body)
                     .lineLimit(1)
                 HStack(spacing: 6) {
@@ -41,6 +41,14 @@ struct ChangesetDetailView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    /// The whole list, or the rows the reader picked out of it. The count comes from the
+    /// selection rather than the document, so the header names what was asked for even
+    /// while the assembler is still working through it.
+    private var title: String {
+        guard windowState.detailSelection != .allChanges else { return "All changes" }
+        return "\(windowState.selectedFiles.count) files selected"
     }
 
     /// The caption line: file count, churn, change counter. Blank before the first

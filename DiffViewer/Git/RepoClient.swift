@@ -45,13 +45,13 @@ protocol RepoClient: Sendable {
     /// other read failure throws: reporting an unreadable file as absent would draw a
     /// modified file as deleted.
     func worktreeContents(of path: String) async throws -> Data?
-    /// Runs `action` on one path, throwing git's stderr if it refuses. The only
-    /// repository writes the app makes, and all whole-file: nothing here edits contents
-    /// or creates a commit.
-    func perform(_ action: GitFileAction, on path: String) async throws
-    /// Moves the worktree file at `path` to the Trash, so deleting an untracked file is
-    /// recoverable from Finder. Git cannot do this — an untracked path is not in the
-    /// index — which makes it the app's only write outside git, and it lives here so
-    /// tests can stub it rather than touching the real Trash.
-    func trash(_ path: String) async throws
+    /// Runs `action` over every path in one git process, throwing git's stderr if it
+    /// refuses. An empty list does nothing. The only repository writes the app makes, and
+    /// all whole-file: nothing here edits contents or creates a commit.
+    func perform(_ action: GitFileAction, on paths: [String]) async throws
+    /// Moves each worktree file to the Trash, so deleting an untracked file is
+    /// recoverable from Finder. An empty list does nothing. Git cannot do this — an
+    /// untracked path is not in the index — which makes it the app's only write outside
+    /// git, and it lives here so tests can stub it rather than touching the real Trash.
+    func trash(_ paths: [String]) async throws
 }

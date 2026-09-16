@@ -332,7 +332,7 @@ import Testing
         try await repo.commit("Root commit")
         try repo.delete("a.txt")
 
-        try await repo.client.perform(.stage, on: "a.txt")
+        try await repo.client.perform(.stage, on: ["a.txt"])
 
         let files = try await repo.client.status()
         #expect(files.count == 1, "nothing should be left unstaged")
@@ -350,7 +350,7 @@ import Testing
         try repo.write("new.txt", "fresh\n")
         try await repo.git(["add", "new.txt"])
 
-        try await repo.client.perform(.unstage, on: "new.txt")
+        try await repo.client.perform(.unstage, on: ["new.txt"])
 
         let files = try await repo.client.status()
         #expect(files.map(\.path) == ["new.txt"])
@@ -369,7 +369,7 @@ import Testing
         try repo.write("new.txt", "fresh\n")
         try await repo.git(["add", "new.txt"])
 
-        try await repo.client.perform(.unstage, on: "new.txt")
+        try await repo.client.perform(.unstage, on: ["new.txt"])
 
         let files = try await repo.client.status()
         #expect(files.map(\.path) == ["new.txt"])
@@ -385,7 +385,7 @@ import Testing
         try await repo.commit("Root commit")
         try repo.delete("a.txt")
 
-        try await repo.client.perform(.discard, on: "a.txt")
+        try await repo.client.perform(.discard, on: ["a.txt"])
 
         let restored = try Data(contentsOf: repo.url.appendingPathComponent("a.txt"))
         #expect(restored == Data("one\n".utf8))
@@ -403,7 +403,7 @@ import Testing
         try await repo.git(["add", "a.txt"])
         try repo.write("a.txt", "c\n")
 
-        try await repo.client.perform(.discard, on: "a.txt")
+        try await repo.client.perform(.discard, on: ["a.txt"])
 
         #expect(try Data(contentsOf: repo.url.appendingPathComponent("a.txt")) == Data("b\n".utf8))
         let files = try await repo.client.status()
@@ -412,12 +412,47 @@ import Testing
         #expect(files.first?.kind == .modified)
     }
 
+    /// One git process for the whole batch: both paths reach `git add` after `--`, and
+    /// both end up in the index.
+    @Test func stageRecordsEveryPathInOneCall() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try repo.write("b.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.write("a.txt", "two\n")
+        try repo.write("b.txt", "two\n")
+
+        try await repo.client.perform(.stage, on: ["a.txt", "b.txt"])
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path).sorted() == ["a.txt", "b.txt"], "nothing should be left unstaged")
+        #expect(files.allSatisfy { $0.area == .staged })
+    }
+
+    /// An empty batch must not reach git: `git reset -q --` with no pathspec resets the
+    /// whole index, so a caller that passes nothing would silently unstage everything.
+    @Test func anEmptyBatchNeverReachesGit() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.write("a.txt", "two\n")
+        try await repo.git(["add", "a.txt"])
+
+        try await repo.client.perform(.unstage, on: [])
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["a.txt"])
+        #expect(files.first?.area == .staged, "an empty batch must leave the index alone")
+    }
+
     @Test func trashRemovesTheFileFromTheWorktree() async throws {
         let repo = try Repo()
         try await repo.initialize()
         try repo.write("junk.txt", "throw me away\n")
 
-        try await repo.client.trash("junk.txt")
+        try await repo.client.trash(["junk.txt"])
 
         #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("junk.txt").path))
         #expect(try await repo.client.status().isEmpty)
@@ -466,10 +501,10 @@ import Testing
         try await repo.commit("Root commit")
 
         await #expect(throws: (any Error).self) {
-            try await repo.client.perform(.discard, on: "missing.txt")
+            try await repo.client.perform(.discard, on: ["missing.txt"])
         }
         do {
-            try await repo.client.perform(.discard, on: "missing.txt")
+            try await repo.client.perform(.discard, on: ["missing.txt"])
             Issue.record("discarding an unknown path should fail")
         } catch {
             #expect(error.localizedDescription.contains("did not match"), "\(error.localizedDescription)")
