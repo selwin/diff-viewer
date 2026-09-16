@@ -17,20 +17,19 @@ final class WindowState {
     let diffLoader: DiffLoader
 
     private(set) var session: RepoSession?
-    var repositoryRoot: RepositoryRoot? { session?.root }
-    var isEmpty: Bool { session == nil }
     private(set) var files: [ChangedFile] = []
     private(set) var isLoading = false
     private(set) var isClosed = false
     var errorMessage: String?
-    var selectedFileID: ChangedFile.ID? {
+    /// All changes, one file, or nothing yet. Writing it reloads the diff.
+    var selection: DiffSelection? {
         didSet {
-            if selectedFileID != oldValue {
+            if selection != oldValue {
                 currentChangeIndex = nil
                 scrollTarget = nil
-                // Someone chose a file; whatever the last scope change meant to restore
-                // is now out of date.
-                if selectedFileID != nil { pendingReselect = nil }
+                // Someone chose a file; whatever a file action meant to restore is now
+                // out of date. All changes is not a file and leaves the wish standing.
+                if case .file = selection { pendingReselect = nil }
                 reloadDiff()
             }
         }
@@ -78,6 +77,9 @@ final class WindowState {
     /// after the scope task's own `refresh`, which may be superseded by a watcher refresh
     /// that publishes the files instead.
     private var pendingReselect: PendingSelection?
+    /// Set when a window or a scope is about to show its first list, and consumed by
+    /// whichever refresh publishes one, for the same reason as `pendingReselect`.
+    private var pendingAllChanges = false
 
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
@@ -98,30 +100,6 @@ final class WindowState {
         diffLoader = DiffLoader(cache: cache)
     }
 
-    var selectedFile: ChangedFile? {
-        files.first { $0.id == selectedFileID }
-    }
-
-    var unstagedFiles: [ChangedFile] { files.filter { $0.area == .unstaged } }
-    var stagedFiles: [ChangedFile] { files.filter { $0.area == .staged } }
-    /// The selected commit's files. Empty in working-tree scope.
-    var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
-
-    /// The files in the order the sidebar draws them, which is not the order of `files`:
-    /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.
-    /// Any rule that speaks of "the row above" or "the next row" means an index here.
-    var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
-
-    /// Files worth warming in the difft cache: everything in the current scope but the
-    /// selection, which is the loader's job at foreground priority.
-    var filesToWarm: [ChangedFile] {
-        // Unstaged first, as before: that is the list a reader works down. The working
-        // tree can fill both of its lists at once; a commit fills only the third.
-        sidebarRows.filter { $0.id != selectedFileID }
-    }
-
-    var repoName: String { repositoryRoot?.name ?? "DiffViewer" }
-
     /// The window and tab title. The repository name, extended with parent folders by
     /// the coordinator when another open repository has the same name.
     var title = "DiffViewer"
@@ -141,7 +119,8 @@ final class WindowState {
         }
         self.session = session
         title = root.name
-        selectedFileID = nil
+        selection = nil
+        pendingAllChanges = true
         errorMessage = nil
         isLoading = true
         initialRefresh = Task { [weak self] in
@@ -240,7 +219,10 @@ final class WindowState {
             // runs the observer above, which would discard the restoration first.
             let pending = pendingReselect
             pendingReselect = nil
-            let selectionBefore = selectedFileID
+            let wantsAllChanges = pendingAllChanges
+            pendingAllChanges = false
+            let selectionBefore = selection
+            let rowIDsBefore = sidebarRows.map(\.id)
             // Only the files whose counts are known, so the lookup below is a plain
             // optional rather than a nested one.
             let known = Dictionary(
@@ -248,13 +230,22 @@ final class WindowState {
                 uniquingKeysWith: { first, _ in first })
             files = newFiles.map { $0.with(lineStats: known[$0.id]) }
             if let selectedFileID, !newFiles.contains(where: { $0.id == selectedFileID }) {
-                self.selectedFileID = nil
+                selection = nil
             }
             if let pending { reselect(pending) }
+            // Only the first list for a window or a scope lands on All changes: a
+            // selection a *later* refresh cleared because its file vanished stays nil,
+            // which is what the restoration rule and the detail area both read.
+            // `selectionBefore` guards a choice made while this read was in flight.
+            if wantsAllChanges, selection == nil, selectionBefore == nil { selection = .allChanges }
             errorMessage = nil
             // A settings change reloaded the diff before starting its refresh, and any
             // change to the selection above already reloaded it through the observer.
-            if cause != .settings, selectedFileID == selectionBefore { reloadDiff() }
+            // All changes is the exception: its diff is built from the whole list, so a
+            // list that gained, lost or renamed a file has to be loaded again.
+            if selection == selectionBefore, cause != .settings || changesetListChanged(rowIDsBefore) {
+                reloadDiff()
+            }
             onRefreshPublished?(self, cause)
             session.statsTask = Task { [weak self] in
                 await self?.attachLineStats(
@@ -271,6 +262,12 @@ final class WindowState {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Whether All changes is showing a changeset built from a list the refresh just
+    /// replaced. Order counts as a change: the sections are drawn in sidebar order.
+    private func changesetListChanged(_ before: [ChangedFile.ID]) -> Bool {
+        selection == .allChanges && sidebarRows.map(\.id) != before
     }
 
     /// Runs numstat for the scope's areas and counts untracked files, then replaces
@@ -313,7 +310,7 @@ final class WindowState {
         Task { await refresh(session: session, cause: .settings) }
     }
 
-    /// Loads the selected file's diff when visible; when hidden, records that a load
+    /// Loads the selection's diff when visible; when hidden, records that a load
     /// is owed so nothing runs for a window nobody can see.
     private func reloadDiff() {
         guard !isClosed else { return }
@@ -322,15 +319,27 @@ final class WindowState {
             return
         }
         diffStale = false
-        diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
+        if selection == .allChanges {
+            diffLoader.load(
+                changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+                foldOptions: preferences.foldOptions)
+        } else {
+            diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
+        }
     }
 
     // MARK: - Change navigation
 
-    var changeBlockCount: Int {
-        if case let .text(document)? = diffLoader.content { return document.changeBlocks.count }
-        return 0
+    /// The document navigation walks: one file's, or the whole changeset's.
+    private var navigableDocument: DiffDocument? {
+        switch diffLoader.content {
+        case let .text(document): document
+        case let .changeset(changeset): changeset.document
+        default: nil
+        }
     }
+
+    var changeBlockCount: Int { navigableDocument?.changeBlocks.count ?? 0 }
 
     func nextChange() {
         jump(
@@ -345,7 +354,7 @@ final class WindowState {
     }
 
     private func jump(to index: Int?) {
-        guard let index, case let .text(document)? = diffLoader.content else { return }
+        guard let index, let document = navigableDocument, index < document.changeBlocks.count else { return }
         currentChangeIndex = index
         scrollTarget = ScrollTarget(row: document.changeBlocks[index].lowerBound)
     }
@@ -385,15 +394,14 @@ extension WindowState {
         guard let session, !isClosed, newScope != scope else { return }
         session.scopeSerial += 1
 
-        // Remember what was selected before anything is cleared. Clearing `files` does
-        // not run `selectedFileID`'s observer, so the previous scope's diff load has to
-        // be stopped by hand; assigning nil does that through `reloadDiff`, and it must
-        // happen before the target is recorded or the observer would discard it.
-        let previous = selectedFile.map { PendingSelection(path: $0.path, area: $0.area) }
-        selectedFileID = nil
-        // A second scope change before the first finished has no selection to read — the
-        // list was cleared — so the target recorded by that first change still stands.
-        if let previous { pendingReselect = previous }
+        // Clearing `files` does not run the selection's observer, so the previous scope's
+        // diff load has to be stopped by hand; assigning nil does that through
+        // `reloadDiff`. Nothing is remembered to restore: the new scope's list lands on
+        // All changes, a better answer than hunting for the same path in a different set
+        // of files, and a pending restoration belongs to the list being left behind.
+        selection = nil
+        pendingReselect = nil
+        pendingAllChanges = true
         session.statsTask?.cancel()
 
         scope = newScope
@@ -412,8 +420,9 @@ extension WindowState {
     /// Called by whichever refresh publishes the new files, which is not always the one
     /// that recorded the target: a watcher refresh can overtake a scope change.
     private func reselect(_ previous: PendingSelection) {
-        guard !isClosed, selectedFileID == nil else { return }
-        selectedFileID = SidebarReselection.target(for: previous, in: sidebarRows)
+        guard !isClosed, selection == nil else { return }
+        guard let target = SidebarReselection.target(for: previous, in: sidebarRows) else { return }
+        selection = .file(target)
     }
 
     /// Asks the next refresh that publishes a file list to restore `selection`.
@@ -437,8 +446,9 @@ extension WindowState {
         let serial = session.scopeSerial
         scope = .workingTree
         selectedCommit = nil
-        selectedFileID = nil
+        selection = nil
         pendingReselect = nil
+        pendingAllChanges = true
         files = []
         isLoadingScope = true
         await refresh(session: session, cause: .scope)

@@ -1,6 +1,36 @@
 import AppKit
 import SwiftUI
 
+/// What the panes show. `.file` folds with user state and the collapse-unchanged
+/// preference; `.changeset` is a fixed projection from `ChangesetProjection`:
+/// no fold state, no fold actions, no collapse toggle.
+enum PaneContent {
+    case file(DiffDocument)
+    case changeset(ChangesetDocument)
+
+    var document: DiffDocument {
+        switch self {
+        case let .file(document): document
+        case let .changeset(changeset): changeset.document
+        }
+    }
+
+    /// Nil for a file, which is why a file always installs as a replace.
+    var identity: ChangesetIdentity? {
+        switch self {
+        case .file: nil
+        case let .changeset(changeset): changeset.identity
+        }
+    }
+
+    var changesetDocument: ChangesetDocument? {
+        switch self {
+        case .file: nil
+        case let .changeset(changeset): changeset
+        }
+    }
+}
+
 /// Two diff panes with a shared vertical scroll position and independent
 /// horizontal scrolling. Owns the per-file folding state; the panes and the
 /// overview strip always see the same projection.
@@ -14,6 +44,12 @@ final class SideBySideContainerView: NSView {
     private var isSyncing = false
 
     private var document: DiffDocument?
+    /// The installed changeset, nil when a single file is installed. Its identity is what
+    /// an incoming publication is compared against.
+    private var changeset: ChangesetDocument?
+    /// The style snapshot already handed to the panes; a snapshot that finished after the
+    /// document went out reuses the document's id, so only its own id can dedupe it.
+    private var appliedStylesID: UUID?
     private var foldState = FoldState()
     private(set) var folded = FoldedRows.identity(documentRowCount: 0)
     private(set) var collapseUnchanged = true
@@ -22,10 +58,13 @@ final class SideBySideContainerView: NSView {
         didSet { leftPane.foldOptions = foldOptions; rightPane.foldOptions = foldOptions }
     }
 
-    /// A visible document row and its pixel offset from the top of the viewport, used
-    /// to keep the reader's place when the projection or row height changes.
+    /// A visible row and its pixel offset from the top of the viewport, used to keep the
+    /// reader's place when the projection or row height changes. A file re-anchors on the
+    /// document row; a changeset re-anchors on the display index, because its projection
+    /// is append-stable and its synthetic rows have no document row of their own.
     private struct Anchor {
         let documentRow: Int
+        let displayIndex: Int
         let offset: CGFloat
     }
 
@@ -81,36 +120,99 @@ final class SideBySideContainerView: NSView {
 
     // MARK: - Inputs
 
-    /// Installs a document. When the same file is recomputed with identical rows
-    /// (e.g. a refresh that changed nothing), expansions are kept; otherwise they
-    /// reset. The viewport is re-anchored on the new-side source line that was at
-    /// the top, so an edit elsewhere in the file does not move the reader.
-    func setDocument(_ document: DiffDocument?, fontSize: CGFloat) {
-        let previousAnchor = captureAnchor()
-        let previousDocument = self.document
-        let sameRows = previousDocument.map { $0.rows == document?.rows } ?? false
-        if !sameRows { foldState = FoldState() }
-        self.document = document
-
+    /// Installs content. A changeset revision that extends the installed one is appended,
+    /// which keeps the selection, the caches and the scroll position; anything else is a
+    /// fresh install.
+    func setContent(_ content: PaneContent, fontSize: CGFloat) {
+        let mode = DocumentUpdate.mode(installed: changeset?.identity, incoming: content.identity)
+        // The anchor is read at the old row height, before the font size changes it.
+        let fontChanged = rightPane.fontSize != fontSize
+        let anchor = captureAnchor()
         leftPane.fontSize = fontSize
         rightPane.fontSize = fontSize
-        if let document {
-            leftPane.model = PaneModel(side: .old, rows: document.rows, lines: document.oldLines)
-            rightPane.model = PaneModel(side: .new, rows: document.rows, lines: document.newLines)
-            overview.rows = document.rows
-            overview.changeBlocks = document.changeBlocks
-        } else {
-            leftPane.model = nil
-            rightPane.model = nil
-            overview.rows = []
-            overview.changeBlocks = []
+        switch mode {
+        case .replace:
+            install(content, previousAnchor: anchor)
+        case .append:
+            append(content)
+            // An append keeps the clip origin; only a new row height has to re-anchor.
+            if fontChanged { restoreScroll(anchor) }
         }
+    }
+
+    /// The ordinary path. When the same file is recomputed with identical rows (e.g. a
+    /// refresh that changed nothing), expansions are kept; otherwise they reset. The
+    /// viewport is re-anchored on the new-side source line that was at the top, so an
+    /// edit elsewhere in the file does not move the reader. A changeset never translates
+    /// an anchor: earlier files shift every later row, so the old index means nothing.
+    private func install(_ content: PaneContent, previousAnchor: Anchor?) {
+        let previousDocument = document
+        let previousWasChangeset = changeset != nil
+        let incoming = content.document
+        let sameRows = previousDocument.map { $0.rows == incoming.rows } ?? false
+        if !sameRows { foldState = FoldState() }
+        document = incoming
+        changeset = content.changesetDocument
+
+        let isChangeset = changeset != nil
+        for pane in [leftPane, rightPane] {
+            // A changeset's separators are inert: there is no per-file fold state to hold.
+            pane.onFoldAction = isChangeset ? nil : { [weak self] action in self?.handle(action) }
+        }
+        installModels(mode: .replace)
+        // Styles for the new document arrive in their own publication; until then the
+        // panes must not keep the previous document's colours.
+        leftPane.styles = nil
+        rightPane.styles = nil
+        appliedStylesID = nil
+        overview.rows = incoming.rows
+        overview.changeBlocks = incoming.changeBlocks
 
         var anchor: Anchor?
-        if let previousAnchor, let previousDocument, let document {
-            anchor = Self.translate(previousAnchor, from: previousDocument, to: document)
+        if let previousAnchor, let previousDocument, !isChangeset, !previousWasChangeset {
+            anchor = Self.translate(previousAnchor, from: previousDocument, to: incoming)
         }
         refold(anchor: anchor)
+    }
+
+    /// Installs an appended revision without changing the clip origin. Growing a document
+    /// view leaves the origin where it is, so the reader stays where they were while later
+    /// files stream in.
+    private func append(_ content: PaneContent) {
+        guard let incoming = content.changesetDocument else { return }
+        document = incoming.document
+        changeset = incoming
+        installModels(mode: .append)
+        overview.rows = incoming.document.rows
+        overview.changeBlocks = incoming.document.changeBlocks
+        folded = incoming.folded
+        leftPane.displayRows = folded.displayRows
+        rightPane.displayRows = folded.displayRows
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        for scroll in [leftScroll, rightScroll] { scroll.reflectScrolledClipView(scroll.contentView) }
+        updateOverviewViewport()
+        applyCurrentBlock()
+    }
+
+    /// Hands both panes the current document, with the changeset's sections when there is
+    /// one, so the gutter can number lines per file.
+    private func installModels(mode: DocumentUpdate.Mode) {
+        guard let document else { return }
+        let sections = changeset?.sections ?? []
+        leftPane.install(
+            PaneModel(side: .old, rows: document.rows, lines: document.oldLines, sections: sections), mode: mode)
+        rightPane.install(
+            PaneModel(side: .new, rows: document.rows, lines: document.newLines, sections: sections), mode: mode)
+    }
+
+    /// Applies a style snapshot built for the installed document. A snapshot that arrives
+    /// after the document is identified by its own id, not the document's.
+    func setStyles(_ styles: DocumentStyles?) {
+        guard let styles, let document, styles.documentID == document.id, styles.id != appliedStylesID else { return }
+        leftPane.styles = styles.old
+        rightPane.styles = styles.new
+        appliedStylesID = styles.id
     }
 
     /// Changes the row height without touching fold state; keeps the top row in place.
@@ -122,10 +224,12 @@ final class SideBySideContainerView: NSView {
         restoreScroll(anchor)
     }
 
+    /// Records the preference. A changeset's projection is fixed, so only a file refolds.
     func setCollapseUnchanged(_ collapse: Bool) {
         guard collapse != collapseUnchanged else { return }
         let anchor = captureAnchor()
         collapseUnchanged = collapse
+        guard changeset == nil else { return }
         refold(anchor: anchor)
     }
 
@@ -137,7 +241,7 @@ final class SideBySideContainerView: NSView {
     }
 
     private func handle(_ action: FoldAction) {
-        guard let document else { return }
+        guard let document, changeset == nil else { return }
         let step = foldOptions.expansionStep
         switch action {
         case let .expandUp(hidden): foldState.expandUp(hidden, step: step)
@@ -151,7 +255,9 @@ final class SideBySideContainerView: NSView {
     // MARK: - Projection
 
     private func refold(anchor: Anchor?) {
-        if let document, collapseUnchanged {
+        if let changeset {
+            folded = changeset.folded
+        } else if let document, collapseUnchanged {
             folded = RowFolding.fold(
                 changeBlocks: document.changeBlocks, documentRowCount: document.rows.count, state: foldState,
                 options: foldOptions)
@@ -180,7 +286,8 @@ final class SideBySideContainerView: NSView {
         guard !range.isEmpty else { return nil }
         let top = range.lowerBound
         let offset = rightScroll.contentView.bounds.minY - rightPane.layout.y(forRow: top)
-        return Anchor(documentRow: folded.documentRow(forDisplayIndex: top), offset: offset)
+        return Anchor(
+            documentRow: folded.documentRow(forDisplayIndex: top), displayIndex: top, offset: offset)
     }
 
     /// Maps an anchor across documents by source line: the new-side line at the top
@@ -196,7 +303,7 @@ final class SideBySideContainerView: NSView {
         } else {
             return nil
         }
-        return Anchor(documentRow: target, offset: anchor.offset)
+        return Anchor(documentRow: target, displayIndex: anchor.displayIndex, offset: anchor.offset)
     }
 
     /// Re-lays out the panes for the current projection and scrolls so the anchor's
@@ -207,8 +314,15 @@ final class SideBySideContainerView: NSView {
         layoutSubtreeIfNeeded()
         let maxY = max(0, rightPane.frame.height - rightScroll.contentView.bounds.height)
         var y: CGFloat = 0
-        if let anchor, anchor.documentRow < folded.documentRowCount {
-            y = rightPane.layout.y(forRow: folded.displayIndex(forDocumentRow: anchor.documentRow)) + anchor.offset
+        if let anchor {
+            if changeset != nil {
+                // A header or notice maps to a boundary that can equal the row count, so
+                // the display index is the only usable anchor for a changeset.
+                let index = min(anchor.displayIndex, max(0, folded.displayRows.count - 1))
+                y = rightPane.layout.y(forRow: index) + anchor.offset
+            } else if anchor.documentRow < folded.documentRowCount {
+                y = rightPane.layout.y(forRow: folded.displayIndex(forDocumentRow: anchor.documentRow)) + anchor.offset
+            }
         }
         y = min(max(0, y), maxY)
         for scroll in [leftScroll, rightScroll] {
@@ -270,10 +384,11 @@ final class SideBySideContainerView: NSView {
     }
 }
 
-/// SwiftUI wrapper. One instance lives per selected file, so any document update
-/// is a recomputation of the same file and keeps the reader's place.
+/// SwiftUI wrapper. One instance lives per selection, so a document update is either a
+/// recomputation of the same file, which re-anchors on the row that was at the top, or the
+/// next revision of the same changeset, which leaves the viewport untouched.
 struct SideBySideView: NSViewRepresentable {
-    let document: DiffDocument
+    let content: PaneContent
     var styles: DocumentStyles?
     var fontSize: CGFloat = 12
     var scrollTarget: ScrollTarget?
@@ -285,24 +400,25 @@ struct SideBySideView: NSViewRepresentable {
         let view = SideBySideContainerView(frame: .zero)
         view.foldOptions = foldOptions
         view.setCollapseUnchanged(collapseUnchanged)
-        view.setDocument(document, fontSize: fontSize)
-        context.coordinator.documentID = document.id
-        applyStylesIfNeeded(to: view, coordinator: context.coordinator)
+        view.setContent(content, fontSize: fontSize)
+        context.coordinator.documentID = content.document.id
+        view.setStyles(styles)
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)
         view.currentBlock = currentBlock
         return view
     }
 
     func updateNSView(_ view: SideBySideContainerView, context: Context) {
-        if context.coordinator.documentID != document.id {
-            view.setDocument(document, fontSize: fontSize)
-            context.coordinator.documentID = document.id
-            context.coordinator.stylesApplied = false
+        // Every changeset revision carries a fresh document id, so each publication
+        // reaches the container, which decides whether it appends or replaces.
+        if context.coordinator.documentID != content.document.id {
+            view.setContent(content, fontSize: fontSize)
+            context.coordinator.documentID = content.document.id
         } else {
             view.setFontSize(fontSize)
         }
         view.setCollapseUnchanged(collapseUnchanged)
-        applyStylesIfNeeded(to: view, coordinator: context.coordinator)
+        view.setStyles(styles)
         if view.currentBlock != currentBlock { view.currentBlock = currentBlock }
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)
     }
@@ -313,18 +429,10 @@ struct SideBySideView: NSViewRepresentable {
         view.scroll(toRow: scrollTarget.row)
     }
 
-    private func applyStylesIfNeeded(to view: SideBySideContainerView, coordinator: Coordinator) {
-        guard !coordinator.stylesApplied, let styles, styles.documentID == document.id else { return }
-        view.leftPane.styles = styles.old
-        view.rightPane.styles = styles.new
-        coordinator.stylesApplied = true
-    }
-
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator {
         var documentID: UUID?
-        var stylesApplied = false
         var scrollTargetID: UUID?
     }
 }

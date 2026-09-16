@@ -35,6 +35,26 @@ enum DiffTheme {
     static let foldControl = dynamic(light: rgb(0, 0, 0, 0.07), dark: rgb(255, 255, 255, 0.09))
     static let foldText = NSColor.secondaryLabelColor
 
+    // A changeset's file headers, the gaps between files, and one-line notices.
+    static let headerBackground = dynamic(light: rgb(243, 245, 248), dark: rgb(38, 41, 47))
+    static let headerText = NSColor.labelColor
+    static let headerSecondary = NSColor.secondaryLabelColor
+    static let noticeText = NSColor.secondaryLabelColor
+    static let addedCount = NSColor.systemGreen
+    static let deletedCount = NSColor.systemRed
+
+    /// The sidebar badge colour for a change kind. Shared so the sidebar and the
+    /// changeset file headers can never drift apart.
+    static func badge(for kind: ChangedFile.Kind) -> NSColor {
+        switch kind {
+        case .modified, .typeChanged: .systemOrange
+        case .added, .untracked: .systemGreen
+        case .deleted: .systemRed
+        case .renamed, .copied: .systemBlue
+        case .unmerged: .systemPurple
+        }
+    }
+
     static let tabWidth = 4
 
     static func font(size: CGFloat) -> NSFont {

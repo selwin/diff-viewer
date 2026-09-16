@@ -7,7 +7,7 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var windowState = windowState
-        List(selection: $windowState.selectedFileID) {
+        List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it
                 // returns; on a slow repository, saying "no changes" in that gap would
@@ -21,6 +21,16 @@ struct SidebarView: View {
                     Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
                         .foregroundStyle(.secondary)
                 }
+            }
+            // Outside every section, so the whole-list row sits above the headings
+            // rather than inside one of them.
+            if !windowState.files.isEmpty {
+                HStack(spacing: 8) {
+                    Label("All changes", systemImage: "square.stack")
+                    Spacer(minLength: 8)
+                    ChurnLabel(stats: LineStats.total(of: windowState.files))
+                }
+                .tag(DiffSelection.allChanges)
             }
             if !windowState.unstagedFiles.isEmpty {
                 Section("Unstaged (\(windowState.unstagedFiles.count))") {
@@ -45,8 +55,8 @@ struct SidebarView: View {
         .animation(.default, value: windowState.files.map(\.id))
         // The list-level form hands over the row that was right-clicked even when it is
         // not the selected one, which is what a Finder-shaped sidebar is expected to do.
-        .contextMenu(forSelectionType: ChangedFile.ID.self) { ids in
-            contextMenu(for: ids)
+        .contextMenu(forSelectionType: DiffSelection.self) { selections in
+            contextMenu(for: Set(selections.compactMap(\.fileID)))
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !windowState.isEmpty {
@@ -128,18 +138,12 @@ private struct FileRow: View {
             Spacer(minLength: 8)
             ChurnLabel(stats: file.lineStats)
         }
-        .tag(file.id)
+        .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
     }
 
     private var badgeColor: Color {
-        switch file.kind {
-        case .modified, .typeChanged: .orange
-        case .added, .untracked: .green
-        case .deleted: .red
-        case .renamed, .copied: .blue
-        case .unmerged: .purple
-        }
+        Color(nsColor: DiffTheme.badge(for: file.kind))
     }
 }
 

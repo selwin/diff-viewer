@@ -246,9 +246,28 @@ struct GitClient: RepoClient {
         return result.stdout
     }
 
-    /// Contents of `path` in the working tree, or nil if missing.
-    func worktreeContents(of path: String) async -> Data? {
-        try? Data(contentsOf: repoRoot.appendingPathComponent(path))
+    /// Contents of `path` in the working tree, or nil if the path is not there.
+    ///
+    /// Only a missing file is nil. A file that exists but cannot be read — no permission,
+    /// a directory in its place, a broken mount — throws, because the diff engine reads a
+    /// nil as "this side does not exist" and would draw the file as deleted.
+    func worktreeContents(of path: String) async throws -> Data? {
+        do {
+            return try Data(contentsOf: repoRoot.appendingPathComponent(path))
+        } catch {
+            guard Self.isMissingFile(error) else { throw error }
+            return nil
+        }
+    }
+
+    /// Whether an error from a file read means "not there". `Data(contentsOf:)` reports it
+    /// as a Cocoa error; the POSIX spelling is kept for reads that come up from lower down.
+    private static func isMissingFile(_ error: Error) -> Bool {
+        if let cocoa = error as? CocoaError {
+            return cocoa.code == .fileReadNoSuchFile || cocoa.code == .fileNoSuchFile
+        }
+        if let posix = error as? POSIXError { return posix.code == .ENOENT }
+        return false
     }
 
     /// Runs `action` on one path. `check` turns a refusal into a `ProcessError.failed`

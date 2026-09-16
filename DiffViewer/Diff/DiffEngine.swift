@@ -16,13 +16,13 @@ enum DiffEngine {
             switch file.kind {
             case .untracked:
                 old = nil
-                new = await client.worktreeContents(of: file.path)
+                new = try await client.worktreeContents(of: file.path)
             case .unmerged:
                 old = try await client.headContents(of: file.path)
-                new = await client.worktreeContents(of: file.path)
+                new = try await client.worktreeContents(of: file.path)
             default:
                 old = try await client.indexContents(of: file.path)
-                new = file.kind == .deleted ? nil : await client.worktreeContents(of: file.path)
+                new = file.kind == .deleted ? nil : try await client.worktreeContents(of: file.path)
             }
         case .staged:
             old = file.kind == .added ? nil : try await client.headContents(of: file.originalPath ?? file.path)

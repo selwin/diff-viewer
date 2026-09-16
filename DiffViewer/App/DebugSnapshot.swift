@@ -111,7 +111,7 @@ enum DebugLaunchOptions {
                     await selectScope(scopeSha, in: windowState)
                 }
                 if !selection.isEmpty {
-                    windowState.selectedFileID = selection
+                    windowState.selection = .file(selection)
                 }
                 if nextCount > 0 {
                     try? await Task.sleep(for: .seconds(2))
@@ -209,7 +209,7 @@ enum DebugLaunchOptions {
         guard state.selectedFileID != fileID else { return "\(fileID) is already selected; nothing would load" }
         let before = await services.cache.stats
         let start = ContinuousClock.now
-        state.selectedFileID = fileID
+        state.selection = .file(fileID)
         // Poll finely: a cache hit publishes in well under the dump loop's 100 ms tick.
         guard
             await eventually(

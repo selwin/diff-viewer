@@ -172,6 +172,22 @@ struct LineStatsJoinerTests {
         }
     }
 
+    /// Counting is decoration: a file that cannot be read has unknown stats, exactly as a
+    /// missing one does, and never fails the list it decorates.
+    @Test func aWorktreeReadFailureLeavesTheStatsUnknown() async {
+        let client = StubRepoClient(files: [])
+        await client.fail(worktree: ["locked.txt"])
+        await client.set(worktree: Data("one\ntwo\n".utf8), for: "readable.txt")
+
+        let joined = await LineStatsJoiner.attach(
+            numstat: [:],
+            to: [changedFile("locked.txt", kind: .untracked), changedFile("readable.txt", kind: .untracked)],
+            client: client
+        )
+        #expect(stats(joined, "unstaged:locked.txt") == nil)
+        #expect(stats(joined, "unstaged:readable.txt") == .counted(added: 2, deleted: 0))
+    }
+
     // MARK: line counting
 
     @Test func lineCountMatchesTextLinesSplit() {

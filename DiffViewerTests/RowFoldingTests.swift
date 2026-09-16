@@ -23,6 +23,8 @@ struct RowFoldingTests {
                 if let r = run, r.upperBound == i { run = r.lowerBound..<(i + 1) } else { flush(); run = i..<(i + 1) }
             case let .separator(hidden):
                 flush(); out.append("sep \(hidden.lowerBound)..<\(hidden.upperBound)")
+            case .fileHeader, .spacer, .notice:
+                flush(); out.append("synthetic")  // Only a changeset projection emits these.
             }
         }
         flush()
@@ -163,6 +165,8 @@ struct RowFoldingTests {
                     // Separators cover only equal rows: no change block intersects.
                     for block in blocks { #expect(block.overlaps(hidden) == false) }
                     covered = hidden.upperBound
+                case .fileHeader, .spacer, .notice:
+                    Issue.record("folding a single file never emits synthetic rows")
                 }
             }
             #expect(covered == rows)

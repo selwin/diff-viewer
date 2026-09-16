@@ -1,11 +1,26 @@
 import Foundation
 
-/// One row of the side-by-side view after folding: a document row, or a separator
-/// standing in for a run of hidden (equal) document rows.
+/// One row of the side-by-side view after folding: a document row, a separator standing
+/// in for a run of hidden (equal) document rows, or a synthetic row that belongs to a
+/// changeset section rather than to the document. Synthetic rows carry the index of
+/// their `ChangesetSection`; everything they show is read from that section.
 enum DisplayRow: Equatable, Sendable {
     case documentRow(Int)
     /// `hidden` is a non-empty range of `DiffDocument.rows` indices.
     case separator(hidden: Range<Int>)
+    case fileHeader(section: Int)
+    case spacer(section: Int)
+    /// A one-line explanation for a section with no rows ("Binary file", an error, …).
+    case notice(section: Int)
+
+    /// The document rows this display row stands for; nil for a synthetic row.
+    var documentRows: Range<Int>? {
+        switch self {
+        case let .documentRow(index): index..<(index + 1)
+        case let .separator(hidden): hidden
+        case .fileHeader, .spacer, .notice: nil
+        }
+    }
 }
 
 /// Tunables for folding. Context lines may come from user defaults; use `validated`.
@@ -62,18 +77,31 @@ struct FoldedRows: Sendable {
     let documentRowCount: Int
     /// For every document row, the display index that shows it or its separator.
     private let displayIndexByRow: [Int]
+    /// For every synthetic display row, the document row it is inserted before.
+    private let boundaryByDisplayIndex: [Int: Int]
 
-    init(displayRows: [DisplayRow], documentRowCount: Int) {
+    /// `syntheticBoundaries` holds one insertion boundary per synthetic display row, in
+    /// display order. The single-file path emits no synthetic rows and passes none.
+    init(displayRows: [DisplayRow], documentRowCount: Int, syntheticBoundaries: [Int] = []) {
         self.displayRows = displayRows
         self.documentRowCount = documentRowCount
         var table = Array(repeating: 0, count: documentRowCount)
+        var boundaries: [Int: Int] = [:]
+        var pending = syntheticBoundaries.makeIterator()
         for (index, row) in displayRows.enumerated() {
             switch row {
             case let .documentRow(i): table[i] = index
             case let .separator(hidden): for i in hidden { table[i] = index }
+            case .fileHeader, .spacer, .notice:
+                guard let boundary = pending.next() else {
+                    preconditionFailure("every synthetic display row needs a boundary")
+                }
+                boundaries[index] = boundary
             }
         }
+        precondition(pending.next() == nil, "more boundaries than synthetic display rows")
         displayIndexByRow = table
+        boundaryByDisplayIndex = boundaries
     }
 
     static func identity(documentRowCount: Int) -> FoldedRows {
@@ -83,11 +111,18 @@ struct FoldedRows: Sendable {
     /// Precondition: `0 <= row < documentRowCount`.
     func displayIndex(forDocumentRow row: Int) -> Int { displayIndexByRow[row] }
 
-    /// Precondition: `0 <= index < displayRows.count`. A separator maps to its first hidden row.
+    /// Precondition: `0 <= index < displayRows.count`. A separator maps to its first
+    /// hidden row. A synthetic row maps to its section's insertion boundary, which may
+    /// equal `documentRowCount` and must never be used to index `DiffDocument.rows`.
     func documentRow(forDisplayIndex index: Int) -> Int {
         switch displayRows[index] {
         case let .documentRow(i): return i
         case let .separator(hidden): return hidden.lowerBound
+        case .fileHeader, .spacer, .notice:
+            guard let boundary = boundaryByDisplayIndex[index] else {
+                preconditionFailure("synthetic display row \(index) has no boundary")
+            }
+            return boundary
         }
     }
 
@@ -103,7 +138,9 @@ struct FoldedRows: Sendable {
         return first..<(last + 1)
     }
 
-    /// Half-open; a trailing separator contributes all of its hidden rows.
+    /// Half-open; a trailing separator contributes all of its hidden rows. Synthetic rows
+    /// stand for no document rows, so the end comes from the last row in the range that
+    /// does; a range holding only synthetic rows is empty at the boundary of its first row.
     func documentRange(forDisplayRange range: Range<Int>) -> Range<Int> {
         guard !range.isEmpty else {
             let start =
@@ -111,11 +148,10 @@ struct FoldedRows: Sendable {
             return start..<start
         }
         let first = documentRow(forDisplayIndex: range.lowerBound)
-        let end: Int
-        switch displayRows[range.upperBound - 1] {
-        case let .documentRow(i): end = i + 1
-        case let .separator(hidden): end = hidden.upperBound
+        guard let end = range.reversed().lazy.compactMap({ displayRows[$0].documentRows?.upperBound }).first else {
+            return first..<first
         }
+        precondition(end >= first, "display rows map to document rows out of order")
         return first..<end
     }
 }

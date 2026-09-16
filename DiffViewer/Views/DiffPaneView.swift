@@ -7,19 +7,6 @@ struct StyleRun: Sendable, Equatable {
     let style: TokenStyle
 }
 
-/// The document content one pane draws from.
-struct PaneModel {
-    enum Side { case old, new }
-
-    let side: Side
-    let rows: [DiffRow]
-    let lines: [String]
-
-    func cell(_ row: DiffRow) -> DiffSide? {
-        side == .old ? row.old : row.new
-    }
-}
-
 /// A click on a separator row. Ranges are hidden document rows.
 enum FoldAction: Equatable {
     case expandUp(Range<Int>)
@@ -33,18 +20,12 @@ enum FoldAction: Equatable {
 /// intersecting the dirty rect are drawn, and shaped lines are cached, so large
 /// diffs scroll smoothly.
 final class DiffPaneView: NSView {
-    /// Document content. Set once per document; recomputes metrics and clears caches.
-    var model: PaneModel? {
-        didSet {
-            selection = nil
-            lineCache.removeAll()
-            numberCache.removeAll()
-            recomputeMetrics()
-            needsDisplay = true
-        }
-    }
+    /// Document content. Installed through `install(_:mode:)`, which decides what has to
+    /// be reset, so plain assignment is not allowed.
+    private(set) var model: PaneModel?
 
-    /// Syntax color runs per line index. Only the shaped-text cache is reset.
+    /// Syntax color runs per line index. Only the shaped line cache is reset; header text
+    /// does not depend on syntax styles.
     var styles: [[StyleRun]]? {
         didSet { lineCache.removeAll(); needsDisplay = true }
     }
@@ -76,20 +57,48 @@ final class DiffPaneView: NSView {
     var fontSize: CGFloat = 12 {
         didSet {
             if fontSize != oldValue {
-                lineCache.removeAll(); numberCache.removeAll(); recomputeMetrics(); needsDisplay = true
+                lineCache.removeAll()
+                numberCache.removeAll()
+                headerCache.removeAll()
+                recomputeMetrics()
+                needsDisplay = true
             }
         }
     }
 
+    /// Installs new content. `.replace` starts from scratch; `.append` is the same
+    /// document with sections added at the end, so the selection and the shaped-line
+    /// caches (keyed by line index, which never shifts) stay valid and only the new
+    /// lines are measured.
+    func install(_ model: PaneModel?, mode: DocumentUpdate.Mode) {
+        let previousLineCount = self.model?.lines.count ?? 0
+        self.model = model
+        switch mode {
+        case .replace:
+            selection = nil
+            lineCache.removeAll()
+            numberCache.removeAll()
+            headerCache.removeAll()
+            recomputeMetrics()
+        case .append:
+            extendMetrics(from: previousLineCount)
+        }
+        needsDisplay = true
+    }
+
     private(set) var layout = PaneLayout(rowHeight: 20, rowCount: 0)
     private(set) var contentWidth: CGFloat = 0
-    private var font = DiffTheme.font(size: 12)
-    private var ascent: CGFloat = 0
+    private(set) var font = DiffTheme.font(size: 12)
+    private(set) var ascent: CGFloat = 0
     private(set) var charWidth: CGFloat = 7
     private(set) var gutterWidth: CGFloat = 40
     let textInset: CGFloat = 8
+    /// Widest line measured so far, in character units; an append only extends it.
+    private var maxLineUnits = 0
     private var lineCache: [Int: CachedLine] = [:]
     private var numberCache: [Int: CTLine] = [:]
+    /// One shaped header line per changeset section index, for this pane's side.
+    var headerCache: [Int: CTLine] = [:]
 
     struct CachedLine {
         let line: CTLine
@@ -115,6 +124,7 @@ final class DiffPaneView: NSView {
         super.viewDidChangeEffectiveAppearance()
         lineCache.removeAll()
         numberCache.removeAll()
+        headerCache.removeAll()
         needsDisplay = true
     }
 
@@ -123,6 +133,7 @@ final class DiffPaneView: NSView {
 
     // MARK: - Metrics
 
+    /// Measures everything from scratch: a new document, or the same one at a new font size.
     private func recomputeMetrics() {
         font = DiffTheme.font(size: fontSize)
         ascent = ceil(font.ascender)
@@ -130,19 +141,32 @@ final class DiffPaneView: NSView {
         charWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
         layout = PaneLayout(rowHeight: lineHeight + 4, rowCount: displayRows.count)
 
-        let lineCount = model?.lines.count ?? 0
-        let digits = max(3, String(max(lineCount, 1)).count)
-        gutterWidth = ceil(CGFloat(digits) * charWidth) + 20
+        gutterWidth = width(forDigits: model?.gutterDigits ?? 3)
+        maxLineUnits = 0
+        for line in model?.lines ?? [] { maxLineUnits = max(maxLineUnits, units(of: line)) }
+        contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
+    }
 
-        var maxUnits = 0
-        if let lines = model?.lines {
-            for line in lines {
-                var units = line.utf16.count
-                if line.utf16.contains(9) { units += line.utf16.count(where: { $0 == 9 }) * (DiffTheme.tabWidth - 1) }
-                if units > maxUnits { maxUnits = units }
-            }
+    /// Measures only the lines an append added. The gutter can widen but never shrinks,
+    /// so the numbers already drawn keep their position.
+    private func extendMetrics(from previousLineCount: Int) {
+        guard let model else { return }
+        if previousLineCount < model.lines.count {
+            for line in model.lines[previousLineCount...] { maxLineUnits = max(maxLineUnits, units(of: line)) }
         }
-        contentWidth = gutterWidth + textInset + CGFloat(maxUnits) * charWidth + 40
+        gutterWidth = max(gutterWidth, width(forDigits: model.gutterDigits))
+        contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
+    }
+
+    private func width(forDigits digits: Int) -> CGFloat {
+        ceil(CGFloat(digits) * charWidth) + 20
+    }
+
+    /// Width of a line in character units, counting a tab as its expansion.
+    private func units(of line: String) -> Int {
+        var units = line.utf16.count
+        if line.utf16.contains(9) { units += line.utf16.count(where: { $0 == 9 }) * (DiffTheme.tabWidth - 1) }
+        return units
     }
 
     /// Size the document view should have inside a clip view of the given width.
@@ -168,6 +192,12 @@ final class DiffPaneView: NSView {
                 drawDocumentRow(model.rows[rowIndex], at: rowIndex, in: rowRect, model: model, context: context)
             case let .separator(hidden):
                 drawSeparator(hidden, in: rowRect, context: context)
+            case let .fileHeader(section):
+                drawFileHeader(section: section, in: rowRect, model: model, context: context)
+            case .spacer:
+                drawSpacer(in: rowRect, context: context)
+            case let .notice(section):
+                drawNotice(section: section, in: rowRect, model: model, context: context)
             }
             if let current = currentChangeRows, current.contains(displayIndex) {
                 NSColor.controlAccentColor.setFill()
@@ -197,10 +227,12 @@ final class DiffPaneView: NSView {
         } else {
             drawPad(rowRect, context: context)
         }
-        drawGutter(cell, rowRect: rowRect, gutterColor: gutterColor, context: context)
+        drawGutter(cell, inRow: index, rowRect: rowRect, gutterColor: gutterColor, context: context)
     }
 
-    private func fullWidthRect(_ rowRect: NSRect) -> NSRect {
+    /// The row across the whole document view, so a background reaches past the visible
+    /// width.
+    func fullWidthRect(_ rowRect: NSRect) -> NSRect {
         NSRect(x: 0, y: rowRect.minY, width: max(bounds.width, rowRect.maxX), height: rowRect.height)
     }
 
@@ -239,16 +271,26 @@ final class DiffPaneView: NSView {
         context.restoreGState()
     }
 
-    private func drawGutter(_ cell: DiffSide?, rowRect: NSRect, gutterColor: NSColor?, context: CGContext) {
-        let gutterRect = NSRect(x: rowRect.minX, y: rowRect.minY, width: gutterWidth, height: rowRect.height)
-        (gutterColor ?? DiffTheme.gutterBackground).setFill()
-        context.fill(gutterRect)
-        guard let cell else { return }
-        let numberLine = numberLine(for: cell.lineNumber, changed: gutterColor != nil)
+    private func drawGutter(
+        _ cell: DiffSide?, inRow row: Int, rowRect: NSRect, gutterColor: NSColor?, context: CGContext
+    ) {
+        let gutterRect = fillGutter(rowRect, color: gutterColor, context: context)
+        guard let cell, let model else { return }
+        let numberLine = numberLine(for: model.lineNumber(of: cell, inRow: row), changed: gutterColor != nil)
         let width = CTLineGetTypographicBounds(numberLine, nil, nil, nil)
         drawLine(
             numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: rowRect.minY + 2 + ascent),
             context: context)
+    }
+
+    /// Fills the gutter band of a row and returns it. Rows with no line number
+    /// (separators, notices) fill it for continuity and draw nothing in it.
+    @discardableResult
+    func fillGutter(_ rowRect: NSRect, color: NSColor?, context: CGContext) -> NSRect {
+        let gutterRect = NSRect(x: rowRect.minX, y: rowRect.minY, width: gutterWidth, height: rowRect.height)
+        (color ?? DiffTheme.gutterBackground).setFill()
+        context.fill(gutterRect)
+        return gutterRect
     }
 
     private func drawHighlights(
@@ -283,7 +325,7 @@ final class DiffPaneView: NSView {
             NSRect(x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
     }
 
-    private func drawLine(_ line: CTLine, at point: CGPoint, context: CGContext) {
+    func drawLine(_ line: CTLine, at point: CGPoint, context: CGContext) {
         context.saveGState()
         context.textMatrix = .identity
         context.translateBy(x: point.x, y: point.y)
@@ -298,6 +340,7 @@ final class DiffPaneView: NSView {
     /// geometry is used for drawing and hit testing. `rowRect.minX` is the visible
     /// left edge, so controls stay put under horizontal scrolling like the gutter.
     func controlRects(for hidden: Range<Int>, rowRect: NSRect) -> [(control: FoldControl, rect: NSRect)] {
+        guard onFoldAction != nil else { return [] }  // A changeset's separators are inert.
         let side = rowRect.height - 4
         var x = rowRect.minX + gutterWidth + textInset
         let controls = RowFolding.controls(for: hidden, documentRowCount: model?.rows.count ?? 0, options: foldOptions)
@@ -307,10 +350,12 @@ final class DiffPaneView: NSView {
         }
     }
 
+    /// A folded run. Without a fold handler (a changeset) the row is inert: no control
+    /// squares, and a leading ellipsis so it still reads as a gap.
     private func drawSeparator(_ hidden: Range<Int>, in rowRect: NSRect, context: CGContext) {
         DiffTheme.foldBackground.setFill()
         context.fill(fullWidthRect(rowRect))
-        drawGutter(nil, rowRect: rowRect, gutterColor: nil, context: context)
+        fillGutter(rowRect, color: nil, context: context)
 
         var textX = rowRect.minX + gutterWidth + textInset
         for (control, rect) in controlRects(for: hidden, rowRect: rowRect) {
@@ -320,7 +365,8 @@ final class DiffPaneView: NSView {
             textX = rect.maxX + 4
         }
 
-        let text = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
+        let count = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
+        let text = onFoldAction == nil ? "⋯ \(count)" : count
         let attributed = NSAttributedString(
             string: text, attributes: [.font: font, .foregroundColor: DiffTheme.foldText])
         drawLine(

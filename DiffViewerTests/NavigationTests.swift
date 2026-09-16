@@ -13,6 +13,16 @@ struct NavigationTests {
         #expect(ChangeNavigator.next(after: 1, count: 0) == nil)
     }
 
+    /// A changeset passes its file boundaries in, so a deletion ending one file and an
+    /// addition starting the next are two changes to walk, not one.
+    @Test func boundariesSplitAdjacentRowsIntoSeparateBlocks() {
+        let document = DiffDocument(
+            oldLines: ["a"], newLines: ["b"], rows: [deletedRow(0), addedRow(0)], language: nil,
+            blockBoundaries: [1])
+        #expect(document.changeBlocks == [0..<1, 1..<2])
+        #expect(ChangeNavigator.next(after: 0, count: 2) == 1)
+    }
+
     @Test func clampHandlesShrinkingBlockLists() {
         #expect(ChangeNavigator.clamp(5, count: 3) == 2)
         #expect(ChangeNavigator.clamp(1, count: 3) == 1)

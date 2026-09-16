@@ -37,21 +37,14 @@ struct DiffDetailView: View {
                         Text(language)
                     }
                     if case let .text(doc)? = loader.content {
-                        let count = doc.changeBlocks.count
-                        if let index = windowState.currentChangeIndex, index < count {
-                            Text("Change \(index + 1) of \(count)")
-                        } else {
-                            Text("\(count) change\(count == 1 ? "" : "s")")
-                        }
+                        ChangeCounterText(count: doc.changeBlocks.count, current: windowState.currentChangeIndex)
                     }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            if loader.isLoading {
-                ProgressView().controlSize(.small)
-            }
+            LoadingIndicator(isLoading: loader.isLoading)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -67,7 +60,7 @@ struct DiffDetailView: View {
             switch loader.content {
             case let .text(document)?:
                 SideBySideView(
-                    document: document,
+                    content: .file(document),
                     styles: loader.styles,
                     fontSize: preferences.fontSize,
                     scrollTarget: windowState.scrollTarget,
@@ -82,6 +75,9 @@ struct DiffDetailView: View {
                 ContentUnavailableView(
                     "No differences", systemImage: "equal.circle",
                     description: Text("Both versions have identical content."))
+            case .changeset?:
+                // Stage 3 draws the changeset; this view only ever shows one file.
+                Color.clear
             case nil:
                 Color.clear
             }

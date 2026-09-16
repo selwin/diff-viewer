@@ -41,8 +41,10 @@ protocol RepoClient: Sendable {
     /// missing, so a nil here would render an unreachable commit as a file that was added
     /// wholesale. Callers read only the sides the change kind says exist.
     func contents(of path: String, at revision: String) async throws -> Data
-    /// Contents of `path` in the working tree, or nil if missing.
-    func worktreeContents(of path: String) async -> Data?
+    /// Contents of `path` in the working tree, or nil if the path is not there. Every
+    /// other read failure throws: reporting an unreadable file as absent would draw a
+    /// modified file as deleted.
+    func worktreeContents(of path: String) async throws -> Data?
     /// Runs `action` on one path, throwing git's stderr if it refuses. The only
     /// repository writes the app makes, and all whole-file: nothing here edits contents
     /// or creates a commit.

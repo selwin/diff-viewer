@@ -19,8 +19,8 @@ Where DiffViewer already stands versus the bar:
 | Aggregate +/- churn | counts by kind only | per-commit only | none | **no** |
 | Per-file +/- churn in sidebar | no | no | no | **yes** |
 | Stage / unstage / discard from file list | no (viewer) | yes | no | **yes** (whole file) |
-| All files in one scroll | no (per file) | yes (default view) | no | **no** |
-| Collapse unchanged / context expansion | yes | yes (default) | no | **no** |
+| All files in one scroll | no (per file) | yes (default view) | no | **yes** (All changes) |
+| Collapse unchanged / context expansion | yes | yes (default) | no | **yes** (fixed context in All changes) |
 | Find in diff | yes | no | no | **no** |
 | Jump to line | yes | no | no | **no** |
 | Wrap long lines | yes | yes | no | **no** |
@@ -230,55 +230,66 @@ all. This is a cheap differentiator.
 **Tests.** `GitNumstatParser` (rename lines, binary `-`, `-z` framing), `DiffDocument`
 row-count stats, aggregate summation across areas.
 
-### 3. All-changes view: every file's hunks in one continuous scroll
+### 3. All-changes view (shipped 2026-09-15)
 
-**Goal.** Like Sublime Merge's changes pane: scroll through every changed file's hunks
-top to bottom without clicking through the sidebar. The sidebar becomes a jump list.
+Every changed file's hunks in one continuous side-by-side scroll, selected by default,
+like Sublime Merge's changes pane. "Unified" means *unified across files*; the view stays
+side by side, as CLAUDE.md requires.
 
-**Scope clarification.** "Unified" here means *unified across files*, not the inline
-unified-diff text format. The view stays side by side, as CLAUDE.md requires; Sublime
-Merge itself renders its changes pane side by side when the window is wide enough.
+**What shipped.**
+- An "All changes" row above the sidebar sections, selected whenever a list arrives
+  (first list, scope change). Clicking a file still opens the single-file view.
+- One flat `DiffDocument` for the whole list (`ChangesetDocument`: rows and lines
+  concatenated, one `ChangesetSection` per file), so navigation, the overview strip, text
+  selection and copy work unchanged. Change blocks never span a file boundary.
+- A file header per section drawn by the pane renderer: kind badge, name, directory,
+  `← old path` on the left; `+N −M`, language and the comparison label on the right.
+  Gutter numbers are file-local. A file with no rows shows a one-line notice (binary,
+  identical, no visible changes, too large, not shown, or the error).
+- Fixed context per hunk (the `collapseContextLines` default); the Collapse Unchanged
+  toggle does not apply and separators are inert.
+- Streaming: `ChangesetAssembler` diffs and highlights three files at a time in sidebar
+  order and publishes the contiguous completed prefix every 150 ms, text before styles.
+  Each revision is appended in place, keeping the scroll position and selection. The
+  header reads "Loading 7 of 12…" meanwhile.
+- Limits, applied before anything else runs: 200 files per changeset and 1 MB of source
+  per file; a rejected file becomes a notice and stays readable from the sidebar.
 
-**Competitor notes.** Sublime Merge stacks every file's hunks with a per-file header
-(hover buttons, context menu), shows condensed hunks by default, and lets you expand
-context by dragging a hunk edge or double-clicking it. Kaleidoscope 7.0 instead keeps one
-file per view but makes ⌘↓ / ⌘↑ cross file boundaries, and offers Collapse Unchanged
-(6.0) with ⌥-click to expand all. Neither has structural token highlights in this mode,
-which we keep.
+**Deferred**, in rough priority order:
+- Keep the finished changeset across selection changes (3.1 below).
+- Sticky file header while scrolling; scroll-spy highlight of the current file in the
+  sidebar; ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in the overview strip.
+- Click-to-expand context inside the changeset, and a per-file `DiffDocument` cache so
+  opening a file after All changes has loaded it is instant.
+- Tooltips for truncated header paths and notice text.
+- Section-aware scroll anchoring on a full replace; an aggregate source-byte budget with
+  size preflight; an app-wide bound on concurrent git, difft and highlight work.
+
+#### 3.1 Follow-up: keep the All-changes document across selection changes (requested 2026-09-15)
+
+**Problem.** Clicking a file in the sidebar and then All changes again reloads the whole
+changeset from scratch: `DiffLoader.load(changeset:)` clears its content and starts a new
+`ChangesetAssembler`, which reads every file from git again, realigns, rebuilds the flat
+document and re-highlights each file, streaming sections in from an empty view. Only
+`DifftCache` is memoised, so the difft subprocesses are skipped but everything else runs
+twice. The reader sees a visible reload for a document that has not changed.
 
 **Design.**
-- New document type `ChangesetDocument`: an ordered list of `FileSection`s, each holding
-  a `ChangedFile`, its `DiffDocument` (or binary/identical/loading state), and the row
-  offset at which it starts. Total row count is the sum of section heights.
-- Extend `DiffRow.Kind` with `.fileHeader` and `.collapsed(hiddenCount)` so `DiffPaneView`
-  can draw a sticky-looking header row (path, kind badge, `+12 −4`) and a "⋯ 48 unchanged
-  lines" row without a second renderer. Keep `PaneLayout` as fixed-height rows; header
-  rows can be the same height as text rows, or an integer multiple.
-- Context by default: show N (3) lines of context around each change block and collapse
-  the rest. Clicking a collapsed row expands it in place; ⌥-click expands all in that
-  file; a global toggle (View › Show Full Files) turns collapsing off. This is also the
-  single-file view's "collapse unchanged" feature (see Next), so build it in
-  `DiffAligner` output space: a `RowFilter` that maps document rows to visible rows and
-  back, so navigation and the overview strip keep working with the full row indices.
-- Loading: diff files lazily in sidebar order with a small concurrency limit (git + difft
-  per file). Sections that have not loaded yet reserve an estimated height (from numstat
-  lines) so the scroll bar does not jump; when the real document arrives, adjust offsets
-  and keep the visible row anchored. Highlighting is requested only for sections that
-  intersect the visible range plus one screen of lookahead.
-- Sidebar becomes scroll-spy: selecting a file scrolls the changeset to its header;
-  scrolling updates the sidebar selection to the file under the top of the viewport.
-- Navigation: ⌘↓ / ⌘↑ walk change blocks across file boundaries; add ⌘⌥↓ / ⌘⌥↑ for
-  next/previous file. The change overview strip spans the whole changeset with thin file
-  separators.
-- Mode switch: View › Single File (⌘1) / All Changes (⌘2), persisted. Both modes share
-  the sidebar and prefs. Per-window in the tabs model.
-- Performance guard: for changesets above a threshold (e.g. 200 files or 100k total
-  lines) show a banner and load sections only as they scroll into view; never run difft
-  on every file up front.
+- `DiffLoader` keeps the last *completed* `ChangesetDocument` and its final
+  `DocumentStyles`, keyed by the sidebar's file ids in order, `hideWhitespace`, and the
+  fold options it was projected with. Reselecting All changes with the same key publishes
+  the retained document and styles at once, with no assembler; a different key runs the
+  load as today. A watcher refresh or a scope change produces a different list, so the key
+  invalidates itself; a cancelled or partial load is never retained.
+- One retained changeset per window (the loader is per window), released when the
+  window's list changes, so the bound is the last admitted changeset (200 files × 1 MB).
+- Optional, larger: the per-file `DiffDocument` cache already deferred from Stage 3, so
+  that opening a single file after All changes has loaded it is instant too. That touches
+  `DiffEngine` and the prefetcher and should be its own item.
 
-**Tests.** `RowFilter` round-trips (visible index ↔ document row), section offset
-arithmetic when a section resizes, change-block navigation across sections, scroll-spy
-mapping from row to file.
+**Tests.** `DiffLoaderTests`: same key → the retained document is published synchronously
+and no assembler runs (the fake client sees no reads); changed list, whitespace mode, or
+fold options → a fresh load; a load cancelled before completion retains nothing.
 
 ---
 
@@ -286,10 +297,6 @@ mapping from row to file.
 
 Roughly in priority order.
 
-- **Collapse unchanged text in the single-file view.** Same `RowFilter` and collapsed
-  rows as the all-changes view; toggle in View menu, ⌥-click to expand all. Off by
-  default to match Kaleidoscope, and because full context is what a viewer is for. Most of
-  the work lands with feature 3 above.
 - **Find in diff (⌘F).** Search old side, new side, or both; highlight matches in the
   panes and the overview strip; ⌘G / ⌘⇧G step through matches. Kaleidoscope has it, and
   Sublime Merge users complain it is missing, so it is a visible win. Add an option to

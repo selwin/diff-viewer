@@ -1,8 +1,13 @@
 import Foundation
 import Observation
 
-/// Computes the diff for the selected file, cancelling stale work when the selection
-/// or whitespace mode changes. Keeps the previous content visible while reloading.
+/// Computes the diff for the selection, cancelling stale work when the selection or the
+/// whitespace mode changes.
+///
+/// Two modes, one set of published properties. A single file keeps the previous content
+/// on screen while it reloads, so re-diffing the same file does not blank the panes. A
+/// changeset is about the whole list rather than one file, so it starts from an empty
+/// view and grows as the assembler completes sections.
 @MainActor
 @Observable
 final class DiffLoader {
@@ -12,8 +17,12 @@ final class DiffLoader {
     private(set) var errorMessage: String?
     /// Syntax styles for `content`, arriving shortly after the diff itself.
     private(set) var styles: DocumentStyles?
-    /// True while styles for the published content are being computed.
+    /// True while styles for the published content are being computed. Always false for a
+    /// changeset, whose highlighting runs inside the assembler and so is covered by
+    /// `isLoading`.
     private(set) var isHighlighting = false
+    /// How much of an All-changes load has been published, while one is running.
+    private(set) var changesetProgress: (completed: Int, total: Int)?
 
     /// True while a diff or its highlighting is in flight.
     var hasActiveWork: Bool { isLoading || isHighlighting }
@@ -44,6 +53,13 @@ final class DiffLoader {
     func load(file: ChangedFile?, client: (any RepoClient)?, hideWhitespace: Bool) {
         cancelActiveWork()
         let gen = generation
+        changesetProgress = nil
+        // A changeset on screen belongs to another selection entirely.
+        if case .changeset = content {
+            content = nil
+            styles = nil
+            contentFileID = nil
+        }
         guard let file, let client else {
             content = nil
             contentFileID = nil
@@ -82,6 +98,45 @@ final class DiffLoader {
         }
     }
 
+    /// Loads every file as one changeset, publishing it as sections complete.
+    func load(
+        changeset files: [ChangedFile], client: (any RepoClient)?, hideWhitespace: Bool,
+        foldOptions: FoldOptions = FoldOptions()
+    ) {
+        cancelActiveWork()
+        let gen = generation
+        content = nil
+        contentFileID = nil
+        styles = nil
+        errorMessage = nil
+        changesetProgress = nil
+        guard let client else { return }
+        isLoading = true
+        let assembler = ChangesetAssembler(
+            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions, cache: cache)
+        task = Task { [weak self] in
+            guard let self else { return }
+            await assembler.run { [self] publication in
+                await publish(publication, generation: gen)
+            }
+            guard gen == generation else { return }
+            isLoading = false
+            changesetProgress = nil
+        }
+    }
+
+    private func publish(_ publication: ChangesetAssembler.Publication, generation gen: Int) {
+        guard gen == generation else { return }
+        switch publication {
+        case let .document(document, snapshot, completed, total):
+            content = .changeset(document)
+            styles = snapshot
+            changesetProgress = (completed, total)
+        case let .styles(snapshot):
+            styles = snapshot
+        }
+    }
+
     private func highlight(_ document: DiffDocument, fileName: String, generation gen: Int) {
         let oldLines = document.oldLines
         let newLines = document.newLines
@@ -95,7 +150,7 @@ final class DiffLoader {
             async let new = Task.detached(priority: .userInitiated) {
                 Highlighter.highlight(lines: newLines, fileName: fileName)
             }.value
-            let result = await DocumentStyles(documentID: documentID, old: old, new: new)
+            let result = await DocumentStyles(documentID: documentID, revision: 0, old: old, new: new)
             guard !Task.isCancelled, gen == generation else { return }
             styles = result
             isHighlighting = false
@@ -103,8 +158,14 @@ final class DiffLoader {
     }
 }
 
+/// Syntax styles for one document. `revision` is the changeset revision they were built
+/// for, so a snapshot can be matched to the document installed in the panes; a single-file
+/// document has only one revision, 0.
 struct DocumentStyles: Sendable {
+    /// Identifies this style snapshot independently of its document revision.
+    let id = UUID()
     let documentID: UUID
+    let revision: Int
     let old: [[StyleRun]]?
     let new: [[StyleRun]]?
 }
