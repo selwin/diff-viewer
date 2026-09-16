@@ -53,8 +53,9 @@ struct SidebarView: View {
         // Keyed on the ids, not the files: staging moves a row between sections and should
         // slide, while line counts arriving for the same rows should not start a transaction.
         .animation(.default, value: windowState.files.map(\.id))
-        // The list-level form hands over the row that was right-clicked even when it is
-        // not the selected one, which is what a Finder-shaped sidebar is expected to do.
+        // The list-level form hands over the whole selection when the right-clicked row is
+        // part of it, and that row alone when it is not, which is what a Finder-shaped
+        // sidebar is expected to do.
         .contextMenu(forSelectionType: DiffSelection.self) { selections in
             contextMenu(for: Set(selections.compactMap(\.fileID)))
         }
@@ -71,45 +72,50 @@ struct SidebarView: View {
         }
     }
 
-    /// The menu for exactly one row. A header, blank space, a placeholder row, or a
-    /// multiple selection hands over an empty or larger set and has nothing to act on.
+    /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
+    /// for twenty, since the items a selection offers are the items every row in it offers.
+    /// Right-clicking a row outside the selection still acts on that row alone — the list
+    /// hands over just that id — and a header, blank space, or the All changes row names no
+    /// file at all, which has nothing to act on.
     @ViewBuilder
     private func contextMenu(for ids: Set<ChangedFile.ID>) -> some View {
-        if ids.count == 1, let id = ids.first, let file = windowState.files.first(where: { $0.id == id }) {
-            // Whether the file is on disk is the view's question, not the model's: it is
-            // true only at the moment the menu is built, and one stat per right-click is
-            // cheap, where keeping it on `ChangedFile` would mean statting every row on
-            // every refresh to hold an answer that goes stale anyway.
-            let existsOnDisk =
+        let files = windowState.sidebarRows.filter { ids.contains($0.id) }
+        if files.isEmpty {
+            EmptyView()
+        } else {
+            // Whether a file is on disk is the view's question, not the model's: it is
+            // true only at the moment the menu is built, and one stat per row per
+            // right-click is cheap, where keeping it on `ChangedFile` would mean statting
+            // every row on every refresh to hold an answer that goes stale anyway.
+            let actions = FileAction.menu(for: files) { file in
                 windowState.repositoryRoot.map {
                     FileManager.default.fileExists(atPath: $0.url.appendingPathComponent(file.path).path)
                 } ?? false
-            let actions = FileAction.menu(for: file, existsOnDisk: existsOnDisk)
+            }
             let writes = actions.filter(\.isRepositoryWrite)
             let harmless = actions.filter { !$0.isRepositoryWrite }
             ForEach(writes, id: \.self) { action in
-                Button(action.title(for: file)) { run(action, on: file) }
+                Button(action.title(for: files)) { run(action, on: files) }
             }
-            // Separate what changes the repository from what only looks at the file.
+            // Separate what changes the repository from what only looks at the files.
             if !writes.isEmpty, !harmless.isEmpty {
                 Divider()
             }
             ForEach(harmless, id: \.self) { action in
-                Button(action.title(for: file)) { run(action, on: file) }
+                Button(action.title(for: files)) { run(action, on: files) }
             }
-        } else {
-            EmptyView()
         }
     }
 
-    /// The runner confirms first, so it needs this window to hang the sheet on.
-    private func run(_ action: FileAction, on file: ChangedFile) {
+    /// The runner confirms first — once for the whole batch — so it needs this window to
+    /// hang the sheet on.
+    private func run(_ action: FileAction, on files: [ChangedFile]) {
         let runner = FileActionRunner(
             windowState: windowState,
             preferences: preferences,
             window: services.windows[windowState.id]
         )
-        Task { await runner.run(action, on: file) }
+        Task { await runner.run(action, on: files) }
     }
 }
 

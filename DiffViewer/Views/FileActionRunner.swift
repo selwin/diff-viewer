@@ -14,9 +14,9 @@ struct FileActionRunner {
     /// The window to attach the confirmation sheet to; nil falls back to an app-modal alert.
     let window: NSWindow?
 
-    func run(_ action: FileAction, on file: ChangedFile) async {
-        if action.isDestructive(for: file), preferences.confirmDestructiveFileActions {
-            let alert = Self.confirmation(for: action, on: file)
+    func run(_ action: FileAction, on files: [ChangedFile]) async {
+        if action.isDestructive(for: files), preferences.confirmDestructiveFileActions {
+            let alert = Self.confirmation(for: action, on: files)
             let response: NSApplication.ModalResponse
             if let window {
                 response = await alert.beginSheetModal(for: window)
@@ -28,21 +28,34 @@ struct FileActionRunner {
                 preferences.confirmDestructiveFileActions = false
             }
         }
-        await windowState.perform(action, on: file)
+        await windowState.perform(action, on: files)
     }
 
-    /// The alert for one destructive action. Both wordings live in one switch so the
-    /// question, the consequence, and the button verb cannot drift apart.
-    private static func confirmation(for action: FileAction, on file: ChangedFile) -> NSAlert {
+    /// The alert for one destructive action, asked once however many rows it covers. All
+    /// four wordings live in one switch so the question, the consequence, and the button
+    /// verb cannot drift apart. A single file is named; a batch is counted, because the
+    /// reader can see which rows are highlighted and a list of names would not fit.
+    private static func confirmation(for action: FileAction, on files: [ChangedFile]) -> NSAlert {
         let alert = NSAlert()
+        let singleFile = files.count == 1 ? files.first : nil
         switch action {
         case .trash:
-            alert.messageText = "Move \(file.fileName) to the Trash?"
-            alert.informativeText = "The file is untracked; it can be recovered from the Trash."
+            alert.messageText =
+                singleFile.map { "Move \($0.fileName) to the Trash?" }
+                ?? "Move \(files.count) files to the Trash?"
+            alert.informativeText =
+                singleFile != nil
+                ? "The file is untracked; it can be recovered from the Trash."
+                : "The files are untracked; they can be recovered from the Trash."
             alert.addButton(withTitle: "Delete")
         default:
-            alert.messageText = "Discard changes to \(file.fileName)?"
-            alert.informativeText = "Unstaged changes to this file will be lost."
+            alert.messageText =
+                singleFile.map { "Discard changes to \($0.fileName)?" }
+                ?? "Discard changes to \(files.count) files?"
+            alert.informativeText =
+                singleFile != nil
+                ? "Unstaged changes to this file will be lost."
+                : "Unstaged changes to these files will be lost."
             alert.addButton(withTitle: "Discard")
         }
         alert.alertStyle = .warning

@@ -36,8 +36,8 @@ Where DiffViewer already stands versus the bar:
 ## Requested: sidebar churn and sidebar actions
 
 Three items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
-A and B have landed; B is written up under "Landed since this list was written".
-D was added on 2026-09-14, after B shipped single-select.
+A, B and D have landed; B and D are written up under "Landed since this list was
+written". D was added on 2026-09-14, after B shipped single-select.
 
 ### A. Per-file churn in the sidebar (done 2026-09-13)
 
@@ -118,7 +118,12 @@ state suffix from a set of existing marker files.
 
 ---
 
-### D. Multi-selection in the sidebar, with bulk context-menu actions
+### D. Multi-selection in the sidebar, with bulk context-menu actions (done 2026-09-16)
+
+Shipped as designed below, with one change of substance: the detail pane shows a
+multi-selection as a changeset of the selected files (the All-changes machinery over a
+subset), not the most recently added file. The rest of the deviations are under
+"Landed since this list was written".
 
 **Goal.** ⇧-click and ⌘-click select several files in the sidebar, and the context menu
 acts on all of them at once: stage five files, discard three, trash every untracked
@@ -409,8 +414,43 @@ refresh after a write is immediate and not an optimisation: `RepoWatcher` sets
 `kFSEventStreamCreateFlagIgnoreSelf`, so a write this process makes fires no event.
 
 Follow-ups it leaves open: the File-menu mirror with ⌘S / ⌘⇧S / ⌘⌫, so the actions are
-discoverable and reachable from the keyboard; one-step discard of a staged change
-(`git restore --staged --worktree`); and multi-selection with bulk actions (Requested D).
+discoverable and reachable from the keyboard, and one-step discard of a staged change
+(`git restore --staged --worktree`). Multi-selection with bulk actions landed on
+2026-09-16 (below).
+
+### Multi-selection with bulk actions (2026-09-16)
+
+⌘-click, ⇧-click and ⌘A select several sidebar rows. Two or more selected files show as
+one changeset in the detail pane, built by the All-changes assembler over just those files
+in sidebar order; a set that includes the All changes row shows All changes (⌘A and a
+⇧-click range from the top include it). The context menu offers the intersection of what
+every selected row allows, so a mixed staged and unstaged selection gets only Reveal, Open
+and Copy; titles carry the count ("Stage 3 Files", "Discard Changes to 3 Files…", "Restore
+3 Files", "Delete 3 Files…", "Copy 3 Paths", where Copy counts unique paths). One
+confirmation per batch, one git process per batch, one refresh per batch.
+
+**Deviations from design D.** The detail pane shows the selection as a changeset rather
+than one file. Batch trash is a `FileManager.trashItem` loop, not `NSWorkspace.recycle`,
+so there is no single Finder undo yet. `GitClient.perform` ignores an empty list at the
+boundary: `git reset -q --` with no pathspec resets the whole index.
+
+**What the batch forced into the model.** The selection is a `Set<DiffSelection>` whose
+setter is the user's path: it bumps a revision and drops any pending reselection, while
+refreshes mutate the stored set through one private method that does neither. A write
+restores the rows it acted on only if the revision is unchanged when it finishes, and a
+user write during the write's own refresh clears the request, so a deselection or a
+switch to All changes mid-write is never reversed. Surviving rows stay selected and the
+missing ones are re-found by path; the row-index fallback applies once, for the topmost
+lost row. The refresh alone decides whether to reload the pane, from a content key
+(mode plus the ids the pane is built from), because applying a selection never reloads.
+Every attempted write refreshes, success or failure: `git restore` checks out entries one
+by one without rolling back, and a trash loop can stop halfway. A successful refresh
+clears only an error a refresh raised, so a batch failure survives the watcher.
+
+Follow-ups it leaves open: Stage All / Unstage All on the section headers; a split menu
+for a mixed selection ("Stage 2 Files" + "Unstage 1 File") if the intersection rule
+proves too strict; `NSWorkspace.recycle` for one Finder undo; and the File-menu mirror
+above, which should act on the selection.
 
 ## Not doing (and why)
 

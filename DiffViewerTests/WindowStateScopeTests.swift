@@ -55,18 +55,18 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let commit = commitSummary("c1")
         _ = await adopt(h, state, commit: commit, commitFiles: [commitFile("a1.swift", commit)])
-        #expect(state.selection == .allChanges, "the first list selects All changes")
-        state.selection = .file(workingFiles[0].id)
+        #expect(state.selection == [.allChanges], "the first list selects All changes")
+        state.selection = [.file(workingFiles[0].id)]
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
-        #expect(await eventually { await state.selection == .allChanges })
+        #expect(await eventually { await state.selection == [.allChanges] })
         #expect(state.selectedFileID == nil)
 
-        state.selection = state.files.first.map { .file($0.id) }
+        state.selection = state.files.first.map { [.file($0.id)] } ?? []
         state.selectWorkingTree()
         #expect(await eventually { await state.files.count == workingFiles.count })
-        #expect(await eventually { await state.selection == .allChanges }, "and on the way back too")
+        #expect(await eventually { await state.selection == [.allChanges] }, "and on the way back too")
     }
 
     /// All changes reads every file itself, so the prefetcher has nothing to warm.
@@ -75,10 +75,10 @@ struct WindowStateScopeTests {
         let state = h.makeState()
         let commit = commitSummary("c1")
         _ = await adopt(h, state, commit: commit, commitFiles: [])
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
         #expect(state.filesToWarm.isEmpty)
 
-        state.selection = .file(workingFiles[0].id)
+        state.selection = [.file(workingFiles[0].id)]
         #expect(state.filesToWarm.map(\.path) == ["a2.swift"])
     }
 
@@ -246,12 +246,12 @@ struct WindowStateScopeTests {
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.count == 2 })
-        #expect(await eventually { await state.selection == .allChanges })
+        #expect(await eventually { await state.selection == [.allChanges] })
         // All changes warms nothing, so the list is checked with a file selected and with
         // nothing selected at all.
-        state.selection = nil
+        state.selection = []
         #expect(state.filesToWarm.map(\.path) == ["one.swift", "two.swift"])
-        state.selection = state.files.first.map { .file($0.id) }
+        state.selection = state.files.first.map { [.file($0.id)] } ?? []
         #expect(state.filesToWarm.map(\.path) == ["two.swift"])
     }
 
@@ -368,7 +368,7 @@ struct WindowStateScopeTests {
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.count == 1 })
-        state.selection = state.files.first.map { .file($0.id) }
+        state.selection = state.files.first.map { [.file($0.id)] } ?? []
         #expect(state.selectedFile?.path == "a1.swift")
 
         // Both working-tree reads block, so their completion order can be chosen.
@@ -385,7 +385,7 @@ struct WindowStateScopeTests {
         await client.releaseFirst()
         try? await Task.sleep(for: .milliseconds(50))
 
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
         #expect(state.selectedFileID == nil)
     }
 
@@ -540,7 +540,7 @@ struct WindowStateScopeTests {
         await client.set(files: [commitFile("a1.swift", second)], forCommit: second.ref.sha)
         await client.set(commits: [second, first])
 
-        state.selection = state.files.first { $0.path == "a1.swift" }.map { .file($0.id) }
+        state.selection = state.files.first { $0.path == "a1.swift" }.map { [.file($0.id)] } ?? []
         #expect(state.selectedFile?.path == "a1.swift")
 
         await client.holdCommitFiles(true)
@@ -551,7 +551,7 @@ struct WindowStateScopeTests {
         await client.releaseCommitFiles()
 
         #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
-        #expect(await eventually { await state.selection == .allChanges })
+        #expect(await eventually { await state.selection == [.allChanges] })
         #expect(state.scope == .commit(second.ref))
     }
 
@@ -563,14 +563,14 @@ struct WindowStateScopeTests {
         let h = Harness()
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: workingFiles)
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
         let reads = await repo.client.contentReads
 
         let updated = [changedFile("a1.swift"), changedFile("new.swift")]
         await repo.client.set(files: updated)
         h.watcherCallbacks[repo.root]!()
         #expect(await eventually { await state.files == updated })
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
         #expect(await eventually { await repo.client.contentReads > reads }, "the changeset is read again")
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
     }
@@ -582,7 +582,7 @@ struct WindowStateScopeTests {
         let h = Harness()
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: [changedFile("a.swift")])
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
 
         await repo.client.set(files: [changedFile("a.swift"), changedFile("b.swift")])
         state.diffSettingsChanged()
@@ -600,12 +600,12 @@ struct WindowStateScopeTests {
         let files = [changedFile("a.swift"), changedFile("b.swift")]
         let repo = await h.adopt(state, "A", files: files)
         await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1]])
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
 
-        await state.perform(.stage, on: files[0])
+        await state.perform(.stage, on: [files[0]])
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection == .allChanges, "no row was selected, so nothing is restored")
+        #expect(state.selection == [.allChanges], "no row was selected, so nothing is restored")
     }
 
     /// The reselection rule still applies to a file the reader was actually on.
@@ -616,11 +616,11 @@ struct WindowStateScopeTests {
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: files)
         await repo.client.set(filesAfterWrite: [staged, files[1]])
-        state.selection = .file(files[0].id)
+        state.selection = [.file(files[0].id)]
 
-        await state.perform(.stage, on: files[0])
+        await state.perform(.stage, on: [files[0]])
 
-        #expect(await eventually { await state.selection == .file(staged.id) })
+        #expect(await eventually { await state.selection == [.file(staged.id)] })
     }
 
     /// The case a computed `selectedFileID` would get wrong: All changes and "nothing
@@ -632,10 +632,10 @@ struct WindowStateScopeTests {
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: files)
         let client = repo.client
-        state.selection = .file(files[0].id)
+        state.selection = [.file(files[0].id)]
         await client.holdActions(true)
 
-        let write = Task { await state.perform(.stage, on: files[0]) }
+        let write = Task { await state.perform(.stage, on: [files[0]]) }
         #expect(await eventually { await client.heldActionCount == 1 })
         // A watcher refresh lands while git runs and clears the selection, because the
         // row the reader was on has gone.
@@ -644,14 +644,14 @@ struct WindowStateScopeTests {
         h.watcherCallbacks[repo.root]?()
         #expect(
             await eventually {
-                guard await state.selection == nil else { return false }
+                guard await state.selection.isEmpty else { return false }
                 return await state.files == afterWatcher
             })
-        state.selection = .allChanges
+        state.selection = [.allChanges]
         await client.releaseActions()
         await write.value
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection == .allChanges, "the reader's own choice outranks the write")
+        #expect(state.selection == [.allChanges], "the reader's own choice outranks the write")
     }
 }

@@ -27,6 +27,22 @@ enum FileAction: CaseIterable, Sendable {
         writes(for: file) + harmless(existsOnDisk: existsOnDisk)
     }
 
+    /// The menu for a whole selection: the items every one of `files` offers.
+    ///
+    /// Each file's own menu is computed once, so the caller stats each path once, and the
+    /// intersection is filtered back through `allCases` to keep the writes-then-harmless
+    /// order the divider depends on. A mixed staged and unstaged selection therefore
+    /// offers only the harmless items: Stage and Unstage mean opposite things to its two
+    /// halves, and a menu that acted on some rows and not others would be worse than none.
+    static func menu(for files: [ChangedFile], existsOnDisk: (ChangedFile) -> Bool) -> [FileAction] {
+        guard let first = files.first else { return [] }
+        var shared = Set(menu(for: first, existsOnDisk: existsOnDisk(first)))
+        for file in files.dropFirst() {
+            shared.formIntersection(menu(for: file, existsOnDisk: existsOnDisk(file)))
+        }
+        return allCases.filter(shared.contains)
+    }
+
     /// The repository writes `file` offers, if any.
     private static func writes(for file: ChangedFile) -> [FileAction] {
         switch file.area {
@@ -72,6 +88,31 @@ enum FileAction: CaseIterable, Sendable {
         }
     }
 
+    /// The menu title for a whole selection. One file keeps its own title, which says what
+    /// the command means for that file; several files are counted instead, because a batch
+    /// title cannot name eight paths and the reader can see which rows are highlighted.
+    ///
+    /// Copy Path counts paths rather than rows: a file with both staged and unstaged edits
+    /// is two rows but one path, and only one path would reach the pasteboard.
+    func title(for files: [ChangedFile]) -> String {
+        if files.count == 1, let file = files.first { return title(for: file) }
+        let count = files.count
+        switch self {
+        case .stage: return "Stage \(count) Files"
+        case .unstage: return "Unstage \(count) Files"
+        case .discard:
+            // The same command, but a batch of deletions only brings files back.
+            return files.allSatisfy { $0.kind == .deleted }
+                ? "Restore \(count) Files" : "Discard Changes to \(count) Files…"
+        case .trash: return "Delete \(count) Files…"
+        case .revealInFinder: return "Reveal in Finder"
+        case .openInEditor: return "Open in Default Editor"
+        case .copyPath:
+            let paths = Set(files.map(\.path)).count
+            return paths == 1 ? "Copy Path" : "Copy \(paths) Paths"
+        }
+    }
+
     /// Whether the action destroys work, which is what the confirmation sheet asks about.
     /// Restoring a deleted file is a discard that loses nothing, so it does not confirm.
     func isDestructive(for file: ChangedFile) -> Bool {
@@ -80,6 +121,12 @@ enum FileAction: CaseIterable, Sendable {
         case .discard: file.kind != .deleted
         default: false
         }
+    }
+
+    /// Whether the batch destroys work: one file with something to lose is enough to ask.
+    /// An all-deleted discard ("Restore N Files") loses nothing, so it still asks nothing.
+    func isDestructive(for files: [ChangedFile]) -> Bool {
+        files.contains { isDestructive(for: $0) }
     }
 
     /// The git command behind the action, or nil for the ones git does not run.

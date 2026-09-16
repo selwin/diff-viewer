@@ -207,7 +207,7 @@ final class CoordinatorHarness {
         // the selection leaves a warm list to prefetch: All changes warms nothing, and
         // these tests are about which window is prefetched and when.
         #expect(await eventually { await MainActor.run { !window.diffLoader.hasActiveWork } })
-        window.selection = nil
+        window.selection = []
     }
 }
 
@@ -465,7 +465,7 @@ struct WindowCoordinatorTests {
         // first list to arrive selects All changes, which warms nothing.
         #expect(await eventually { await MainActor.run { h.prefetcher.events.count == 2 } })
         #expect(h.prefetcher.events.allSatisfy { $0 == .prefetch([]) })
-        #expect(state.selection == .allChanges)
+        #expect(state.selection == [.allChanges])
     }
 
     @Test func userRequestJoiningARestorationCreateUpgradesRecency() async {
@@ -725,8 +725,8 @@ struct WindowCoordinatorTests {
         let w2 = h.makeWindow()
         await h.openAndSettle(a, into: w1)
         await h.openAndSettle(b, into: w2)
-        w1.selection = .file(filesA[0].id)
-        w2.selection = .file(filesB[0].id)
+        w1.selection = [.file(filesA[0].id)]
+        w2.selection = [.file(filesB[0].id)]
         #expect(
             await eventually { await MainActor.run { w1.diffLoader.content != nil && w2.diffLoader.content != nil } })
         #expect(
