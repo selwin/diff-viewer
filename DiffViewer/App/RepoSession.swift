@@ -47,9 +47,17 @@ final class RepoSession {
     /// Bumped when a refresh that needs a defaults read is accepted, and on close. Only
     /// the read of the current generation publishes.
     var commitDefaultsGeneration = 0
-    /// One watcher refresh at a time: ticks received during it request one follow-up.
+    /// One watcher refresh at a time.
     var watcherRefreshRunning = false
-    var watcherRefreshPending = false
+    /// Ticks received during a watcher refresh, merged into one follow-up.
+    var watcherRefreshPending: Set<RepoChange> = []
+    /// Bumped on `.configuration` and `.rescan`. Part of every line-stats request, so
+    /// carried-over counts are invalidated: attributes can change the binary
+    /// classification of an unchanged file.
+    var configurationRevision = 0
+    /// What the last defaults read said about `commit.template`. Unknown until then and
+    /// after a failed read, which routing treats as configured.
+    var templateDependency: CommitDefaults.TemplateDependency = .unknown
 
     init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root
@@ -75,6 +83,10 @@ enum RefreshCause: Sendable {
     case commit
     /// A branch switch finished, successfully or not, and the working tree was re-read.
     case branchSwitch
+
+    /// Whether a refresh for this cause starts a commit-defaults read. A settings change
+    /// has no bearing on the suggestion, and the watcher decides from its routing.
+    var readsCommitDefaults: Bool { self != .settings && self != .watcher }
 }
 
 /// One page of the branch's history: the commits, the revision they were read from,

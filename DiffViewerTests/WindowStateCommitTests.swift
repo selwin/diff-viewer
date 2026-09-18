@@ -135,7 +135,8 @@ struct WindowStateCommitTests {
 
         await client.set(commitDefaults: .none)
         let before = h.published.count
-        h.watcherCallbacks[root]!()
+        // A merge abort removes MERGE_HEAD: the change that re-reads the defaults.
+        h.tick(root, [.commitState])
         #expect(await eventually { await h.published.count == before + 1 })
         try await settleDefaults(state)
         #expect(state.commitMessage == "", "the untouched draft was emptied while git ran")

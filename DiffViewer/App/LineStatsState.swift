@@ -21,7 +21,7 @@ enum FileInputIdentity: Equatable {
 struct LineStatsRequest: Equatable {
     let scope: DiffScope
     let hideWhitespace: Bool
-    /// Bumped when git configuration that affects diffs changes; 0 until Stage 2.
+    /// The session's revision of git configuration that affects diffs (attributes, excludes).
     let configurationRevision: Int
     /// Every requested file, listed explicitly so a file that appears or disappears
     /// changes the request.

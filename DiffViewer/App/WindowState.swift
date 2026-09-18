@@ -14,7 +14,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class WindowState {
-    typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping @MainActor () -> Void) -> (any RepoWatching)?
+    typealias WatcherCallback = @MainActor (Set<RepoChange>) -> Void
+    typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping WatcherCallback) -> (any RepoWatching)?
 
     let id = WindowID()
     let preferences: Preferences
@@ -182,9 +183,9 @@ final class WindowState {
     func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
         guard session == nil, !isClosed else { return false }
         let session = RepoSession(root: root, client: client)
-        session.watcher = watchRepository(root) { [weak self, weak session] in
+        session.watcher = watchRepository(root) { [weak self, weak session] changes in
             guard let self, let session else { return }
-            Task { await self.repositoryChanged(session: session) }
+            Task { await self.repositoryChanged(session: session, changes: changes) }
         }
         self.session = session
         title = root.name
@@ -232,36 +233,42 @@ final class WindowState {
 
     /// Something under `.git` or in the working tree changed.
     ///
-    /// One refresh runs at a time; ticks received during it request one follow-up. The
-    /// follow-up runs hidden too: a hidden window still re-reads status, and dropping the
-    /// tick would lose an edit that only a status read can discover.
-    private func repositoryChanged(session: RepoSession) async {
+    /// One refresh runs at a time; ticks received during it are merged into one
+    /// follow-up. The follow-up runs hidden too: a hidden window still re-reads status,
+    /// and dropping the tick would lose an edit that only a status read can discover.
+    private func repositoryChanged(session: RepoSession, changes: Set<RepoChange>) async {
         guard session === self.session, !isClosed else { return }
         if session.watcherRefreshRunning {
-            session.watcherRefreshPending = true
+            session.watcherRefreshPending.formUnion(changes)
             return
         }
         session.watcherRefreshRunning = true
         defer { session.watcherRefreshRunning = false }
-        await runWatcherRefresh(session: session)
-        while session.watcherRefreshPending, session === self.session, !isClosed {
-            session.watcherRefreshPending = false
-            await runWatcherRefresh(session: session)
+        await runWatcherRefresh(session: session, changes: changes)
+        while !session.watcherRefreshPending.isEmpty, session === self.session, !isClosed {
+            let pending = session.watcherRefreshPending
+            session.watcherRefreshPending = []
+            await runWatcherRefresh(session: session, changes: pending)
         }
     }
 
-    /// A commit's contents cannot change, so in commit scope this must not re-read the
-    /// file list, republish it, or reload the diff — doing so on every keystroke in
-    /// another editor would re-read historical blobs and re-run alignment and
-    /// highlighting for a view that cannot have changed. Only the commit list can go
-    /// stale, and only when HEAD moves.
-    private func runWatcherRefresh(session: RepoSession) async {
-        if case .workingTree = scope {
-            await refresh(session: session, cause: .watcher)
+    /// Routes `changes` to the reads they can invalidate. In commit scope only repository
+    /// metadata is refreshed: a commit's contents cannot change, and re-reading them on
+    /// every keystroke in another editor would redo alignment and highlighting for nothing.
+    private func runWatcherRefresh(session: RepoSession, changes: Set<RepoChange>) async {
+        if changes.contains(.configuration) || changes.contains(.rescan) {
+            session.configurationRevision += 1
+            // The configuration may have gained a template; until the read below says,
+            // a worktree write has to be assumed to touch it.
+            session.templateDependency = .unknown
         }
-        guard session === self.session, !isClosed else { return }
+        let work = RefreshRouting.work(for: changes, scope: scope, template: session.templateDependency)
+        // Before the first suspension, so the read's generation is settled the moment
+        // the tick is accepted.
+        if work.commitDefaults { startCommitDefaultsRead(session: session) }
+        if work.status { await refresh(session: session, cause: .watcher) }
+        guard session === self.session, !isClosed, work.repositoryMetadata else { return }
         await reloadHistoryIfHeadMoved(session: session)
-        // Also in commit scope: a checkout under a selected commit still changes the branch.
         await refreshHeadState(session: session)
     }
 
@@ -280,10 +287,9 @@ final class WindowState {
         session.refreshSerial += 1
         let serial = session.refreshSerial
         // Started before the first suspension so the read's generation is settled the
-        // moment the refresh is accepted. Only a settings change has no bearing on the
-        // suggestion. Independent of `status()` succeeding: the defaults have their own
-        // inputs.
-        if scope == .workingTree, cause != .settings {
+        // moment the refresh is accepted. Independent of `status()` succeeding: the
+        // defaults have their own inputs.
+        if scope == .workingTree, cause.readsCommitDefaults {
             startCommitDefaultsRead(session: session)
         }
         let ignoreWhitespace = preferences.hideWhitespace
@@ -330,7 +336,8 @@ final class WindowState {
             // on screen: a cancelled read must not leave one version's counts on another's
             // content. Assigned only when something differs, so an equal tick observes nothing.
             let desired = LineStatsRequest(
-                scope: scope, hideWhitespace: ignoreWhitespace, configurationRevision: 0,
+                scope: scope, hideWhitespace: ignoreWhitespace,
+                configurationRevision: session.configurationRevision,
                 inputs: newByID.mapValues { FileInputIdentity($0.fingerprint) })
             let lastOutcome = session.lineStats.lastOutcome
             let published = newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) }
@@ -847,7 +854,7 @@ extension WindowState {
 
     /// Reads the suggestion and applies it while its generation is still current and the
     /// sidebar still shows the working tree. A thrown read applies nothing, so the box
-    /// keeps its last good state.
+    /// keeps its last good state, but it does forget whether a template is configured.
     private func loadCommitDefaults(session: RepoSession, generation: Int) async {
         // Cancelled before it ran: skip the subprocess, not just the publish.
         guard !Task.isCancelled else { return }
@@ -859,11 +866,18 @@ extension WindowState {
         do {
             new = try await session.client.commitDefaults()
         } catch {
-            // Applies nothing today. When Stage 2 records the failure, it must sit behind
-            // `isCurrent()` too, so an obsolete failure never overwrites a newer result.
+            // Behind `isCurrent()` too, so an obsolete failure never overwrites a newer result.
+            guard isCurrent() else { return }
+            session.templateDependency = .unknown
             return
         }
         guard isCurrent() else { return }
+        session.templateDependency = new.templateDependency
+        if case let .configured(path) = new.templateDependency {
+            session.watcher?.setDependencies([path])
+        } else {
+            session.watcher?.setDependencies([])
+        }
         applyCommitDefaults(new)
     }
 

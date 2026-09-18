@@ -62,7 +62,7 @@ struct WindowStateScopeTests {
         #expect(await eventually { await h.published.last?.cause == .scope })
         await client.set(commits: [second])
         await client.set(head: second.ref.sha)
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.history.commits == [second] })
         #expect(state.selectableCommits == [first, second])
 
@@ -141,8 +141,8 @@ struct WindowStateScopeTests {
         state.select(commit: commit)
         #expect(await eventually { await client.heldCommitFileCount == 1 })
 
-        // The watcher fires while the commit's files are still being read.
-        h.watcherCallbacks.values.first?()
+        // A ref moves while the commit's files are still being read.
+        h.watcherChangeCallbacks.values.first?([.refs])
         try? await Task.sleep(for: .milliseconds(50))
 
         await client.holdCommitFiles(false)
@@ -165,8 +165,8 @@ struct WindowStateScopeTests {
         #expect(state.files.map(\.path) == ["src/one.swift"], "no stale working-tree publish arrives late")
     }
 
-    /// A commit cannot change, so an edit elsewhere in the tree must not re-read it,
-    /// republish the list, or reload the diff.
+    /// A commit cannot change, so a ref write elsewhere in the repository must not re-read
+    /// it, republish the list, or reload the diff. `.refs`, so the HEAD check does run.
     @Test func aWatcherTickWithUnmovedHeadDoesNothingInCommitScope() async {
         let h = Harness()
         let state = h.makeState()
@@ -179,7 +179,7 @@ struct WindowStateScopeTests {
         let reads = await client.commitFileCalls
         let historyReads = await client.historyCalls
 
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         try? await Task.sleep(for: .milliseconds(100))
 
         #expect(h.published.count == publishes, "no file-list publish")
@@ -196,7 +196,7 @@ struct WindowStateScopeTests {
         await client.set(head: later.ref.sha)
         await client.set(commits: [later, commit])
 
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.history.commits.first?.ref == later.ref })
         #expect(state.history.revision == later.ref.sha)
         #expect(state.commitLimit == WindowState.commitPageSize)
@@ -227,7 +227,7 @@ struct WindowStateScopeTests {
         let page = (0...WindowState.commitPageSize).map { commitSummary("c\($0)") }
         await client.set(commits: page)
         await client.set(head: objectID("moved"))
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
 
         #expect(await eventually { await state.history.hasMore })
         #expect(state.history.commits.count == WindowState.commitPageSize)
@@ -264,7 +264,8 @@ struct WindowStateScopeTests {
         #expect(state.historyPlaceholder == .failed)
 
         await repo.client.fail(history: false)
-        h.watcherCallbacks.values.first?()
+        // Only a ref change checks HEAD again; an edit in the tree does not.
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await !state.history.commits.isEmpty }, "a failed read is not left standing")
         #expect(state.historyErrorMessage == nil)
     }
@@ -327,8 +328,8 @@ struct WindowStateScopeTests {
     }
 
     /// The reason the branch is read on the HEAD tick rather than from the status
-    /// header: in commit scope the watcher never calls `status()`, so a checkout while a
-    /// commit is selected would otherwise leave the branch title stale.
+    /// header: in commit scope the watcher never calls `status()`, so a checkout (a
+    /// `.refs` change) while a commit is selected would otherwise leave the branch title stale.
     @Test func aWatcherTickUpdatesTheBranchInCommitScope() async {
         let h = Harness()
         let state = h.makeState()
@@ -340,7 +341,7 @@ struct WindowStateScopeTests {
         #expect(await eventually { await state.files.count == 1 })
 
         await client.set(headState: .named("other"))
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.branchDisplayTitle == "other" })
     }
 
@@ -353,7 +354,7 @@ struct WindowStateScopeTests {
         let client = await adopt(h, state, commit: commit, commitFiles: [])
         await client.set(headState: .detached(sha: String(repeating: "b", count: 40)))
 
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.branchDisplayTitle == "Detached bbbbbbb" })
     }
 
@@ -369,7 +370,7 @@ struct WindowStateScopeTests {
         // Waiting for the failing read to be counted, rather than for a duration, keeps
         // the assertion below about the title and not about timing.
         let before = await client.headStateCalls
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await client.headStateCalls == before + 1 })
         #expect(state.branchDisplayTitle == "main")
     }
@@ -390,7 +391,7 @@ struct WindowStateScopeTests {
 
         // The tick reads HEAD and blocks, having seen the old revision.
         await client.holdHead(true)
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await client.heldHeadCount == 1 })
 
         // The switch resolves the new revision and publishes it while the tick waits.
@@ -502,7 +503,7 @@ struct WindowStateScopeTests {
         await client.set(head: later.ref.sha)
         await client.set(commits: [later, first])
         await client.holdHead(true)
-        for _ in 0..<4 { h.watcherCallbacks.values.first?() }
+        for _ in 0..<4 { h.watcherChangeCallbacks.values.first?([.refs]) }
         #expect(await eventually { await client.heldHeadCount == 1 }, "ticks queue behind the running refresh")
         let headsBefore = await client.headCalls
         let readsBefore = await client.historyCalls
@@ -537,7 +538,7 @@ struct WindowStateScopeTests {
 
         // Both checks resolve revisions that differ from what is displayed.
         await client.set(head: older.ref.sha)
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await client.heldHeadCount == 1 })
         await client.set(headAfterSwitch: newer.ref.sha)
         let switching = Task { await state.switchBranch(to: "feature") }
@@ -570,13 +571,13 @@ struct WindowStateScopeTests {
         await client.holdHistory(true)
         await client.set(head: onB.ref.sha)
         await client.set(commits: [onB])
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await client.heldHistoryCount == 1 })
 
         // Back to A before B's history arrives.
         await client.set(head: onA.ref.sha)
         await client.set(commits: [onA])
-        h.watcherCallbacks.values.first?()
+        h.watcherChangeCallbacks.values.first?([.refs])
         try? await Task.sleep(for: .milliseconds(60))
 
         await client.holdHistory(false)

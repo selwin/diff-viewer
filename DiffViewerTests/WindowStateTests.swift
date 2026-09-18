@@ -425,6 +425,9 @@ actor StubRepoClient: RepoClient {
 @MainActor
 final class NoopWatcher: RepoWatching {
     private(set) var stopped = false
+    /// Every dependency set handed over, in order.
+    private(set) var dependencies: [Set<String>] = []
+    func setDependencies(_ paths: Set<String>) { dependencies.append(paths) }
     func stop() { stopped = true }
 }
 
@@ -435,6 +438,9 @@ final class Harness {
     let runner = RunnerProbe()
     let preferences: Preferences
     private(set) var watchers: [RepositoryRoot: NoopWatcher] = [:]
+    /// A tick carrying an explicit set of changes.
+    private(set) var watcherChangeCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// A plain tick, as an edit and a stage produce: `[.worktree, .index]`.
     private(set) var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
     /// Every `onRefreshPublished` call, in order.
     private(set) var published: [(files: [ChangedFile], cause: RefreshCause, inputsChanged: Bool)] = []
@@ -458,13 +464,19 @@ final class Harness {
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher
-                self?.watcherCallbacks[root] = onChange
+                self?.watcherChangeCallbacks[root] = onChange
+                self?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
                 return watcher
             })
         state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
             self?.published.append((state.files, cause, inputsChanged))
         }
         return state
+    }
+
+    /// Delivers a watcher tick for `root` carrying `changes`.
+    func tick(_ root: RepositoryRoot, _ changes: Set<RepoChange>) {
+        watcherChangeCallbacks[root]!(changes)
     }
 
     /// Waits for the line-stats read in flight, if any, so later counter assertions are
@@ -1267,5 +1279,311 @@ struct WindowStateTests {
         await tick(h, repo.root, waitingFor: repo.client)
         #expect(h.published.last?.inputsChanged == true)
         #expect(await eventually { await repo.client.contentReads == reads + 2 })
+    }
+
+    // MARK: Routed ticks
+
+    /// Adopts `files` with counts and waits for every read the adoption starts, so the
+    /// counters below move only for the tick under test.
+    private func adoptSettled(_ h: Harness, _ state: WindowState, files: [ChangedFile]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let repo = await adoptCounted(h, state, files: files)
+        await state.session?.historyTask?.value
+        await state.session?.commitDefaultsTask?.value
+        #expect(await eventually { await state.localBranches == ["main"] })
+        return repo
+    }
+
+    /// Every read a tick can route to, taken at one moment.
+    private struct Reads: Equatable {
+        var status, head, headState, defaults, numstat, content: Int
+
+        init(_ client: StubRepoClient) async {
+            status = await client.statusCalls
+            head = await client.headCalls
+            headState = await client.headStateCalls
+            defaults = await client.commitDefaultsCalls
+            numstat = await client.numstatCalls
+            content = await client.contentReads
+        }
+
+        /// The same counters after the given reads.
+        func plus(status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0) -> Reads {
+            var reads = self
+            reads.status += status
+            reads.head += head
+            reads.headState += headState
+            reads.defaults += defaults
+            return reads
+        }
+    }
+
+    /// Sends `changes` and waits for the status read and publish it must produce.
+    private func tick(
+        _ h: Harness, _ repo: RepositoryRoot, _ changes: Set<RepoChange>, waitingFor client: StubRepoClient
+    ) async {
+        let status = await client.statusCalls
+        let before = h.published.count
+        h.tick(repo, changes)
+        #expect(await eventually { await client.statusCalls == status + 1 })
+        #expect(await eventually { await h.published.count > before })
+    }
+
+    @Test func anIndexTickCostsOneStatusRead() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+
+        await tick(h, repo.root, [.index], waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == before.plus(status: 1))
+    }
+
+    @Test func aRefsTickReadsMetadataAndDefaultsWithoutReloading() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+
+        await tick(h, repo.root, [.refs], waitingFor: repo.client)
+        let expected = before.plus(status: 1, head: 1, headState: 1, defaults: 1)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected, "equal inputs: no diff, no recount")
+    }
+
+    /// A soft reset writes only `.git/HEAD` and the ref, yet what is staged changes.
+    @Test func aSoftResetShowsItsStagedFiles() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        #expect(state.detailSelection == .allChanges)
+        let reads = await repo.client.contentReads
+
+        let unstaged = filesA + [changedFile("reset.swift", area: .staged)]
+        await repo.client.set(files: unstaged)
+        await tick(h, repo.root, [.refs], waitingFor: repo.client)
+        #expect(state.files.map(\.id) == unstaged.map(\.id))
+        #expect(await eventually { await repo.client.contentReads > reads }, "All changes reloads")
+    }
+
+    /// `info/exclude` decides what is untracked, so the list and the counts follow it.
+    @Test func anExcludeEditUpdatesTheListAndRecounts() async {
+        let h = Harness()
+        let state = h.makeState()
+        let untracked = changedFile("scratch.txt", kind: .untracked)
+        let repo = await adoptSettled(h, state, files: filesA + [untracked])
+        let numstats = await repo.client.numstatCalls
+
+        await repo.client.set(files: filesA)
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(await eventually { await repo.client.numstatCalls > numstats })
+    }
+
+    /// Attributes can reclassify an unchanged file as binary, so a configuration change
+    /// recounts everything and shows nothing stale meanwhile.
+    @Test func aConfigurationTickDropsCarriedOverCountsAndRecounts() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let revision = state.session?.configurationRevision
+        await repo.client.holdNumstat(true)
+
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(state.session?.configurationRevision == revision.map { $0 + 1 })
+        #expect(state.files.allSatisfy { $0.lineStats == nil }, "the old counts answer another configuration")
+        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+
+        await repo.client.releaseNumstat()
+        #expect(await eventually { await state.files.allSatisfy { $0.lineStats != nil } })
+    }
+
+    @Test func aWorktreeTickLeavesAHeldDefaultsReadAloneWhenNoTemplateIsConfigured() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        // Spelled out: `.none` against an optional would mean nil.
+        #expect(state.session?.templateDependency == CommitDefaults.TemplateDependency.none)
+        let expected = merging("Merge branch 'feature'")
+        await repo.client.set(commitDefaults: expected)
+        await repo.client.holdCommitDefaults(true)
+        await state.refresh()
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        let task = try #require(state.session?.commitDefaultsTask)
+        let defaults = await repo.client.commitDefaultsCalls
+
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.commitDefaultsCalls == defaults, "no template: the worktree cannot change it")
+
+        await repo.client.releaseCommitDefaults()
+        await task.value
+        #expect(state.commitDefaults == expected, "the held read was not superseded")
+    }
+
+    /// A configured template may live in the worktree, so an edit there can change the suggestion.
+    @Test func aWorktreeTickRereadsDefaultsWhileATemplateIsConfigured() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.set(
+            commitDefaults: CommitDefaults(suggestion: nil, isMerging: false, templateDependency: configured))
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(state.session?.templateDependency == configured)
+
+        let filled = CommitDefaults(
+            suggestion: .init(text: "Subject: ", source: .template), isMerging: false, templateDependency: configured)
+        await repo.client.set(commitDefaults: filled)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await state.commitDefaults == filled })
+    }
+
+    /// A configuration change may have enabled a template. Until the read it starts says
+    /// so, a worktree tick must not trust the old "none": a template edit made while that
+    /// read is pending would otherwise publish a suggestion that is already stale.
+    @Test func aConfigurationTickForgetsTheTemplateDependencyUntilItsReadLands() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        #expect(state.session?.templateDependency == CommitDefaults.TemplateDependency.none)
+
+        let templateA = templated("A")
+        let templateB = templated("B")
+        // The read the configuration tick starts sees template A and is held there.
+        await repo.client.set(commitDefaults: templateA)
+        await repo.client.holdCommitDefaults(true)
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        #expect(state.session?.templateDependency == .unknown)
+
+        // The template is edited to B while A's read is pending; the worktree tick must read again.
+        await repo.client.set(commitDefaults: templateB)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 2 })
+
+        await repo.client.releaseFirstCommitDefaults()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(state.commitDefaults == .none, "A's read is stale and applies nothing")
+        await repo.client.holdCommitDefaults(false)
+        await repo.client.releaseCommitDefaults()
+        #expect(await eventually { await state.commitDefaults == templateB })
+        #expect(state.session?.templateDependency == configured)
+    }
+
+    /// A template in the worktree, as the routed-tick tests configure it.
+    private let configured = CommitDefaults.TemplateDependency.configured(path: "/tmp/A/.gitmessage")
+
+    private func templated(_ text: String) -> CommitDefaults {
+        CommitDefaults(
+            suggestion: .init(text: text, source: .template), isMerging: false, templateDependency: configured)
+    }
+
+    /// The watcher learns the template's path from each read, so an edit to a template kept
+    /// under `.git` is not dropped with that directory's noise.
+    @Test func aDefaultsReadHandsTheTemplatePathToTheWatcher() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        let path = "/tmp/A/.git/commit-template"
+        await repo.client.set(
+            commitDefaults: CommitDefaults(
+                suggestion: nil, isMerging: false, templateDependency: .configured(path: path)))
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(h.watchers[repo.root]?.dependencies.last == [path])
+
+        await repo.client.set(commitDefaults: .none)
+        await state.refresh()
+        await state.session?.commitDefaultsTask?.value
+        #expect(h.watchers[repo.root]?.dependencies.last == [], "unset: nothing left to depend on")
+    }
+
+    /// A read that threw cannot say whether a template is configured, so the next
+    /// worktree tick reads again rather than assuming there is none.
+    @Test func aFailedDefaultsReadIsRetriedByAWorktreeTick() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.fail(commitDefaults: true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(state.session?.templateDependency == .unknown)
+
+        let expected = merging("Merge branch 'feature'")
+        await repo.client.fail(commitDefaults: false)
+        await repo.client.set(commitDefaults: expected)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await state.commitDefaults == expected })
+    }
+
+    @Test func ticksWithDifferentChangesMergeIntoOneFollowUp() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+        await repo.client.hold(true)
+        h.tick(repo.root, [.index])
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        h.tick(repo.root, [.index])
+        h.tick(repo.root, [.refs])
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+
+        #expect(await eventually { await repo.client.statusCalls == before.status + 2 }, "one follow-up")
+        #expect(await eventually { await repo.client.headStateCalls == before.headState + 1 }, "carrying `.refs`")
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == before.status + 2)
+        #expect(await repo.client.headStateCalls == before.headState + 1)
+    }
+
+    /// Selects `commit` and waits for its files, so a tick arrives in commit scope.
+    private func adoptInCommitScope(_ h: Harness, _ state: WindowState) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let commit = commitSummary("c1")
+        let repo = h.repo("A", files: filesA)
+        await repo.client.set(head: commit.ref.sha)
+        await repo.client.set(commits: [commit])
+        await repo.client.set(
+            files: [ChangedFile(path: "one.swift", originalPath: nil, kind: .modified, area: .commit(commit.ref))],
+            forCommit: commit.ref.sha)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await !state.history.commits.isEmpty })
+        state.select(commit: commit)
+        #expect(await eventually { await state.files.count == 1 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(await eventually { await state.localBranches == ["main"] })
+        return repo
+    }
+
+    @Test func aWorktreeTickDoesNothingInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let before = await Reads(repo.client)
+
+        h.tick(repo.root, [.worktree])
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await Reads(repo.client) == before)
+    }
+
+    @Test func aRefsTickChecksHeadWithoutStatusInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let before = await Reads(repo.client)
+
+        h.tick(repo.root, [.refs])
+        let expected = before.plus(head: 1, headState: 1)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected, "no status read, no defaults read")
     }
 }

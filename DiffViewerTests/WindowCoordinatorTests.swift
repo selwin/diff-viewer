@@ -32,6 +32,9 @@ final class RepoRegistry {
     var entries: [URL: (root: RepositoryRoot, client: StubRepoClient)] = [:]
     var lookups: [URL: Int] = [:]
     var watchers: [RepositoryRoot: NoopWatcher] = [:]
+    /// A tick carrying an explicit set of changes.
+    var watcherChangeCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// A plain tick, as an edit and a stage produce: `[.worktree, .index]`.
     var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
 
     func lookup(_ url: URL) -> (root: RepositoryRoot, client: StubRepoClient)? {
@@ -167,7 +170,8 @@ final class CoordinatorHarness {
         WindowState(preferences: preferences, cache: cache) { [weak registry] root, onChange in
             let watcher = NoopWatcher()
             registry?.watchers[root] = watcher
-            registry?.watcherCallbacks[root] = onChange
+            registry?.watcherChangeCallbacks[root] = onChange
+            registry?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
             return watcher
         }
     }

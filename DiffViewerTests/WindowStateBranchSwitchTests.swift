@@ -402,12 +402,12 @@ struct WindowStateBranchSwitchTests {
 
     // MARK: The branch list
 
-    /// The list rides the head-state read, so every watcher tick keeps it current.
+    /// The list rides the head-state read, so every ref change keeps it current.
     @Test func headRefreshUpdatesLocalBranches() async throws {
         let (h, state, client, root) = try await settled()
         await client.set(localBranches: ["a", "b"])
 
-        h.watcherCallbacks[root]!()
+        h.tick(root, [.refs])
         #expect(await eventually { await state.localBranches == ["a", "b"] })
     }
 
@@ -420,7 +420,7 @@ struct WindowStateBranchSwitchTests {
         // Waiting for the failing read to be counted, rather than for a duration, keeps
         // the assertion below about the list and not about timing.
         let reads = await client.localBranchesCalls
-        h.watcherCallbacks[root]!()
+        h.tick(root, [.refs])
         #expect(await eventually { await client.localBranchesCalls == reads + 1 })
         #expect(state.localBranches == ["main"])
     }
