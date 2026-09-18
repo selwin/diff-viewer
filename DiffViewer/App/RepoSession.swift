@@ -34,7 +34,7 @@ final class RepoSession {
     var headStateCheckSerial = 0
     /// The commit-list read in flight, if any.
     var historyTask: Task<Void, Never>?
-    /// The tail of the chain of repository writes: sidebar file actions and commits. Each
+    /// The tail of the chain of repository writes: sidebar file actions, commits, and branch switches. Each
     /// new write waits for this task before touching the repository, so two quick clicks
     /// cannot run two `git` writes at once and collide on `index.lock`.
     var repositoryWriteTask: Task<Void, Never>?
@@ -63,6 +63,8 @@ enum RefreshCause: Sendable {
     case fileAction
     /// A commit attempt finished, successfully or not, and the repository was re-read.
     case commit
+    /// A branch switch finished, successfully or not, and the working tree was re-read.
+    case branchSwitch
 }
 
 /// One page of the branch's history: the commits, the revision they were read from,

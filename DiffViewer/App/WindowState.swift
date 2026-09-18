@@ -1,6 +1,6 @@
 // swiftlint:disable file_length
-// The scope, history and commit extensions stay in this file so their state can remain
-// `private(set)`; the length is the cost of that.
+// The scope, history, commit and branch-switch extensions stay in this file so their
+// state can remain `private(set)`; the length is the cost of that.
 
 import AppKit
 import Observation
@@ -92,8 +92,12 @@ final class WindowState {
     /// picker still has to label and tick the thing the user chose.
     private(set) var selectedCommit: CommitSummary?
     private(set) var history = CommitHistory()
-    /// Where HEAD points, or nil until the first read returns: nil shows no subtitle, not a wrong one.
+    /// Where HEAD points, or nil until the first read returns: nil shows no branch, not a wrong one.
     private(set) var headState: HeadState?
+    /// The local branches the picker lists, read with `headState` on the same ticket.
+    private(set) var localBranches: [String] = []
+    /// True while a branch switch is queued, running, or refreshing repository state.
+    private(set) var isSwitchingBranch = false
     private(set) var commitLimit = WindowState.commitPageSize
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
@@ -104,6 +108,9 @@ final class WindowState {
     /// True from a scope change until that scope's file list arrives, so an unfinished
     /// read is not drawn as a commit that changed nothing.
     private(set) var isLoadingScope = false
+    /// The last working-tree read threw and nothing has replaced its list since: an
+    /// empty `files` then means unread, not clean.
+    private(set) var listReadFailed = false
     /// The rows to select again once the new list arrives. Held here rather than after the
     /// scope task's own `refresh`, which may be superseded by a watcher refresh that
     /// publishes the files instead.
@@ -277,6 +284,7 @@ final class WindowState {
         isLoadingScope = false
         switch outcome {
         case let .success(newFiles):
+            listReadFailed = false
             // Taken before anything is applied: a restoration describes the list this
             // refresh is about to replace, and only this refresh can grant it.
             let pending = pendingReselections
@@ -334,6 +342,7 @@ final class WindowState {
                 // lie, so drop back to the working tree.
                 await fallBackToWorkingTree(session: session, from: ref, error: error)
             } else {
+                listReadFailed = true
                 errorMessage = error.localizedDescription
                 errorRaisedByRefresh = true
             }
@@ -436,6 +445,26 @@ extension WindowState {
         select(scope: .commit(commit.ref), commit: commit)
     }
 
+    /// The picker's choice: a commit is looked up in `selectableCommits`, and an unknown
+    /// ref is ignored.
+    func select(scope newScope: DiffScope) {
+        switch newScope {
+        case .workingTree:
+            selectWorkingTree()
+        case let .commit(ref):
+            guard let commit = selectableCommits.first(where: { $0.ref == ref }) else { return }
+            select(commit: commit)
+        }
+    }
+
+    /// The loaded page, plus the selected commit when it is not in it: a branch switch or
+    /// a page reset can drop it, and the picker still has to tick what is on screen.
+    var selectableCommits: [CommitSummary] {
+        let page = history.commits
+        guard let selected = selectedCommit, !page.contains(where: { $0.ref == selected.ref }) else { return page }
+        return [selected] + page
+    }
+
     private func select(scope newScope: DiffScope, commit: CommitSummary?) {
         guard let session, !isClosed, newScope != scope else { return }
         session.scopeSerial += 1
@@ -514,6 +543,8 @@ extension WindowState {
     /// Reloads the commit list only when HEAD has moved since the page was read. One
     /// `rev-parse` per watcher tick, instead of a full log on every edit to the tree.
     private func reloadHistoryIfHeadMoved(session: RepoSession) async {
+        // Reached after awaits too: a window closed meanwhile must start no process.
+        guard session === self.session, !isClosed else { return }
         // Each check takes its own ticket, so the newest one wins whatever order they
         // finish in. Sharing the history generation let completion order decide instead:
         // whichever check resolved first started a load, and a check holding a fresher
@@ -553,7 +584,8 @@ extension WindowState {
         startHistoryLoad(session: session, source: .revision(head))
     }
 
-    /// Re-reads where HEAD points, on its own serial so a commit-list load cannot cancel it or be cancelled.
+    /// Re-reads where HEAD points and the local branch list, on its own serial so a
+    /// commit-list load cannot cancel it or be cancelled.
     private func refreshHeadState(session: RepoSession) async {
         // A watcher callback queued before its window closed: skip the read.
         guard session === self.session, !isClosed else { return }
@@ -568,6 +600,16 @@ extension WindowState {
         }
         guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
         headState = state
+        // Separate reads can disagree; the picker keeps a row for the current selection.
+        // A failed list read keeps the last list, for the same reason as above.
+        let branches: [String]
+        do {
+            branches = try await session.client.localBranches()
+        } catch {
+            return
+        }
+        guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
+        localBranches = branches
     }
 
     /// Drops a history read whose answer is no longer wanted, and settles the state its
@@ -640,11 +682,13 @@ extension WindowState {
 /// Recording the index as a commit and keeping the draft in step with git's own
 /// suggestion. Same file as the class so the commit state stays `private(set)`.
 extension WindowState {
-    /// An open window in working-tree scope, no commit queued or running, no conflict
-    /// rows, something to commit (staged files, or a merge whose tree may equal HEAD), a
-    /// non-blank message that is not a commit.template left exactly as applied.
+    /// An open window in working-tree scope, no commit or branch switch queued or running,
+    /// no conflict rows, something to commit (staged files, or a merge whose tree may equal
+    /// HEAD), a non-blank message that is not a commit.template left exactly as applied.
     var canCommit: Bool {
-        guard session != nil, !isClosed, scope == .workingTree, !isCommitting else { return false }
+        guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch else {
+            return false
+        }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
         guard files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging else { return false }
         guard !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -729,5 +773,63 @@ extension WindowState {
         let text = new.suggestion?.text
         storedCommitMessage = text ?? ""  // not the setter: this is not an edit
         lastAppliedDefaultMessage = text
+    }
+}
+
+// MARK: - Switching branches
+
+/// Checking out another local branch from the title bar. Same file as the class so
+/// `isSwitchingBranch` stays `private(set)`.
+extension WindowState {
+    /// Switches the working tree to `branch` on the write chain; a second call while one
+    /// is queued or running does nothing, and so does choosing the branch already checked
+    /// out. The scope is kept: a selected commit stays selected.
+    func switchBranch(to branch: String) async {
+        guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch) else { return }
+        isSwitchingBranch = true  // before the first suspension: the admission guard
+        defer { isSwitchingBranch = false }
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runBranchSwitch(to: branch, session: session)
+        }
+    }
+
+    private func runBranchSwitch(to branch: String, session: RepoSession) async {
+        guard session === self.session, !isClosed else { return }
+        var failure: (any Error)?
+        do { try await session.client.switchBranch(to: branch) } catch { failure = error }
+        guard session === self.session, !isClosed else { return }
+        // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
+        // and the watcher ignores this process's own events. A commit's files and diff
+        // cannot have changed, so commit scope skips the re-read.
+        if scope == .workingTree {
+            // A switch replaces the working tree wholesale, so the old list must not
+            // outlive it even when the re-read fails: cleared first, the way a scope
+            // change is, and the defaults with it so a stale merge suggestion cannot
+            // enable Commit. The refresh reloads both.
+            //
+            // Restore selected paths that remain in the refreshed list; otherwise select
+            // All changes. Old row positions are ignored because the branch may have
+            // changed. Recorded after the setter below, which drops any pending restoration.
+            let candidates: [PendingSelection] = files.compactMap { file in
+                guard selection.contains(.file(file.id)) else { return nil }
+                return PendingSelection(path: file.path, area: file.area, row: nil)
+            }
+            selection = []
+            if !candidates.isEmpty { restoreSelectionAfterNextRefresh(candidates) }
+            pendingAllChanges = true
+            session.statsTask?.cancel()
+            files = []
+            isLoadingScope = true
+            applyCommitDefaults(.none)
+            await refresh(session: session, cause: .branchSwitch)
+        }
+        guard session === self.session, !isClosed else { return }
+        // Reloads history only when HEAD moved or a previous read failed, and resets the
+        // page when it did; two branches at one commit keep their list.
+        await reloadHistoryIfHeadMoved(session: session)
+        await refreshHeadState(session: session)
+        guard session === self.session, !isClosed, let failure else { return }
+        // After the refresh, so the news survives it.
+        errorMessage = failure.localizedDescription
     }
 }

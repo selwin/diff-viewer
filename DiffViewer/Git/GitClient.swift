@@ -6,17 +6,17 @@ struct GitClient: RepoClient {
     /// Merged over `baseEnvironment` on every call, so tests can hand git a neutral identity
     /// and keep the developer's own config out.
     private let environmentOverrides: [String: String]
-    /// Awaited only by `commit`, which is the one call that runs the user's hooks.
-    private let resolveCommitEnvironment: @Sendable () async -> [String: String]
+    /// Awaited only by the calls that run the user's hooks: `commit` and `switchBranch`.
+    private let resolveHookEnvironment: @Sendable () async -> [String: String]
 
     init(
         repoRoot: URL,
         environment: [String: String] = [:],
-        resolveCommitEnvironment: @escaping @Sendable () async -> [String: String] = LoginShellPath.environment
+        resolveHookEnvironment: @escaping @Sendable () async -> [String: String] = LoginShellPath.environment
     ) {
         self.repoRoot = repoRoot
         self.environmentOverrides = environment
-        self.resolveCommitEnvironment = resolveCommitEnvironment
+        self.resolveHookEnvironment = resolveHookEnvironment
     }
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")
@@ -32,6 +32,14 @@ struct GitClient: RepoClient {
     /// overrides on top.
     private var callEnvironment: [String: String] {
         Self.baseEnvironment.merging(environmentOverrides) { _, instance in instance }
+    }
+
+    /// What a call that runs hooks passes to git. Later wins: hooks need the login
+    /// shell's PATH, and a caller's own overrides still beat both.
+    private func hookEnvironment() async -> [String: String] {
+        var environment = Self.baseEnvironment.merging(await resolveHookEnvironment()) { _, resolved in resolved }
+        environment.merge(environmentOverrides) { _, instance in instance }
+        return environment
     }
 
     /// Resolves the repository root containing `url`, or throws if it isn't inside a repo.
@@ -141,12 +149,37 @@ struct GitClient: RepoClient {
 
     /// The branch a successful `git symbolic-ref HEAD` names.
     private func branchName(from result: ProcessResult) -> String {
-        let trimmed = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.branchName(fromRef: result.stdoutString)
+    }
+
+    /// The branch name a full ref names: `refs/heads/main` → `main`. Only the line
+    /// terminator is removed: git permits Unicode separators and trailing non-breaking
+    /// spaces in a ref name, and trimming whitespace would corrupt those.
+    private static func branchName(fromRef ref: String) -> String {
+        let line = ref.hasSuffix("\n") ? String(ref.dropLast()) : ref
         let prefix = "refs/heads/"
-        // A symbolic HEAD pointing outside `refs/heads/` is not a branch, and there is
-        // nothing better to call it than what git wrote.
-        guard trimmed.hasPrefix(prefix) else { return trimmed }
-        return String(trimmed.dropFirst(prefix.count))
+        // A ref outside `refs/heads/` is not a branch, and there is nothing better to
+        // call it than what git wrote.
+        guard line.hasPrefix(prefix) else { return line }
+        return String(line.dropFirst(prefix.count))
+    }
+
+    /// Local branch names sorted by ref name. An unborn branch has no ref and is omitted.
+    func localBranches() async throws -> [String] {
+        // `%(refname)`, not `%(refname:short)`: when a tag and a branch share a name, git
+        // shortens `refs/heads/main` only as far as `heads/main` to stay unambiguous.
+        // Stripping the prefix ourselves always yields the plain branch name.
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["for-each-ref", "--format=%(refname)", "refs/heads/"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // The literal terminator, not `isNewline`, which would also split on a U+2028
+        // inside a name.
+        return result.stdoutString
+            .split(separator: "\n")
+            .map { Self.branchName(fromRef: String($0)) }
     }
 
     /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headState()`
@@ -154,8 +187,8 @@ struct GitClient: RepoClient {
     private func readSymbolicHead() async throws -> ProcessResult {
         // Deliberately not `--short`: when a tag and a branch share a name, git shortens
         // `refs/heads/main` only as far as `heads/main` to stay unambiguous, and the
-        // window subtitle would show that verbatim. Reading the full ref and stripping
-        // the prefix afterwards always yields the plain branch name.
+        // picker would show that verbatim. Reading the full ref and stripping the prefix
+        // afterwards always yields the plain branch name.
         try await ProcessRunner.run(
             Self.executable,
             arguments: ["symbolic-ref", "--quiet", "HEAD"],
@@ -359,28 +392,47 @@ struct GitClient: RepoClient {
         try message.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
 
-        // Later wins: hooks need the login shell's PATH, and a caller's own overrides still
-        // beat both.
-        var commitEnvironment = Self.baseEnvironment.merging(await resolveCommitEnvironment()) { _, resolved in
-            resolved
-        }
-        commitEnvironment.merge(environmentOverrides) { _, instance in instance }
-
         let result = try await ProcessRunner.run(
             Self.executable,
             arguments: ["commit", "--cleanup=strip", "-F", file.path],
             currentDirectory: repoRoot,
-            environment: commitEnvironment
+            environment: await hookEnvironment()
         )
-        // Not `check`: its label would echo the temp file's path into the alert. Both streams
-        // go into the message because hooks often explain themselves on stdout while git
-        // warns on stderr.
+        // Not `check`: its label would echo the temp file's path into the alert.
         guard result.status == 0 else {
-            let diagnostics = [result.stderrString, result.stdoutString]
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-            throw ProcessError.failed(command: "git commit", status: result.status, stderr: diagnostics)
+            throw ProcessError.failed(
+                command: "git commit", status: result.status, stderr: Self.hookDiagnostics(result))
         }
+    }
+
+    /// Switches to an existing local branch. Runs the user's post-checkout hook, so it
+    /// takes the hook environment.
+    func switchBranch(to branch: String) async throws {
+        // Git itself would read a leading dash as an option.
+        guard !branch.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git switch", status: 128, stderr: "'\(branch)' is not a branch name")
+        }
+        // `--no-guess`: a stale menu entry whose local branch was deleted must not create
+        // a tracking branch from a matching remote.
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["switch", "--no-guess", branch],
+            currentDirectory: repoRoot,
+            environment: await hookEnvironment()
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git switch", status: result.status, stderr: Self.hookDiagnostics(result))
+        }
+    }
+
+    /// Both streams of a failed hook-running command, because hooks often explain
+    /// themselves on stdout while git warns on stderr.
+    private static func hookDiagnostics(_ result: ProcessResult) -> String {
+        [result.stderrString, result.stdoutString]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     /// `commit.template`'s text, or nil when no template is set or its file is gone. Read

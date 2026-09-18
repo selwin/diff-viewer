@@ -1,70 +1,22 @@
 import SwiftUI
 
 /// Picks what the sidebar shows: the working tree, or one commit from the branch's
-/// history. Sits above the file list, which it scopes, and its face sums that list's churn.
+/// history. Sits above the file list, which it scopes. The same menu opens from the
+/// title bar's `ScopePickerView`.
 struct CommitPickerView: View {
     @Environment(WindowState.self) private var windowState
 
     var body: some View {
         Menu {
-            // Working Tree is always a row, whatever the history is doing: someone who
-            // selects a commit and then checks out a branch with no commits still needs a
-            // way back.
-            Picker("Showing", selection: scopeBinding) {
-                Text("Working Tree").tag(DiffScope.workingTree)
-                ForEach(listedCommits) { commit in
-                    Text(label(for: commit)).tag(DiffScope.commit(commit.ref))
-                }
-            }
-            .pickerStyle(.inline)
-
-            // Plain text in a menu reads as an unavailable item, which is what loading,
-            // empty and failed histories should look like — distinct from each other, and
-            // never a row that can be chosen.
-            if let placeholder = windowState.historyPlaceholder {
-                Divider()
-                Text(placeholder.label)
-            }
-
-            if windowState.history.hasMore {
-                Divider()
-                Button("Load \(WindowState.commitPageSize) More…") { windowState.loadMoreCommits() }
-                    .disabled(windowState.isLoadingHistory)
-            }
+            ScopeMenuContent()
         } label: {
-            ScopeLabel(
-                title: title, identity: identity, glyph: scopeIcon,
-                churn: LineStats.total(of: windowState.files))
+            ScopeLabel(title: title, identity: identity, glyph: scopeIcon)
         }
         // `.plain` leaves the label to SwiftUI. The bordered menu style keeps one image and one
         // text from its label and drops the rest, which rules out a two-line face.
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .help("Choose what to compare: the working tree, or a commit against its parent")
-    }
-
-    private var scopeBinding: Binding<DiffScope> {
-        Binding(
-            get: { windowState.scope },
-            set: { newScope in
-                switch newScope {
-                case .workingTree:
-                    windowState.selectWorkingTree()
-                case let .commit(ref):
-                    guard let commit = listedCommits.first(where: { $0.ref == ref }) else { return }
-                    windowState.select(commit: commit)
-                }
-            }
-        )
-    }
-
-    /// The loaded page, plus the selected commit when it is not in it: a branch switch or
-    /// a page reset can drop it, and the picker still has to tick what is on screen.
-    private var listedCommits: [CommitSummary] {
-        let page = windowState.history.commits
-        guard let selected = windowState.selectedCommit, !page.contains(where: { $0.ref == selected.ref })
-        else { return page }
-        return [selected] + page
+        .help(ScopeMenuContent.scopeSelectionHelp)
     }
 
     private var title: String {
@@ -86,6 +38,45 @@ struct CommitPickerView: View {
         case .workingTree: "arrow.triangle.branch"
         case .commit: "smallcircle.filled.circle"
         }
+    }
+}
+
+/// The rows of the scope menu: Working Tree, the loaded commits, and what the history
+/// has to say for itself. Shared by the sidebar picker and the title bar's.
+struct ScopeMenuContent: View {
+    @Environment(WindowState.self) private var windowState
+
+    static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
+
+    var body: some View {
+        // Working Tree is always a row, whatever the history is doing: someone who
+        // selects a commit and then checks out a branch with no commits still needs a
+        // way back.
+        Picker("Showing", selection: scopeBinding) {
+            Text("Working Tree").tag(DiffScope.workingTree)
+            ForEach(windowState.selectableCommits) { commit in
+                Text(label(for: commit)).tag(DiffScope.commit(commit.ref))
+            }
+        }
+        .pickerStyle(.inline)
+
+        // Plain text in a menu reads as an unavailable item, which is what loading,
+        // empty and failed histories should look like — distinct from each other, and
+        // never a row that can be chosen.
+        if let placeholder = windowState.historyPlaceholder {
+            Divider()
+            Text(placeholder.label)
+        }
+
+        if windowState.history.hasMore {
+            Divider()
+            Button("Load \(WindowState.commitPageSize) More…") { windowState.loadMoreCommits() }
+                .disabled(windowState.isLoadingHistory)
+        }
+    }
+
+    private var scopeBinding: Binding<DiffScope> {
+        Binding(get: { windowState.scope }, set: { windowState.select(scope: $0) })
     }
 
     /// Shared rather than built per row: a page of fifty rows is formatted each time the
@@ -114,7 +105,6 @@ private struct ScopeLabel: View {
     let title: String
     let identity: String
     let glyph: String
-    let churn: LineStats?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -127,18 +117,12 @@ private struct ScopeLabel: View {
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                HStack(spacing: 4) {
-                    // The sha and the counts never truncate; only the title gives way.
-                    Text(identity)
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                    if churn != nil {
-                        Text("·").font(.callout).foregroundStyle(.secondary)
-                        ChurnLabel(stats: churn)
-                    }
-                }
-                .lineLimit(1)
+                // The sha never truncates; only the title gives way.
+                Text(identity)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.up.chevron.down")

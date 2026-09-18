@@ -48,6 +48,53 @@ struct WindowStateScopeTests {
         #expect(state.selectedCommit == nil)
     }
 
+    /// The picker has to tick what is on screen even after the page stops listing it, so
+    /// the selected commit is kept at the top of the rows until it is deselected.
+    @Test func selectableCommitsKeepTheSelectedCommitWhenThePageDropsIt() async {
+        let h = Harness()
+        let state = h.makeState()
+        let first = commitSummary("c1")
+        let second = commitSummary("c2")
+        let client = await adopt(h, state, commit: first, commitFiles: [])
+        #expect(state.selectableCommits == [first])
+
+        state.select(commit: first)
+        #expect(await eventually { await h.published.last?.cause == .scope })
+        await client.set(commits: [second])
+        await client.set(head: second.ref.sha)
+        h.watcherCallbacks.values.first?()
+        #expect(await eventually { await state.history.commits == [second] })
+        #expect(state.selectableCommits == [first, second])
+
+        state.selectWorkingTree()
+        #expect(state.selectableCommits == [second])
+        #expect(await eventually { await state.files.count == workingFiles.count })
+    }
+
+    /// The picker's binding hands over a ref, not a commit: a known one selects its
+    /// commit and an unknown one does nothing, rather than showing a scope with no summary.
+    @Test func selectingAnUnknownCommitRefIsIgnored() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [])
+        let unknown = CommitRef(sha: objectID("nowhere"), shortSha: "nowhere", firstParentSHA: nil)
+
+        state.select(scope: .commit(unknown))
+        #expect(state.scope == .workingTree)
+        #expect(!state.isLoadingScope)
+        #expect(await client.commitFileCalls == 0)
+
+        state.select(scope: .commit(commit.ref))
+        #expect(state.scope == .commit(commit.ref))
+        #expect(state.selectedCommit == commit)
+        #expect(await eventually { await h.published.last?.cause == .scope })
+
+        state.select(scope: .workingTree)
+        #expect(state.scope == .workingTree)
+        #expect(await eventually { await state.files.count == workingFiles.count })
+    }
+
     /// The scope change no longer hunts for the same path in the new list: the whole
     /// point of a new scope is a new set of changes, and All changes shows all of them.
     @Test func everyScopeChangeLandsOnAllChanges() async {
@@ -268,36 +315,36 @@ struct WindowStateScopeTests {
         #expect(await eventually { await state.files.first?.lineStats == .counted(added: 4, deleted: 2) })
     }
 
-    // MARK: Branch subtitle
+    // MARK: Branch display title
 
-    @Test func adoptingPublishesTheBranchAsTheSubtitle() async {
+    @Test func adoptingPublishesTheBranchAsTheDisplayTitle() async {
         let h = Harness()
         let state = h.makeState()
         let repo = h.repo("A", files: workingFiles)
         await repo.client.set(headState: .named("sidebar-actions"))
         #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await state.subtitle == "sidebar-actions" })
+        #expect(await eventually { await state.branchDisplayTitle == "sidebar-actions" })
     }
 
     /// The reason the branch is read on the HEAD tick rather than from the status
     /// header: in commit scope the watcher never calls `status()`, so a checkout while a
-    /// commit is selected would otherwise leave the subtitle stale.
+    /// commit is selected would otherwise leave the branch title stale.
     @Test func aWatcherTickUpdatesTheBranchInCommitScope() async {
         let h = Harness()
         let state = h.makeState()
         let commit = commitSummary("c1")
         let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("one.swift", commit)])
-        #expect(await eventually { await state.subtitle == "main" })
+        #expect(await eventually { await state.branchDisplayTitle == "main" })
 
         state.select(commit: commit)
         #expect(await eventually { await state.files.count == 1 })
 
         await client.set(headState: .named("other"))
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { await state.subtitle == "other" })
+        #expect(await eventually { await state.branchDisplayTitle == "other" })
     }
 
-    /// The SHA deliberately differs from the loaded history's commit, so a subtitle that
+    /// The SHA deliberately differs from the loaded history's commit, so a title that
     /// read the history revision rather than HEAD would fail this.
     @Test func aDetachedHeadNamesItsOwnCommitNotTheLoadedHistory() async {
         let h = Harness()
@@ -307,24 +354,24 @@ struct WindowStateScopeTests {
         await client.set(headState: .detached(sha: String(repeating: "b", count: 40)))
 
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { await state.subtitle == "detached at bbbbbbb" })
+        #expect(await eventually { await state.branchDisplayTitle == "Detached bbbbbbb" })
     }
 
-    /// Blanking the subtitle for one failed read would be worse than a stale name.
-    @Test func aFailedHeadStateReadKeepsThePreviousSubtitle() async {
+    /// Blanking the title for one failed read would be worse than a stale name.
+    @Test func aFailedHeadStateReadKeepsThePreviousTitle() async {
         let h = Harness()
         let state = h.makeState()
         let commit = commitSummary("c1")
         let client = await adopt(h, state, commit: commit, commitFiles: [])
-        #expect(await eventually { await state.subtitle == "main" })
+        #expect(await eventually { await state.branchDisplayTitle == "main" })
 
         await client.fail(headState: true)
         // Waiting for the failing read to be counted, rather than for a duration, keeps
-        // the assertion below about the subtitle and not about timing.
+        // the assertion below about the title and not about timing.
         let before = await client.headStateCalls
         h.watcherCallbacks.values.first?()
         #expect(await eventually { await client.headStateCalls == before + 1 })
-        #expect(state.subtitle == "main")
+        #expect(state.branchDisplayTitle == "main")
     }
 
     // MARK: Ordering

@@ -92,6 +92,10 @@ thresholds, old/new pairing per `Kind` and `Area`.
 
 ### C. Show the current branch
 
+_Landed as the title-bar branch picker (2026-09-18): the subtitle became a pop-up that also
+switches local branches. Still open here: the in-progress operation suffix and the
+ahead/behind counts._
+
 **Goal.** The window always shows which branch the open repository is on, and updates
 when the branch changes underneath the app (checkout in a terminal, a coding agent
 switching branches, a rebase in progress).
