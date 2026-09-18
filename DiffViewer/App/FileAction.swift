@@ -5,7 +5,8 @@ import Foundation
 /// Which items a row offers is a property of the file, not of the view, so the whole
 /// menu is decided here and the view only renders it. The first four write (to the
 /// repository or the worktree); the last three are harmless and always available for a
-/// path that can be pointed at.
+/// path that can be pointed at. Committing is not a menu item: the box below the list
+/// records the index through `WindowState.commit()`.
 enum FileAction: CaseIterable, Sendable {
     case stage
     case unstage

@@ -46,12 +46,18 @@ protocol RepoClient: Sendable {
     /// modified file as deleted.
     func worktreeContents(of path: String) async throws -> Data?
     /// Runs `action` over every path in one git process, throwing git's stderr if it
-    /// refuses. An empty list does nothing. The only repository writes the app makes, and
-    /// all whole-file: nothing here edits contents or creates a commit.
+    /// refuses. An empty list does nothing. All whole-file: nothing here edits contents.
     func perform(_ action: GitFileAction, on paths: [String]) async throws
     /// Moves each worktree file to the Trash, so deleting an untracked file is
     /// recoverable from Finder. An empty list does nothing. Git cannot do this — an
     /// untracked path is not in the index — which makes it the app's only write outside
     /// git, and it lives here so tests can stub it rather than touching the real Trash.
     func trash(_ paths: [String]) async throws
+    /// Merge/squash/template metadata the commit box prefills from, and whether a merge is
+    /// in progress. Throws when the repository's own state cannot be read.
+    func commitDefaults() async throws -> CommitDefaults
+    /// Records the index as a commit with `message`: `git commit --cleanup=strip -F <file>`.
+    /// Throws git's and the hooks' diagnostics when it refuses (nothing staged, a failing
+    /// hook, no identity).
+    func commit(message: String) async throws
 }

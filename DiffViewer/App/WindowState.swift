@@ -1,3 +1,7 @@
+// swiftlint:disable file_length
+// The scope, history and commit extensions stay in this file so their state can remain
+// `private(set)`; the length is the cost of that.
+
 import AppKit
 import Observation
 import SwiftUI
@@ -108,6 +112,29 @@ final class WindowState {
     /// whichever refresh publishes one, for the same reason as `pendingReselect`.
     private var pendingAllChanges = false
 
+    /// The commit message being written, bound to the commit box.
+    ///
+    /// The setter is the reader's path (the box, tests), so it bumps `commitDraftRevision`.
+    /// A defaults read writes `storedCommitMessage` directly, the way `applySelection`
+    /// bypasses the `selection` setter, so automatic text never counts as an edit.
+    var commitMessage: String {
+        get { storedCommitMessage }
+        set {
+            storedCommitMessage = newValue
+            commitDraftRevision += 1
+        }
+    }
+    private var storedCommitMessage = ""
+    /// Bumped by every reader write to `commitMessage`, so a commit can tell whether the box
+    /// was edited while git ran. Same idea as `selectionRevision`.
+    private(set) var commitDraftRevision = 0
+    /// git's suggestion (merge, squash, template) and whether a merge is in progress.
+    private(set) var commitDefaults = CommitDefaults.none
+    /// Last automatically applied message, used to preserve edited drafts.
+    private var lastAppliedDefaultMessage: String?
+    /// A commit is queued or running.
+    private(set) var isCommitting = false
+
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
 
@@ -170,6 +197,7 @@ final class WindowState {
         initialRefresh?.cancel()
         session?.refreshSerial += 1
         session?.statsTask?.cancel()
+        session?.commitDefaultsTask?.cancel()
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -222,6 +250,7 @@ final class WindowState {
         session.refreshSerial += 1
         let serial = session.refreshSerial
         session.statsTask?.cancel()
+        session.commitDefaultsTask?.cancel()
         let ignoreWhitespace = preferences.hideWhitespace
         let client = session.client
 
@@ -289,6 +318,11 @@ final class WindowState {
                 await self?.attachLineStats(
                     to: newFiles, session: session, scope: scope, serial: serial,
                     ignoreWhitespace: ignoreWhitespace)
+            }
+            if scope == .workingTree {
+                session.commitDefaultsTask = Task { [weak self] in
+                    await self?.loadCommitDefaults(session: session, serial: serial)
+                }
             }
         case let .failure(error):
             if case let .commit(ref) = scope {
@@ -595,5 +629,102 @@ extension WindowState {
     private func finishHistoryLoad() {
         isLoadingHistory = false
         historyRequestInFlight = nil
+    }
+}
+
+// MARK: - Commit
+
+/// Recording the index as a commit and keeping the draft in step with git's own
+/// suggestion. Same file as the class so the commit state stays `private(set)`.
+extension WindowState {
+    /// An open window in working-tree scope, no commit queued or running, no conflict
+    /// rows, something to commit (staged files, or a merge whose tree may equal HEAD), a
+    /// non-blank message that is not a commit.template left exactly as applied.
+    var canCommit: Bool {
+        guard session != nil, !isClosed, scope == .workingTree, !isCommitting else { return false }
+        guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
+        guard files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging else { return false }
+        guard !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return !commitNeedsTemplateEdit
+    }
+
+    /// Whether the draft exactly matches the current template suggestion. Commit refuses
+    /// it and the box says why. An exact string comparison, not git's cleanup-aware check;
+    /// a safeguard against committing boilerplate.
+    var commitNeedsTemplateEdit: Bool {
+        guard let suggestion = commitDefaults.suggestion, suggestion.source == .template else { return false }
+        return commitMessage == suggestion.text
+    }
+
+    /// Starts one commit; a second call while one is queued or running does nothing, so a
+    /// burst of ⌘↩ presses records one commit.
+    func commit() async {
+        guard canCommit, let session else { return }
+        isCommitting = true  // before the first suspension: the admission guard
+        defer { isCommitting = false }
+        let message = commitMessage
+        let revision = commitDraftRevision
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runCommit(message: message, revision: revision, session: session)
+        }
+    }
+
+    private func runCommit(message: String, revision: Int, session: RepoSession) async {
+        guard session === self.session, !isClosed else { return }
+        var failure: (any Error)?
+        do { try await session.client.commit(message: message) } catch { failure = error }
+        guard session === self.session, !isClosed else { return }
+        // Whatever the reader typed while git ran, a cleared box included, is theirs and
+        // survives both outcomes. Only an unedited box is settled here.
+        if commitDraftRevision == revision {
+            if failure == nil {
+                storedCommitMessage = ""
+            } else {
+                // A defaults read that landed while git ran may have replaced or emptied
+                // the draft. Put the submitted message back, and count it as the reader's
+                // own from now on so no later refresh can take it away.
+                storedCommitMessage = message
+            }
+            lastAppliedDefaultMessage = nil
+        }
+        // Refresh either way: a failing hook may have rewritten files, and the watcher
+        // ignores this process's own writes.
+        await refresh(session: session, cause: .commit)
+        // `refresh` returns quietly for a closed window; the history load below would
+        // not, and would leave `isLoadingHistory` stuck on.
+        guard session === self.session, !isClosed else { return }
+        // History and HEAD reload because a commit moves both and nothing else on this
+        // path would notice.
+        refreshHistory(session: session)
+        await refreshHeadState(session: session)
+        guard session === self.session, !isClosed, let failure else { return }
+        // After the refresh, so the news survives it.
+        errorMessage = failure.localizedDescription
+    }
+
+    /// Reads the suggestion for the list a refresh just published. Applies only while that
+    /// refresh is still the newest and the sidebar still shows the working tree; a thrown
+    /// read applies nothing, so the box keeps its last good state.
+    private func loadCommitDefaults(session: RepoSession, serial: Int) async {
+        // Cancelled before it ran: skip the subprocess, not just the publish.
+        guard !Task.isCancelled else { return }
+        let new: CommitDefaults
+        do { new = try await session.client.commitDefaults() } catch { return }
+        guard !Task.isCancelled, session === self.session, !isClosed, serial == session.refreshSerial,
+            scope == .workingTree
+        else { return }
+        applyCommitDefaults(new)
+    }
+
+    /// The draft is untouched when it still equals what was last applied (or is empty and
+    /// nothing was). Untouched → replaced by the new suggestion (nil empties it) and
+    /// remembered; touched → left alone. A merge abort empties the box, a cherry-pick
+    /// fills it, and a half-written message survives every watcher tick.
+    private func applyCommitDefaults(_ new: CommitDefaults) {
+        commitDefaults = new
+        guard storedCommitMessage == (lastAppliedDefaultMessage ?? "") else { return }
+        let text = new.suggestion?.text
+        storedCommitMessage = text ?? ""  // not the setter: this is not an edit
+        lastAppliedDefaultMessage = text
     }
 }

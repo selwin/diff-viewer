@@ -2,10 +2,10 @@ import AppKit
 
 /// Running one sidebar context-menu action over the rows it was invoked on.
 ///
-/// An extension in its own file: the class body is long enough, and these are the only
-/// places in the app that write to the repository. Everything they need from the class
-/// is `internal`, apart from the pending selection, which `restoreSelectionAfterNextRefresh`
-/// hands over.
+/// An extension in its own file: the class body is long enough, and these, with the
+/// commit extension, are the only places in the app that write to the repository.
+/// Everything they need from the class is `internal`, apart from the pending selection,
+/// which `restoreSelectionAfterNextRefresh` hands over.
 ///
 /// One row or twenty take the same path: the menu is built from the whole selection, the
 /// confirmation is asked once, git runs once, and one refresh publishes the result.
@@ -39,21 +39,25 @@ extension WindowState {
         return requested.filter { kinds[$0.id] == $0.kind }
     }
 
-    /// Queues a repository write behind whatever the session is already running.
+    /// Serializes repository writes; each operation validates its own inputs.
     ///
     /// Two quick clicks would otherwise start two `git` processes at once and one of them
-    /// would fail on `index.lock`. The chain serializes the writes: one unstructured task
-    /// per write, so a queued write is not cancelled by its caller going away, and each
-    /// write re-reads status before it runs. What stops a write whose rows changed while it
-    /// waited is that read in `runWrite`, not cancellation.
-    private func performWrite(_ action: FileAction, on files: [ChangedFile], session: RepoSession) async {
-        let previousWrite = session.fileActionTask
-        let task = Task { [weak self] in
+    /// would fail on `index.lock`. One unstructured task per write, so a queued write is not
+    /// cancelled by its caller going away.
+    func enqueueWrite(session: RepoSession, _ body: @escaping @MainActor () async -> Void) async {
+        let previousWrite = session.repositoryWriteTask
+        let task = Task {
             await previousWrite?.value
+            await body()
+        }
+        session.repositoryWriteTask = task
+        await task.value
+    }
+
+    private func performWrite(_ action: FileAction, on files: [ChangedFile], session: RepoSession) async {
+        await enqueueWrite(session: session) { [weak self] in
             await self?.runWrite(action, on: files, session: session)
         }
-        session.fileActionTask = task
-        await task.value
     }
 
     private func runWrite(_ action: FileAction, on files: [ChangedFile], session: RepoSession) async {

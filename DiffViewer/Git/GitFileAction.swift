@@ -2,9 +2,10 @@ import Foundation
 
 /// A whole-file git write the sidebar can ask for.
 ///
-/// Every case moves paths between the worktree, the index, and HEAD; none of them
-/// edits file contents and none commits. `.stage` is also how a deletion is recorded
-/// and how a conflicted path is marked resolved — `git add` covers all three — and
+/// Every case moves paths between the worktree, the index, and HEAD; none of them edits
+/// file contents, and commits are made by `RepoClient.commit(message:)`. `.stage` is also
+/// how a deletion is recorded and how a conflicted path is marked resolved — `git add`
+/// covers all three — and
 /// `.discard` is also how a deleted file is brought back, since `git restore` rewrites
 /// the worktree from the index either way.
 enum GitFileAction: Equatable, Sendable {
