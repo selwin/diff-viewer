@@ -70,15 +70,21 @@ final class WindowState {
     /// Keyboard focus. Informational for the view; nothing in the model branches on it.
     var isKey = false
 
-    /// On screen, per AppKit's occlusion state. A hidden window starts no diff or
-    /// highlight work; what it skipped is reloaded when it becomes visible again.
+    /// On screen, per AppKit's occlusion state. A hidden window stops its watcher and
+    /// starts no diff or highlight work. Showing restarts watching and schedules a
+    /// rescan; stale or changed content reloads.
     var isVisible = true {
         didSet {
             guard isVisible != oldValue, !isClosed else { return }
             if isVisible {
-                if diffStale { reloadDiff() }
-            } else if diffLoader.cancelActiveWork() {
-                diffStale = true
+                guard let session else { return }
+                let watcherGeneration = startWatcher(session: session)
+                Task {
+                    await repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: [.rescan])
+                }
+            } else {
+                if let session { stopWatcher(session: session) }
+                if diffLoader.cancelActiveWork() { diffStale = true }
             }
         }
     }
@@ -183,10 +189,8 @@ final class WindowState {
     func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
         guard session == nil, !isClosed else { return false }
         let session = RepoSession(root: root, client: client)
-        session.watcher = watchRepository(root) { [weak self, weak session] changes in
-            guard let self, let session else { return }
-            Task { await self.repositoryChanged(session: session, changes: changes) }
-        }
+        // A window adopted hidden gets its watcher when shown.
+        if isVisible { startWatcher(session: session) }
         self.session = session
         title = root.name
         selection = []
@@ -215,10 +219,36 @@ final class WindowState {
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
-        session?.watcher?.stop()
-        session?.watcher = nil
+        if let session { stopWatcher(session: session) }
         diffLoader.cancelActiveWork()
         isLoading = false
+    }
+
+    /// Starts a watcher for `session` and returns the generation its callbacks must match.
+    @discardableResult
+    private func startWatcher(session: RepoSession) -> Int {
+        session.watcherGeneration += 1
+        let watcherGeneration = session.watcherGeneration
+        let watcher = watchRepository(session.root) { [weak self, weak session] changes in
+            guard let self, let session else { return }
+            Task {
+                await self.repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: changes)
+            }
+        }
+        // A fresh watcher keeps the template the last defaults read found.
+        if case let .configured(path) = session.templateDependency {
+            watcher?.setDependencies([path])
+        }
+        session.watcher = watcher
+        return watcherGeneration
+    }
+
+    /// Invalidates callbacks, stops watching, and clears pending changes.
+    private func stopWatcher(session: RepoSession) {
+        session.watcherGeneration += 1
+        session.watcher?.stop()
+        session.watcher = nil
+        session.watcherRefreshPending = nil
     }
 
     // MARK: - Refreshing
@@ -231,31 +261,42 @@ final class WindowState {
         await refreshHeadState(session: session)
     }
 
-    /// Something under `.git` or in the working tree changed.
-    ///
-    /// One refresh runs at a time; ticks received during it are merged into one
-    /// follow-up. The follow-up runs hidden too: a hidden window still re-reads status,
-    /// and dropping the tick would lose an edit that only a status read can discover.
-    private func repositoryChanged(session: RepoSession, changes: Set<RepoChange>) async {
-        guard session === self.session, !isClosed else { return }
+    /// Something under `.git` or in the working tree changed, per the watcher of
+    /// `watcherGeneration`. One refresh runs at a time; ticks during it merge into one
+    /// follow-up carrying their watcher's generation. A hidden window has no watcher,
+    /// so showing delivers one `[.rescan]`.
+    private func repositoryChanged(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
+        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
         if session.watcherRefreshRunning {
-            session.watcherRefreshPending.formUnion(changes)
+            // Merge with a pending tick of the same generation; a pending tick from a
+            // stopped watcher is replaced, its work covered by the rescan that follows a restart.
+            if var pending = session.watcherRefreshPending, pending.generation == watcherGeneration {
+                pending.changes.formUnion(changes)
+                session.watcherRefreshPending = pending
+            } else {
+                session.watcherRefreshPending = (watcherGeneration, changes)
+            }
             return
         }
         session.watcherRefreshRunning = true
         defer { session.watcherRefreshRunning = false }
-        await runWatcherRefresh(session: session, changes: changes)
-        while !session.watcherRefreshPending.isEmpty, session === self.session, !isClosed {
-            let pending = session.watcherRefreshPending
-            session.watcherRefreshPending = []
-            await runWatcherRefresh(session: session, changes: pending)
+        await runWatcherRefresh(session: session, watcherGeneration: watcherGeneration, changes: changes)
+        // The follow-up runs on the pending tick's own generation, so a rescan delivered
+        // by a restart while this refresh ran is not lost, and a tick from a watcher
+        // stopped meanwhile is dropped.
+        while let pending = session.watcherRefreshPending, session === self.session, !isClosed,
+            pending.generation == session.watcherGeneration
+        {
+            session.watcherRefreshPending = nil
+            await runWatcherRefresh(session: session, watcherGeneration: pending.generation, changes: pending.changes)
         }
+        session.watcherRefreshPending = nil
     }
 
     /// Routes `changes` to the reads they can invalidate. In commit scope only repository
     /// metadata is refreshed: a commit's contents cannot change, and re-reading them on
     /// every keystroke in another editor would redo alignment and highlighting for nothing.
-    private func runWatcherRefresh(session: RepoSession, changes: Set<RepoChange>) async {
+    private func runWatcherRefresh(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
         if changes.contains(.configuration) || changes.contains(.rescan) {
             session.configurationRevision += 1
             // The configuration may have gained a template; until the read below says,
@@ -266,8 +307,12 @@ final class WindowState {
         // Before the first suspension, so the read's generation is settled the moment
         // the tick is accepted.
         if work.commitDefaults { startCommitDefaultsRead(session: session) }
-        if work.status { await refresh(session: session, cause: .watcher) }
-        guard session === self.session, !isClosed, work.repositoryMetadata else { return }
+        if work.status { await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration) }
+        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
+        // A load skipped while hidden is still owed when the refresh could not decide
+        // about it: commit scope reads no status, and a failed read publishes nothing.
+        if diffStale { reloadDiff() }
+        guard work.repositoryMetadata else { return }
         await reloadHistoryIfHeadMoved(session: session)
         await refreshHeadState(session: session)
     }
@@ -281,7 +326,7 @@ final class WindowState {
     /// numstat read updates `files` in place when `session.lineStats` says one is needed.
     /// A failed numstat leaves its files unknown and never fails the refresh, which is
     /// driven by `status()` alone.
-    func refresh(session: RepoSession, cause: RefreshCause) async {
+    func refresh(session: RepoSession, cause: RefreshCause, watcherGeneration: Int? = nil) async {
         // A watcher callback queued before its window closed: skip the read.
         guard session === self.session, !isClosed else { return }
         session.refreshSerial += 1
@@ -308,6 +353,9 @@ final class WindowState {
             outcome = .failure(error)
         }
         guard session === self.session, !isClosed, serial == session.refreshSerial else { return }
+        // A watcher refresh whose watcher was stopped publishes nothing; the rescan that
+        // follows a restart reads again.
+        if let watcherGeneration, watcherGeneration != session.watcherGeneration { return }
         // The scope changed while this read was in flight; its files belong to a list
         // nobody is showing any more.
         guard scope == self.scope else { return }

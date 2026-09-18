@@ -437,9 +437,14 @@ final class Harness {
     let suite = "DiffViewerTests.\(UUID().uuidString)"
     let runner = RunnerProbe()
     let preferences: Preferences
+    /// The latest watcher started for each root.
     private(set) var watchers: [RepositoryRoot: NoopWatcher] = [:]
-    /// A tick carrying an explicit set of changes.
+    /// How many watchers were started for each root.
+    private(set) var watcherStarts: [RepositoryRoot: Int] = [:]
+    /// A tick carrying an explicit set of changes, from the latest watcher.
     private(set) var watcherChangeCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// The callback of the watcher the latest one replaced, for ticks from a stopped watcher.
+    private(set) var previousWatcherCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
     /// A plain tick, as an edit and a stage produce: `[.worktree, .index]`.
     private(set) var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
     /// Every `onRefreshPublished` call, in order.
@@ -464,6 +469,8 @@ final class Harness {
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher
+                self?.watcherStarts[root, default: 0] += 1
+                self?.previousWatcherCallbacks[root] = self?.watcherChangeCallbacks[root]
                 self?.watcherChangeCallbacks[root] = onChange
                 self?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
                 return watcher
@@ -706,7 +713,11 @@ struct WindowStateTests {
 
         state.isVisible = false
         #expect(!state.diffStale)
+        let before = h.published.count
         state.isVisible = true
+        // Showing re-reads status once; an equal list has nothing to reload.
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .watcher)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads, "a current diff is reused, not reloaded")
         #expect(!state.diffLoader.hasActiveWork)
@@ -729,8 +740,11 @@ struct WindowStateTests {
         #expect(!hasContent(state, for: filesA[0]))
         #expect(h.published.count == 2, "hidden refreshes still publish their file list")
 
+        // The owed load rides on the rescan refresh that showing delivers.
         state.isVisible = true
-        #expect(!state.diffStale)
+        #expect(await eventually { await h.published.count == 3 })
+        #expect(h.published.last?.cause == .watcher)
+        #expect(await eventually { await !state.diffStale })
         #expect(await eventually { await self.hasContent(state, for: self.filesA[0]) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         #expect(await repo.client.contentReads == reads + 2, "one load: index plus worktree")
@@ -1239,9 +1253,34 @@ struct WindowStateTests {
         #expect(await repo.client.contentReads == after, "the tick has nothing new to load")
     }
 
-    /// A hidden window still re-reads status, so a tick queued behind a running refresh
-    /// is not dropped by hiding: only a status read can discover the edit it carries.
-    @Test func tickQueuedBeforeHidingStillRefreshes() async {
+    // MARK: Hiding and showing
+
+    @Test func hidingStopsTheWatcherAndShowingStartsANewOne() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(h.watcherStarts[repo.root] == 1)
+        let first = h.watchers[repo.root]
+        let status = await repo.client.statusCalls
+        let reads = await repo.client.contentReads
+        let before = h.published.count
+
+        state.isVisible = false
+        #expect(first?.stopped == true)
+        #expect(state.session?.watcher == nil)
+
+        state.isVisible = true
+        #expect(h.watcherStarts[repo.root] == 2)
+        #expect(h.watchers[repo.root] !== first)
+        #expect(h.watchers[repo.root]?.stopped == false)
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .watcher)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1, "one rescan")
+        #expect(await repo.client.contentReads == reads, "nothing changed: the diff on show is kept")
+    }
+
+    @Test func showingReloadsAStaleDiffOnce() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: filesA)
@@ -1249,21 +1288,201 @@ struct WindowStateTests {
         let reads = await repo.client.contentReads
         let status = await repo.client.statusCalls
 
+        state.isVisible = false
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        state.isVisible = true
+        #expect(await eventually { await repo.client.statusCalls == status + 1 })
+        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1, "one status read")
+        #expect(await repo.client.contentReads == reads + 2, "one load")
+    }
+
+    /// A hidden window watches nothing: a running refresh and the tick queued behind it
+    /// go with the watcher, and the rescan on showing finds the edit they carried.
+    @Test func staleStatusAcrossHideAndShow() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        let status = await repo.client.statusCalls
+        let before = h.published.count
+        let tick = h.watcherCallbacks[repo.root]!
+
         await repo.client.hold(true)
-        h.watcherCallbacks[repo.root]!()
+        tick()
         #expect(await eventually { await repo.client.heldCount == 1 })
         await repo.client.set(files: [filesA[0].edited(), filesA[1]])
-        h.watcherCallbacks[repo.root]!()
+        tick()
         state.isVisible = false
         await repo.client.hold(false)
         await repo.client.releaseFirst()
-        #expect(await eventually { await repo.client.statusCalls == status + 2 }, "the follow-up runs hidden")
-        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
-        #expect(state.diffStale, "the reload is owed, not run, while hidden")
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.published.count == before, "the outlived read publishes nothing")
+        #expect(await repo.client.statusCalls == status + 1, "the queued follow-up is dropped")
+        #expect(state.files.first?.fingerprint == filesA[0].fingerprint)
+        #expect(!state.diffStale, "nothing was published, so no reload is owed")
         #expect(await repo.client.contentReads == reads)
 
+        // The stopped watcher's callback reads nothing.
+        tick()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1)
+
         state.isVisible = true
+        #expect(await eventually { await repo.client.statusCalls == status + 2 })
+        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
         #expect(await eventually { await repo.client.contentReads == reads + 2 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 2)
+        #expect(await repo.client.contentReads == reads + 2, "exactly one load")
+    }
+
+    @Test func aTickFromAStoppedWatcherIsIgnored() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let before = h.published.count
+        state.isVisible = false
+        state.isVisible = true
+        #expect(await eventually { await h.published.count > before })
+        try? await Task.sleep(for: .milliseconds(50))
+        let status = await repo.client.statusCalls
+
+        h.previousWatcherCallbacks[repo.root]!([.worktree])
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status, "the replaced watcher's ticks are dropped")
+
+        h.watcherChangeCallbacks[repo.root]!([.worktree])
+        #expect(await eventually { await repo.client.statusCalls == status + 1 }, "the new watcher's are not")
+    }
+
+    @Test func showingInCommitScopeReadsMetadataAndReloadsTheStaleDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let file = state.files[0]
+
+        state.isVisible = false
+        state.selection = [.file(file.id)]
+        #expect(state.diffStale)
+        let before = await Reads(repo.client)
+
+        state.isVisible = true
+        // A commit's files cannot change, so no status read; the owed load runs once.
+        #expect(await eventually { await self.hasContent(state, for: file) })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        let expected = before.plus(head: 1, headState: 1, content: 2)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        #expect(!state.diffStale)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected)
+    }
+
+    @Test func adoptingHiddenStartsTheWatcherOnShow() async {
+        let h = Harness()
+        let state = h.makeState()
+        state.isVisible = false
+        let repo = h.repo("A", files: filesA)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.watcherStarts[repo.root, default: 0] == 0)
+        #expect(state.session?.watcher == nil)
+
+        state.isVisible = true
+        #expect(h.watcherStarts[repo.root] == 1)
+        #expect(state.session?.watcher != nil)
+    }
+
+    @Test func aRescanDeliveredDuringARunningRefreshIsNotLost() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let status = await repo.client.statusCalls
+
+        await repo.client.hold(true)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        state.isVisible = false
+        state.isVisible = true
+        // The rescan finds the old watcher's refresh still running and queues behind it.
+        #expect(await eventually { await state.session?.watcherRefreshPending != nil })
+        #expect(await repo.client.statusCalls == status + 1)
+
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.statusCalls == status + 2 }, "the rescan runs as the follow-up")
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 2)
+    }
+
+    /// A status read that outlives its watcher publishes nothing: its snapshot predates
+    /// the hide, and the rescan queued behind it reads again.
+    @Test func aStatusReadOutlivedByItsWatcherPublishesNothing() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        let status = await repo.client.statusCalls
+        let before = h.published.count
+
+        // The selected file is gone in the snapshot the held read will return.
+        await repo.client.set(files: [filesA[1]])
+        await repo.client.hold(true)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        state.isVisible = false
+        state.isVisible = true
+        #expect(await eventually { await state.session?.watcherRefreshPending != nil })
+        // It is back by the time the rescan reads.
+        await repo.client.set(files: filesA)
+        // The stale read returns; the rescan's read is held next.
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        await repo.client.releaseFirst()
+
+        #expect(await eventually { await repo.client.statusCalls == status + 2 })
+        #expect(await eventually { await h.published.count == before + 1 }, "the stale response published nothing")
+        #expect(state.selection == [.file(filesA[0].id)], "the selection survives the file's brief absence")
+        #expect(state.files == filesA)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.published.count == before + 1)
+        #expect(await repo.client.contentReads == reads, "the shown file's fingerprint is unchanged: no reload")
+    }
+
+    /// The load owed from hiding does not depend on the status read on show succeeding.
+    @Test func aFailedStatusOnShowStillLoadsTheOwedDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        // A reload of the same file, held at the worktree read.
+        await repo.client.holdReads(true)
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.heldReadCount == 1 })
+        state.isVisible = false
+        #expect(state.diffStale)
+        await repo.client.holdReads(false)
+        await repo.client.releaseReads()
+
+        await repo.client.fail(true)
+        state.isVisible = true
+        #expect(await eventually { await state.errorMessage != nil }, "the status failure is kept")
+        // The cancelled reload's two reads were counted before the hold; the owed load adds two.
+        #expect(await eventually { await repo.client.contentReads == reads + 4 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
+        #expect(hasContent(state, for: filesA[0]))
+        #expect(state.files == filesA, "the old list is retained")
     }
 
     /// Status cannot say what HEAD holds for a conflict, so the fingerprint is unknown and
@@ -1309,12 +1528,13 @@ struct WindowStateTests {
         }
 
         /// The same counters after the given reads.
-        func plus(status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0) -> Reads {
+        func plus(status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0, content: Int = 0) -> Reads {
             var reads = self
             reads.status += status
             reads.head += head
             reads.headState += headState
             reads.defaults += defaults
+            reads.content += content
             return reads
         }
     }

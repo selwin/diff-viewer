@@ -12,7 +12,11 @@ struct WindowID: Hashable, Sendable {
 final class RepoSession {
     let root: RepositoryRoot
     let client: any RepoClient
+    /// Nil while the window is hidden: a hidden window watches nothing.
     var watcher: (any RepoWatching)?
+    /// Bumped on every watcher start and stop. A callback from a watcher whose
+    /// generation is no longer current is dropped.
+    var watcherGeneration = 0
     /// Incremented per refresh; only the latest may publish.
     var refreshSerial = 0
     /// Which line-stats read is active and which finished last. A refresh asks it what to
@@ -49,8 +53,10 @@ final class RepoSession {
     var commitDefaultsGeneration = 0
     /// One watcher refresh at a time.
     var watcherRefreshRunning = false
-    /// Ticks received during a watcher refresh, merged into one follow-up.
-    var watcherRefreshPending: Set<RepoChange> = []
+    /// Ticks received during a watcher refresh, merged into one follow-up. Carries the
+    /// generation of the watcher that delivered them, so a follow-up for a stopped
+    /// watcher is dropped.
+    var watcherRefreshPending: (generation: Int, changes: Set<RepoChange>)?
     /// Bumped on `.configuration` and `.rescan`. Part of every line-stats request, so
     /// carried-over counts are invalidated: attributes can change the binary
     /// classification of an unchanged file.

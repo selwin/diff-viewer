@@ -686,7 +686,6 @@ struct WindowCoordinatorTests {
         await h.openAndSettle(a, into: w1)
         await h.openAndSettle(b, into: w2)
         h.coordinator.windowDidBecomeKey(w1.id)
-        h.coordinator.windowOcclusionChanged(w2.id, visible: false)
         let events = h.prefetcher.events
 
         let updated = [changedFile("b2.swift")]
