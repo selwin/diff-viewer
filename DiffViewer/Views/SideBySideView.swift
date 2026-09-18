@@ -160,8 +160,8 @@ final class SideBySideContainerView: NSView {
             pane.onFoldAction = isChangeset ? nil : { [weak self] action in self?.handle(action) }
         }
         installModels(mode: .replace)
-        // Styles for the new document arrive in their own publication; until then the
-        // panes must not keep the previous document's colours.
+        // Styles are applied separately by `setStyles`; the panes must not keep the
+        // previous document's colours until then.
         leftPane.styles = nil
         rightPane.styles = nil
         appliedStylesID = nil
@@ -206,8 +206,9 @@ final class SideBySideContainerView: NSView {
             PaneModel(side: .new, rows: document.rows, lines: document.newLines, sections: sections), mode: mode)
     }
 
-    /// Applies a style snapshot built for the installed document. A snapshot that arrives
-    /// after the document is identified by its own id, not the document's.
+    /// Applies a style snapshot built for the installed document. A snapshot is
+    /// identified by its own id, not the document's, so a reload of the same document
+    /// still reapplies its styles.
     func setStyles(_ styles: DocumentStyles?) {
         guard let styles, let document, styles.documentID == document.id, styles.id != appliedStylesID else { return }
         leftPane.styles = styles.old

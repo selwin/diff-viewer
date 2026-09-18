@@ -9,15 +9,17 @@ import Foundation
 /// every publication is the previous one plus sections appended at the end, whatever
 /// order the files actually finish in.
 actor ChangesetAssembler {
-    /// One update for the loader. A document publication always carries the styles that
-    /// match it; styles that finish between two documents go out on their own.
-    enum Publication: Sendable {
-        case document(ChangesetDocument, DocumentStyles, completed: Int, total: Int)
-        case styles(DocumentStyles)
+    /// One revision for the loader, with the styles that match it.
+    struct Publication: Sendable {
+        let document: ChangesetDocument
+        let styles: DocumentStyles
+        let completed: Int
+        let total: Int
     }
 
-    /// Files diffed and highlighted at once. The worker holds its slot until its file's
-    /// highlighting is done, so this bounds highlighting as well as diffing.
+    /// Files diffed and highlighted at once. Each worker processes one file at a time,
+    /// including sequential highlighting of both sides, so this bounds highlighting as
+    /// well as diffing.
     static let workerCount = 3
     /// The shortest gap between two publications. A section that completes inside the gap
     /// waits for its end rather than for the next slow worker.
@@ -30,35 +32,27 @@ actor ChangesetAssembler {
     /// a projection it never has to rebuild.
     private let foldOptions: FoldOptions
     private let cache: DifftCache
+    private let resultCache: DiffResultCache
     private let clock: any Clock<Duration>
-    private let highlight: @Sendable ([String], String) async -> [[StyleRun]]?
+    private let highlight: DiffEngine.Highlight
     private let loadID: UUID
 
     /// One slot per file, filled as it finishes. Nil is "not done yet".
     private var results: [ChangesetBuilder.FileResult?]
-    /// One slot per file, filled when its highlighting finishes.
-    private var sectionStyles: [SectionStyles?]
+    /// One slot per file, filled with its result; nil where there is nothing to colour.
+    private var sectionStyles: [SyntaxStyles?]
     /// The next file a worker takes. Files are admitted in sidebar order, never in
     /// completion order.
     private var cursor = 0
     /// How many sections the last publication carried.
     private var publishedCount = 0
     private var revision = 0
-    private var published: ChangesetDocument?
-    /// Styles arrived for a section that is already published, so the panes are missing
-    /// colours the assembler already has.
-    private var hasPendingStyles = false
     /// The stop flag and the pending flush, which cancellation has to reach from outside
     /// the actor.
     private let cancellation = Cancellation()
     private var send: (@Sendable (Publication) async -> Void)?
     /// The published sections, for the append-only assertion.
     private var publishedSectionIDs: [ChangedFile.ID] = []
-
-    private struct SectionStyles {
-        let old: [[StyleRun]]?
-        let new: [[StyleRun]]?
-    }
 
     /// Whether the load was cancelled, and the flush waiting to go out.
     ///
@@ -118,12 +112,9 @@ actor ChangesetAssembler {
         hideWhitespace: Bool,
         foldOptions: FoldOptions = FoldOptions(),
         cache: DifftCache,
+        resultCache: DiffResultCache,
         clock: any Clock<Duration> = ContinuousClock(),
-        highlight: @escaping @Sendable ([String], String) async -> [[StyleRun]]? = { lines, fileName in
-            await Task.detached(priority: .userInitiated) {
-                Highlighter.highlight(lines: lines, fileName: fileName)
-            }.value
-        },
+        highlight: @escaping DiffEngine.Highlight = DiffEngine.defaultHighlight,
         loadID: UUID = UUID()
     ) {
         self.files = files
@@ -131,6 +122,7 @@ actor ChangesetAssembler {
         self.hideWhitespace = hideWhitespace
         self.foldOptions = foldOptions
         self.cache = cache
+        self.resultCache = resultCache
         self.clock = clock
         self.highlight = highlight
         self.loadID = loadID
@@ -143,7 +135,13 @@ actor ChangesetAssembler {
         }
     }
 
-    /// Runs the whole load, calling `publish` for every revision and style snapshot.
+    /// Files diffed so far, not counting those past the cap. For tests; not the
+    /// publishable prefix.
+    var completedCount: Int {
+        results.prefix(min(files.count, ChangesetLimits.maxFiles)).filter { $0 != nil }.count
+    }
+
+    /// Runs the whole load, calling `publish` for every revision.
     ///
     /// Returns when the task group drains, which after a cancellation means when the
     /// workers already inside git, difft, the aligner or tree-sitter come back — those
@@ -191,27 +189,17 @@ actor ChangesetAssembler {
         return cursor
     }
 
-    /// Reads, diffs and highlights one file, recording each stage as it lands.
+    /// Reads, diffs and highlights one file, then records it.
     private func process(_ index: Int) async throws {
-        let file = files[index]
         try Task.checkCancellation()
-        let result = try await diff(file)
+        let (result, styles) = try await diff(files[index])
         try Task.checkCancellation()
-        await record(result, at: index)
-        try Task.checkCancellation()
-
-        // Nothing to colour for a binary, an identical pair, a file that was never read,
-        // or one whose changes are all hidden; the section keeps no lines either way.
-        guard case let .content(.text(document)) = result, !document.changeBlocks.isEmpty else { return }
-        let styles = await highlight(document, fileName: file.fileName)
-        try Task.checkCancellation()
-        await record(styles: styles, at: index)
+        await record(result, styles: styles, at: index)
     }
 
-    /// One file's outcome. The source buffers are scoped to this call and are never
-    /// retained in the section it produces, so a section's `Data` is gone by the time its
-    /// lines exist.
-    private func diff(_ file: ChangedFile) async throws -> ChangesetBuilder.FileResult {
+    /// One file's outcome and its styles. Published results do not retain the source
+    /// buffers.
+    private func diff(_ file: ChangedFile) async throws -> (ChangesetBuilder.FileResult, SyntaxStyles?) {
         let sources: DiffEngine.Sources
         do {
             sources = try await DiffEngine.sources(for: file, client: client)
@@ -219,40 +207,26 @@ actor ChangesetAssembler {
             throw CancellationError()
         } catch {
             try Task.checkCancellation()
-            return .failed(error.localizedDescription)
+            return (.failed(error.localizedDescription), nil)
         }
         try Task.checkCancellation()
 
         // A computation-admission limit, not a memory one: the read has happened, but a
         // huge file costs no diff and no highlighting.
         guard sources.old.count + sources.new.count <= ChangesetLimits.maxSourceBytesPerFile else {
-            return .tooLarge
+            return (.tooLarge, nil)
         }
-        return .content(
-            await DiffEngine.build(sources, hideWhitespace: hideWhitespace, cache: cache, priority: .foreground))
-    }
-
-    /// Both sides of one file, off the actor. Sequential rather than in parallel: the
-    /// worker count is the bound on concurrent highlighting.
-    private func highlight(_ document: DiffDocument, fileName: String) async -> SectionStyles {
-        await SectionStyles(
-            old: highlight(document.oldLines, fileName),
-            new: highlight(document.newLines, fileName))
+        let output = try await DiffEngine.build(
+            sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache, priority: .foreground,
+            highlight: highlight)
+        return (.content(output.content), output.styles)
     }
 
     // MARK: - Publishing
 
-    private func record(_ result: ChangesetBuilder.FileResult, at index: Int) async {
+    private func record(_ result: ChangesetBuilder.FileResult, styles: SyntaxStyles?, at index: Int) async {
         results[index] = result
-        await publishIfDue()
-    }
-
-    private func record(styles: SectionStyles, at index: Int) async {
         sectionStyles[index] = styles
-        // Styles for a section that is not published yet ride out with it; only an
-        // already-published section needs a snapshot of its own.
-        guard index < publishedCount else { return }
-        hasPendingStyles = true
         await publishIfDue()
     }
 
@@ -263,30 +237,21 @@ actor ChangesetAssembler {
         await publishNow(startingCooldown: true)
     }
 
-    /// Sends whatever is ready: a grown prefix (with the styles it has), or a fresh
-    /// snapshot for the sections already out. Nothing ready means nothing sent.
+    /// Sends the grown prefix with its styles. Nothing ready means nothing sent.
     private func publishNow(startingCooldown: Bool) async {
         guard !cancellation.isStopped, let send else { return }
         let prefix = completedPrefix()
+        guard prefix > publishedCount else { return }
 
-        if prefix > publishedCount {
-            revision += 1
-            publishedCount = prefix
-            let document = ChangesetBuilder.build(
-                results: (0..<prefix).map { (files[$0], results[$0]!) }, loadID: loadID, revision: revision,
-                foldOptions: foldOptions)
-            checkAppendOnly(document)
-            published = document
-            hasPendingStyles = false
-            let snapshot = snapshot(for: document)
-            if startingCooldown { startCooldown() }
-            await send(.document(document, snapshot, completed: prefix, total: files.count))
-        } else if hasPendingStyles, let document = published {
-            hasPendingStyles = false
-            let snapshot = snapshot(for: document)
-            if startingCooldown { startCooldown() }
-            await send(.styles(snapshot))
-        }
+        revision += 1
+        publishedCount = prefix
+        let document = ChangesetBuilder.build(
+            results: (0..<prefix).map { (files[$0], results[$0]!) }, loadID: loadID, revision: revision,
+            foldOptions: foldOptions)
+        checkAppendOnly(document)
+        let snapshot = snapshot(for: document)
+        if startingCooldown { startCooldown() }
+        await send(Publication(document: document, styles: snapshot, completed: prefix, total: files.count))
     }
 
     /// Sections 0..<k where every file is done. A failed or skipped file is a finished
@@ -315,7 +280,7 @@ actor ChangesetAssembler {
     }
 
     /// Styles for every line of `document`, in one array per side. A section that is not
-    /// highlighted — unsupported language, or not done yet — contributes empty runs, so a
+    /// highlighted (unsupported language, nothing to colour) contributes empty runs, so a
     /// later file's styles never shift onto the wrong lines.
     private func snapshot(for document: ChangesetDocument) -> DocumentStyles {
         var old: [[StyleRun]] = []

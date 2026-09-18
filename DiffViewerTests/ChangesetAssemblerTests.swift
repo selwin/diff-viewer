@@ -5,44 +5,26 @@ import Testing
 
 /// Everything one assembler run published, in order.
 private actor PublicationLog {
-    private(set) var publications: [ChangesetAssembler.Publication] = []
+    private(set) var documents: [ChangesetAssembler.Publication] = []
 
-    func append(_ publication: ChangesetAssembler.Publication) { publications.append(publication) }
+    func append(_ publication: ChangesetAssembler.Publication) { documents.append(publication) }
 
-    var count: Int { publications.count }
+    var count: Int { documents.count }
 
-    var isEmpty: Bool { publications.isEmpty }
-
-    var documents: [(document: ChangesetDocument, styles: DocumentStyles, completed: Int, total: Int)] {
-        publications.compactMap {
-            guard case let .document(document, styles, completed, total) = $0 else { return nil }
-            return (document, styles, completed, total)
-        }
-    }
-
-    /// The styles of every publication, document or not, in order.
-    var snapshots: [DocumentStyles] {
-        publications.map {
-            switch $0 {
-            case let .document(_, styles, _, _): styles
-            case let .styles(styles): styles
-            }
-        }
-    }
+    var isEmpty: Bool { documents.isEmpty }
 
     var lastDocument: ChangesetDocument? { documents.last?.document }
 }
 
 /// A highlighter that colours one language, records what it was asked for, and can be
 /// held open on a file the way the stub client holds a worktree read.
-private actor HighlighterProbe {
+actor HighlighterProbe {
     private(set) var fileNames: [String] = []
     /// Files whose highlighting suspends until the test releases them.
     private var heldNames: Set<String> = []
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
-    /// Suspends highlighting of each file, so a worker can be pinned inside the stage
-    /// that runs after its diff is already recorded.
+    /// Suspends highlighting of each file, so a worker can be pinned inside its build.
     func hold(_ names: Set<String>) { heldNames.formUnion(names) }
 
     func release(_ name: String) {
@@ -81,12 +63,14 @@ struct ChangesetAssemblerTests {
         _ names: [String],
         client: StubRepoClient,
         clock: ManualClock = ManualClock(),
-        highlighter: HighlighterProbe = HighlighterProbe()
+        highlighter: HighlighterProbe = HighlighterProbe(),
+        cache: DifftCache = plainCache(),
+        resultCache: DiffResultCache = DiffResultCache()
     ) -> (assembler: ChangesetAssembler, log: PublicationLog, run: () -> Task<Void, Never>) {
         let log = PublicationLog()
         let assembler = ChangesetAssembler(
-            files: files(names), client: client, hideWhitespace: true, cache: plainCache(), clock: clock,
-            highlight: highlighter.callback())
+            files: files(names), client: client, hideWhitespace: true, cache: cache, resultCache: resultCache,
+            clock: clock, highlight: highlighter.callback())
         return (assembler, log, { Task { await assembler.run { await log.append($0) } } })
     }
 
@@ -125,14 +109,10 @@ struct ChangesetAssemblerTests {
     @Test func nothingIsPublishedUntilThePrefixGrows() async {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["a.swift"])
-        let highlighter = HighlighterProbe()
-        let (_, log, run) = assemble(["a.swift", "b.swift", "c.swift"], client: client, highlighter: highlighter)
+        let (assembler, log, run) = assemble(["a.swift", "b.swift", "c.swift"], client: client)
         let task = run()
 
-        // Highlighting a file is the last thing its worker does, so seeing it means the
-        // section is recorded and the publication was declined.
-        #expect(await eventually { await highlighter.fileNames.contains("c.swift") })
-        #expect(await eventually { await highlighter.fileNames.contains("b.swift") })
+        #expect(await eventually { await assembler.completedCount == 2 }, "b and c are recorded")
         #expect(await log.isEmpty, "a completed section behind an unfinished one publishes nothing")
 
         await client.release(worktree: "a.swift")
@@ -151,9 +131,8 @@ struct ChangesetAssemblerTests {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["b.swift", "d.swift"])
         let clock = ManualClock()
-        let highlighter = HighlighterProbe()
-        let (_, log, run) = assemble(
-            ["a.swift", "b.swift", "c.swift", "d.swift"], client: client, clock: clock, highlighter: highlighter)
+        let (assembler, log, run) = assemble(
+            ["a.swift", "b.swift", "c.swift", "d.swift"], client: client, clock: clock)
         let task = run()
 
         #expect(await eventually { await log.documents.count == 1 })
@@ -163,7 +142,7 @@ struct ChangesetAssemblerTests {
         // The second revision is flushed at the deadline, the third when the group drains.
         #expect(await eventually { clock.sleeperCount == 1 })
         await client.release(worktree: "b.swift")
-        #expect(await eventually { await highlighter.fileNames.contains("b.swift") })
+        #expect(await eventually { await assembler.completedCount == 3 })
         clock.advance(by: .milliseconds(150))
         #expect(await eventually { await log.documents.count == 2 })
 
@@ -246,18 +225,17 @@ struct ChangesetAssemblerTests {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["b.swift", "d.swift"])
         let clock = ManualClock()
-        let highlighter = HighlighterProbe()
-        let (_, log, run) = assemble(
-            ["a.swift", "b.swift", "c.swift", "d.swift"], client: client, clock: clock, highlighter: highlighter)
+        let (assembler, log, run) = assemble(
+            ["a.swift", "b.swift", "c.swift", "d.swift"], client: client, clock: clock)
         let task = run()
 
         #expect(await eventually { await log.documents.count == 1 }, "the first section publishes at once")
         #expect(await eventually { clock.sleeperCount == 1 }, "and starts the throttle window")
 
-        // The second file finishes inside the window: its highlighting running is proof
-        // the section was recorded and the publication deferred.
+        // The second file finishes inside the window: it is recorded, but the
+        // publication is deferred.
         await client.release(worktree: "b.swift")
-        #expect(await eventually { await highlighter.fileNames.contains("b.swift") })
+        #expect(await eventually { await assembler.completedCount == 3 })
         #expect(await log.documents.count == 1, "still inside the window")
 
         clock.advance(by: .milliseconds(150))
@@ -277,16 +255,14 @@ struct ChangesetAssemblerTests {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["b.swift", "c.swift"])
         let clock = ManualClock()
-        let highlighter = HighlighterProbe()
-        let (_, log, run) = assemble(
-            ["a.swift", "b.swift", "c.swift"], client: client, clock: clock, highlighter: highlighter)
+        let (assembler, log, run) = assemble(["a.swift", "b.swift", "c.swift"], client: client, clock: clock)
         let task = run()
 
         #expect(await eventually { await log.documents.count == 1 })
         #expect(await eventually { clock.sleeperCount == 1 })
         // A second section completes inside the window, so a flush is waiting to go out.
         await client.release(worktree: "b.swift")
-        #expect(await eventually { await highlighter.fileNames.contains("b.swift") })
+        #expect(await eventually { await assembler.completedCount == 2 })
         let published = await log.count
         #expect(published == 1)
 
@@ -353,7 +329,7 @@ struct ChangesetAssemblerTests {
         let (_, log, run) = assemble(["plain.txt", "code.swift"], client: client)
         await run().value
 
-        guard let document = await log.lastDocument, let styles = await log.snapshots.last else {
+        guard let document = await log.lastDocument, let styles = await log.documents.last?.styles else {
             Issue.record("nothing was published")
             return
         }
@@ -371,11 +347,10 @@ struct ChangesetAssemblerTests {
     @Test func stylesFinishedEarlyAppearWithTheirSection() async {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["a.swift"])
-        let highlighter = HighlighterProbe()
-        let (_, log, run) = assemble(["a.swift", "b.swift"], client: client, highlighter: highlighter)
+        let (assembler, log, run) = assemble(["a.swift", "b.swift"], client: client)
         let task = run()
 
-        #expect(await eventually { await highlighter.fileNames.contains("b.swift") })
+        #expect(await eventually { await assembler.completedCount == 1 })
         #expect(await log.isEmpty)
 
         await client.release(worktree: "a.swift")
@@ -406,5 +381,41 @@ struct ChangesetAssemblerTests {
         #expect(documents.count == 2)
         for document in documents { expectMatchingStyles(document.document, document.styles) }
         #expect(documents[1].document.sections.count == 2)
+    }
+
+    // MARK: Result cache
+
+    /// A second load of the same files against one result store neither diffs nor
+    /// highlights again, and still publishes a fully styled document.
+    @Test func aSecondLoadOfTheSameFilesIsServedFromTheResultCache() async {
+        let names = ["a.swift", "b.swift", "c.swift"]
+        let probe = RunnerProbe()
+        let cache = DifftCache(runner: { old, new, fileName, qos in
+            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
+        })
+        let resultCache = DiffResultCache()
+        let highlighter = HighlighterProbe()
+
+        let first = assemble(
+            names, client: StubRepoClient(files: []), highlighter: highlighter, cache: cache, resultCache: resultCache)
+        await first.run().value
+        let launches = await probe.launches.count
+        let highlights = await highlighter.fileNames.count
+        #expect(launches == 3)
+        #expect(highlights == 6, "two sides per file")
+
+        let second = assemble(
+            names, client: StubRepoClient(files: []), highlighter: highlighter, cache: cache, resultCache: resultCache)
+        await second.run().value
+        #expect(await probe.launches.count == launches, "difft did not run again")
+        #expect(await highlighter.fileNames.count == highlights, "nor did the highlighter")
+
+        guard let last = await second.log.documents.last else {
+            Issue.record("nothing was published")
+            return
+        }
+        expectMatchingStyles(last.document, last.styles)
+        #expect(last.document.sections.count == 3)
+        #expect(last.styles.new?.allSatisfy { !$0.isEmpty } == true, "every line keeps its colours")
     }
 }

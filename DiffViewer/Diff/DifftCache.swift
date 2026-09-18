@@ -164,7 +164,14 @@ actor DifftCache {
     /// Hints for the pair, running difft if needed. Nil when difft failed.
     nonisolated func result(old: Data, new: Data, fileName: String, priority: Priority) async -> DifftResult? {
         let key = Self.key(old: old, new: new, fileName: fileName)
-        return await lookup(key, old: old, new: new, fileName: fileName, priority: priority)
+        return await result(for: key, old: old, new: new, fileName: fileName, priority: priority)
+    }
+
+    /// Same, for a caller that already computed `key(old:new:fileName:)` for the pair.
+    nonisolated func result(for key: Key, old: Data, new: Data, fileName: String, priority: Priority) async
+        -> DifftResult?
+    {
+        await lookup(key, old: old, new: new, fileName: fileName, priority: priority)
     }
 
     private func lookup(_ key: Key, old: Data, new: Data, fileName: String, priority: Priority) async -> DifftResult? {

@@ -10,7 +10,7 @@ import SwiftUI
 /// list, the selection, the diff loader, and change navigation.
 ///
 /// A window adopts a repository once and keeps it until it closes. App-wide concerns
-/// (preferences, the difft cache, prefetching) are injected or driven from outside.
+/// (preferences, the caches, prefetching) are injected or driven from outside.
 @MainActor
 @Observable
 final class WindowState {
@@ -151,10 +151,13 @@ final class WindowState {
     private let watchRepository: WatcherFactory
     private var initialRefresh: Task<Void, Never>?
 
-    init(preferences: Preferences, cache: DifftCache, watchRepository: @escaping WatcherFactory) {
+    init(
+        preferences: Preferences, cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
+        watchRepository: @escaping WatcherFactory
+    ) {
         self.preferences = preferences
         self.watchRepository = watchRepository
-        diffLoader = DiffLoader(cache: cache)
+        diffLoader = DiffLoader(cache: cache, resultCache: resultCache)
     }
 
     /// The window and tab title. The repository name, extended with parent folders by

@@ -590,7 +590,6 @@ struct WindowStateTests {
         await repo.client.releaseReads()
         try? await Task.sleep(for: .milliseconds(50))
         #expect(documentID(state) == published, "the cancelled replacement must not publish")
-        #expect(!state.diffLoader.isHighlighting)
         #expect(hasContent(state), "the published diff stays for the switch back")
     }
 

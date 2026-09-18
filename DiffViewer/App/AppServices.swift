@@ -2,8 +2,8 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// What the app owns exactly once: preferences, the difft cache, the prefetcher, the
-/// window coordinator, and the map from window ids to their `NSWindow`s.
+/// What the app owns exactly once: preferences, the difft and result caches, the
+/// prefetcher, the window coordinator, and the map from window ids to their `NSWindow`s.
 ///
 /// `@Observable` only so views can receive it through `.environment(_:)`; it holds no
 /// state that changes after creation.
@@ -15,6 +15,7 @@ final class AppServices {
 
     let preferences: Preferences
     let cache: DifftCache
+    let resultCache = DiffResultCache()
     let prefetcher: DiffPrefetcher
     let coordinator: WindowCoordinator
     let windows = NativeWindowRegistry()
@@ -62,7 +63,7 @@ final class AppServices {
     }
 
     func makeWindowState() -> WindowState {
-        WindowState(preferences: preferences, cache: cache) { root, onChange in
+        WindowState(preferences: preferences, cache: cache, resultCache: resultCache) { root, onChange in
             RepoWatcher(root: root.url, onChange: onChange)
         }
     }

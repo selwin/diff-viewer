@@ -40,4 +40,54 @@ struct DiffLoaderTests {
         #expect(current?.sections.map(\.file.path) == ["c.swift"])
         #expect(loader.styles?.documentID == current?.document.id)
     }
+
+    /// A file's rows and colours are published in one turn, so a reader never sees
+    /// the rows uncoloured or the previous file's colours.
+    @Test func contentAndStylesArePublishedTogether() async {
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(file: changedFile("a.swift"), client: StubRepoClient(files: []), hideWhitespace: true)
+
+        #expect(await eventually { await loader.content != nil })
+        guard case let .text(document)? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.styles?.documentID == document.id)
+        #expect(loader.styles?.new?.count == document.newLines.count)
+        #expect(!loader.hasActiveWork)
+    }
+
+    /// A cache hit for the file on screen keeps the style snapshot it already has; the
+    /// same file turning binary clears it, even though the file id did not change.
+    @Test func aSameFileHitKeepsItsStylesAndTurningBinaryClearsThem() async {
+        let probe = RunnerProbe()
+        let cache = DifftCache(runner: { old, new, fileName, qos in
+            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
+        })
+        let resultCache = DiffResultCache()
+        let client = StubRepoClient(files: [])
+        let loader = DiffLoader(cache: cache, resultCache: resultCache)
+
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(await eventually { await loader.styles != nil })
+        let first = loader.styles?.id
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(await eventually { await resultCache.stats.hits == 1 })
+        #expect(await eventually { await !loader.isLoading })
+        guard case let .text(document)? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.styles?.documentID == document.id)
+        #expect(loader.styles?.id == first, "the snapshot on screen is kept")
+
+        await client.set(worktree: Data([0, 1, 2]), for: "a.swift")
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(await eventually { await !loader.isLoading })
+        guard case .binary? = loader.content else {
+            Issue.record("binary expected")
+            return
+        }
+        #expect(loader.styles == nil)
+    }
 }
