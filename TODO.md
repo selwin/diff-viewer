@@ -401,6 +401,7 @@ not it is the selected one, and commit scope offers no writes at all.
 "Read-only" principle in CLAUDE.md became a whole-file rule: never file contents, never a
 commit, but a file may move between the working tree, the index, and HEAD. CLAUDE.md and
 README were updated with it. Hunk-level staging stays out, as *Not doing* still says.
+(Commits came in later; see *Commit* below.)
 
 **Deviations from the original design** (its text is in git history). Staged rows get
 Unstage only; the one-step discard of a staged change was dropped. The confirmation is an
@@ -451,6 +452,48 @@ Follow-ups it leaves open: Stage All / Unstage All on the section headers; a spl
 for a mixed selection ("Stage 2 Files" + "Unstage 1 File") if the intersection rule
 proves too strict; `NSWorkspace.recycle` for one Finder undo; and the File-menu mirror
 above, which should act on the selection.
+
+### Commit (2026-09-18)
+
+A message box at the bottom of the sidebar, in working-tree scope, with a Commit button
+and ⌘↩ on the File menu. It records the index as `git commit --cleanup=strip -F <file>`
+with the text in the box, prefilled the way the editor flow would be: `SQUASH_MSG` then
+`MERGE_MSG` when both exist, else one of them, else `commit.template`. Nothing is staged
+for you. Commit is disabled with nothing staged (unless `MERGE_HEAD` exists, since a merge
+may commit a tree equal to HEAD), a blank message, an unmerged row, or a template left
+exactly as applied. Hooks run with the PATH of the user's login shell, resolved once from
+`$SHELL -l -c` under a five-second deadline so a Finder-launched app still finds Homebrew
+tools.
+
+**Scope change.** CLAUDE.md's "never commits" became "may record the index as a commit".
+Still nothing finer than a file: no hunks, no amend, no message composed for the user.
+
+**Stances worth knowing.** `--cleanup=strip` is what an edited message gets in the editor
+flow, and git applies `core.commentChar` itself; under `commentChar=auto` a prefilled
+`# Conflicts:` block can survive, and the target is parity with `git commit` in an editor,
+which the tests assert against the system git, not that every `#` line disappears. The
+unedited-template refusal is an exact string comparison, a safeguard against committing
+boilerplate rather than git's cleanup-aware check. The login-shell PATH reads login startup
+files only; a PATH set in `.zshrc` alone is not seen. Two known differences from the editor
+flow: `prepare-commit-msg` receives source `message`, not `merge`; and merge metadata
+changed outside the app in a *linked worktree* is not watched, a pre-existing watcher limit
+(HEAD and the index there are missed too).
+
+**What it forced into the model.** Commits share the serialized write chain with the
+sidebar actions, so a commit can never meet a stage on `index.lock`; git stays the
+authority on whether the index can be committed and `canCommit` only shapes the UI. The
+defaults load in a serial-checked task after each file list publishes, so a slow template
+never delays the sidebar and a stale read applies nothing. The draft is untouched when it
+still equals what was last applied, and only an untouched draft follows the suggestion; a
+draft edit revision, bumped by the reader's writes alone, decides what a finished commit
+may clear or restore, so a failing hook keeps the message unless the reader edited the box
+while git ran.
+
+Follow-ups it leaves open: amend; a `--no-verify` toggle; sign-off; commit-and-push;
+honouring `commit.cleanup`; a 50/72 column guide; a summary/description split; an
+identity check via `git var GIT_AUTHOR_IDENT` before enabling the button; timeouts on git
+calls (a hanging gpg pinentry); undo last commit; Stage All on the section header; and
+watching a linked worktree's git dir.
 
 ## Not doing (and why)
 
