@@ -711,4 +711,124 @@ import Testing
             #expect(error.localizedDescription.contains("missing.txt"))
         }
     }
+
+    // MARK: Fingerprints
+
+    /// A repository with one committed file and an unstaged edit to it.
+    private func editedRepo() async throws -> Repo {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try repo.write("a.txt", "two\n")
+        return repo
+    }
+
+    private func fingerprint(_ path: String, area: ChangedFile.Area, in repo: Repo) async throws
+        -> DiffInputFingerprint?
+    {
+        try await repo.client.status().first { $0.path == path && $0.area == area }?.fingerprint
+    }
+
+    @Test func statusFingerprintsAreKnown() async throws {
+        let repo = try await editedRepo()
+        try repo.write("new.txt", "fresh\n")
+        try await repo.git(["add", "new.txt"])
+
+        let unstaged = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+        #expect(unstaged.isKnown)
+        guard case .file = unstaged.worktree else {
+            Issue.record("expected a stat, got \(unstaged.worktree)")
+            return
+        }
+        let staged = try #require(try await fingerprint("new.txt", area: .staged, in: repo))
+        #expect(staged.isKnown)
+        #expect(staged.old == .absent)
+        #expect(staged.worktree == .notApplicable)
+        let again = try await fingerprint("a.txt", area: .unstaged, in: repo)
+        #expect(!DiffInputFingerprint.mayHaveChanged(unstaged, again), "nothing moved between two status calls")
+    }
+
+    @Test func anEditMovesTheFingerprint() async throws {
+        let repo = try await editedRepo()
+        let before = try await fingerprint("a.txt", area: .unstaged, in: repo)
+        // The write changes the size and the mtime, and both are in the stat.
+        try repo.write("a.txt", "two\nthree\n")
+        let after = try await fingerprint("a.txt", area: .unstaged, in: repo)
+        #expect(DiffInputFingerprint.mayHaveChanged(before, after))
+    }
+
+    /// The case an mtime-only check would miss: same size, mtime put back. `utimes`
+    /// itself bumps ctime, so the stat still moves.
+    @Test func aSameSizeEditWithRestoredMtimeMovesTheFingerprint() async throws {
+        let repo = try await editedRepo()
+        let file = repo.url.appendingPathComponent("a.txt")
+        let before = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+        let originalDate = try #require(
+            try FileManager.default.attributesOfItem(atPath: file.path)[.modificationDate] as? Date)
+
+        try repo.write("a.txt", "TWO\n")
+        try FileManager.default.setAttributes([.modificationDate: originalDate], ofItemAtPath: file.path)
+
+        let after = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+        guard case let .file(_, ctimeBefore, sizeBefore, _) = before.worktree,
+            case let .file(_, ctimeAfter, sizeAfter, _) = after.worktree
+        else {
+            Issue.record("expected stats, got \(before.worktree) and \(after.worktree)")
+            return
+        }
+        #expect(sizeBefore == sizeAfter, "the edit is the same size on purpose")
+        #expect(ctimeBefore != ctimeAfter, "restoring the mtime is itself a change to the inode")
+        #expect(DiffInputFingerprint.mayHaveChanged(before, after))
+    }
+
+    /// `git add` leaves the file alone and writes a new blob, so the staged entry's index
+    /// side differs from its HEAD side, and a later unstaged entry reads from that blob.
+    @Test func stagingMovesTheIndexBlob() async throws {
+        let repo = try await editedRepo()
+        let unstagedBefore = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+
+        try await repo.git(["add", "a.txt"])
+        let staged = try #require(try await fingerprint("a.txt", area: .staged, in: repo))
+        #expect(staged.old == unstagedBefore.old, "HEAD's blob was the index blob before the add")
+        #expect(staged.new != staged.old)
+        guard case .object = staged.new else {
+            Issue.record("expected an index blob, got \(staged.new)")
+            return
+        }
+
+        try repo.write("a.txt", "three\n")
+        let unstagedAfter = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+        #expect(unstagedAfter.old == staged.new, "the unstaged diff now reads the new index blob")
+        #expect(DiffInputFingerprint.mayHaveChanged(unstagedBefore, unstagedAfter))
+    }
+
+    @Test func aDeletedWorktreeFileIsMissing() async throws {
+        let repo = try await editedRepo()
+        try repo.delete("a.txt")
+        let deleted = try #require(try await fingerprint("a.txt", area: .unstaged, in: repo))
+        #expect(deleted.kind == .deleted)
+        #expect(deleted.worktree == .missing)
+        #expect(deleted.isKnown)
+    }
+
+    /// The stat follows the link because the diff reads the target's contents, so an edit
+    /// to the target changes what the link's diff shows.
+    @Test func aSymlinkFingerprintFollowsItsTarget() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("target.txt", "one\n")
+        try FileManager.default.createSymbolicLink(
+            atPath: repo.url.appendingPathComponent("link.txt").path, withDestinationPath: "target.txt")
+        let before = try #require(try await fingerprint("link.txt", area: .unstaged, in: repo))
+        #expect(before.kind == .untracked)
+        guard case .file = before.worktree else {
+            Issue.record("expected the target's stat, got \(before.worktree)")
+            return
+        }
+
+        try repo.write("target.txt", "one\ntwo\n")
+        let after = try #require(try await fingerprint("link.txt", area: .unstaged, in: repo))
+        #expect(DiffInputFingerprint.mayHaveChanged(before, after))
+    }
 }

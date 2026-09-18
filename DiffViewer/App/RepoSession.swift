@@ -15,7 +15,10 @@ final class RepoSession {
     var watcher: (any RepoWatching)?
     /// Incremented per refresh; only the latest may publish.
     var refreshSerial = 0
-    /// The line-stats work of the latest refresh; cancelled when a newer one starts.
+    /// Which line-stats read is active and which finished last. A refresh asks it what to
+    /// do; the read reports back with the token it was given.
+    var lineStats = LineStatsState()
+    /// The active line-stats read, so a superseded one can be cancelled.
     var statsTask: Task<Void, Never>?
     /// Incremented per scope change, so a fallback or a reselection that outlived its
     /// transition cannot act on a scope the user has since moved away from.
@@ -38,8 +41,15 @@ final class RepoSession {
     /// new write waits for this task before touching the repository, so two quick clicks
     /// cannot run two `git` writes at once and collide on `index.lock`.
     var repositoryWriteTask: Task<Void, Never>?
-    /// The commit-defaults read of the latest refresh; cancelled when a newer one starts.
+    /// The commit-defaults read in flight, if any. Superseded by generation, not by the
+    /// refresh serial: a `.settings` refresh does not start one and must not cancel one.
     var commitDefaultsTask: Task<Void, Never>?
+    /// Bumped when a refresh that needs a defaults read is accepted, and on close. Only
+    /// the read of the current generation publishes.
+    var commitDefaultsGeneration = 0
+    /// One watcher refresh at a time: ticks received during it request one follow-up.
+    var watcherRefreshRunning = false
+    var watcherRefreshPending = false
 
     init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root

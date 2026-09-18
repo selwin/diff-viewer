@@ -11,9 +11,52 @@ func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
     return await condition()
 }
 
+/// A working-tree file carries a deterministic fingerprint derived from its path, area and
+/// kind, known for every kind but `.unmerged`, whose `old` is `.unknown` as the parser
+/// leaves it. A commit-scope file has none, as the real client produces.
 func changedFile(_ path: String, area: ChangedFile.Area = .unstaged, kind: ChangedFile.Kind = .modified) -> ChangedFile
 {
-    ChangedFile(path: path, originalPath: nil, kind: kind, area: area)
+    ChangedFile(path: path, originalPath: nil, kind: kind, area: area, fingerprint: fingerprint(path, area, kind))
+}
+
+private func fingerprint(_ path: String, _ area: ChangedFile.Area, _ kind: ChangedFile.Kind) -> DiffInputFingerprint? {
+    let stat = DiffInputFingerprint.Worktree.file(mtimeNs: 1, ctimeNs: 1, size: 10, inode: 1)
+    switch (area, kind) {
+    case (.commit, _):
+        return nil
+    case (.staged, _):
+        return DiffInputFingerprint(
+            old: .object(objectID("head-\(path)")), new: .object(objectID("index-\(path)")),
+            worktree: .notApplicable, kind: kind, originalPath: nil)
+    case (.unstaged, .untracked):
+        return DiffInputFingerprint(old: .absent, new: .notApplicable, worktree: stat, kind: kind, originalPath: nil)
+    case (.unstaged, .unmerged):
+        return DiffInputFingerprint(old: .unknown, new: .notApplicable, worktree: stat, kind: kind, originalPath: nil)
+    case (.unstaged, _):
+        return DiffInputFingerprint(
+            old: .object(objectID("index-\(path)")), new: .notApplicable, worktree: stat, kind: kind,
+            originalPath: nil)
+    }
+}
+
+extension ChangedFile {
+    /// The same file after a worktree write: the stat moved, so `mayHaveChanged` is true.
+    func edited() -> ChangedFile {
+        guard let fingerprint, case let .file(mtime, ctime, size, inode) = fingerprint.worktree else { return self }
+        let worktree = DiffInputFingerprint.Worktree.file(
+            mtimeNs: mtime + 1, ctimeNs: ctime + 1, size: size + 1, inode: inode)
+        return with(fingerprint: fingerprint.with(worktree: worktree))
+    }
+
+    /// The same staged file after another `git add`: the index blob moved, so
+    /// `mayHaveChanged` is true. The unstaged counterpart is `edited()`.
+    func restaged() -> ChangedFile {
+        guard let fingerprint, area == .staged else { return self }
+        let moved = DiffInputFingerprint(
+            old: fingerprint.old, new: .object(objectID("index2-\(path)")), worktree: fingerprint.worktree,
+            kind: fingerprint.kind, originalPath: fingerprint.originalPath)
+        return with(fingerprint: moved)
+    }
 }
 
 // MARK: Clock

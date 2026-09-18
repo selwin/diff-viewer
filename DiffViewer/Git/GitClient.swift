@@ -61,7 +61,14 @@ struct GitClient: RepoClient {
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
+        // The parser cannot stat; the worktree half of an unstaged fingerprint is filled
+        // in here, still off the main actor.
         return GitStatusParser.parse(result.stdout)
+            .map { file in
+                guard file.area == .unstaged, let fingerprint = file.fingerprint else { return file }
+                let worktree = DiffInputFingerprint.worktree(at: repoRoot.appendingPathComponent(file.path))
+                return file.with(fingerprint: fingerprint.with(worktree: worktree))
+            }
             .sorted { ($0.area.sortOrder, $0.path) < ($1.area.sortOrder, $1.path) }
     }
 

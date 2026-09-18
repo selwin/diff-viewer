@@ -281,8 +281,8 @@ final class WindowCoordinator {
         guard !closedBeforeRegistration.contains(state.id), !state.isClosed, windows[state.id] == nil else { return }
         windows[state.id] = state
         sceneRootSetters[state.id] = setSceneRoot
-        state.onRefreshPublished = { [weak self] state, _ in
-            self?.refreshPublished(state)
+        state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
+            self?.refreshPublished(state, cause: cause, inputsChanged: inputsChanged)
         }
         // Reconcile with notifications that arrived before registration.
         if let visible = visibility[state.id] { state.isVisible = visible }
@@ -387,8 +387,10 @@ final class WindowCoordinator {
         prefetcher.prefetch(files: window.filesToWarm, client: client)
     }
 
-    private func refreshPublished(_ state: WindowState) {
-        if state.id == keyWindowID { prefetch(for: state.id) }
+    /// An unchanged watcher tick has nothing new to warm.
+    private func refreshPublished(_ state: WindowState, cause: RefreshCause, inputsChanged: Bool) {
+        guard state.id == keyWindowID, inputsChanged || cause != .watcher else { return }
+        prefetch(for: state.id)
     }
 
     // MARK: - Session persistence

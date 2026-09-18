@@ -584,9 +584,10 @@ struct WindowCoordinatorTests {
         await h.openAndSettle(a, into: w1)
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a))
         // The list that arrives selects All changes, which warms nothing. `openAndSettle`
-        // clears that selection, so the next refresh prefetches the whole list.
+        // clears that selection, so the next refresh with something new — ⌘R here, since
+        // an unchanged tick warms nothing — prefetches the whole list.
         #expect(!h.prefetcher.events.isEmpty)
-        h.registry.watcherCallbacks[h.root(a)]!()
+        await w1.refresh()
         #expect(
             await eventually {
                 await MainActor.run { h.prefetcher.events.last == .prefetch(filesA.map(\.id)) }
@@ -694,6 +695,28 @@ struct WindowCoordinatorTests {
         h.registry.watcherCallbacks[h.root(a)]!()
         #expect(await eventually { await h.prefetcher.events.count == events.count + 1 })
         #expect(h.prefetcher.events.last == .prefetch(updated.map(\.id)))
+    }
+
+    @Test func unchangedWatcherTickPublishesWithoutPrefetch() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        await h.openAndSettle(a, into: w1)
+        h.coordinator.windowDidBecomeKey(w1.id)
+        #expect(await eventually { await !h.prefetcher.events.isEmpty })
+        let events = h.prefetcher.events
+        let status = await h.client(a).statusCalls
+
+        h.registry.watcherCallbacks[h.root(a)]!()
+        #expect(await eventually { await h.client(a).statusCalls == status + 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.prefetcher.events == events, "an unchanged tick has nothing new to warm")
+
+        let edited = [filesA[0].edited(), filesA[1]]
+        await h.client(a).set(files: edited)
+        h.registry.watcherCallbacks[h.root(a)]!()
+        #expect(await eventually { await h.prefetcher.events.count == events.count + 1 })
+        #expect(h.prefetcher.events.last == .prefetch(edited.map(\.id)))
     }
 
     @Test func openOrderFollowsOpensAndCloses() async {

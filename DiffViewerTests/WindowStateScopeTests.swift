@@ -378,7 +378,9 @@ struct WindowStateScopeTests {
 
     /// The generation guard around the HEAD read. Two overlapping checks resolve
     /// different revisions; the slower one holds the older answer and must not use it to
-    /// reinstate a branch the repository has already left.
+    /// reinstate a branch the repository has already left. Ticks queue behind one
+    /// another, so the overlapping check comes from a branch switch, which runs on the
+    /// write chain.
     @Test func aSlowHeadCheckCannotReinstateOlderHistory() async {
         let h = Harness()
         let state = h.makeState()
@@ -386,17 +388,17 @@ struct WindowStateScopeTests {
         let client = await adopt(h, state, commit: first, commitFiles: [])
         #expect(await eventually { await state.history.revision == first.ref.sha })
 
-        // Tick one reads HEAD and blocks, having seen the old revision.
+        // The tick reads HEAD and blocks, having seen the old revision.
         await client.holdHead(true)
         h.watcherCallbacks.values.first?()
         #expect(await eventually { await client.heldHeadCount == 1 })
 
-        // Tick two resolves the new revision and publishes it while tick one waits.
+        // The switch resolves the new revision and publishes it while the tick waits.
         let later = commitSummary("c2", subject: "Newer")
         await client.holdHead(false)
-        await client.set(head: later.ref.sha)
+        await client.set(headAfterSwitch: later.ref.sha)
         await client.set(commits: [later, first])
-        h.watcherCallbacks.values.first?()
+        await state.switchBranch(to: "feature")
         #expect(await eventually { await state.history.revision == later.ref.sha })
 
         await client.releaseHead()
@@ -486,8 +488,9 @@ struct WindowStateScopeTests {
         #expect(state.files.isEmpty, "and now it really is an empty commit")
     }
 
-    /// Repeated ticks while one `git log` is running would otherwise cancel and relaunch
-    /// it each time, and a cancelled `ProcessRunner` subprocess keeps running.
+    /// Ticks queue behind the running refresh, and the one follow-up they collapse into
+    /// finds the `git log` its predecessor started still running: it must not cancel and
+    /// relaunch it, since a cancelled `ProcessRunner` subprocess keeps running.
     @Test func repeatedTicksDoNotRestartTheSameHistoryRead() async {
         let h = Harness()
         let state = h.makeState()
@@ -500,19 +503,27 @@ struct WindowStateScopeTests {
         await client.set(commits: [later, first])
         await client.holdHead(true)
         for _ in 0..<4 { h.watcherCallbacks.values.first?() }
-        #expect(await eventually { await client.heldHeadCount == 4 })
-
+        #expect(await eventually { await client.heldHeadCount == 1 }, "ticks queue behind the running refresh")
+        let headsBefore = await client.headCalls
         let readsBefore = await client.historyCalls
+
         await client.holdHead(false)
+        await client.holdHistory(true)
         await client.releaseHead()
-        #expect(await eventually { await state.history.revision == later.ref.sha })
+        #expect(await eventually { await client.heldHistoryCount == 1 })
+        #expect(await eventually { await client.headCalls == headsBefore + 1 }, "one follow-up for the queued ticks")
         try? await Task.sleep(for: .milliseconds(80))
         let readsAfter = await client.historyCalls
         #expect(readsAfter - readsBefore == 1, "four ticks, one log read")
+
+        await client.holdHistory(false)
+        await client.releaseHistory()
+        #expect(await eventually { await state.history.revision == later.ref.sha })
     }
 
-    /// The mirror of the test above: the *older* check finishes first. Completion order
-    /// must not decide — the newest HEAD read wins either way.
+    /// The mirror of `aSlowHeadCheckCannotReinstateOlderHistory`: the *older* check
+    /// finishes first. Completion order must not decide — the newest HEAD read wins
+    /// either way. The second check again comes from a branch switch.
     @Test func anEarlyFinishingOlderCheckDoesNotBeatTheNewerOne() async {
         let h = Harness()
         let state = h.makeState()
@@ -528,8 +539,8 @@ struct WindowStateScopeTests {
         await client.set(head: older.ref.sha)
         h.watcherCallbacks.values.first?()
         #expect(await eventually { await client.heldHeadCount == 1 })
-        await client.set(head: newer.ref.sha)
-        h.watcherCallbacks.values.first?()
+        await client.set(headAfterSwitch: newer.ref.sha)
+        let switching = Task { await state.switchBranch(to: "feature") }
         #expect(await eventually { await client.heldHeadCount == 2 })
 
         await client.set(commits: [newer, older, start])
@@ -538,6 +549,7 @@ struct WindowStateScopeTests {
         await client.releaseFirstHead()
         try? await Task.sleep(for: .milliseconds(60))
         await client.releaseHead()
+        await switching.value
 
         #expect(await eventually { await state.history.revision == newer.ref.sha })
         #expect(state.history.revision != older.ref.sha, "the first to finish does not win")
