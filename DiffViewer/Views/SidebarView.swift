@@ -156,6 +156,9 @@ private struct FileRow: View {
 /// Shared with the scope button in `CommitPickerView`, which sums the list it scopes.
 struct ChurnLabel: View {
     let stats: LineStats?
+    /// A selected row inverts its text to white; the counts follow the file name
+    /// there and let the +/− signs carry the meaning.
+    @Environment(\.backgroundProminence) private var prominence
 
     var body: some View {
         switch stats {
@@ -173,10 +176,10 @@ struct ChurnLabel: View {
             // rather than "+12 −0"; a file with no churn at all shows nothing.
             HStack(spacing: 4) {
                 if added > 0 {
-                    Text("+\(added)").foregroundStyle(.green)
+                    Text("+\(added)").foregroundStyle(addedStyle)
                 }
                 if deleted > 0 {
-                    Text("−\(deleted)").foregroundStyle(.red)
+                    Text("−\(deleted)").foregroundStyle(deletedStyle)
                 }
             }
             .font(.system(.callout, design: .monospaced))
@@ -184,6 +187,14 @@ struct ChurnLabel: View {
             .lineLimit(1)
             .help(countedHelpText(added: added, deleted: deleted))
         }
+    }
+
+    private var addedStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.green)
+    }
+
+    private var deletedStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.red)
     }
 
     private func countedHelpText(added: Int, deleted: Int) -> String {
