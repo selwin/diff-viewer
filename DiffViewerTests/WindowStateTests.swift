@@ -306,6 +306,8 @@ actor StubRepoClient: RepoClient {
         heldCommitDefaults = []
         for continuation in waiting { continuation.resume() }
     }
+    /// Releases the oldest held defaults read, so completion order can be chosen.
+    func releaseFirstCommitDefaults() { if !heldCommitDefaults.isEmpty { heldCommitDefaults.removeFirst().resume() } }
 
     func commitDefaults() async throws -> CommitDefaults {
         commitDefaultsCalls += 1
