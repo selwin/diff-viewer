@@ -35,28 +35,36 @@ struct DifftRunnerTests {
         #expect(hints.oldChanges[1] == [16..<17])
     }
 
-    @Test func engineHidesAndShowsWhitespaceChanges() async {
+    @Test func engineHidesAndShowsWhitespaceChanges() async throws {
         let sources = DiffEngine.Sources(old: Data("x = 1\n".utf8), new: Data("x  =  1\n".utf8), fileName: "w.py")
+        let resultCache = DiffResultCache()
         guard
-            case let .text(hidden) = await DiffEngine.build(
-                sources, hideWhitespace: true, cache: .bundled(), priority: .foreground)
+            case let .text(hidden) = try await DiffEngine.build(
+                sources, hideWhitespace: true, cache: .bundled(), resultCache: resultCache, priority: .foreground
+            ).content
         else { Issue.record("expected text"); return }
         #expect(hidden.rows.map(\.kind) == [.equal])
         guard
-            case let .text(shown) = await DiffEngine.build(
-                sources, hideWhitespace: false, cache: .bundled(), priority: .foreground)
+            case let .text(shown) = try await DiffEngine.build(
+                sources, hideWhitespace: false, cache: .bundled(), resultCache: resultCache, priority: .foreground
+            ).content
         else { Issue.record("expected text"); return }
         #expect(shown.rows.map(\.kind) == [.modified])
     }
 
-    @Test func engineDetectsBinaryAndIdentical() async {
+    @Test func engineDetectsBinaryAndIdentical() async throws {
+        let resultCache = DiffResultCache()
         let bin = DiffEngine.Sources(old: Data([0, 1, 2]), new: Data([0, 1, 3]), fileName: "a.bin")
-        guard case .binary = await DiffEngine.build(bin, hideWhitespace: true, cache: .bundled(), priority: .foreground)
+        guard
+            case .binary = try await DiffEngine.build(
+                bin, hideWhitespace: true, cache: .bundled(), resultCache: resultCache, priority: .foreground
+            ).content
         else { Issue.record("expected binary"); return }
         let same = DiffEngine.Sources(old: Data("a".utf8), new: Data("a".utf8), fileName: "a.txt")
         guard
-            case .identical = await DiffEngine.build(
-                same, hideWhitespace: true, cache: .bundled(), priority: .foreground)
+            case .identical = try await DiffEngine.build(
+                same, hideWhitespace: true, cache: .bundled(), resultCache: resultCache, priority: .foreground
+            ).content
         else { Issue.record("expected identical"); return }
     }
 }

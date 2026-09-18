@@ -15,38 +15,33 @@ final class DiffLoader {
     private(set) var contentFileID: ChangedFile.ID?
     private(set) var isLoading = false
     private(set) var errorMessage: String?
-    /// Syntax styles for `content`, arriving shortly after the diff itself.
+    /// Syntax styles for `content`, published in the same turn as the content itself.
     private(set) var styles: DocumentStyles?
-    /// True while styles for the published content are being computed. Always false for a
-    /// changeset, whose highlighting runs inside the assembler and so is covered by
-    /// `isLoading`.
-    private(set) var isHighlighting = false
     /// How much of an All-changes load has been published, while one is running.
     private(set) var changesetProgress: (completed: Int, total: Int)?
 
-    /// True while a diff or its highlighting is in flight.
-    var hasActiveWork: Bool { isLoading || isHighlighting }
+    /// True while a diff (including its highlighting) is in flight.
+    var hasActiveWork: Bool { isLoading }
 
     private let cache: DifftCache
+    private let resultCache: DiffResultCache
     private var task: Task<Void, Never>?
-    private var highlightTask: Task<Void, Never>?
     private var generation = 0
 
-    init(cache: DifftCache) {
+    init(cache: DifftCache, resultCache: DiffResultCache = DiffResultCache()) {
         self.cache = cache
+        self.resultCache = resultCache
     }
 
-    /// Stops any in-flight diff and highlight. Published content and styles stay as
-    /// they are; the cancelled generation can no longer publish or start highlighting.
-    /// Returns whether anything was actually in flight.
+    /// Stops any in-flight diff. Published content and styles stay as they are; the
+    /// cancelled generation can no longer publish. Returns whether anything was actually
+    /// in flight.
     @discardableResult
     func cancelActiveWork() -> Bool {
         let wasActive = hasActiveWork
         task?.cancel()
-        highlightTask?.cancel()
         generation += 1
         isLoading = false
-        isHighlighting = false
         return wasActive
     }
 
@@ -78,16 +73,24 @@ final class DiffLoader {
             do {
                 let sources = try await DiffEngine.sources(for: file, client: client)
                 try Task.checkCancellation()
-                let result = await DiffEngine.build(
-                    sources, hideWhitespace: hideWhitespace, cache: cache, priority: .foreground)
+                let output = try await DiffEngine.build(
+                    sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
+                    priority: .foreground)
                 try Task.checkCancellation()
                 guard gen == generation else { return }
-                content = result
+                content = output.content
                 contentFileID = file.id
-                isLoading = false
-                if case let .text(document) = result {
-                    highlight(document, fileName: file.fileName, generation: gen)
+                if case let .text(document) = output.content, let syntax = output.styles {
+                    // A cache hit for the document already on screen keeps its snapshot,
+                    // so the panes do not reshape lines they already have.
+                    if styles?.documentID != document.id {
+                        styles = DocumentStyles(
+                            documentID: document.id, revision: 0, old: syntax.old, new: syntax.new)
+                    }
+                } else {
+                    styles = nil
                 }
+                isLoading = false
             } catch is CancellationError {
                 // A newer request superseded this one.
             } catch {
@@ -113,7 +116,8 @@ final class DiffLoader {
         guard let client else { return }
         isLoading = true
         let assembler = ChangesetAssembler(
-            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions, cache: cache)
+            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions, cache: cache,
+            resultCache: resultCache)
         task = Task { [weak self] in
             guard let self else { return }
             await assembler.run { [self] publication in
@@ -127,34 +131,9 @@ final class DiffLoader {
 
     private func publish(_ publication: ChangesetAssembler.Publication, generation gen: Int) {
         guard gen == generation else { return }
-        switch publication {
-        case let .document(document, snapshot, completed, total):
-            content = .changeset(document)
-            styles = snapshot
-            changesetProgress = (completed, total)
-        case let .styles(snapshot):
-            styles = snapshot
-        }
-    }
-
-    private func highlight(_ document: DiffDocument, fileName: String, generation gen: Int) {
-        let oldLines = document.oldLines
-        let newLines = document.newLines
-        let documentID = document.id
-        isHighlighting = true
-        highlightTask = Task {
-            // Both sides are independent parses; run them in parallel.
-            async let old = Task.detached(priority: .userInitiated) {
-                Highlighter.highlight(lines: oldLines, fileName: fileName)
-            }.value
-            async let new = Task.detached(priority: .userInitiated) {
-                Highlighter.highlight(lines: newLines, fileName: fileName)
-            }.value
-            let result = await DocumentStyles(documentID: documentID, revision: 0, old: old, new: new)
-            guard !Task.isCancelled, gen == generation else { return }
-            styles = result
-            isHighlighting = false
-        }
+        content = .changeset(publication.document)
+        styles = publication.styles
+        changesetProgress = (publication.completed, publication.total)
     }
 }
 
