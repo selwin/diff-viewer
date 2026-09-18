@@ -1,7 +1,7 @@
 import Foundation
 
 /// Diffs and highlights every changed file for one All-changes load, publishing the
-/// changeset as it grows.
+/// changeset as it grows or, in `.finalOnly` mode, once when it is whole.
 ///
 /// Created per load and discarded with it, so nothing here survives a cancellation and
 /// the loader only has to check the generation of what it receives. Three workers pull
@@ -15,6 +15,16 @@ actor ChangesetAssembler {
         let styles: DocumentStyles
         let completed: Int
         let total: Int
+    }
+
+    /// When revisions go out.
+    enum PublicationMode: Sendable {
+        /// Every grown prefix, throttled by `publishInterval`: a fresh view fills in as
+        /// sections complete.
+        case progressive
+        /// One publication when every file is done, for a reload that keeps the previous
+        /// document on screen until the replacement is whole.
+        case finalOnly
     }
 
     /// Files diffed and highlighted at once. Each worker processes one file at a time,
@@ -31,6 +41,7 @@ actor ChangesetAssembler {
     /// The fold options every published revision is projected with, so the view installs
     /// a projection it never has to rebuild.
     private let foldOptions: FoldOptions
+    private let publication: PublicationMode
     private let cache: DifftCache
     private let resultCache: DiffResultCache
     private let clock: any Clock<Duration>
@@ -111,6 +122,7 @@ actor ChangesetAssembler {
         client: any RepoClient,
         hideWhitespace: Bool,
         foldOptions: FoldOptions = FoldOptions(),
+        publication: PublicationMode = .progressive,
         cache: DifftCache,
         resultCache: DiffResultCache,
         clock: any Clock<Duration> = ContinuousClock(),
@@ -121,6 +133,7 @@ actor ChangesetAssembler {
         self.client = client
         self.hideWhitespace = hideWhitespace
         self.foldOptions = foldOptions
+        self.publication = publication
         self.cache = cache
         self.resultCache = resultCache
         self.clock = clock
@@ -224,9 +237,12 @@ actor ChangesetAssembler {
 
     // MARK: - Publishing
 
+    /// Records one file's outcome. Only a progressive load publishes here; a final-only
+    /// load waits for the forced publication when the workers drain.
     private func record(_ result: ChangesetBuilder.FileResult, styles: SyntaxStyles?, at index: Int) async {
         results[index] = result
         sectionStyles[index] = styles
+        guard publication == .progressive else { return }
         await publishIfDue()
     }
 

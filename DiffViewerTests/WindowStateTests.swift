@@ -770,6 +770,109 @@ struct WindowStateTests {
         #expect(await repo.client.contentReads == reads + 2)
     }
 
+    // MARK: Changeset reloads
+
+    /// The changeset the loader is publishing, or nil when it is showing anything else.
+    private func changesetDocument(_ state: WindowState) -> ChangesetDocument? {
+        guard case let .changeset(document)? = state.diffLoader.content else { return nil }
+        return document
+    }
+
+    /// Waits for a changeset load other than `previous` to finish publishing, and returns it.
+    private func replacementChangeset(_ state: WindowState, after previous: UUID?) async -> ChangesetDocument? {
+        #expect(await eventually { await self.changesetDocument(state)?.loadID != previous })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        return changesetDocument(state)
+    }
+
+    @Test func anEditWhileAllChangesIsShownKeepsTheDocumentOnScreen() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document on screen stays while the edit reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    @Test func aWhitespaceToggleKeepsAllChangesOnScreen() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        h.preferences.hideWhitespace.toggle()
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document on screen stays while the toggle reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    /// A new selection is a new view and starts from empty; once it is on screen, a
+    /// reload of the same files keeps it, like All changes.
+    @Test func selectingFilesAfterAllChangesStartsFromEmpty() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(changesetDocument(state) != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        state.selection = [.file(filesA[0].id), .file(filesA[1].id)]
+        #expect(state.diffLoader.content == nil, "the All-changes document is not kept for another selection")
+
+        await repo.client.release(worktree: "a1.swift")
+        let selected = await replacementChangeset(state, after: nil)
+        #expect(selected?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == selected?.loadID, "the same files reload in place")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: selected?.loadID)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    /// The reload that showing a window delivers, through its rescan, is a reload of the
+    /// same view too.
+    @Test func showingAHiddenAllChangesReloadKeepsTheDocument() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        state.isVisible = false
+        await repo.client.hold(worktree: ["a1.swift"])
+        state.isVisible = true
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document stays while the rescan reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
     // MARK: Line stats
 
     @Test func publishedFilesCarryLineStats() async {

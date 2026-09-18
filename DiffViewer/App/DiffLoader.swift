@@ -6,8 +6,9 @@ import Observation
 ///
 /// Two modes, one set of published properties. A single file keeps the previous content
 /// on screen while it reloads, so re-diffing the same file does not blank the panes. A
-/// changeset is about the whole list rather than one file, so it starts from an empty
-/// view and grows as the assembler completes sections.
+/// changeset starts from an empty view for a new selection and grows as the assembler
+/// completes sections; when the same view reloads, the previous document stays on screen
+/// until the whole replacement is ready.
 @MainActor
 @Observable
 final class DiffLoader {
@@ -101,23 +102,29 @@ final class DiffLoader {
         }
     }
 
-    /// Loads every file as one changeset, publishing it as sections complete.
+    /// Loads every file as one changeset, publishing it as sections complete. With
+    /// `preserveCurrentContent`, a changeset already on screen stays there and the
+    /// replacement is published whole, in one step; an empty list still shows nothing.
     func load(
         changeset files: [ChangedFile], client: (any RepoClient)?, hideWhitespace: Bool,
-        foldOptions: FoldOptions = FoldOptions()
+        foldOptions: FoldOptions = FoldOptions(), preserveCurrentContent: Bool = false
     ) {
         cancelActiveWork()
         let gen = generation
-        content = nil
-        contentFileID = nil
-        styles = nil
+        let onScreen = if case .changeset = content { true } else { false }
+        let preserved = preserveCurrentContent && client != nil && !files.isEmpty && onScreen
+        if !preserved {
+            content = nil
+            contentFileID = nil
+            styles = nil
+        }
         errorMessage = nil
         changesetProgress = nil
         guard let client else { return }
         isLoading = true
         let assembler = ChangesetAssembler(
-            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions, cache: cache,
-            resultCache: resultCache)
+            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions,
+            publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache)
         task = Task { [weak self] in
             guard let self else { return }
             await assembler.run { [self] publication in

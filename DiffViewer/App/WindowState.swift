@@ -91,6 +91,8 @@ final class WindowState {
 
     /// A diff load was skipped or cancelled while hidden and must run on becoming visible.
     private(set) var diffStale = false
+    /// What the running or last changeset load was asked to show; nil while a file is shown.
+    private var changesetRequest: ChangesetRequest?
 
     /// What the sidebar is showing: the working tree, or one previous commit.
     private(set) var scope: DiffScope = .workingTree
@@ -539,18 +541,25 @@ final class WindowState {
         diffStale = false
         switch detailSelection {
         case .allChanges:
-            diffLoader.load(
-                changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace,
-                foldOptions: preferences.foldOptions)
+            loadChangeset(sidebarRows)
         case .files:
-            diffLoader.load(
-                changeset: selectedFiles, client: session?.client, hideWhitespace: preferences.hideWhitespace,
-                foldOptions: preferences.foldOptions)
+            loadChangeset(selectedFiles)
         case .file, .nothing:
             // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
             // either way the loader is told to show nothing, which also cancels its work.
+            changesetRequest = nil
             diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
         }
+    }
+
+    /// Loads `files` as one changeset. A reload of the view already on screen keeps its
+    /// document until the replacement is whole; a new view starts from empty.
+    private func loadChangeset(_ files: [ChangedFile]) {
+        let request = ChangesetRequest(identity: detailIdentity)
+        diffLoader.load(
+            changeset: files, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+            foldOptions: preferences.foldOptions, preserveCurrentContent: request.isReload(of: changesetRequest))
+        changesetRequest = request
     }
 }
 
