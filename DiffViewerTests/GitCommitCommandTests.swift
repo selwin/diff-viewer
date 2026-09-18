@@ -228,6 +228,26 @@ import Testing
         #expect(suggestion.text == "Subject line\n\n")
     }
 
+    /// The dependency is whether the key is set, not whether the file is readable: a
+    /// missing template is still one a later worktree write can create.
+    @Test func theTemplateDependencyFollowsTheConfiguration() async throws {
+        let repo = try GitCommandTests.Repo()
+        try await repo.initialize()
+        try await repo.prepareForCommits()
+        #expect(try await repo.client.commitDefaults().templateDependency == .none)
+
+        try await repo.git(["config", "commit.template", "tmpl.txt"])
+        let path = repo.url.appendingPathComponent("tmpl.txt").path
+        let missing = try await repo.client.commitDefaults()
+        #expect(missing.templateDependency == .configured(path: path))
+        #expect(missing.suggestion == nil)
+
+        try repo.write("tmpl.txt", "Subject line\n\n")
+        let present = try await repo.client.commitDefaults()
+        #expect(present.templateDependency == .configured(path: path))
+        #expect(present.suggestion?.source == .template)
+    }
+
     @Test func aCleanRepositorySuggestsNothing() async throws {
         let repo = try GitCommandTests.Repo()
         try await repo.initialize()

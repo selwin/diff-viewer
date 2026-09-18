@@ -72,11 +72,11 @@ struct ChangesetDetailView: View {
         }
     }
 
-    /// "+340 −120" from the sections' own counts. A side that did not change is left
-    /// out, like `ChurnLabel`; a changeset with no churn at all shows nothing.
+    /// "+340 −120" for the document on screen. Text sections count their own rows; every
+    /// other section follows the sidebar's counts while its file is unchanged. A side that
+    /// did not change is left out, like `ChurnLabel`; no churn at all shows nothing.
     private func churnText(of document: ChangesetDocument) -> String? {
-        let added = document.sections.reduce(0) { $0 + $1.added }
-        let deleted = document.sections.reduce(0) { $0 + $1.deleted }
+        let (added, deleted) = ChangesetChurn.total(sections: document.sections, files: windowState.files)
         var parts: [String] = []
         if added > 0 { parts.append("+\(added)") }
         if deleted > 0 { parts.append("−\(deleted)") }

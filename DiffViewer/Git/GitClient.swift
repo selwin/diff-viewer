@@ -61,7 +61,14 @@ struct GitClient: RepoClient {
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
+        // The parser cannot stat; the worktree half of an unstaged fingerprint is filled
+        // in here, still off the main actor.
         return GitStatusParser.parse(result.stdout)
+            .map { file in
+                guard file.area == .unstaged, let fingerprint = file.fingerprint else { return file }
+                let worktree = DiffInputFingerprint.worktree(at: repoRoot.appendingPathComponent(file.path))
+                return file.with(fingerprint: fingerprint.with(worktree: worktree))
+            }
             .sorted { ($0.area.sortOrder, $0.path) < ($1.area.sortOrder, $1.path) }
     }
 
@@ -374,13 +381,17 @@ struct GitClient: RepoClient {
         let isMerging = FileManager.default.fileExists(atPath: files[0].path)
         let merge = try Self.readText(at: files[1])
         let squash = try Self.readText(at: files[2])
+        // The path is always resolved, so callers know the template is a dependency even
+        // while merge metadata outranks it; the file is read only when it is the suggestion.
+        let templatePath = try await templatePath()
         var template: String?
-        if merge == nil, squash == nil {
-            template = try await templateMessage()
+        if merge == nil, squash == nil, let templatePath {
+            template = try Self.readText(at: templatePath)
         }
         return CommitDefaults(
             suggestion: CommitDefaults.resolveMessage(merge: merge, squash: squash, template: template),
-            isMerging: isMerging)
+            isMerging: isMerging,
+            templateDependency: templatePath.map { .configured(path: $0.path) } ?? .none)
     }
 
     /// Records the index using a temporary message file and git's strip cleanup mode. The
@@ -435,9 +446,8 @@ struct GitClient: RepoClient {
             .joined(separator: "\n")
     }
 
-    /// `commit.template`'s text, or nil when no template is set or its file is gone. Read
-    /// only when nothing outranks it.
-    private func templateMessage() async throws -> String? {
+    /// Where `commit.template` points, or nil when it is not set.
+    private func templatePath() async throws -> URL? {
         let result = try await ProcessRunner.run(
             Self.executable,
             arguments: ["config", "-z", "--path", "--get", "commit.template"],
@@ -454,7 +464,7 @@ struct GitClient: RepoClient {
         var path = result.stdoutString
         if path.hasSuffix("\0") { path.removeLast() }
         guard !path.isEmpty else { return nil }
-        return try Self.readText(at: gitPath(path))
+        return gitPath(path)
     }
 
     /// Resolves a git-reported path against the repository root; a linked worktree's are

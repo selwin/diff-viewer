@@ -106,9 +106,10 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     let originalPath: String?
     let kind: Kind
     let area: Area
-    /// Added/deleted line counts, or nil while unknown. Last property so the
-    /// memberwise initialiser keeps working without it.
+    /// Added/deleted line counts, or nil while unknown.
     var lineStats: LineStats?
+    /// What the diff reads for this file, or nil for a commit, whose content cannot change.
+    var fingerprint: DiffInputFingerprint?
 
     var id: String { "\(area.identity):\(path)" }
 
@@ -116,6 +117,13 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     func with(lineStats: LineStats?) -> ChangedFile {
         var copy = self
         copy.lineStats = lineStats
+        return copy
+    }
+
+    /// A copy carrying `fingerprint`.
+    func with(fingerprint: DiffInputFingerprint?) -> ChangedFile {
+        var copy = self
+        copy.fingerprint = fingerprint
         return copy
     }
 

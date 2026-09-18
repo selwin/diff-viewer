@@ -32,6 +32,9 @@ final class RepoRegistry {
     var entries: [URL: (root: RepositoryRoot, client: StubRepoClient)] = [:]
     var lookups: [URL: Int] = [:]
     var watchers: [RepositoryRoot: NoopWatcher] = [:]
+    /// A tick carrying an explicit set of changes.
+    var watcherChangeCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// A plain tick, as an edit and a stage produce: `[.worktree, .index]`.
     var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
 
     func lookup(_ url: URL) -> (root: RepositoryRoot, client: StubRepoClient)? {
@@ -167,7 +170,8 @@ final class CoordinatorHarness {
         WindowState(preferences: preferences, cache: cache) { [weak registry] root, onChange in
             let watcher = NoopWatcher()
             registry?.watchers[root] = watcher
-            registry?.watcherCallbacks[root] = onChange
+            registry?.watcherChangeCallbacks[root] = onChange
+            registry?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
             return watcher
         }
     }
@@ -584,9 +588,10 @@ struct WindowCoordinatorTests {
         await h.openAndSettle(a, into: w1)
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(a))
         // The list that arrives selects All changes, which warms nothing. `openAndSettle`
-        // clears that selection, so the next refresh prefetches the whole list.
+        // clears that selection, so the next refresh with something new — ⌘R here, since
+        // an unchanged tick warms nothing — prefetches the whole list.
         #expect(!h.prefetcher.events.isEmpty)
-        h.registry.watcherCallbacks[h.root(a)]!()
+        await w1.refresh()
         #expect(
             await eventually {
                 await MainActor.run { h.prefetcher.events.last == .prefetch(filesA.map(\.id)) }
@@ -681,7 +686,6 @@ struct WindowCoordinatorTests {
         await h.openAndSettle(a, into: w1)
         await h.openAndSettle(b, into: w2)
         h.coordinator.windowDidBecomeKey(w1.id)
-        h.coordinator.windowOcclusionChanged(w2.id, visible: false)
         let events = h.prefetcher.events
 
         let updated = [changedFile("b2.swift")]
@@ -694,6 +698,28 @@ struct WindowCoordinatorTests {
         h.registry.watcherCallbacks[h.root(a)]!()
         #expect(await eventually { await h.prefetcher.events.count == events.count + 1 })
         #expect(h.prefetcher.events.last == .prefetch(updated.map(\.id)))
+    }
+
+    @Test func unchangedWatcherTickPublishesWithoutPrefetch() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        await h.openAndSettle(a, into: w1)
+        h.coordinator.windowDidBecomeKey(w1.id)
+        #expect(await eventually { await !h.prefetcher.events.isEmpty })
+        let events = h.prefetcher.events
+        let status = await h.client(a).statusCalls
+
+        h.registry.watcherCallbacks[h.root(a)]!()
+        #expect(await eventually { await h.client(a).statusCalls == status + 1 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.prefetcher.events == events, "an unchanged tick has nothing new to warm")
+
+        let edited = [filesA[0].edited(), filesA[1]]
+        await h.client(a).set(files: edited)
+        h.registry.watcherCallbacks[h.root(a)]!()
+        #expect(await eventually { await h.prefetcher.events.count == events.count + 1 })
+        #expect(h.prefetcher.events.last == .prefetch(edited.map(\.id)))
     }
 
     @Test func openOrderFollowsOpensAndCloses() async {

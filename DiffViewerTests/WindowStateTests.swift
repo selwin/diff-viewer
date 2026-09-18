@@ -26,6 +26,8 @@ actor StubRepoClient: RepoClient {
     private(set) var peakInFlightReads = 0
     private var numstatEntries: [ChangedFile.Area: [NumstatEntry]] = [:]
     private var failsNumstat = false
+    private var holdsNumstat = false
+    private var heldNumstat: [CheckedContinuation<Void, Never>] = []
     /// The `ignoreWhitespace` argument of the most recent numstat call.
     private(set) var lastIgnoreWhitespace: Bool?
     private(set) var numstatCalls = 0
@@ -100,6 +102,15 @@ actor StubRepoClient: RepoClient {
 
     func set(numstat entries: [NumstatEntry], area: ChangedFile.Area) { numstatEntries[area] = entries }
     func fail(numstat on: Bool) { failsNumstat = on }
+    /// Suspends `numstat` after it records the call, so a read can be in flight while the
+    /// test drives something else.
+    func holdNumstat(_ on: Bool) { holdsNumstat = on }
+    var heldNumstatCount: Int { heldNumstat.count }
+    func releaseNumstat() {
+        let waiting = heldNumstat
+        heldNumstat = []
+        for continuation in waiting { continuation.resume() }
+    }
     /// Makes both `perform` and `trash` throw, after recording the call.
     func fail(actions on: Bool) { failsActions = on }
     /// Suspends `perform` and `trash` after they record the call, so a second write can
@@ -116,6 +127,9 @@ actor StubRepoClient: RepoClient {
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
         numstatCalls += 1
         lastIgnoreWhitespace = ignoreWhitespace
+        if holdsNumstat {
+            await withCheckedContinuation { heldNumstat.append($0) }
+        }
         // An area no test configured is unknown, not empty: the joiner treats an empty
         // list as "git saw no churn" and would stamp every file with +0 −0.
         guard !failsNumstat, let entries = numstatEntries[area] else {
@@ -411,6 +425,9 @@ actor StubRepoClient: RepoClient {
 @MainActor
 final class NoopWatcher: RepoWatching {
     private(set) var stopped = false
+    /// Every dependency set handed over, in order.
+    private(set) var dependencies: [Set<String>] = []
+    func setDependencies(_ paths: Set<String>) { dependencies.append(paths) }
     func stop() { stopped = true }
 }
 
@@ -420,10 +437,18 @@ final class Harness {
     let suite = "DiffViewerTests.\(UUID().uuidString)"
     let runner = RunnerProbe()
     let preferences: Preferences
+    /// The latest watcher started for each root.
     private(set) var watchers: [RepositoryRoot: NoopWatcher] = [:]
+    /// How many watchers were started for each root.
+    private(set) var watcherStarts: [RepositoryRoot: Int] = [:]
+    /// A tick carrying an explicit set of changes, from the latest watcher.
+    private(set) var watcherChangeCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// The callback of the watcher the latest one replaced, for ticks from a stopped watcher.
+    private(set) var previousWatcherCallbacks: [RepositoryRoot: @MainActor (Set<RepoChange>) -> Void] = [:]
+    /// A plain tick, as an edit and a stage produce: `[.worktree, .index]`.
     private(set) var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
     /// Every `onRefreshPublished` call, in order.
-    private(set) var published: [(files: [ChangedFile], cause: RefreshCause)] = []
+    private(set) var published: [(files: [ChangedFile], cause: RefreshCause, inputsChanged: Bool)] = []
 
     init() {
         defaults = UserDefaults(suiteName: suite)!
@@ -444,13 +469,27 @@ final class Harness {
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher
-                self?.watcherCallbacks[root] = onChange
+                self?.watcherStarts[root, default: 0] += 1
+                self?.previousWatcherCallbacks[root] = self?.watcherChangeCallbacks[root]
+                self?.watcherChangeCallbacks[root] = onChange
+                self?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
                 return watcher
             })
-        state.onRefreshPublished = { [weak self] state, cause in
-            self?.published.append((state.files, cause))
+        state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
+            self?.published.append((state.files, cause, inputsChanged))
         }
         return state
+    }
+
+    /// Delivers a watcher tick for `root` carrying `changes`.
+    func tick(_ root: RepositoryRoot, _ changes: Set<RepoChange>) {
+        watcherChangeCallbacks[root]!(changes)
+    }
+
+    /// Waits for the line-stats read in flight, if any, so later counter assertions are
+    /// about what the test itself asked for.
+    func settleStats(_ state: WindowState) async {
+        await state.session?.statsTask?.value
     }
 
     func repo(_ name: String, files: [ChangedFile]) -> (root: RepositoryRoot, client: StubRepoClient) {
@@ -674,7 +713,11 @@ struct WindowStateTests {
 
         state.isVisible = false
         #expect(!state.diffStale)
+        let before = h.published.count
         state.isVisible = true
+        // Showing re-reads status once; an equal list has nothing to reload.
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .watcher)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads, "a current diff is reused, not reloaded")
         #expect(!state.diffLoader.hasActiveWork)
@@ -697,8 +740,11 @@ struct WindowStateTests {
         #expect(!hasContent(state, for: filesA[0]))
         #expect(h.published.count == 2, "hidden refreshes still publish their file list")
 
+        // The owed load rides on the rescan refresh that showing delivers.
         state.isVisible = true
-        #expect(!state.diffStale)
+        #expect(await eventually { await h.published.count == 3 })
+        #expect(h.published.last?.cause == .watcher)
+        #expect(await eventually { await !state.diffStale })
         #expect(await eventually { await self.hasContent(state, for: self.filesA[0]) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         #expect(await repo.client.contentReads == reads + 2, "one load: index plus worktree")
@@ -722,6 +768,109 @@ struct WindowStateTests {
         #expect(await eventually { await state.diffStale })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads + 2)
+    }
+
+    // MARK: Changeset reloads
+
+    /// The changeset the loader is publishing, or nil when it is showing anything else.
+    private func changesetDocument(_ state: WindowState) -> ChangesetDocument? {
+        guard case let .changeset(document)? = state.diffLoader.content else { return nil }
+        return document
+    }
+
+    /// Waits for a changeset load other than `previous` to finish publishing, and returns it.
+    private func replacementChangeset(_ state: WindowState, after previous: UUID?) async -> ChangesetDocument? {
+        #expect(await eventually { await self.changesetDocument(state)?.loadID != previous })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        return changesetDocument(state)
+    }
+
+    @Test func anEditWhileAllChangesIsShownKeepsTheDocumentOnScreen() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document on screen stays while the edit reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    @Test func aWhitespaceToggleKeepsAllChangesOnScreen() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        h.preferences.hideWhitespace.toggle()
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document on screen stays while the toggle reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    /// A new selection is a new view and starts from empty; once it is on screen, a
+    /// reload of the same files keeps it, like All changes.
+    @Test func selectingFilesAfterAllChangesStartsFromEmpty() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(changesetDocument(state) != nil)
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        state.selection = [.file(filesA[0].id), .file(filesA[1].id)]
+        #expect(state.diffLoader.content == nil, "the All-changes document is not kept for another selection")
+
+        await repo.client.release(worktree: "a1.swift")
+        let selected = await replacementChangeset(state, after: nil)
+        #expect(selected?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+
+        await repo.client.hold(worktree: ["a1.swift"])
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == selected?.loadID, "the same files reload in place")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: selected?.loadID)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
+    }
+
+    /// The reload that showing a window delivers, through its rescan, is a reload of the
+    /// same view too.
+    @Test func showingAHiddenAllChangesReloadKeepsTheDocument() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let shown = changesetDocument(state)?.loadID
+        #expect(shown != nil)
+
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        state.isVisible = false
+        await repo.client.hold(worktree: ["a1.swift"])
+        state.isVisible = true
+        #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
+        #expect(changesetDocument(state)?.loadID == shown, "the document stays while the rescan reloads")
+        #expect(state.diffLoader.isLoading)
+
+        await repo.client.release(worktree: "a1.swift")
+        let replacement = await replacementChangeset(state, after: shown)
+        #expect(replacement?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
     }
 
     // MARK: Line stats
@@ -829,5 +978,935 @@ struct WindowStateTests {
         #expect(state.diffStale)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.contentReads == reads, "a hidden window loads no diff")
+    }
+
+    // MARK: Quiet refreshes
+
+    /// Flips when the observed property is assigned. `withObservationTracking` fires its
+    /// closure on the assigning thread, which for `files` is the main actor.
+    private final class ChangeFlag: @unchecked Sendable {
+        var raised = false
+    }
+
+    private func counted(_ file: ChangedFile, _ added: Int, _ deleted: Int) -> NumstatEntry {
+        NumstatEntry(path: file.path, stats: .counted(added: added, deleted: deleted))
+    }
+
+    /// Adopts `files` with counts for both areas and waits for them to land.
+    private func adoptCounted(_ h: Harness, _ state: WindowState, files: [ChangedFile]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let repo = h.repo("A", files: files)
+        await repo.client.set(numstat: files.filter { $0.area == .unstaged }.map { counted($0, 3, 1) }, area: .unstaged)
+        await repo.client.set(numstat: files.filter { $0.area == .staged }.map { counted($0, 5, 2) }, area: .staged)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        await h.settleStats(state)
+        #expect(state.files.allSatisfy { $0.lineStats != nil })
+        return repo
+    }
+
+    private func stats(of path: String, in state: WindowState) -> LineStats? {
+        state.files.first { $0.path == path }?.lineStats
+    }
+
+    private func tick(_ h: Harness, _ repo: RepositoryRoot, waitingFor client: StubRepoClient) async {
+        let status = await client.statusCalls
+        let before = h.published.count
+        h.watcherCallbacks[repo]!()
+        #expect(await eventually { await client.statusCalls == status + 1 })
+        #expect(await eventually { await h.published.count > before })
+    }
+
+    @Test func equalTickPublishesWithoutReloadingRecountingOrReassigning() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptCounted(h, state, files: filesA)
+        let reads = await repo.client.contentReads
+        let numstats = await repo.client.numstatCalls
+        let flag = ChangeFlag()
+        withObservationTracking {
+            _ = state.files
+        } onChange: {
+            flag.raised = true
+        }
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(h.published.last?.cause == .watcher)
+        #expect(h.published.last?.inputsChanged == false)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.contentReads == reads, "nothing shown changed, so nothing is re-read")
+        #expect(await repo.client.numstatCalls == numstats, "the last counts still answer the same inputs")
+        #expect(!flag.raised, "an equal list is not reassigned")
+        #expect(state.files.allSatisfy { $0.lineStats != nil })
+    }
+
+    @Test func changedSelectedFileReloadsTheDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(h.published.last?.inputsChanged == true)
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+    }
+
+    @Test func anyChangedFileReloadsAllChanges() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(state.detailSelection == .allChanges)
+        let reads = await repo.client.contentReads
+
+        await repo.client.set(files: [filesA[0], filesA[1].restaged()])
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(await eventually { await repo.client.contentReads > reads })
+    }
+
+    @Test func changedUnselectedFileRecountsWithoutReloading() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptCounted(h, state, files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        await repo.client.holdNumstat(true)
+
+        await repo.client.set(files: [filesA[0], filesA[1].restaged()])
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(stats(of: "a2.swift", in: state) == nil, "moved inputs drop the old counts until new ones arrive")
+        #expect(stats(of: "a1.swift", in: state) == .counted(added: 3, deleted: 1), "unmoved inputs keep theirs")
+        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+        #expect(await repo.client.contentReads == reads, "the shown file did not change")
+
+        await repo.client.releaseNumstat()
+        #expect(await eventually { await self.stats(of: "a2.swift", in: state) == .counted(added: 5, deleted: 2) })
+    }
+
+    @Test func failedLoadRetriesOnAnEqualTick() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        await repo.client.fail(worktree: ["a1.swift"])
+        await state.refresh()
+        #expect(await eventually { await state.diffLoader.errorMessage != nil })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+
+        await repo.client.fail(worktree: [])
+        let reads = await repo.client.contentReads
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+        #expect(await eventually { await state.diffLoader.errorMessage == nil })
+    }
+
+    @Test func interruptedCountsPublishNilAndRunOnce() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptCounted(h, state, files: filesA)
+        await repo.client.holdNumstat(true)
+
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(stats(of: "a1.swift", in: state) == nil)
+        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+        let numstats = await repo.client.numstatCalls
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(await repo.client.numstatCalls == numstats, "an equal request keeps the read already running")
+        #expect(stats(of: "a1.swift", in: state) == nil)
+
+        await repo.client.releaseNumstat()
+        #expect(await eventually { await self.stats(of: "a1.swift", in: state) == .counted(added: 3, deleted: 1) })
+    }
+
+    @Test func revertedEditKeepsTheEarlierCountsWhenTheSupersededReadFinishes() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptCounted(h, state, files: filesA)
+        // A: the counts on screen. B: the edit, whose read would report something else.
+        await repo.client.set(numstat: [counted(filesA[0], 99, 0)], area: .unstaged)
+        await repo.client.holdNumstat(true)
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(stats(of: "a1.swift", in: state) == nil)
+        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+
+        // Back to A: the last finished read answers again, and B's is superseded.
+        await repo.client.set(files: filesA)
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(stats(of: "a1.swift", in: state) == .counted(added: 3, deleted: 1))
+        await repo.client.releaseNumstat()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(stats(of: "a1.swift", in: state) == .counted(added: 3, deleted: 1), "B's counts never land on A")
+    }
+
+    @Test func failedCountsAreReusedByTicksAndRetriedByManualRefresh() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.fail(numstat: true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await h.settleStats(state)
+        #expect(state.files.allSatisfy { $0.lineStats == nil })
+        let numstats = await repo.client.numstatCalls
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.numstatCalls == numstats, "a tick does not retry a failure")
+
+        await repo.client.fail(numstat: false)
+        await repo.client.set(numstat: [counted(filesA[0], 3, 1)], area: .unstaged)
+        await repo.client.set(numstat: [counted(filesA[1], 5, 2)], area: .staged)
+        await state.refresh()
+        #expect(await eventually { await self.stats(of: "a1.swift", in: state) == .counted(added: 3, deleted: 1) })
+        #expect(await eventually { await self.stats(of: "a2.swift", in: state) == .counted(added: 5, deleted: 2) })
+    }
+
+    @Test func binaryFilesKeepTheirLabelAcrossAnEqualTick() async {
+        let h = Harness()
+        let state = h.makeState()
+        let tracked = changedFile("img.png")
+        let untracked = changedFile("new.png", kind: .untracked)
+        let repo = h.repo("A", files: [tracked, untracked])
+        await repo.client.set(numstat: [NumstatEntry(path: "img.png", stats: .binary)], area: .unstaged)
+        await repo.client.set(numstat: [], area: .staged)
+        await repo.client.set(worktree: Data([0x89, 0x50, 0x4E, 0x47, 0, 1]), for: "new.png")
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        await h.settleStats(state)
+        #expect(stats(of: "img.png", in: state) == .binary)
+        #expect(stats(of: "new.png", in: state) == .binary)
+        let numstats = await repo.client.numstatCalls
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(stats(of: "img.png", in: state) == .binary)
+        #expect(stats(of: "new.png", in: state) == .binary)
+        #expect(await repo.client.numstatCalls == numstats)
+    }
+
+    @Test func whitespaceToggleStartsANewCount() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptCounted(h, state, files: filesA)
+        let numstats = await repo.client.numstatCalls
+
+        let toggled = !h.preferences.hideWhitespace
+        h.preferences.hideWhitespace = toggled
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.numstatCalls == numstats + 2 })
+        #expect(await eventually { await repo.client.lastIgnoreWhitespace == toggled })
+    }
+
+    private func hasFailedSection(_ state: WindowState) -> Bool {
+        guard case let .changeset(document)? = state.diffLoader.content else { return false }
+        return document.sections.contains { if case .failed = $0.outcome { return true } else { return false } }
+    }
+
+    @Test func failedSectionRetriesOnceAcrossEqualTicks() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.fail(worktree: ["a1.swift"])
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(hasFailedSection(state))
+
+        await repo.client.fail(worktree: [])
+        await repo.client.holdReads(true)
+        let reads = await repo.client.contentReads
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(await eventually { await repo.client.heldReadCount == 1 }, "the replacement starts")
+        #expect(await eventually { await repo.client.contentReads == reads + 4 })
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(await repo.client.contentReads == reads + 4, "a replacement in flight is not restarted")
+
+        await repo.client.releaseReads()
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!hasFailedSection(state))
+        #expect(await repo.client.contentReads == reads + 4)
+    }
+
+    private func merging(_ text: String) -> CommitDefaults {
+        CommitDefaults(suggestion: .init(text: text, source: .merge), isMerging: true)
+    }
+
+    @Test func settingsRefreshLeavesTheDefaultsReadAlone() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        let expected = merging("Merge branch 'feature'")
+        await repo.client.set(commitDefaults: expected)
+        await repo.client.holdCommitDefaults(true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        let task = try #require(state.session?.commitDefaultsTask)
+        let generation = state.session?.commitDefaultsGeneration
+        let before = h.published.count
+
+        state.diffSettingsChanged()
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .settings)
+        #expect(await repo.client.commitDefaultsCalls == 1, "a settings change has no bearing on the suggestion")
+        #expect(state.session?.commitDefaultsGeneration == generation)
+
+        await repo.client.releaseCommitDefaults()
+        await task.value
+        #expect(state.commitDefaults == expected)
+    }
+
+    @Test func olderDefaultsReadIsDiscardedWhileTheNewerRefreshIsStillReading() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        let older = merging("Merge branch 'older'")
+        let newer = merging("Merge branch 'newer'")
+        await repo.client.set(commitDefaults: older)
+        await repo.client.holdCommitDefaults(true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        let old = try #require(state.session?.commitDefaultsTask)
+
+        // The newer refresh is accepted, and its defaults read starts, before its status returns.
+        await repo.client.set(commitDefaults: newer)
+        await repo.client.hold(true)
+        let refresh = Task { await state.refresh() }
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 2 })
+
+        await repo.client.releaseFirstCommitDefaults()
+        await old.value
+        #expect(state.commitDefaults == .none, "the older read finished and applied nothing")
+
+        await repo.client.releaseFirst()
+        await refresh.value
+        await repo.client.releaseCommitDefaults()
+        let current = try #require(state.session?.commitDefaultsTask)
+        await current.value
+        #expect(state.commitDefaults == newer)
+    }
+
+    @Test func manualRefreshReloadsEqualFiles() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        await state.refresh()
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+    }
+
+    @Test func ticksDuringASlowStatusCollapseIntoOneFollowUp() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let status = await repo.client.statusCalls
+        await repo.client.hold(true)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        h.watcherCallbacks[repo.root]!()
+        h.watcherCallbacks[repo.root]!()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1, "ticks queue behind the running refresh")
+
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.heldCount == 1 }, "one follow-up for both ticks")
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.statusCalls == status + 2 })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 2)
+    }
+
+    /// An edit that lands between the settings load's read and its status would leave
+    /// the old content behind a fingerprint every later tick judges unchanged.
+    @Test func settingsRefreshReloadsAShownFileThatChangedUnderTheLoad() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        // The stub snapshots its list when status is called, so the edit is in place before
+        // the refresh starts; the held status still returns after the load's reads.
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        await repo.client.hold(true)
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.contentReads == reads + 2 }, "the settings load read the file")
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        #expect(await eventually { await h.published.last?.cause == .settings })
+        #expect(await eventually { await repo.client.contentReads == reads + 4 }, "the edit is read again")
+
+        let after = await repo.client.contentReads
+        await tick(h, repo.root, waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.contentReads == after, "the tick has nothing new to load")
+    }
+
+    // MARK: Hiding and showing
+
+    @Test func hidingStopsTheWatcherAndShowingStartsANewOne() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        #expect(h.watcherStarts[repo.root] == 1)
+        let first = h.watchers[repo.root]
+        let status = await repo.client.statusCalls
+        let reads = await repo.client.contentReads
+        let before = h.published.count
+
+        state.isVisible = false
+        #expect(first?.stopped == true)
+        #expect(state.session?.watcher == nil)
+
+        state.isVisible = true
+        #expect(h.watcherStarts[repo.root] == 2)
+        #expect(h.watchers[repo.root] !== first)
+        #expect(h.watchers[repo.root]?.stopped == false)
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .watcher)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1, "one rescan")
+        #expect(await repo.client.contentReads == reads, "nothing changed: the diff on show is kept")
+    }
+
+    @Test func showingReloadsAStaleDiffOnce() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        let status = await repo.client.statusCalls
+
+        state.isVisible = false
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        state.isVisible = true
+        #expect(await eventually { await repo.client.statusCalls == status + 1 })
+        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1, "one status read")
+        #expect(await repo.client.contentReads == reads + 2, "one load")
+    }
+
+    /// A hidden window watches nothing: a running refresh and the tick queued behind it
+    /// go with the watcher, and the rescan on showing finds the edit they carried.
+    @Test func staleStatusAcrossHideAndShow() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        let status = await repo.client.statusCalls
+        let before = h.published.count
+        let tick = h.watcherCallbacks[repo.root]!
+
+        await repo.client.hold(true)
+        tick()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        tick()
+        state.isVisible = false
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.published.count == before, "the outlived read publishes nothing")
+        #expect(await repo.client.statusCalls == status + 1, "the queued follow-up is dropped")
+        #expect(state.files.first?.fingerprint == filesA[0].fingerprint)
+        #expect(!state.diffStale, "nothing was published, so no reload is owed")
+        #expect(await repo.client.contentReads == reads)
+
+        // The stopped watcher's callback reads nothing.
+        tick()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 1)
+
+        state.isVisible = true
+        #expect(await eventually { await repo.client.statusCalls == status + 2 })
+        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 2)
+        #expect(await repo.client.contentReads == reads + 2, "exactly one load")
+    }
+
+    @Test func aTickFromAStoppedWatcherIsIgnored() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let before = h.published.count
+        state.isVisible = false
+        state.isVisible = true
+        #expect(await eventually { await h.published.count > before })
+        try? await Task.sleep(for: .milliseconds(50))
+        let status = await repo.client.statusCalls
+
+        h.previousWatcherCallbacks[repo.root]!([.worktree])
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status, "the replaced watcher's ticks are dropped")
+
+        h.watcherChangeCallbacks[repo.root]!([.worktree])
+        #expect(await eventually { await repo.client.statusCalls == status + 1 }, "the new watcher's are not")
+    }
+
+    @Test func showingInCommitScopeReadsMetadataAndReloadsTheStaleDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let file = state.files[0]
+
+        state.isVisible = false
+        state.selection = [.file(file.id)]
+        #expect(state.diffStale)
+        let before = await Reads(repo.client)
+
+        state.isVisible = true
+        // A commit's files cannot change, so no status read; the owed load runs once.
+        #expect(await eventually { await self.hasContent(state, for: file) })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        let expected = before.plus(head: 1, headState: 1, content: 2)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        #expect(!state.diffStale)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected)
+    }
+
+    @Test func adoptingHiddenStartsTheWatcherOnShow() async {
+        let h = Harness()
+        let state = h.makeState()
+        state.isVisible = false
+        let repo = h.repo("A", files: filesA)
+        let before = h.published.count
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.watcherStarts[repo.root, default: 0] == 0)
+        #expect(state.session?.watcher == nil)
+
+        state.isVisible = true
+        #expect(h.watcherStarts[repo.root] == 1)
+        #expect(state.session?.watcher != nil)
+    }
+
+    @Test func aRescanDeliveredDuringARunningRefreshIsNotLost() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        let status = await repo.client.statusCalls
+
+        await repo.client.hold(true)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        state.isVisible = false
+        state.isVisible = true
+        // The rescan finds the old watcher's refresh still running and queues behind it.
+        #expect(await eventually { await state.session?.watcherRefreshPending != nil })
+        #expect(await repo.client.statusCalls == status + 1)
+
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.statusCalls == status + 2 }, "the rescan runs as the follow-up")
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == status + 2)
+    }
+
+    /// A status read that outlives its watcher publishes nothing: its snapshot predates
+    /// the hide, and the rescan queued behind it reads again.
+    @Test func aStatusReadOutlivedByItsWatcherPublishesNothing() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+        let status = await repo.client.statusCalls
+        let before = h.published.count
+
+        // The selected file is gone in the snapshot the held read will return.
+        await repo.client.set(files: [filesA[1]])
+        await repo.client.hold(true)
+        h.watcherCallbacks[repo.root]!()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        state.isVisible = false
+        state.isVisible = true
+        #expect(await eventually { await state.session?.watcherRefreshPending != nil })
+        // It is back by the time the rescan reads.
+        await repo.client.set(files: filesA)
+        // The stale read returns; the rescan's read is held next.
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        await repo.client.releaseFirst()
+
+        #expect(await eventually { await repo.client.statusCalls == status + 2 })
+        #expect(await eventually { await h.published.count == before + 1 }, "the stale response published nothing")
+        #expect(state.selection == [.file(filesA[0].id)], "the selection survives the file's brief absence")
+        #expect(state.files == filesA)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(h.published.count == before + 1)
+        #expect(await repo.client.contentReads == reads, "the shown file's fingerprint is unchanged: no reload")
+    }
+
+    /// The load owed from hiding does not depend on the status read on show succeeding.
+    @Test func aFailedStatusOnShowStillLoadsTheOwedDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        await select(filesA[0], in: state)
+        let reads = await repo.client.contentReads
+
+        // A reload of the same file, held at the worktree read.
+        await repo.client.holdReads(true)
+        state.diffSettingsChanged()
+        #expect(await eventually { await repo.client.heldReadCount == 1 })
+        state.isVisible = false
+        #expect(state.diffStale)
+        await repo.client.holdReads(false)
+        await repo.client.releaseReads()
+
+        await repo.client.fail(true)
+        state.isVisible = true
+        #expect(await eventually { await state.errorMessage != nil }, "the status failure is kept")
+        // The cancelled reload's two reads were counted before the hold; the owed load adds two.
+        #expect(await eventually { await repo.client.contentReads == reads + 4 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
+        #expect(hasContent(state, for: filesA[0]))
+        #expect(state.files == filesA, "the old list is retained")
+    }
+
+    /// Status cannot say what HEAD holds for a conflict, so the fingerprint is unknown and
+    /// every tick reloads: the price of never showing a stale conflict.
+    @Test func unmergedFileRevalidatesOnEveryTick() async {
+        let h = Harness()
+        let state = h.makeState()
+        let conflict = changedFile("c.swift", kind: .unmerged)
+        let repo = await h.adopt(state, "A", files: [conflict])
+        await select(conflict, in: state)
+        let reads = await repo.client.contentReads
+
+        await tick(h, repo.root, waitingFor: repo.client)
+        #expect(h.published.last?.inputsChanged == true)
+        #expect(await eventually { await repo.client.contentReads == reads + 2 })
+    }
+
+    // MARK: Routed ticks
+
+    /// Adopts `files` with counts and waits for every read the adoption starts, so the
+    /// counters below move only for the tick under test.
+    private func adoptSettled(_ h: Harness, _ state: WindowState, files: [ChangedFile]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let repo = await adoptCounted(h, state, files: files)
+        await state.session?.historyTask?.value
+        await state.session?.commitDefaultsTask?.value
+        #expect(await eventually { await state.localBranches == ["main"] })
+        return repo
+    }
+
+    /// Every read a tick can route to, taken at one moment.
+    private struct Reads: Equatable {
+        var status, head, headState, defaults, numstat, content: Int
+
+        init(_ client: StubRepoClient) async {
+            status = await client.statusCalls
+            head = await client.headCalls
+            headState = await client.headStateCalls
+            defaults = await client.commitDefaultsCalls
+            numstat = await client.numstatCalls
+            content = await client.contentReads
+        }
+
+        /// The same counters after the given reads.
+        func plus(status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0, content: Int = 0) -> Reads {
+            var reads = self
+            reads.status += status
+            reads.head += head
+            reads.headState += headState
+            reads.defaults += defaults
+            reads.content += content
+            return reads
+        }
+    }
+
+    /// Sends `changes` and waits for the status read and publish it must produce.
+    private func tick(
+        _ h: Harness, _ repo: RepositoryRoot, _ changes: Set<RepoChange>, waitingFor client: StubRepoClient
+    ) async {
+        let status = await client.statusCalls
+        let before = h.published.count
+        h.tick(repo, changes)
+        #expect(await eventually { await client.statusCalls == status + 1 })
+        #expect(await eventually { await h.published.count > before })
+    }
+
+    @Test func anIndexTickCostsOneStatusRead() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+
+        await tick(h, repo.root, [.index], waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == before.plus(status: 1))
+    }
+
+    @Test func aRefsTickReadsMetadataAndDefaultsWithoutReloading() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+
+        await tick(h, repo.root, [.refs], waitingFor: repo.client)
+        let expected = before.plus(status: 1, head: 1, headState: 1, defaults: 1)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected, "equal inputs: no diff, no recount")
+    }
+
+    /// A soft reset writes only `.git/HEAD` and the ref, yet what is staged changes.
+    @Test func aSoftResetShowsItsStagedFiles() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        #expect(state.detailSelection == .allChanges)
+        let reads = await repo.client.contentReads
+
+        let unstaged = filesA + [changedFile("reset.swift", area: .staged)]
+        await repo.client.set(files: unstaged)
+        await tick(h, repo.root, [.refs], waitingFor: repo.client)
+        #expect(state.files.map(\.id) == unstaged.map(\.id))
+        #expect(await eventually { await repo.client.contentReads > reads }, "All changes reloads")
+    }
+
+    /// `info/exclude` decides what is untracked, so the list and the counts follow it.
+    @Test func anExcludeEditUpdatesTheListAndRecounts() async {
+        let h = Harness()
+        let state = h.makeState()
+        let untracked = changedFile("scratch.txt", kind: .untracked)
+        let repo = await adoptSettled(h, state, files: filesA + [untracked])
+        let numstats = await repo.client.numstatCalls
+
+        await repo.client.set(files: filesA)
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(await eventually { await repo.client.numstatCalls > numstats })
+    }
+
+    /// Attributes can reclassify an unchanged file as binary, so a configuration change
+    /// recounts everything and shows nothing stale meanwhile.
+    @Test func aConfigurationTickDropsCarriedOverCountsAndRecounts() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let revision = state.session?.configurationRevision
+        await repo.client.holdNumstat(true)
+
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(state.session?.configurationRevision == revision.map { $0 + 1 })
+        #expect(state.files.allSatisfy { $0.lineStats == nil }, "the old counts answer another configuration")
+        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+
+        await repo.client.releaseNumstat()
+        #expect(await eventually { await state.files.allSatisfy { $0.lineStats != nil } })
+    }
+
+    @Test func aWorktreeTickLeavesAHeldDefaultsReadAloneWhenNoTemplateIsConfigured() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        // Spelled out: `.none` against an optional would mean nil.
+        #expect(state.session?.templateDependency == CommitDefaults.TemplateDependency.none)
+        let expected = merging("Merge branch 'feature'")
+        await repo.client.set(commitDefaults: expected)
+        await repo.client.holdCommitDefaults(true)
+        await state.refresh()
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        let task = try #require(state.session?.commitDefaultsTask)
+        let defaults = await repo.client.commitDefaultsCalls
+
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.commitDefaultsCalls == defaults, "no template: the worktree cannot change it")
+
+        await repo.client.releaseCommitDefaults()
+        await task.value
+        #expect(state.commitDefaults == expected, "the held read was not superseded")
+    }
+
+    /// A configured template may live in the worktree, so an edit there can change the suggestion.
+    @Test func aWorktreeTickRereadsDefaultsWhileATemplateIsConfigured() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.set(
+            commitDefaults: CommitDefaults(suggestion: nil, isMerging: false, templateDependency: configured))
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(state.session?.templateDependency == configured)
+
+        let filled = CommitDefaults(
+            suggestion: .init(text: "Subject: ", source: .template), isMerging: false, templateDependency: configured)
+        await repo.client.set(commitDefaults: filled)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await state.commitDefaults == filled })
+    }
+
+    /// A configuration change may have enabled a template. Until the read it starts says
+    /// so, a worktree tick must not trust the old "none": a template edit made while that
+    /// read is pending would otherwise publish a suggestion that is already stale.
+    @Test func aConfigurationTickForgetsTheTemplateDependencyUntilItsReadLands() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        #expect(state.session?.templateDependency == CommitDefaults.TemplateDependency.none)
+
+        let templateA = templated("A")
+        let templateB = templated("B")
+        // The read the configuration tick starts sees template A and is held there.
+        await repo.client.set(commitDefaults: templateA)
+        await repo.client.holdCommitDefaults(true)
+        await tick(h, repo.root, [.configuration], waitingFor: repo.client)
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 1 })
+        #expect(state.session?.templateDependency == .unknown)
+
+        // The template is edited to B while A's read is pending; the worktree tick must read again.
+        await repo.client.set(commitDefaults: templateB)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await repo.client.heldCommitDefaultsCount == 2 })
+
+        await repo.client.releaseFirstCommitDefaults()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(state.commitDefaults == .none, "A's read is stale and applies nothing")
+        await repo.client.holdCommitDefaults(false)
+        await repo.client.releaseCommitDefaults()
+        #expect(await eventually { await state.commitDefaults == templateB })
+        #expect(state.session?.templateDependency == configured)
+    }
+
+    /// A template in the worktree, as the routed-tick tests configure it.
+    private let configured = CommitDefaults.TemplateDependency.configured(path: "/tmp/A/.gitmessage")
+
+    private func templated(_ text: String) -> CommitDefaults {
+        CommitDefaults(
+            suggestion: .init(text: text, source: .template), isMerging: false, templateDependency: configured)
+    }
+
+    /// The watcher learns the template's path from each read, so an edit to a template kept
+    /// under `.git` is not dropped with that directory's noise.
+    @Test func aDefaultsReadHandsTheTemplatePathToTheWatcher() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        let path = "/tmp/A/.git/commit-template"
+        await repo.client.set(
+            commitDefaults: CommitDefaults(
+                suggestion: nil, isMerging: false, templateDependency: .configured(path: path)))
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(h.watchers[repo.root]?.dependencies.last == [path])
+
+        await repo.client.set(commitDefaults: .none)
+        await state.refresh()
+        await state.session?.commitDefaultsTask?.value
+        #expect(h.watchers[repo.root]?.dependencies.last == [], "unset: nothing left to depend on")
+    }
+
+    /// A read that threw cannot say whether a template is configured, so the next
+    /// worktree tick reads again rather than assuming there is none.
+    @Test func aFailedDefaultsReadIsRetriedByAWorktreeTick() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: filesA)
+        await repo.client.fail(commitDefaults: true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await state.session?.commitDefaultsTask?.value
+        #expect(state.session?.templateDependency == .unknown)
+
+        let expected = merging("Merge branch 'feature'")
+        await repo.client.fail(commitDefaults: false)
+        await repo.client.set(commitDefaults: expected)
+        await tick(h, repo.root, [.worktree], waitingFor: repo.client)
+        #expect(await eventually { await state.commitDefaults == expected })
+    }
+
+    @Test func ticksWithDifferentChangesMergeIntoOneFollowUp() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        let before = await Reads(repo.client)
+        await repo.client.hold(true)
+        h.tick(repo.root, [.index])
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        h.tick(repo.root, [.index])
+        h.tick(repo.root, [.refs])
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+
+        #expect(await eventually { await repo.client.statusCalls == before.status + 2 }, "one follow-up")
+        #expect(await eventually { await repo.client.headStateCalls == before.headState + 1 }, "carrying `.refs`")
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await repo.client.statusCalls == before.status + 2)
+        #expect(await repo.client.headStateCalls == before.headState + 1)
+    }
+
+    /// Selects `commit` and waits for its files, so a tick arrives in commit scope.
+    private func adoptInCommitScope(_ h: Harness, _ state: WindowState) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let commit = commitSummary("c1")
+        let repo = h.repo("A", files: filesA)
+        await repo.client.set(head: commit.ref.sha)
+        await repo.client.set(commits: [commit])
+        await repo.client.set(
+            files: [ChangedFile(path: "one.swift", originalPath: nil, kind: .modified, area: .commit(commit.ref))],
+            forCommit: commit.ref.sha)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await !state.history.commits.isEmpty })
+        state.select(commit: commit)
+        #expect(await eventually { await state.files.count == 1 })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(await eventually { await state.localBranches == ["main"] })
+        return repo
+    }
+
+    @Test func aWorktreeTickDoesNothingInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let before = await Reads(repo.client)
+
+        h.tick(repo.root, [.worktree])
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(await Reads(repo.client) == before)
+    }
+
+    @Test func aRefsTickChecksHeadWithoutStatusInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptInCommitScope(h, state)
+        let before = await Reads(repo.client)
+
+        h.tick(repo.root, [.refs])
+        let expected = before.plus(head: 1, headState: 1)
+        #expect(await eventually { await Reads(repo.client) == expected })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == expected, "no status read, no defaults read")
     }
 }

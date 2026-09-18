@@ -12,10 +12,17 @@ struct WindowID: Hashable, Sendable {
 final class RepoSession {
     let root: RepositoryRoot
     let client: any RepoClient
+    /// Nil while the window is hidden: a hidden window watches nothing.
     var watcher: (any RepoWatching)?
+    /// Bumped on every watcher start and stop. A callback from a watcher whose
+    /// generation is no longer current is dropped.
+    var watcherGeneration = 0
     /// Incremented per refresh; only the latest may publish.
     var refreshSerial = 0
-    /// The line-stats work of the latest refresh; cancelled when a newer one starts.
+    /// Which line-stats read is active and which finished last. A refresh asks it what to
+    /// do; the read reports back with the token it was given.
+    var lineStats = LineStatsState()
+    /// The active line-stats read, so a superseded one can be cancelled.
     var statsTask: Task<Void, Never>?
     /// Incremented per scope change, so a fallback or a reselection that outlived its
     /// transition cannot act on a scope the user has since moved away from.
@@ -38,8 +45,25 @@ final class RepoSession {
     /// new write waits for this task before touching the repository, so two quick clicks
     /// cannot run two `git` writes at once and collide on `index.lock`.
     var repositoryWriteTask: Task<Void, Never>?
-    /// The commit-defaults read of the latest refresh; cancelled when a newer one starts.
+    /// The commit-defaults read in flight, if any. Superseded by generation, not by the
+    /// refresh serial: a `.settings` refresh does not start one and must not cancel one.
     var commitDefaultsTask: Task<Void, Never>?
+    /// Bumped when a refresh that needs a defaults read is accepted, and on close. Only
+    /// the read of the current generation publishes.
+    var commitDefaultsGeneration = 0
+    /// One watcher refresh at a time.
+    var watcherRefreshRunning = false
+    /// Ticks received during a watcher refresh, merged into one follow-up. Carries the
+    /// generation of the watcher that delivered them, so a follow-up for a stopped
+    /// watcher is dropped.
+    var watcherRefreshPending: (generation: Int, changes: Set<RepoChange>)?
+    /// Bumped on `.configuration` and `.rescan`. Part of every line-stats request, so
+    /// carried-over counts are invalidated: attributes can change the binary
+    /// classification of an unchanged file.
+    var configurationRevision = 0
+    /// What the last defaults read said about `commit.template`. Unknown until then and
+    /// after a failed read, which routing treats as configured.
+    var templateDependency: CommitDefaults.TemplateDependency = .unknown
 
     init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root
@@ -65,6 +89,10 @@ enum RefreshCause: Sendable {
     case commit
     /// A branch switch finished, successfully or not, and the working tree was re-read.
     case branchSwitch
+
+    /// Whether a refresh for this cause starts a commit-defaults read. A settings change
+    /// has no bearing on the suggestion, and the watcher decides from its routing.
+    var readsCommitDefaults: Bool { self != .settings && self != .watcher }
 }
 
 /// One page of the branch's history: the commits, the revision they were read from,

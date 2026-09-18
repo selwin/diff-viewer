@@ -14,7 +14,8 @@ import SwiftUI
 @MainActor
 @Observable
 final class WindowState {
-    typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping @MainActor () -> Void) -> (any RepoWatching)?
+    typealias WatcherCallback = @MainActor (Set<RepoChange>) -> Void
+    typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping WatcherCallback) -> (any RepoWatching)?
 
     let id = WindowID()
     let preferences: Preferences
@@ -69,21 +70,29 @@ final class WindowState {
     /// Keyboard focus. Informational for the view; nothing in the model branches on it.
     var isKey = false
 
-    /// On screen, per AppKit's occlusion state. A hidden window starts no diff or
-    /// highlight work; what it skipped is reloaded when it becomes visible again.
+    /// On screen, per AppKit's occlusion state. A hidden window stops its watcher and
+    /// starts no diff or highlight work. Showing restarts watching and schedules a
+    /// rescan; stale or changed content reloads.
     var isVisible = true {
         didSet {
             guard isVisible != oldValue, !isClosed else { return }
             if isVisible {
-                if diffStale { reloadDiff() }
-            } else if diffLoader.cancelActiveWork() {
-                diffStale = true
+                guard let session else { return }
+                let watcherGeneration = startWatcher(session: session)
+                Task {
+                    await repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: [.rescan])
+                }
+            } else {
+                if let session { stopWatcher(session: session) }
+                if diffLoader.cancelActiveWork() { diffStale = true }
             }
         }
     }
 
     /// A diff load was skipped or cancelled while hidden and must run on becoming visible.
     private(set) var diffStale = false
+    /// What the running or last changeset load was asked to show; nil while a file is shown.
+    private var changesetRequest: ChangesetRequest?
 
     /// What the sidebar is showing: the working tree, or one previous commit.
     private(set) var scope: DiffScope = .workingTree
@@ -146,7 +155,9 @@ final class WindowState {
     static let commitPageSize = 50
 
     /// Called after every refresh that publishes `files`, whether or not the list changed.
-    @ObservationIgnored var onRefreshPublished: (@MainActor (WindowState, RefreshCause) -> Void)?
+    /// `inputsChanged` is whether the id set or any file's fingerprint moved since the
+    /// previous list.
+    @ObservationIgnored var onRefreshPublished: (@MainActor (WindowState, RefreshCause, _ inputsChanged: Bool) -> Void)?
 
     /// Index into the current document's change blocks, for next/previous navigation, and
     /// the row the panes should bring into view. Written by `applySelection`, which resets
@@ -180,10 +191,8 @@ final class WindowState {
     func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
         guard session == nil, !isClosed else { return false }
         let session = RepoSession(root: root, client: client)
-        session.watcher = watchRepository(root) { [weak self, weak session] in
-            guard let self, let session else { return }
-            Task { await self.repositoryChanged(session: session) }
-        }
+        // A window adopted hidden gets its watcher when shown.
+        if isVisible { startWatcher(session: session) }
         self.session = session
         title = root.name
         selection = []
@@ -206,15 +215,42 @@ final class WindowState {
         isClosed = true
         initialRefresh?.cancel()
         session?.refreshSerial += 1
-        session?.statsTask?.cancel()
+        if let session { cancelLineStats(session: session) }
+        session?.commitDefaultsGeneration += 1
         session?.commitDefaultsTask?.cancel()
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
-        session?.watcher?.stop()
-        session?.watcher = nil
+        if let session { stopWatcher(session: session) }
         diffLoader.cancelActiveWork()
         isLoading = false
+    }
+
+    /// Starts a watcher for `session` and returns the generation its callbacks must match.
+    @discardableResult
+    private func startWatcher(session: RepoSession) -> Int {
+        session.watcherGeneration += 1
+        let watcherGeneration = session.watcherGeneration
+        let watcher = watchRepository(session.root) { [weak self, weak session] changes in
+            guard let self, let session else { return }
+            Task {
+                await self.repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: changes)
+            }
+        }
+        // A fresh watcher keeps the template the last defaults read found.
+        if case let .configured(path) = session.templateDependency {
+            watcher?.setDependencies([path])
+        }
+        session.watcher = watcher
+        return watcherGeneration
+    }
+
+    /// Invalidates callbacks, stops watching, and clears pending changes.
+    private func stopWatcher(session: RepoSession) {
+        session.watcherGeneration += 1
+        session.watcher?.stop()
+        session.watcher = nil
+        session.watcherRefreshPending = nil
     }
 
     // MARK: - Refreshing
@@ -227,21 +263,59 @@ final class WindowState {
         await refreshHeadState(session: session)
     }
 
-    /// Something under `.git` or in the working tree changed.
-    ///
-    /// A commit's contents cannot change, so in commit scope this must not re-read the
-    /// file list, republish it, or reload the diff — doing so on every keystroke in
-    /// another editor would re-read historical blobs and re-run alignment and
-    /// highlighting for a view that cannot have changed. Only the commit list can go
-    /// stale, and only when HEAD moves.
-    private func repositoryChanged(session: RepoSession) async {
-        guard session === self.session, !isClosed else { return }
-        if case .workingTree = scope {
-            await refresh(session: session, cause: .watcher)
+    /// Something under `.git` or in the working tree changed, per the watcher of
+    /// `watcherGeneration`. One refresh runs at a time; ticks during it merge into one
+    /// follow-up carrying their watcher's generation. A hidden window has no watcher,
+    /// so showing delivers one `[.rescan]`.
+    private func repositoryChanged(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
+        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
+        if session.watcherRefreshRunning {
+            // Merge with a pending tick of the same generation; a pending tick from a
+            // stopped watcher is replaced, its work covered by the rescan that follows a restart.
+            if var pending = session.watcherRefreshPending, pending.generation == watcherGeneration {
+                pending.changes.formUnion(changes)
+                session.watcherRefreshPending = pending
+            } else {
+                session.watcherRefreshPending = (watcherGeneration, changes)
+            }
+            return
         }
-        guard session === self.session, !isClosed else { return }
+        session.watcherRefreshRunning = true
+        defer { session.watcherRefreshRunning = false }
+        await runWatcherRefresh(session: session, watcherGeneration: watcherGeneration, changes: changes)
+        // The follow-up runs on the pending tick's own generation, so a rescan delivered
+        // by a restart while this refresh ran is not lost, and a tick from a watcher
+        // stopped meanwhile is dropped.
+        while let pending = session.watcherRefreshPending, session === self.session, !isClosed,
+            pending.generation == session.watcherGeneration
+        {
+            session.watcherRefreshPending = nil
+            await runWatcherRefresh(session: session, watcherGeneration: pending.generation, changes: pending.changes)
+        }
+        session.watcherRefreshPending = nil
+    }
+
+    /// Routes `changes` to the reads they can invalidate. In commit scope only repository
+    /// metadata is refreshed: a commit's contents cannot change, and re-reading them on
+    /// every keystroke in another editor would redo alignment and highlighting for nothing.
+    private func runWatcherRefresh(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
+        if changes.contains(.configuration) || changes.contains(.rescan) {
+            session.configurationRevision += 1
+            // The configuration may have gained a template; until the read below says,
+            // a worktree write has to be assumed to touch it.
+            session.templateDependency = .unknown
+        }
+        let work = RefreshRouting.work(for: changes, scope: scope, template: session.templateDependency)
+        // Before the first suspension, so the read's generation is settled the moment
+        // the tick is accepted.
+        if work.commitDefaults { startCommitDefaultsRead(session: session) }
+        if work.status { await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration) }
+        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
+        // A load skipped while hidden is still owed when the refresh could not decide
+        // about it: commit scope reads no status, and a failed read publishes nothing.
+        if diffStale { reloadDiff() }
+        guard work.repositoryMetadata else { return }
         await reloadHistoryIfHeadMoved(session: session)
-        // Also in commit scope: a checkout under a selected commit still changes the branch.
         await refreshHeadState(session: session)
     }
 
@@ -250,17 +324,21 @@ final class WindowState {
     /// started since.
     ///
     /// Line stats are decoration and arrive separately: the list is published as soon
-    /// as `status()` returns, carrying the counts already known for each file, and a
-    /// follow-up task runs numstat and the untracked line counts and updates `files`
-    /// in place. A newer refresh cancels that task; a failed numstat leaves its area
-    /// unknown and never fails the refresh, which is driven by `status()` alone.
-    func refresh(session: RepoSession, cause: RefreshCause) async {
+    /// as `status()` returns, carrying the counts still valid for each file, and a
+    /// numstat read updates `files` in place when `session.lineStats` says one is needed.
+    /// A failed numstat leaves its files unknown and never fails the refresh, which is
+    /// driven by `status()` alone.
+    func refresh(session: RepoSession, cause: RefreshCause, watcherGeneration: Int? = nil) async {
         // A watcher callback queued before its window closed: skip the read.
         guard session === self.session, !isClosed else { return }
         session.refreshSerial += 1
         let serial = session.refreshSerial
-        session.statsTask?.cancel()
-        session.commitDefaultsTask?.cancel()
+        // Started before the first suspension so the read's generation is settled the
+        // moment the refresh is accepted. Independent of `status()` succeeding: the
+        // defaults have their own inputs.
+        if scope == .workingTree, cause.readsCommitDefaults {
+            startCommitDefaultsRead(session: session)
+        }
         let ignoreWhitespace = preferences.hideWhitespace
         let client = session.client
 
@@ -277,6 +355,9 @@ final class WindowState {
             outcome = .failure(error)
         }
         guard session === self.session, !isClosed, serial == session.refreshSerial else { return }
+        // A watcher refresh whose watcher was stopped publishes nothing; the rescan that
+        // follows a restart reads again.
+        if let watcherGeneration, watcherGeneration != session.watcherGeneration { return }
         // The scope changed while this read was in flight; its files belong to a list
         // nobody is showing any more.
         guard scope == self.scope else { return }
@@ -293,13 +374,24 @@ final class WindowState {
             pendingAllChanges = false
             // Taken before `files` is replaced, so it describes the pane on screen.
             let keyBefore = detailIdentity
+            let before = Dictionary(files.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let newByID = Dictionary(newFiles.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             let selectionBeforeWasEmpty = storedSelection.isEmpty
-            // Only the files whose counts are known, so the lookup below is a plain
-            // optional rather than a nested one.
-            let known = Dictionary(
-                files.compactMap { file in file.lineStats.map { (file.id, $0) } },
-                uniquingKeysWith: { first, _ in first })
-            files = newFiles.map { $0.with(lineStats: known[$0.id]) }
+            let inputsChanged =
+                Set(before.keys) != Set(newByID.keys)
+                || newFiles.contains {
+                    DiffInputFingerprint.mayHaveChanged(before[$0.id]?.fingerprint, $0.fingerprint)
+                }
+            // Counts are carried over from the last finished read, never from the list
+            // on screen: a cancelled read must not leave one version's counts on another's
+            // content. Assigned only when something differs, so an equal tick observes nothing.
+            let desired = LineStatsRequest(
+                scope: scope, hideWhitespace: ignoreWhitespace,
+                configurationRevision: session.configurationRevision,
+                inputs: newByID.mapValues { FileInputIdentity($0.fingerprint) })
+            let lastOutcome = session.lineStats.lastOutcome
+            let published = newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) }
+            if published != files { files = published }
             // One set for the whole selection rather than a scan of the list per row:
             // All changes is not a file and always survives.
             let liveIDs = Set(newFiles.map(\.id))
@@ -318,21 +410,42 @@ final class WindowState {
             // failure is news the reader has not seen yet and outlives a status read.
             if errorRaisedByRefresh { errorMessage = nil }
             // The refresh alone decides, because applying a selection above never reloads.
-            // A settings change reloaded the diff before it started this refresh, so it
-            // reloads a second time only when the identity actually moved; every other
-            // cause re-reads content that may have changed on disk.
-            if detailIdentity != keyBefore || cause != .settings {
-                reloadDiff()
+            // A watcher tick reloads only when what is shown may differ from the list
+            // published before it: the rows moved, a shown file's inputs moved, a load is
+            // owed, or the last one failed. Failed loads stay eligible for retry, but a
+            // retry never cancels a replacement already in flight for the same inputs, or
+            // every equal tick would restart it. A settings change reloaded the diff before
+            // it started this refresh, so it reloads again only when the rows or a shown
+            // file's inputs moved meanwhile — an edit that lands between that load's read
+            // and this status would otherwise stay hidden behind its own new fingerprint.
+            // Every other cause re-reads content that may have changed on disk.
+            let identityMoved = detailIdentity != keyBefore
+            let shownInputsChanged = detailIdentity.ids.contains { id in
+                DiffInputFingerprint.mayHaveChanged(before[id]?.fingerprint, newByID[id]?.fingerprint)
             }
-            onRefreshPublished?(self, cause)
-            session.statsTask = Task { [weak self] in
-                await self?.attachLineStats(
-                    to: newFiles, session: session, scope: scope, serial: serial,
-                    ignoreWhitespace: ignoreWhitespace)
+            let reload: Bool
+            switch cause {
+            case .watcher:
+                let lastLoadFailed =
+                    !diffLoader.hasActiveWork && (diffLoader.errorMessage != nil || changesetHasFailedSection)
+                reload = identityMoved || shownInputsChanged || diffStale || lastLoadFailed
+            case .settings:
+                reload = identityMoved || shownInputsChanged
+            default:
+                reload = true
             }
-            if scope == .workingTree {
-                session.commitDefaultsTask = Task { [weak self] in
-                    await self?.loadCommitDefaults(session: session, serial: serial)
+            if reload { reloadDiff() }
+            onRefreshPublished?(self, cause, inputsChanged)
+            switch session.lineStats.decide(desired: desired, cause: cause) {
+            case let .reuseLastOutcome(cancelActive):
+                // The counts were carried over above; the superseded read has nothing to add.
+                if cancelActive { session.statsTask?.cancel() }
+            case .keepActive:
+                break
+            case let .start(token, cancelActive):
+                if cancelActive { session.statsTask?.cancel() }
+                session.statsTask = Task { [weak self] in
+                    await self?.attachLineStats(to: newFiles, request: desired, token: token, session: session)
                 }
             }
         case let .failure(error):
@@ -349,17 +462,25 @@ final class WindowState {
         }
     }
 
-    /// Runs numstat for the scope's areas and counts untracked files, then replaces
-    /// `files` with the same list carrying the fresh stats, if this refresh still owns
-    /// the window. Not a publish: the list itself did not change.
+    /// True when the changeset on screen has a section its load could not produce.
+    private var changesetHasFailedSection: Bool {
+        guard case let .changeset(document)? = diffLoader.content else { return false }
+        return document.sections.contains { if case .failed = $0.outcome { return true } else { return false } }
+    }
+
+    /// Runs numstat for the request's areas and counts untracked files, then stamps the
+    /// counts onto the current `files` by id. Accepted only from the active read: a
+    /// superseded token records nothing, whatever refresh is newest by then. Not a
+    /// publish: the list itself did not change.
     private func attachLineStats(
-        to newFiles: [ChangedFile], session: RepoSession, scope: DiffScope, serial: Int, ignoreWhitespace: Bool
+        to newFiles: [ChangedFile], request: LineStatsRequest, token: Int, session: RepoSession
     ) async {
         let client = session.client
+        let ignoreWhitespace = request.hideWhitespace
         // The working tree's two areas are independent processes and stay concurrent;
         // a commit scope has a single area.
         let numstat = await withTaskGroup(of: (ChangedFile.Area, [NumstatEntry]?).self) { group in
-            for area in scope.areas {
+            for area in request.scope.areas {
                 group.addTask {
                     let entries = try? await client.numstat(area: area, ignoreWhitespace: ignoreWhitespace)
                     return (area, entries)
@@ -374,8 +495,28 @@ final class WindowState {
         }
         guard !Task.isCancelled else { return }
         let joined = await LineStatsJoiner.attach(numstat: numstat, to: newFiles, client: client)
-        guard !Task.isCancelled, session === self.session, !isClosed, serial == session.refreshSerial else { return }
-        files = joined
+        var results: [ChangedFile.ID: LineStatsResult] = [:]
+        for file in joined {
+            results[file.id] =
+                switch file.kind {
+                case .unmerged: .unavailable
+                case .untracked: file.lineStats.map { .available($0) } ?? .failed
+                default:
+                    numstat[file.area] == nil
+                        ? .failed : .available(file.lineStats ?? .counted(added: 0, deleted: 0))
+                }
+        }
+        let outcome = LineStatsOutcome(request: request, results: results)
+        guard !Task.isCancelled, session === self.session, !isClosed, session.lineStats.record(outcome, token: token)
+        else { return }
+        files = files.map { file in results[file.id].map { file.with(lineStats: $0.lineStats) } ?? file }
+    }
+
+    /// Stops the active line-stats read, for a window or a scope that no longer wants it.
+    private func cancelLineStats(session: RepoSession) {
+        session.statsTask?.cancel()
+        session.statsTask = nil
+        _ = session.lineStats.invalidateActive()
     }
 
     // MARK: - Diff
@@ -400,18 +541,25 @@ final class WindowState {
         diffStale = false
         switch detailSelection {
         case .allChanges:
-            diffLoader.load(
-                changeset: sidebarRows, client: session?.client, hideWhitespace: preferences.hideWhitespace,
-                foldOptions: preferences.foldOptions)
+            loadChangeset(sidebarRows)
         case .files:
-            diffLoader.load(
-                changeset: selectedFiles, client: session?.client, hideWhitespace: preferences.hideWhitespace,
-                foldOptions: preferences.foldOptions)
+            loadChangeset(selectedFiles)
         case .file, .nothing:
             // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
             // either way the loader is told to show nothing, which also cancels its work.
+            changesetRequest = nil
             diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
         }
+    }
+
+    /// Loads `files` as one changeset. A reload of the view already on screen keeps its
+    /// document until the replacement is whole; a new view starts from empty.
+    private func loadChangeset(_ files: [ChangedFile]) {
+        let request = ChangesetRequest(identity: detailIdentity)
+        diffLoader.load(
+            changeset: files, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+            foldOptions: preferences.foldOptions, preserveCurrentContent: request.isReload(of: changesetRequest))
+        changesetRequest = request
     }
 }
 
@@ -476,7 +624,7 @@ extension WindowState {
         // the setter drops a pending restoration, which belongs to the list being left.
         selection = []
         pendingAllChanges = true
-        session.statsTask?.cancel()
+        cancelLineStats(session: session)
 
         scope = newScope
         selectedCommit = commit
@@ -749,17 +897,44 @@ extension WindowState {
         errorMessage = failure.localizedDescription
     }
 
-    /// Reads the suggestion for the list a refresh just published. Applies only while that
-    /// refresh is still the newest and the sidebar still shows the working tree; a thrown
-    /// read applies nothing, so the box keeps its last good state.
-    private func loadCommitDefaults(session: RepoSession, serial: Int) async {
+    /// Starts a defaults read for the refresh being accepted. Its own generation, not the
+    /// refresh serial: a `.settings` refresh leaves a running read alone, and a read that
+    /// outlives a newer one publishes nothing.
+    private func startCommitDefaultsRead(session: RepoSession) {
+        session.commitDefaultsGeneration += 1
+        let generation = session.commitDefaultsGeneration
+        session.commitDefaultsTask?.cancel()
+        session.commitDefaultsTask = Task { [weak self] in
+            await self?.loadCommitDefaults(session: session, generation: generation)
+        }
+    }
+
+    /// Reads the suggestion and applies it while its generation is still current and the
+    /// sidebar still shows the working tree. A thrown read applies nothing, so the box
+    /// keeps its last good state, but it does forget whether a template is configured.
+    private func loadCommitDefaults(session: RepoSession, generation: Int) async {
         // Cancelled before it ran: skip the subprocess, not just the publish.
         guard !Task.isCancelled else { return }
+        func isCurrent() -> Bool {
+            !Task.isCancelled && session === self.session && !isClosed
+                && generation == session.commitDefaultsGeneration && scope == .workingTree
+        }
         let new: CommitDefaults
-        do { new = try await session.client.commitDefaults() } catch { return }
-        guard !Task.isCancelled, session === self.session, !isClosed, serial == session.refreshSerial,
-            scope == .workingTree
-        else { return }
+        do {
+            new = try await session.client.commitDefaults()
+        } catch {
+            // Behind `isCurrent()` too, so an obsolete failure never overwrites a newer result.
+            guard isCurrent() else { return }
+            session.templateDependency = .unknown
+            return
+        }
+        guard isCurrent() else { return }
+        session.templateDependency = new.templateDependency
+        if case let .configured(path) = new.templateDependency {
+            session.watcher?.setDependencies([path])
+        } else {
+            session.watcher?.setDependencies([])
+        }
         applyCommitDefaults(new)
     }
 
@@ -817,7 +992,7 @@ extension WindowState {
             selection = []
             if !candidates.isEmpty { restoreSelectionAfterNextRefresh(candidates) }
             pendingAllChanges = true
-            session.statsTask?.cancel()
+            cancelLineStats(session: session)
             files = []
             isLoadingScope = true
             applyCommitDefaults(.none)

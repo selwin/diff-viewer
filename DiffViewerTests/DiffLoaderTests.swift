@@ -41,6 +41,71 @@ struct DiffLoaderTests {
         #expect(loader.styles?.documentID == current?.document.id)
     }
 
+    // MARK: Preserved reloads
+
+    /// A reload of the changeset on screen keeps its document and styles until the whole
+    /// replacement is ready, then swaps it in as a new load in one step.
+    @Test func aPreservedReloadKeepsTheDocumentUntilTheReplacementIsWhole() async {
+        let client = StubRepoClient(files: [])
+        let loader = DiffLoader(cache: plainDifftCache())
+        let files = [changedFile("a.swift"), changedFile("b.swift")]
+
+        loader.load(changeset: files, client: client, hideWhitespace: true)
+        #expect(await eventually { await !loader.hasActiveWork })
+        let first = changesetDocument(loader.content)?.loadID
+        let styles = loader.styles?.id
+        #expect(first != nil && styles != nil)
+
+        await client.hold(worktree: ["a.swift"])
+        loader.load(changeset: files, client: client, hideWhitespace: true, preserveCurrentContent: true)
+        #expect(await eventually { await client.waitingWorktreePaths.contains("a.swift") })
+        #expect(changesetDocument(loader.content)?.loadID == first, "the previous document stays on screen")
+        #expect(loader.styles?.id == styles, "with its styles")
+        #expect(loader.isLoading)
+        #expect(loader.changesetProgress == nil, "a preserved reload reports no progress")
+
+        await client.release(worktree: "a.swift")
+        #expect(await eventually { await changesetDocument(loader.content)?.loadID != first })
+        let replacement = changesetDocument(loader.content)
+        #expect(replacement?.sections.map(\.file.path) == ["a.swift", "b.swift"])
+        #expect(loader.styles?.documentID == replacement?.document.id)
+        #expect(await eventually { await !loader.hasActiveWork })
+    }
+
+    /// Nothing to show is nothing to keep: an empty list clears the panes at once.
+    @Test func aPreservedReloadOfAnEmptyListShowsNoChanges() async {
+        let client = StubRepoClient(files: [])
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(changeset: [changedFile("a.swift")], client: client, hideWhitespace: true)
+        #expect(await eventually { await !loader.hasActiveWork })
+
+        loader.load(changeset: [], client: client, hideWhitespace: true, preserveCurrentContent: true)
+        #expect(loader.content == nil)
+        #expect(await eventually { await !loader.isLoading })
+        #expect(loader.content == nil)
+    }
+
+    /// Preserving only applies to a changeset: a single file on screen belongs to another
+    /// selection and is cleared, as for any new changeset.
+    @Test func preservingWithoutAChangesetOnScreenStartsFromEmpty() async {
+        let client = StubRepoClient(files: [])
+        let loader = DiffLoader(cache: plainDifftCache())
+        let a = changedFile("a.swift")
+        loader.load(file: a, client: client, hideWhitespace: true)
+        #expect(await eventually { await loader.content != nil })
+
+        await client.hold(worktree: ["a.swift"])
+        loader.load(changeset: [a], client: client, hideWhitespace: true, preserveCurrentContent: true)
+        #expect(loader.content == nil, "the file's document is not kept")
+        #expect(loader.isLoading)
+
+        await client.release(worktree: "a.swift")
+        #expect(await eventually { await changesetDocument(loader.content)?.sections.count == 1 })
+        #expect(await eventually { await !loader.hasActiveWork })
+    }
+
+    // MARK: Single files
+
     /// A file's rows and colours are published in one turn, so a reader never sees
     /// the rows uncoloured or the previous file's colours.
     @Test func contentAndStylesArePublishedTogether() async {

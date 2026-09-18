@@ -3,7 +3,8 @@ import Foundation
 
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
-///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`).
+///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`);
+///   `all` selects All changes.
 /// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
 ///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
 ///   commit's sidebar and diffs can be screenshotted.
@@ -111,7 +112,7 @@ enum DebugLaunchOptions {
                     await selectScope(scopeSha, in: windowState)
                 }
                 if !selection.isEmpty {
-                    windowState.selection = [.file(selection)]
+                    windowState.selection = selection == "all" ? [.allChanges] : [.file(selection)]
                 }
                 if nextCount > 0 {
                     try? await Task.sleep(for: .seconds(2))

@@ -65,12 +65,13 @@ struct ChangesetAssemblerTests {
         clock: ManualClock = ManualClock(),
         highlighter: HighlighterProbe = HighlighterProbe(),
         cache: DifftCache = plainCache(),
-        resultCache: DiffResultCache = DiffResultCache()
+        resultCache: DiffResultCache = DiffResultCache(),
+        publication: ChangesetAssembler.PublicationMode = .progressive
     ) -> (assembler: ChangesetAssembler, log: PublicationLog, run: () -> Task<Void, Never>) {
         let log = PublicationLog()
         let assembler = ChangesetAssembler(
-            files: files(names), client: client, hideWhitespace: true, cache: cache, resultCache: resultCache,
-            clock: clock, highlight: highlighter.callback())
+            files: files(names), client: client, hideWhitespace: true, publication: publication, cache: cache,
+            resultCache: resultCache, clock: clock, highlight: highlighter.callback())
         return (assembler, log, { Task { await assembler.run { await log.append($0) } } })
     }
 
@@ -318,6 +319,46 @@ struct ChangesetAssemblerTests {
         await task.value
         #expect(await client.peakInFlightReads == 3, "and the remaining files wait their turn")
         #expect(await log.lastDocument?.sections.count == 6)
+    }
+
+    // MARK: Final-only publication
+
+    /// A final-only load never publishes a prefix, however long an early prefix sits
+    /// ready: the one revision carries every section, with no cooldown ever started.
+    @Test func finalOnlyPublishesOnceWhenEveryFileIsDone() async {
+        let client = StubRepoClient(files: [])
+        await client.hold(worktree: ["c.swift"])
+        let clock = ManualClock()
+        let (assembler, log, run) = assemble(
+            ["a.swift", "b.swift", "c.swift"], client: client, clock: clock, publication: .finalOnly)
+        let task = run()
+
+        #expect(await eventually { await assembler.completedCount == 2 })
+        #expect(await log.isEmpty, "the ready [a, b] prefix is not published")
+        #expect(clock.sleeperCount == 0, "and no cooldown was started")
+
+        await client.release(worktree: "c.swift")
+        await task.value
+        let documents = await log.documents
+        #expect(documents.count == 1)
+        #expect(documents[0].document.revision == 1)
+        #expect(documents[0].document.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift"])
+        #expect(documents[0].completed == 3)
+        #expect(documents[0].total == 3)
+        if let first = documents.first { expectMatchingStyles(first.document, first.styles) }
+    }
+
+    @Test func finalOnlyCancelledPublishesNothing() async {
+        let client = StubRepoClient(files: [])
+        await client.hold(worktree: ["a.swift"])
+        let (_, log, run) = assemble(["a.swift"], client: client, publication: .finalOnly)
+        let task = run()
+
+        #expect(await eventually { await client.waitingWorktreePaths.contains("a.swift") })
+        task.cancel()
+        await client.release(worktree: "a.swift")
+        await task.value
+        #expect(await log.isEmpty)
     }
 
     // MARK: Styles
