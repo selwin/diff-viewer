@@ -35,6 +35,20 @@ actor StubRepoClient: RepoClient {
     private var stubbedHeadState: HeadState = .named("main")
     private var failsHeadState = false
     private(set) var headStateCalls = 0
+    private var stubbedLocalBranches: [String] = ["main"]
+    private var failsLocalBranches = false
+    private var holdsLocalBranches = false
+    private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
+    private(set) var localBranchesCalls = 0
+    /// Every branch a switch was asked for, in order, whether or not it succeeded.
+    private(set) var switchBranchCalls: [String] = []
+    private var failsSwitchBranch = false
+    private var holdsSwitchBranch = false
+    private var heldSwitchBranch: [CheckedContinuation<Void, Never>] = []
+    /// What HEAD becomes once a switch runs, even one that then fails: a post-checkout
+    /// hook fails after git has already moved HEAD. Nil leaves the state alone.
+    private var headStateAfterSwitch: HeadState?
+    private var headAfterSwitch: String??
     private var commits: [CommitSummary] = []
     /// Files each commit changed, by sha.
     private var commitFiles: [String: [ChangedFile]] = [:]
@@ -211,6 +225,64 @@ actor StubRepoClient: RepoClient {
         headStateCalls += 1
         if failsHeadState { throw ProcessError.failed(command: "git symbolic-ref", status: 128, stderr: "gone") }
         return stubbedHeadState
+    }
+
+    // MARK: Branches
+
+    func set(localBranches names: [String]) { stubbedLocalBranches = names }
+    func fail(localBranches on: Bool) { failsLocalBranches = on }
+    /// Suspends `localBranches` after it records the call.
+    func holdLocalBranches(_ on: Bool) { holdsLocalBranches = on }
+    var heldLocalBranchesCount: Int { heldLocalBranches.count }
+    func releaseLocalBranches() {
+        let waiting = heldLocalBranches
+        heldLocalBranches = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Releases the newest held branches read, so completion order can be chosen.
+    func releaseLastLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeLast().resume() } }
+
+    /// Makes `switchBranch` throw, after recording the call and moving HEAD.
+    func fail(switchBranch on: Bool) { failsSwitchBranch = on }
+    /// Suspends `switchBranch` after it records the call.
+    func holdSwitchBranch(_ on: Bool) { holdsSwitchBranch = on }
+    var heldSwitchBranchCount: Int { heldSwitchBranch.count }
+    func releaseSwitchBranch() {
+        let waiting = heldSwitchBranch
+        heldSwitchBranch = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// The head state a switch leaves behind, applied whether or not the switch fails.
+    func set(headStateAfterSwitch state: HeadState?) { headStateAfterSwitch = state }
+    /// The head sha a switch leaves behind, applied whether or not the switch fails.
+    func set(headAfterSwitch sha: String?) { headAfterSwitch = .some(sha) }
+
+    func localBranches() async throws -> [String] {
+        localBranchesCalls += 1
+        // Snapshot before suspending, the way `status()` does: a held read reports what
+        // the repository looked like when it was asked.
+        let snapshot = stubbedLocalBranches
+        if holdsLocalBranches {
+            await withCheckedContinuation { heldLocalBranches.append($0) }
+        }
+        if failsLocalBranches {
+            throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone")
+        }
+        return snapshot
+    }
+
+    func switchBranch(to branch: String) async throws {
+        switchBranchCalls.append(branch)
+        if holdsSwitchBranch {
+            await withCheckedContinuation { heldSwitchBranch.append($0) }
+        }
+        // HEAD moves before the failure check: a post-checkout hook fails after git has
+        // already switched, and that is the case a caller has to refresh through.
+        if let headStateAfterSwitch { stubbedHeadState = headStateAfterSwitch }
+        if let headAfterSwitch { head = headAfterSwitch }
+        if failsSwitchBranch {
+            throw ProcessError.failed(command: "git switch", status: 1, stderr: "post-checkout hook failed")
+        }
     }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {

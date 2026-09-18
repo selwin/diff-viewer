@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
     @Environment(Preferences.self) private var preferences
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -16,7 +17,6 @@ struct ContentView: View {
             detail
         }
         .navigationTitle(windowState.title)
-        .navigationSubtitle(windowState.subtitle)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
             let coordinator = services.coordinator
@@ -27,7 +27,35 @@ struct ContentView: View {
             }
             return true
         }
+        // The window title still names the tab and the Window menu; only the toolbar's
+        // copy goes, so the pickers can follow the name. `.navigation` is the one placement
+        // on the leading side, and it sits before the toolbar's own title: `.automatic`,
+        // `.secondaryAction`, `.principal` and `.toolbar(id:)` items all land on the
+        // trailing side next to the diff buttons.
+        .toolbar(removing: .title)
         .toolbar {
+            // Xcode-scheme-picker style: the repository, what is checked out, and what the
+            // panes compare.
+            ToolbarItem(placement: .navigation) {
+                Text(windowState.title)
+                    .font(.headline)
+                    // The title the toolbar drew dimmed with the window; this one has to.
+                    .foregroundStyle(appearsActive ? .primary : .tertiary)
+            }
+            // A bare name, not a glass pill.
+            .sharedBackgroundVisibility(.hidden)
+            // One item, so the toolbar draws one capsule around both: menus in a
+            // `ToolbarItemGroup` or a `ControlGroup` each get their own.
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 4) {
+                    BranchPickerView()
+                    ScopePickerView()
+                }
+            }
+            // The toolbar's title carried the flexible space that kept the buttons on the
+            // trailing edge; without it they close up behind the pickers. `ToolbarSpacer`
+            // is ignored here, a `Spacer` item is not.
+            ToolbarItem(placement: .primaryAction) { Spacer() }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     windowState.previousChange()

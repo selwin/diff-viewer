@@ -4,6 +4,9 @@ A native macOS 26 app for viewing git diffs side by side.
 
 - **Commit picker** at the top of the sidebar: show the working tree, as always, or pick a
   commit from the branch's history and see what it changed against its first parent.
+- **Title bar pickers** next to the repository name: a branch picker that switches to
+  another local branch (`git switch --no-guess`; git's refusal shows as an alert), and a
+  second face on the commit picker.
 - **All changes**, selected by default: every changed file's hunks stacked in one
   side-by-side scroll, each under a header with its kind badge, name, `+12 −4` and
   language. Line numbers restart per file and ⌘↓ / ⌘↑ walk changes across files.
@@ -90,8 +93,10 @@ listed individually. The list holds 50 commits at a time, with Load More below i
 follows the branch you check out. A commit's diffs cannot change, so nothing about that
 view reloads until HEAD moves.
 
-The window subtitle, under the repository name, names the branch HEAD is on, or reads
-`detached at <sha>` on a detached HEAD, and follows a checkout made in the terminal.
+The branch picker in the title bar names the branch HEAD is on, or reads
+`Detached <sha>` on a detached HEAD, and follows a checkout made in the terminal. Choosing
+another local branch switches to it. While a switch runs, Commit and the actions that
+modify repository files are disabled; Reveal, Open, and Copy Path stay available.
 
 **All changes**, the first row of the sidebar, is selected whenever a list arrives. It
 shows every file in the list in sidebar order, streaming in as each diff finishes

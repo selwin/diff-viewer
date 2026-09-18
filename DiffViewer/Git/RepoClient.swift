@@ -19,6 +19,8 @@ protocol RepoClient: Sendable {
     /// Where HEAD points: a branch name, or the commit a detached HEAD sits on. An
     /// unborn branch still has a name.
     func headState() async throws -> HeadState
+    /// Local branch names sorted by ref name. An unborn branch has no ref and is omitted.
+    func localBranches() async throws -> [String]
     /// The branch's commits, newest first, following first parents only.
     ///
     /// Takes the revision to start from rather than reading HEAD itself: the caller
@@ -60,4 +62,7 @@ protocol RepoClient: Sendable {
     /// Throws git's and the hooks' diagnostics when it refuses (nothing staged, a failing
     /// hook, no identity).
     func commit(message: String) async throws
+    /// Switches to an existing local branch without creating a tracking branch. Throws
+    /// git's and the hooks' diagnostics when it refuses or a post-checkout hook fails.
+    func switchBranch(to branch: String) async throws
 }

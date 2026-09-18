@@ -29,7 +29,7 @@ import Testing
             url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("DiffViewerGitTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            client = GitClient(repoRoot: url, environment: Self.environment, resolveCommitEnvironment: { [:] })
+            client = GitClient(repoRoot: url, environment: Self.environment, resolveHookEnvironment: { [:] })
         }
 
         deinit {
@@ -314,6 +314,191 @@ import Testing
         await #expect(throws: (any Error).self) {
             try await GitClient(repoRoot: directory).headSha()
         }
+    }
+
+    // MARK: Branches
+
+    /// A repository with one commit on `main` and a `side` branch whose `file.txt` differs.
+    private func twoBranchRepo() async throws -> Repo {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("file.txt", "main\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["checkout", "-b", "side"])
+        try repo.write("file.txt", "side\n")
+        try await repo.commit("Side commit")
+        try await repo.git(["checkout", "main"])
+        return repo
+    }
+
+    /// Installs `script` as `post-checkout` in a hooks directory of its own and points the
+    /// repository at it, the way the commit hook test does.
+    private func installPostCheckoutHook(_ script: String, in repo: Repo) async throws {
+        let hooks = repo.url.appendingPathComponent(".git/test-hooks", isDirectory: true)
+        try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true)
+        let hook = hooks.appendingPathComponent("post-checkout")
+        try Data(script.utf8).write(to: hook)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        try await repo.git(["config", "core.hooksPath", hooks.path])
+    }
+
+    /// `%(refname:short)` would answer `heads/main` here, to stay unambiguous with the
+    /// tag, and that is not a branch name anyone wants in the picker.
+    @Test func localBranchesListsHeadsWithoutThePrefix() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["branch", "zeta"])
+        try await repo.git(["branch", "feature/x"])
+        try await repo.git(["tag", "main"])
+
+        #expect(try await repo.client.localBranches() == ["feature/x", "main", "zeta"])
+    }
+
+    /// git allows a Unicode line separator inside a ref name and a non-breaking space at
+    /// its end; splitting on `isNewline` or trimming whitespace would corrupt both.
+    @Test func branchNamesWithUnicodeSeparatorsRoundTrip() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        let names = ["a\u{2028}b", "nbsp\u{00A0}"]
+        for name in names {
+            try await repo.git(["branch", name])
+        }
+
+        let listed = try await repo.client.localBranches()
+        for name in names {
+            #expect(listed.contains(name))
+            try await repo.client.switchBranch(to: name)
+            #expect(try await repo.client.headState() == .named(name))
+        }
+    }
+
+    @Test func localBranchesOfAnUnbornRepositoryIsEmpty() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        #expect(try await repo.client.localBranches() == [])
+    }
+
+    @Test func switchBranchMovesHead() async throws {
+        let repo = try await twoBranchRepo()
+        try await repo.client.switchBranch(to: "side")
+        #expect(try await repo.client.headState() == .named("side"))
+    }
+
+    @Test func switchBranchFromDetachedHeadReattaches() async throws {
+        let repo = try await twoBranchRepo()
+        try await repo.git(["checkout", "--detach"])
+        try await repo.client.switchBranch(to: "main")
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
+    @Test func switchBranchToAnUnknownNameThrows() async throws {
+        let repo = try await twoBranchRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.switchBranch(to: "nowhere")
+        }
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
+    /// Git refuses to overwrite an uncommitted edit, and the refusal leaves both HEAD and
+    /// the edit exactly where they were.
+    @Test func switchBranchRefusesConflictingLocalChanges() async throws {
+        let repo = try await twoBranchRepo()
+        try repo.write("file.txt", "edited on main\n")
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.switchBranch(to: "side")
+        }
+        #expect(try await repo.client.headState() == .named("main"))
+        #expect(try Data(contentsOf: repo.url.appendingPathComponent("file.txt")) == Data("edited on main\n".utf8))
+    }
+
+    /// Without `--no-guess`, `git switch feature` would quietly create a local `feature`
+    /// tracking `origin/feature`. A stale menu entry must not do that.
+    @Test func switchBranchNeverCreatesATrackingBranch() async throws {
+        let remote = try Repo()
+        try await remote.initialize()
+        try remote.write("a.txt", "one\n")
+        try await remote.commit("Root commit")
+        try await remote.git(["branch", "feature"])
+
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["remote", "add", "origin", remote.url.path])
+        try await repo.git(["fetch", "origin"])
+        #expect(try await repo.git(["rev-parse", "--verify", "refs/remotes/origin/feature"]) != "")
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.switchBranch(to: "feature")
+        }
+        #expect(try await repo.client.localBranches() == ["main"])
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
+    /// Git would read the name as an option rather than a branch.
+    @Test func switchBranchRejectsANameThatLooksLikeAnOption() async throws {
+        let repo = try await twoBranchRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.switchBranch(to: "-c")
+        }
+        #expect(try await repo.client.localBranches() == ["main", "side"])
+        #expect(try await repo.client.headState() == .named("main"))
+    }
+
+    /// A post-checkout hook sees the login shell's PATH, and a caller's own overrides still
+    /// beat it, the same as a commit hook.
+    @Test func switchBranchHooksSeeTheInjectedEnvironment() async throws {
+        let repo = try await twoBranchRepo()
+        let probe = repo.url.appendingPathComponent(".git/probe.txt")
+        try await installPostCheckoutHook(
+            """
+            #!/bin/sh
+            printf '%s\\n%s\\n' "$PATH" "$DIFFVIEWER_HOOK" > "$DIFFVIEWER_HOOK_FILE"
+
+            """, in: repo)
+
+        let resolvedPath = "/hook/path:/usr/bin:/bin"
+        let client = GitClient(
+            repoRoot: repo.url,
+            environment: Repo.environment.merging(
+                ["DIFFVIEWER_HOOK": "override", "DIFFVIEWER_HOOK_FILE": probe.path]
+            ) { $1 },
+            resolveHookEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_HOOK": "resolved"] }
+        )
+
+        try await client.switchBranch(to: "side")
+
+        let lines = try String(contentsOf: probe, encoding: .utf8).split(separator: "\n").map(String.init)
+        // Git puts its own exec path in front of PATH for hooks, so the tail is what was handed in.
+        #expect(lines.count == 2, "\(lines)")
+        #expect(lines.first?.hasSuffix(":" + resolvedPath) == true, "\(lines)")
+        #expect(lines.last == "override", "\(lines)")
+    }
+
+    /// A post-checkout hook runs after HEAD has moved and cannot undo it; its exit status
+    /// becomes git's, so the switch both happened and threw, with the hook's own words.
+    @Test func aFailingPostCheckoutHookThrowsWithHeadAlreadyMoved() async throws {
+        let repo = try await twoBranchRepo()
+        try await installPostCheckoutHook(
+            """
+            #!/bin/sh
+            echo 'hook says no'
+            exit 1
+
+            """, in: repo)
+
+        do {
+            try await repo.client.switchBranch(to: "side")
+            Issue.record("a failing post-checkout hook should fail the switch")
+        } catch {
+            #expect(error.localizedDescription.contains("hook says no"), "\(error.localizedDescription)")
+        }
+        #expect(try await repo.client.headState() == .named("side"))
     }
 
     // MARK: Contents

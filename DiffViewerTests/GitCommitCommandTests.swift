@@ -270,7 +270,7 @@ import Testing
             environment: GitCommandTests.Repo.environment.merging(
                 ["DIFFVIEWER_PROBE": "override", "DIFFVIEWER_PROBE_FILE": probe.path]
             ) { $1 },
-            resolveCommitEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_PROBE": "resolved"] }
+            resolveHookEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_PROBE": "resolved"] }
         )
 
         try await client.commit(message: "Change a")

@@ -31,13 +31,28 @@ extension WindowState {
         return historyErrorMessage == nil ? .empty : .failed
     }
 
-    /// The window subtitle: the current branch, or where a detached HEAD sits. The
-    /// selected file's path is not here — the detail header already shows it, larger.
-    var subtitle: String {
+    /// The branch picker's face: the current branch, or where a detached HEAD sits.
+    var branchDisplayTitle: String {
         switch headState {
         case let .named(name)?: name
-        case let .detached(sha)?: "detached at " + sha.prefix(7)
+        case let .detached(sha)?: "Detached " + sha.prefix(7)
         case nil: ""
+        }
+    }
+
+    /// The branch picker's selection: nil while HEAD is detached or unread.
+    var currentBranchName: String? {
+        if case let .named(name)? = headState { return name }
+        return nil
+    }
+
+    /// The scope picker's face: the working tree, or the selected commit's subject and
+    /// short SHA. The SHA alone when the commit's summary is not held.
+    var scopeDisplayTitle: String {
+        switch scope {
+        case .workingTree: "Working Tree"
+        case let .commit(ref):
+            if let subject = selectedCommit?.subject { "\(subject) · \(ref.shortSha)" } else { ref.shortSha }
         }
     }
 }

@@ -3,7 +3,8 @@ import AppKit
 /// Running one sidebar context-menu action over the rows it was invoked on.
 ///
 /// An extension in its own file: the class body is long enough, and these, with the
-/// commit extension, are the only places in the app that write to the repository.
+/// commit and branch-switch extensions, are the only places in the app that write to
+/// the repository.
 /// Everything they need from the class is `internal`, apart from the pending selection,
 /// which `restoreSelectionAfterNextRefresh` hands over.
 ///
@@ -26,6 +27,8 @@ extension WindowState {
         let validatedFiles = Self.validatedFiles(requestedFiles, against: files)
         guard !validatedFiles.isEmpty else { return }
         if action.isRepositoryWrite {
+            // Reject new repository writes until the branch switch finishes.
+            guard !isSwitchingBranch else { return }
             await performWrite(action, on: validatedFiles, session: session)
         } else {
             performHarmless(action, on: validatedFiles)

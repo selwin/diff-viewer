@@ -17,6 +17,15 @@ struct SidebarView: View {
                         ProgressView().controlSize(.small)
                         Text("Loading…").foregroundStyle(.secondary)
                     }
+                } else if windowState.listReadFailed {
+                    // The list was emptied for a re-read that then threw: "no changes"
+                    // would describe a working tree nobody has read.
+                    HStack(spacing: 6) {
+                        Text("Couldn't load changes").foregroundStyle(.secondary)
+                        Button("Retry") { Task { await windowState.refresh() } }
+                            .buttonStyle(.link)
+                            .controlSize(.small)
+                    }
                 } else {
                     Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
                         .foregroundStyle(.secondary)
@@ -106,8 +115,10 @@ struct SidebarView: View {
             }
             let writes = actions.filter(\.isRepositoryWrite)
             let harmless = actions.filter { !$0.isRepositoryWrite }
+            // A switch in progress refuses writes anyway; greying them out says so first.
             ForEach(writes, id: \.self) { action in
                 Button(action.title(for: files)) { run(action, on: files) }
+                    .disabled(windowState.isSwitchingBranch)
             }
             // Separate what changes the repository from what only looks at the files.
             if !writes.isEmpty, !harmless.isEmpty {
@@ -165,7 +176,7 @@ private struct FileRow: View {
     }
 }
 
-/// Shared with the scope button in `CommitPickerView`, which sums the list it scopes.
+/// The +/− counts after a file row, and the whole list's total on the All changes row.
 struct ChurnLabel: View {
     let stats: LineStats?
     /// A selected row inverts its text to white; the counts follow the file name
