@@ -140,13 +140,12 @@ final class SideBySideContainerView: NSView {
         }
     }
 
-    /// The ordinary path. When the same file is recomputed with identical rows (e.g. a
-    /// refresh that changed nothing), expansions are kept; otherwise they reset. The
-    /// viewport is re-anchored on the new-side source line that was at the top, so an
-    /// edit elsewhere in the file does not move the reader. A changeset never translates
-    /// an anchor: earlier files shift every later row, so the old index means nothing.
+    /// The ordinary path. Expansions survive only when the rows are unchanged. The viewport
+    /// is restored by source line: within the file for a single file, and by file id then
+    /// source line through `ChangesetAnchor` for a replaced changeset. Both are approximate.
     private func install(_ content: PaneContent, previousAnchor: Anchor?) {
         let previousDocument = document
+        let previousChangeset = changeset
         let previousWasChangeset = changeset != nil
         let incoming = content.document
         let sameRows = previousDocument.map { $0.rows == incoming.rows } ?? false
@@ -171,6 +170,11 @@ final class SideBySideContainerView: NSView {
         var anchor: Anchor?
         if let previousAnchor, let previousDocument, !isChangeset, !previousWasChangeset {
             anchor = Self.translate(previousAnchor, from: previousDocument, to: incoming)
+        } else if let previousAnchor, let previousChangeset, let incomingChangeset = changeset {
+            anchor = ChangesetAnchor.translate(
+                displayIndex: previousAnchor.displayIndex, from: previousChangeset, to: incomingChangeset
+            )
+            .map { Anchor(documentRow: 0, displayIndex: $0, offset: previousAnchor.offset) }
         }
         refold(anchor: anchor)
     }
@@ -386,8 +390,9 @@ final class SideBySideContainerView: NSView {
 }
 
 /// SwiftUI wrapper. One instance lives per selection, so a document update is either a
-/// recomputation of the same file, which re-anchors on the row that was at the top, or the
-/// next revision of the same changeset, which leaves the viewport untouched.
+/// recomputation of the same file, which re-anchors on the row that was at the top, an
+/// appended revision of the same changeset, which leaves the viewport untouched, or a
+/// replaced changeset, which re-anchors on the file and line that was at the top.
 struct SideBySideView: NSViewRepresentable {
     let content: PaneContent
     var styles: DocumentStyles?
