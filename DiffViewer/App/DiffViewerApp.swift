@@ -157,6 +157,10 @@ struct RepositoryCommands: Commands {
                 }
             }
             .disabled(preferences.recentRepositoryRoots.isEmpty)
+            Divider()
+            Button("Commit") { Task { await windowState?.commit() } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!(windowState?.canCommit ?? false))
         }
         CommandGroup(after: .toolbar) {
             Button("Refresh") { Task { await windowState?.refresh() } }

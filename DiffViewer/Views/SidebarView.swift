@@ -70,6 +70,18 @@ struct SidebarView: View {
                 .background(.bar)
             }
         }
+        // The box belongs to the working tree: a commit already on show is history.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !windowState.isEmpty, windowState.scope == .workingTree {
+                VStack(spacing: 0) {
+                    Divider()
+                    CommitBoxView()
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                }
+                .background(.bar)
+            }
+        }
     }
 
     /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
