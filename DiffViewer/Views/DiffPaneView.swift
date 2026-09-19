@@ -142,6 +142,8 @@ final class DiffPaneView: NSView {
 
     /// Owned here because stored properties cannot live in the input extension.
     var trackingArea: NSTrackingArea?
+    /// Clip origin at the last horizontal-scroll redraw; owned by `SideBySideView`.
+    var lastClipX: CGFloat = 0
 
     // MARK: - Metrics
 

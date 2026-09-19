@@ -87,7 +87,6 @@ final class SideBySideContainerView: NSView {
             scroll.drawsBackground = true
             scroll.backgroundColor = DiffTheme.background
             scroll.contentView.postsBoundsChangedNotifications = true
-            scroll.contentView.copiesOnScroll = false
             scroll.verticalScrollElasticity = .allowed
             scroll.horizontalScrollElasticity = .none
             scroll.contentView.drawsBackground = false
@@ -116,10 +115,21 @@ final class SideBySideContainerView: NSView {
 
     @objc private func clipBoundsChanged(_ note: Notification) {
         if (note.object as AnyObject?) === leftScroll.contentView {
+            redrawIfScrolledHorizontally(leftScroll, pane: leftPane)
             sync(from: leftScroll, to: rightScroll)
         } else {
+            redrawIfScrolledHorizontally(rightScroll, pane: rightPane)
             sync(from: rightScroll, to: leftScroll)
         }
+    }
+
+    /// The gutter is drawn at the visible left edge, and a layer-backed clip view only
+    /// redraws the strip a scroll exposes, so a horizontal scroll must redraw the pane.
+    private func redrawIfScrolledHorizontally(_ scroll: NSScrollView, pane: DiffPaneView) {
+        let x = scroll.contentView.bounds.origin.x
+        guard x != pane.lastClipX else { return }
+        pane.lastClipX = x
+        pane.needsDisplay = true
     }
 
     override func viewDidChangeEffectiveAppearance() {
