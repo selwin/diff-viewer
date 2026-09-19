@@ -82,7 +82,7 @@ struct ScopePickerView: View {
 
     private var icon: String {
         switch windowState.scope {
-        case .workingTree: "folder"
+        case .workingTree: "circle.and.line.horizontal"
         case .commit: "smallcircle.filled.circle"
         }
     }
@@ -96,8 +96,8 @@ struct ScopePickerView: View {
     }
 }
 
-/// The face both title bar pop-ups wear: a bordered one-line box at toolbar control
-/// height, like a System Settings pop-up button. Plain data in, so it does not depend on
+/// The face both title bar pop-ups wear: an outlined one-line box at toolbar control
+/// height with no fill, so it sits flat on the title bar. Plain data in, so it does not depend on
 /// `WindowState`.
 private struct TitleBarPickerLabel: View {
     let glyph: String
@@ -109,6 +109,7 @@ private struct TitleBarPickerLabel: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: glyph)
+                .font(.caption)
                 .foregroundStyle(.secondary)
             Text(title)
                 .lineLimit(1)
@@ -120,7 +121,6 @@ private struct TitleBarPickerLabel: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
         // The whole box opens the menu, not only the text.
         .contentShape(Rectangle())
