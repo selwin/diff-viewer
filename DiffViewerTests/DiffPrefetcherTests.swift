@@ -60,6 +60,7 @@ struct TaggedClient: RepoClient {
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] { [] }
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
+    func objectSizes(of specs: [String]) async throws -> [Int64?] { specs.map { _ in nil } }
     func indexContents(of path: String) async throws -> Data? { nil }
     func headContents(of path: String) async throws -> Data? { nil }
     func contents(of path: String, at revision: String) async throws -> Data { Data() }

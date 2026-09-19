@@ -14,14 +14,17 @@ struct LineStatsTotalTests {
     }
 
     @Test func binaryOnlyHasNoTotal() {
-        let files = [changedFile("a.png").with(lineStats: .binary), changedFile("b.png").with(lineStats: .binary)]
+        let files = [
+            changedFile("a.png").with(lineStats: .binary(nil)),
+            changedFile("b.png").with(lineStats: .binary(nil)),
+        ]
         #expect(LineStats.total(of: files) == nil)
     }
 
     @Test func mixedListSumsOnlyCountedEntries() {
         let files = [
             changedFile("a.swift").with(lineStats: .counted(added: 3, deleted: 1)),
-            changedFile("b.png").with(lineStats: .binary),
+            changedFile("b.png").with(lineStats: .binary(nil)),
             changedFile("c.swift"),
             changedFile("d.swift").with(lineStats: .counted(added: 0, deleted: 7)),
         ]

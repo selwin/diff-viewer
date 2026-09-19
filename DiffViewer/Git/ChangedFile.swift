@@ -2,10 +2,20 @@ import Foundation
 
 /// How many lines a file gained and lost. `nil` on a `ChangedFile` means unknown
 /// (no numstat row, an unmerged path, or a file we could not read), which is not
-/// the same as `.binary`, which is git saying the file has no line counts.
+/// the same as `.binary`, which is git saying the file has no line counts; a binary
+/// file carries its byte counts instead, when they could be read.
 enum LineStats: Hashable, Sendable {
     case counted(added: Int, deleted: Int)
-    case binary
+    case binary(BinarySizes?)
+}
+
+/// The byte counts of a binary file's two sides. A nil side means that side does not
+/// exist (an added or deleted file); a nil `BinarySizes` on `LineStats.binary` means the
+/// counts could not be read. Git sides count the stored blob and the worktree side the
+/// file on disk, so the two can differ under a clean/smudge filter.
+struct BinarySizes: Hashable, Sendable {
+    let oldByteCount: Int64?
+    let newByteCount: Int64?
 }
 
 extension LineStats {
@@ -106,7 +116,7 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     let originalPath: String?
     let kind: Kind
     let area: Area
-    /// Added/deleted line counts, or nil while unknown.
+    /// Added/deleted line counts, or a binary file's byte counts, or nil while unknown.
     var lineStats: LineStats?
     /// What the diff reads for this file, or nil for a commit, whose content cannot change.
     var fingerprint: DiffInputFingerprint?

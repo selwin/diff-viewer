@@ -50,7 +50,7 @@ struct ChangesetChurnTests {
     @Test func uncountedStatsContributeNothing() {
         let file = changedFile("a.swift")
         let sections = [section(file, outcome: .tooLarge)]
-        #expect(total(sections, files: [file.with(lineStats: .binary)]) == (added: 0, deleted: 0))
+        #expect(total(sections, files: [file.with(lineStats: .binary(nil))]) == (added: 0, deleted: 0))
         #expect(total(sections, files: [file.with(lineStats: nil)]) == (added: 0, deleted: 0))
     }
 

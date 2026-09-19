@@ -34,6 +34,9 @@ protocol RepoClient: Sendable {
     /// index → worktree for `.unstaged`, first parent → commit for `.commit`. Untracked
     /// files never appear.
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry]
+    /// The stored size of each object, one entry per spec in order: a blob id or a
+    /// `<rev>:<path>`. Nil where git has no such object. An empty list never launches git.
+    func objectSizes(of specs: [String]) async throws -> [Int64?]
     /// Contents of `path` in the index, or nil if the path is not in the index.
     func indexContents(of path: String) async throws -> Data?
     /// Contents of `path` at HEAD, or nil if the path does not exist there.

@@ -176,24 +176,36 @@ private struct FileRow: View {
     }
 }
 
-/// The +/− counts after a file row, and the whole list's total on the All changes row.
+/// The +/− counts after a file row (byte counts for a binary file), and the whole list's
+/// total on the All changes row.
 struct ChurnLabel: View {
     let stats: LineStats?
     /// A selected row inverts its text to white; the counts follow the file name
     /// there and let the +/− signs carry the meaning.
     @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.locale) private var locale
 
     var body: some View {
         switch stats {
         case nil:
             EmptyView()
-        case .binary:
-            Text("binary")
+        case .binary(nil):
+            binaryFallback
+        case let .binary(sizes?):
+            if let presentation = BinaryChurnText.presentation(for: sizes, locale: locale) {
+                HStack(spacing: 4) {
+                    Text(presentation.primaryText).foregroundStyle(primaryStyle(for: presentation.kind))
+                    if let delta = presentation.deltaText {
+                        Text(delta).foregroundStyle(deltaStyle(for: presentation.kind))
+                    }
+                }
                 .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.tertiary)
                 .fixedSize()
                 .lineLimit(1)
-                .help("Binary file")
+                .help(presentation.helpText)
+            } else {
+                binaryFallback
+            }
         case .counted(let added, let deleted):
             // A side that did not change is left out, so a pure addition reads "+12"
             // rather than "+12 −0"; a file with no churn at all shows nothing.
@@ -218,6 +230,33 @@ struct ChurnLabel: View {
 
     private var deletedStyle: AnyShapeStyle {
         prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.red)
+    }
+
+    /// A modified binary's size is context, not churn; only the delta is coloured.
+    private var sizeStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+    }
+
+    /// Byte counts that could not be read: still a binary, just an unsized one.
+    private var binaryFallback: some View {
+        Text("binary")
+            .font(.system(.callout, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .fixedSize()
+            .lineLimit(1)
+            .help("Binary file")
+    }
+
+    private func primaryStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
+        switch kind {
+        case .added: addedStyle
+        case .deleted: deletedStyle
+        case .grown, .shrunk, .sameSize: sizeStyle
+        }
+    }
+
+    private func deltaStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
+        kind == .shrunk ? deletedStyle : addedStyle
     }
 
     private func countedHelpText(added: Int, deleted: Int) -> String {

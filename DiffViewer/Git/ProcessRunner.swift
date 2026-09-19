@@ -47,59 +47,63 @@ final class ProcessGauge: Sendable {
 }
 
 /// Runs a subprocess to completion off the main thread, draining stdout and stderr
-/// concurrently so large outputs never deadlock on a full pipe.
+/// concurrently so large outputs never deadlock on a full pipe. `standardInput` is a
+/// file to feed the process; nil gives it `/dev/null`.
 enum ProcessRunner {
     static func run(
         _ executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
         environment: [String: String] = [:],
+        standardInput: URL? = nil,
         qualityOfService: QualityOfService = .userInitiated,
         gauge: ProcessGauge? = nil
     ) async throws -> ProcessResult {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
-                let process = Process()
-                process.executableURL = executable
-                process.arguments = arguments
-                process.currentDirectoryURL = currentDirectory
-                process.qualityOfService = qualityOfService
-                var env = ProcessInfo.processInfo.environment
-                for (key, value) in environment { env[key] = value }
-                process.environment = env
+                // Launches, drains both pipes, and waits for the exit. Blocks this thread.
+                func launch(standardInput: FileHandle?) throws -> ProcessResult {
+                    let process = Process()
+                    process.executableURL = executable
+                    process.arguments = arguments
+                    process.currentDirectoryURL = currentDirectory
+                    process.qualityOfService = qualityOfService
+                    var env = ProcessInfo.processInfo.environment
+                    for (key, value) in environment { env[key] = value }
+                    process.environment = env
 
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-                process.standardInput = FileHandle.nullDevice
+                    let stdoutPipe = Pipe()
+                    let stderrPipe = Pipe()
+                    process.standardOutput = stdoutPipe
+                    process.standardError = stderrPipe
+                    process.standardInput = standardInput ?? FileHandle.nullDevice
 
-                do {
                     try process.run()
-                } catch {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                gauge?.launched()
+                    gauge?.launched()
 
-                let group = DispatchGroup()
-                nonisolated(unsafe) var stderrData = Data()
-                group.enter()
-                DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
-                    stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                gauge?.exited()
-                group.wait()
+                    let group = DispatchGroup()
+                    nonisolated(unsafe) var stderrData = Data()
+                    group.enter()
+                    DispatchQueue.global(qos: qualityOfService.dispatchQoS).async {
+                        stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                        group.leave()
+                    }
+                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    gauge?.exited()
+                    group.wait()
 
-                continuation.resume(
-                    returning: ProcessResult(
-                        stdout: stdoutData,
-                        stderr: stderrData,
-                        status: process.terminationStatus
-                    ))
+                    return ProcessResult(stdout: stdoutData, stderr: stderrData, status: process.terminationStatus)
+                }
+
+                // The input handle is closed before the continuation resumes, so a caller
+                // may remove the file as soon as `run` returns.
+                let result = Result {
+                    let input = try standardInput.map { try FileHandle(forReadingFrom: $0) }
+                    defer { try? input?.close() }
+                    return try launch(standardInput: input)
+                }
+                continuation.resume(with: result)
             }
         }
     }
@@ -109,10 +113,12 @@ enum ProcessRunner {
         _ executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        standardInput: URL? = nil
     ) async throws -> ProcessResult {
         let result = try await run(
-            executable, arguments: arguments, currentDirectory: currentDirectory, environment: environment)
+            executable, arguments: arguments, currentDirectory: currentDirectory, environment: environment,
+            standardInput: standardInput)
         guard result.status == 0 else {
             let command = ([executable.lastPathComponent] + arguments).joined(separator: " ")
             throw ProcessError.failed(command: command, status: result.status, stderr: result.stderrString)

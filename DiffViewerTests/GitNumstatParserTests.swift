@@ -15,7 +15,7 @@ struct GitNumstatParserTests {
 
     @Test func binaryEntry() {
         let entries = GitNumstatParser.parse(data(["-\t-\tbin.dat"]))
-        #expect(entries == [NumstatEntry(path: "bin.dat", stats: .binary)])
+        #expect(entries == [NumstatEntry(path: "bin.dat", stats: .binary(nil))])
     }
 
     @Test func renameFramingReportsNewPath() {
@@ -48,7 +48,7 @@ struct GitNumstatParserTests {
         #expect(
             entries == [
                 NumstatEntry(path: "a.txt", stats: .counted(added: 1, deleted: 2)),
-                NumstatEntry(path: "b.bin", stats: .binary),
+                NumstatEntry(path: "b.bin", stats: .binary(nil)),
             ])
     }
 

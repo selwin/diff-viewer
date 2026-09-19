@@ -137,7 +137,7 @@ struct ChangesetBuilderTests {
     // MARK: Sections that contribute nothing
 
     @Test func nonTextSectionsAreEmptyAndCountFromNumstat() {
-        let binary = changedFile("logo.png").with(lineStats: .binary)
+        let binary = changedFile("logo.png").with(lineStats: .binary(nil))
         let identical = changedFile("same.swift")
         let failed = changedFile("gone.swift").with(lineStats: .counted(added: 3, deleted: 4))
         let tooLarge = changedFile("huge.json").with(lineStats: .counted(added: 10, deleted: 0))

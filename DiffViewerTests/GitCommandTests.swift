@@ -521,6 +521,59 @@ import Testing
         }
     }
 
+    // MARK: Object sizes
+
+    /// Every spec shape the joiner sends, in one batch: git answers each in order and
+    /// says `missing` for the ones it cannot resolve, exit 0.
+    @Test func objectSizesAnswerEverySpecInOrder() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "twelve bytes\n")
+        let sha = try await repo.commit("Root commit")
+        let oid = try await repo.git(["rev-parse", "HEAD:a.txt"])
+
+        let sizes = try await repo.client.objectSizes(of: [
+            oid, "HEAD:a.txt", ":a.txt", "\(sha):missing", String(repeating: "0", count: 40),
+        ])
+        #expect(sizes == [13, 13, 13, nil, nil])
+    }
+
+    @Test func objectSizesOfNothingNeverReachesGit() async throws {
+        let client = GitClient(repoRoot: URL(fileURLWithPath: "/nonexistent"), environment: Repo.environment)
+        #expect(try await client.objectSizes(of: []) == [])
+    }
+
+    /// The batch is line-framed, so a newline inside a spec would shift every later answer.
+    @Test func objectSizesRejectsASpecWithANewline() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.objectSizes(of: ["HEAD:a\nb.txt"])
+        }
+    }
+
+    @Test func objectSizesRejectsASpecWithACRLF() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.objectSizes(of: ["HEAD:a\r\nb.txt"])
+        }
+    }
+
+    /// Git strips a CR before the terminator, so "image.png\r" would be sized as "image.png"
+    /// with a correct answer count: only the pre-check can catch it.
+    @Test func objectSizesRejectsASpecEndingInACR() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("image.png", "abc")
+        try repo.write("image.png\r", "abcdefg")
+        _ = try await repo.commit("Two names")
+        #expect(try await repo.client.objectSizes(of: ["HEAD:image.png"]) == [3])
+        await #expect(throws: (any Error).self) {
+            try await repo.client.objectSizes(of: ["HEAD:image.png\r"])
+        }
+    }
+
     // MARK: File actions
 
     /// `git add` on a path that is gone records the deletion; nothing should be left

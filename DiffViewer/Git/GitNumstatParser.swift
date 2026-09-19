@@ -40,7 +40,7 @@ enum GitNumstatParser {
     }
 
     private static func stats(added: Substring, deleted: Substring) -> LineStats? {
-        if added == "-" && deleted == "-" { return .binary }
+        if added == "-" && deleted == "-" { return .binary(nil) }
         guard let added = Int(added), let deleted = Int(deleted) else { return nil }
         return .counted(added: added, deleted: deleted)
     }

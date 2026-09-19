@@ -33,6 +33,12 @@ actor StubRepoClient: RepoClient {
     private(set) var numstatCalls = 0
     /// Worktree contents by path, overriding the default "new \(path)" body.
     private var worktree: [String: Data?] = [:]
+    /// Object sizes by spec; an unlisted spec is one git has no object for.
+    private var objectSizesBySpec: [String: Int64] = [:]
+    private var failsObjectSizes = false
+    private var truncatesObjectSizes = false
+    /// Every `objectSizes` batch asked for, in order.
+    private(set) var objectSizesCalls: [[String]] = []
     private var head: String? = String(repeating: "a", count: 40)
     private var stubbedHeadState: HeadState = .named("main")
     private var failsHeadState = false
@@ -123,6 +129,21 @@ actor StubRepoClient: RepoClient {
         for continuation in waiting { continuation.resume() }
     }
     func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
+    /// The size `objectSizes` answers for `spec`; nil is what git says for a missing object.
+    func set(objectSize size: Int64?, for spec: String) { objectSizesBySpec[spec] = size }
+    /// Makes `objectSizes` throw, after recording the call.
+    func fail(objectSizes on: Bool) { failsObjectSizes = on }
+    /// Makes `objectSizes` answer one entry short, after recording the call.
+    func truncate(objectSizes on: Bool) { truncatesObjectSizes = on }
+
+    func objectSizes(of specs: [String]) async throws -> [Int64?] {
+        objectSizesCalls.append(specs)
+        if failsObjectSizes {
+            throw ProcessError.failed(command: "git cat-file", status: 128, stderr: "gone")
+        }
+        let sizes = specs.map { objectSizesBySpec[$0] }
+        return truncatesObjectSizes ? Array(sizes.dropLast()) : sizes
+    }
 
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
         numstatCalls += 1
@@ -881,7 +902,7 @@ struct WindowStateTests {
         let repo = h.repo("A", files: filesA)
         await repo.client.set(
             numstat: [NumstatEntry(path: "a1.swift", stats: .counted(added: 12, deleted: 4))], area: .unstaged)
-        await repo.client.set(numstat: [NumstatEntry(path: "a2.swift", stats: .binary)], area: .staged)
+        await repo.client.set(numstat: [NumstatEntry(path: "a2.swift", stats: .binary(nil))], area: .staged)
         let before = h.published.count
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count > before })
@@ -892,7 +913,7 @@ struct WindowStateTests {
             await eventually {
                 await state.files.first { $0.path == "a1.swift" }?.lineStats == .counted(added: 12, deleted: 4)
             })
-        #expect(state.files.first { $0.path == "a2.swift" }?.lineStats == .binary)
+        #expect(state.files.first { $0.path == "a2.swift" }?.lineStats == .binary(nil))
         #expect(state.files.map(\.id) == filesA.map(\.id))
         #expect(h.published.count == before + 1)
     }
@@ -1175,21 +1196,40 @@ struct WindowStateTests {
         let tracked = changedFile("img.png")
         let untracked = changedFile("new.png", kind: .untracked)
         let repo = h.repo("A", files: [tracked, untracked])
-        await repo.client.set(numstat: [NumstatEntry(path: "img.png", stats: .binary)], area: .unstaged)
+        await repo.client.set(numstat: [NumstatEntry(path: "img.png", stats: .binary(nil))], area: .unstaged)
         await repo.client.set(numstat: [], area: .staged)
         await repo.client.set(worktree: Data([0x89, 0x50, 0x4E, 0x47, 0, 1]), for: "new.png")
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count == 1 })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         await h.settleStats(state)
-        #expect(stats(of: "img.png", in: state) == .binary)
-        #expect(stats(of: "new.png", in: state) == .binary)
+        let untrackedSizes = LineStats.binary(BinarySizes(oldByteCount: nil, newByteCount: 6))
+        #expect(stats(of: "img.png", in: state) == .binary(nil))
+        #expect(stats(of: "new.png", in: state) == untrackedSizes)
         let numstats = await repo.client.numstatCalls
 
         await tick(h, repo.root, waitingFor: repo.client)
-        #expect(stats(of: "img.png", in: state) == .binary)
-        #expect(stats(of: "new.png", in: state) == .binary)
+        #expect(stats(of: "img.png", in: state) == .binary(nil))
+        #expect(stats(of: "new.png", in: state) == untrackedSizes)
         #expect(await repo.client.numstatCalls == numstats)
+    }
+
+    /// The "binary" fallback: git classified the file but its sizes could not be read, so
+    /// the label stays rather than dropping to a retryable failure.
+    @Test func aFailedSizeLookupKeepsTheBinaryLabel() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = h.repo("A", files: [changedFile("img.png")])
+        await repo.client.set(numstat: [NumstatEntry(path: "img.png", stats: .binary(nil))], area: .unstaged)
+        await repo.client.set(numstat: [], area: .staged)
+        await repo.client.fail(objectSizes: true)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await h.published.count == 1 })
+        await h.settleStats(state)
+
+        #expect(await repo.client.objectSizesCalls.count == 1)
+        #expect(stats(of: "img.png", in: state) == .binary(nil))
+        #expect(state.session?.lineStats.lastOutcome?.results["unstaged:img.png"] == .available(.binary(nil)))
     }
 
     @Test func whitespaceToggleStartsANewCount() async {

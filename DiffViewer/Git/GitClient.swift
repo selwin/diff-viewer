@@ -394,6 +394,45 @@ struct GitClient: RepoClient {
             templateDependency: templatePath.map { .configured(path: $0.path) } ?? .none)
     }
 
+    /// Sizes every spec in one `git cat-file --batch-check`. The specs go in through a
+    /// temporary file, which avoids coordinating a concurrent stdin writer.
+    func objectSizes(of specs: [String]) async throws -> [Int64?] {
+        if specs.isEmpty { return [] }
+        // The batch is line-framed: an LF inside a spec shifts every later answer, and git
+        // strips a CR before the terminator, so a trailing CR sizes the wrong path.
+        guard !specs.contains(where: Self.breaksLineFraming) else {
+            throw ProcessError.failed(command: "git cat-file", status: 128, stderr: "spec cannot be sent on one line")
+        }
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiffViewer-cat-file-\(UUID().uuidString)")
+        try (specs.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["cat-file", "--batch-check=%(objectsize)"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment,
+            standardInput: file
+        )
+        // One line per spec: a size, or `<spec> missing`. The trailing newline ends the
+        // last line rather than starting another.
+        var lines = result.stdoutString.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.last == "" { lines.removeLast() }
+        guard lines.count == specs.count else {
+            throw ProcessError.failed(
+                command: "git cat-file", status: 0,
+                stderr: "expected \(specs.count) answers, got \(lines.count)")
+        }
+        return lines.map { Int64($0) }
+    }
+
+    /// Whether one `cat-file --batch-check` line cannot carry `spec`. Checked on bytes:
+    /// Swift reads "\r\n" as one Character, which a search for "\n" would miss.
+    static func breaksLineFraming(_ spec: String) -> Bool {
+        spec.utf8.contains(0x0A) || spec.utf8.last == 0x0D
+    }
+
     /// Records the index using a temporary message file and git's strip cleanup mode. The
     /// file keeps the message out of a refusal's diagnostics; `strip` matches what an edited
     /// message gets in the editor flow.

@@ -47,11 +47,11 @@ struct LineStatsJoinerTests {
     @Test func binaryRowBecomesBinary() async {
         let client = StubRepoClient(files: [])
         let joined = await LineStatsJoiner.attach(
-            numstat: [.unstaged: [NumstatEntry(path: "bin.dat", stats: .binary)]],
+            numstat: [.unstaged: [NumstatEntry(path: "bin.dat", stats: .binary(nil))]],
             to: [changedFile("bin.dat")],
             client: client
         )
-        #expect(joined.first?.lineStats == .binary)
+        #expect(joined.first?.lineStats == .binary(nil))
     }
 
     @Test func firstRowWinsForDuplicatePaths() async {
@@ -104,8 +104,10 @@ struct LineStatsJoinerTests {
         #expect(await untrackedStats(Data()) == .counted(added: 0, deleted: 0))
     }
 
-    @Test func untrackedBinaryFileIsBinary() async {
-        #expect(await untrackedStats(Data([0x61, 0x00, 0x62])) == .binary)
+    @Test func untrackedBinaryFileIsBinaryWithItsByteCount() async {
+        #expect(
+            await untrackedStats(Data([0x61, 0x00, 0x62]))
+                == .binary(BinarySizes(oldByteCount: nil, newByteCount: 3)))
     }
 
     @Test func untrackedMissingFileStaysUnknown() async {
@@ -186,6 +188,271 @@ struct LineStatsJoinerTests {
         )
         #expect(stats(joined, "unstaged:locked.txt") == nil)
         #expect(stats(joined, "unstaged:readable.txt") == .counted(added: 2, deleted: 0))
+    }
+
+    // MARK: binary sizes
+
+    private typealias Source = LineStatsJoiner.BinarySizeSource
+
+    private let ref = CommitRef(sha: objectID("c"), shortSha: "c", firstParentSHA: objectID("p"))
+    private let rootRef = CommitRef(sha: objectID("root"), shortSha: "root", firstParentSHA: nil)
+
+    private func commitFile(
+        _ path: String, originalPath: String? = nil, kind: ChangedFile.Kind = .modified, in ref: CommitRef
+    ) -> ChangedFile {
+        ChangedFile(path: path, originalPath: originalPath, kind: kind, area: .commit(ref), fingerprint: nil)
+    }
+
+    private func binaryRow(_ path: String) -> NumstatEntry { NumstatEntry(path: path, stats: .binary(nil)) }
+
+    private func sizes(_ old: Int64?, _ new: Int64?) -> LineStats {
+        .binary(BinarySizes(oldByteCount: old, newByteCount: new))
+    }
+
+    @Test func sizeSourcesReadTheWorkingTreeFingerprint() {
+        #expect(
+            LineStatsJoiner.sizeSources(for: changedFile("a.png", area: .staged))
+                == (.spec(objectID("head-a.png")), .spec(objectID("index-a.png"))))
+        #expect(
+            LineStatsJoiner.sizeSources(for: changedFile("a.png")) == (.spec(objectID("index-a.png")), .byteCount(10)))
+    }
+
+    @Test func sizeSourcesTreatTheZeroHashAndAMissingFileAsAbsent() {
+        let staged = changedFile("a.png", area: .staged, kind: .added)
+        let stagedAdd = staged.with(
+            fingerprint: DiffInputFingerprint(
+                old: .absent, new: .object(objectID("index-a.png")), worktree: .notApplicable, kind: .added,
+                originalPath: nil))
+        #expect(LineStatsJoiner.sizeSources(for: stagedAdd) == (.absent, .spec(objectID("index-a.png"))))
+
+        let deleted = changedFile("a.png", kind: .deleted).with(
+            fingerprint: DiffInputFingerprint(
+                old: .object(objectID("index-a.png")), new: .notApplicable, worktree: .missing, kind: .deleted,
+                originalPath: nil))
+        #expect(LineStatsJoiner.sizeSources(for: deleted) == (.spec(objectID("index-a.png")), .absent))
+    }
+
+    @Test func sizeSourcesForACommitFollowTheChangeKind() {
+        let parent = objectID("p")
+        let sha = objectID("c")
+        #expect(
+            LineStatsJoiner.sizeSources(for: commitFile("a.png", in: ref))
+                == (.spec("\(parent):a.png"), .spec("\(sha):a.png")))
+        #expect(
+            LineStatsJoiner.sizeSources(for: commitFile("a.png", kind: .added, in: ref))
+                == (.absent, .spec("\(sha):a.png")))
+        #expect(
+            LineStatsJoiner.sizeSources(for: commitFile("a.png", kind: .deleted, in: ref))
+                == (.spec("\(parent):a.png"), .absent))
+        #expect(
+            LineStatsJoiner.sizeSources(for: commitFile("a.png", in: rootRef))
+                == (.absent, .spec("\(objectID("root")):a.png")))
+    }
+
+    @Test func sizeSourcesUseTheOriginalPathForACommitsOldSide() {
+        let renamed = commitFile("new.png", originalPath: "old.png", kind: .renamed, in: ref)
+        #expect(
+            LineStatsJoiner.sizeSources(for: renamed)
+                == (.spec("\(objectID("p")):old.png"), .spec("\(objectID("c")):new.png")))
+    }
+
+    @Test func sizeSourcesAreUnknownForAPathWithANewline() {
+        let sources = LineStatsJoiner.sizeSources(for: commitFile("bad\nname.png", in: ref))
+        #expect(sources == (.unknown, .unknown))
+    }
+
+    @Test func trackedOnlyListGetsSizes() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: objectID("index-a.png"))
+        await client.set(objectSize: 1_000, for: objectID("head-b.png"))
+        await client.set(objectSize: 25_000, for: objectID("index-b.png"))
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.unstaged: [binaryRow("a.png")], .staged: [binaryRow("b.png")]],
+            to: [changedFile("a.png"), changedFile("b.png", area: .staged)],
+            client: client
+        )
+        #expect(stats(joined, "unstaged:a.png") == sizes(1_000, 10))
+        #expect(stats(joined, "staged:b.png") == sizes(1_000, 25_000))
+    }
+
+    @Test func commitScopeListGetsSizes() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: "\(objectID("p")):a.png")
+        await client.set(objectSize: 25_000, for: "\(objectID("c")):a.png")
+        await client.set(objectSize: 640_000, for: "\(objectID("c")):b.png")
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.commit(ref): [binaryRow("a.png"), binaryRow("b.png")]],
+            to: [commitFile("a.png", in: ref), commitFile("b.png", kind: .added, in: ref)],
+            client: client
+        )
+        #expect(stats(joined, "commit:\(objectID("c")):a.png") == sizes(1_000, 25_000))
+        #expect(stats(joined, "commit:\(objectID("c")):b.png") == sizes(nil, 640_000))
+        #expect(await client.objectSizesCalls.count == 1)
+    }
+
+    @Test func sizesLandOnTheFileThatAskedForThem() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: objectID("head-a.png"))
+        await client.set(objectSize: 25_000, for: objectID("index-a.png"))
+        await client.set(objectSize: 640_000, for: objectID("head-b.png"))
+        await client.set(objectSize: 1_000, for: objectID("index-b.png"))
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.staged: [binaryRow("a.png"), binaryRow("b.png")]],
+            to: [changedFile("a.png", area: .staged), changedFile("b.png", area: .staged)],
+            client: client
+        )
+        #expect(stats(joined, "staged:a.png") == sizes(1_000, 25_000))
+        #expect(stats(joined, "staged:b.png") == sizes(640_000, 1_000))
+    }
+
+    /// A lookup that fails is never an absent side: the file stays "binary" rather than
+    /// rendering as added or deleted, and its neighbours still resolve.
+    @Test func anUnresolvedSpecLeavesOnlyItsFileWithoutSizes() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: objectID("index-a.png"))
+        await client.set(objectSize: 25_000, for: objectID("head-b.png"))
+        await client.set(objectSize: 640_000, for: objectID("index-b.png"))
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.staged: [binaryRow("a.png"), binaryRow("b.png")]],
+            to: [changedFile("a.png", area: .staged), changedFile("b.png", area: .staged)],
+            client: client
+        )
+        #expect(stats(joined, "staged:a.png") == .binary(nil))
+        #expect(stats(joined, "staged:b.png") == sizes(25_000, 640_000))
+    }
+
+    @Test func aRepeatedSpecIsRequestedOnceAndReachesEveryDependent() async {
+        // Two files whose old sides are the same blob: identical content shares an id.
+        let shared = objectID("shared")
+        let a = changedFile("a.png", area: .staged).with(
+            fingerprint: DiffInputFingerprint(
+                old: .object(shared), new: .object(objectID("index-a.png")), worktree: .notApplicable,
+                kind: .modified, originalPath: nil))
+        let b = changedFile("b.png", area: .staged).with(
+            fingerprint: DiffInputFingerprint(
+                old: .object(shared), new: .object(objectID("index-b.png")), worktree: .notApplicable,
+                kind: .modified, originalPath: nil))
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: shared)
+        await client.set(objectSize: 25_000, for: objectID("index-a.png"))
+        await client.set(objectSize: 640_000, for: objectID("index-b.png"))
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.staged: [binaryRow("a.png"), binaryRow("b.png")]], to: [a, b], client: client)
+        #expect(stats(joined, "staged:a.png") == sizes(1_000, 25_000))
+        #expect(stats(joined, "staged:b.png") == sizes(1_000, 640_000))
+        #expect(await client.objectSizesCalls == [[shared, objectID("index-a.png"), objectID("index-b.png")]])
+    }
+
+    @Test func aNewlinePathStaysWithoutSizesAndDoesNotBlockTheRest() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: "\(objectID("p")):ok.png")
+        await client.set(objectSize: 25_000, for: "\(objectID("c")):ok.png")
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.commit(ref): [binaryRow("bad\nname.png"), binaryRow("ok.png")]],
+            to: [commitFile("bad\nname.png", in: ref), commitFile("ok.png", in: ref)],
+            client: client
+        )
+        #expect(stats(joined, "commit:\(objectID("c")):bad\nname.png") == .binary(nil))
+        #expect(stats(joined, "commit:\(objectID("c")):ok.png") == sizes(1_000, 25_000))
+        #expect(await client.objectSizesCalls.flatMap { $0 }.allSatisfy { !$0.contains("\n") })
+    }
+
+    /// "\r\n" is one Character, so a Character search for "\n" would miss it.
+    @Test func aCRLFPathStaysWithoutSizesAndDoesNotBlockTheRest() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: "\(objectID("p")):ok.png")
+        await client.set(objectSize: 25_000, for: "\(objectID("c")):ok.png")
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.commit(ref): [binaryRow("bad\r\nname.png"), binaryRow("ok.png")]],
+            to: [commitFile("bad\r\nname.png", in: ref), commitFile("ok.png", in: ref)],
+            client: client
+        )
+        #expect(stats(joined, "commit:\(objectID("c")):bad\r\nname.png") == .binary(nil))
+        #expect(stats(joined, "commit:\(objectID("c")):ok.png") == sizes(1_000, 25_000))
+        #expect(await client.objectSizesCalls.flatMap { $0 }.allSatisfy { !$0.utf8.contains(0x0A) })
+    }
+
+    /// Git strips a CR before the line terminator, so this path would be sized as "bad.png".
+    @Test func aTrailingCRPathStaysWithoutSizesAndDoesNotBlockTheRest() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: "\(objectID("p")):ok.png")
+        await client.set(objectSize: 25_000, for: "\(objectID("c")):ok.png")
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.commit(ref): [binaryRow("bad.png\r"), binaryRow("ok.png")]],
+            to: [commitFile("bad.png\r", in: ref), commitFile("ok.png", in: ref)],
+            client: client
+        )
+        #expect(stats(joined, "commit:\(objectID("c")):bad.png\r") == .binary(nil))
+        #expect(stats(joined, "commit:\(objectID("c")):ok.png") == sizes(1_000, 25_000))
+        #expect(await client.objectSizesCalls.flatMap { $0 }.allSatisfy { !GitClient.breaksLineFraming($0) })
+    }
+
+    @Test func aFingerprintOnlyFileResolvesEvenWhenTheBatchThrows() async {
+        let added = changedFile("new.png", kind: .added).with(
+            fingerprint: DiffInputFingerprint(
+                old: .absent, new: .notApplicable,
+                worktree: .file(mtimeNs: 1, ctimeNs: 1, size: 640_000, inode: 1), kind: .added, originalPath: nil))
+        let client = StubRepoClient(files: [])
+        await client.fail(objectSizes: true)
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.unstaged: [binaryRow("new.png"), binaryRow("a.png")]],
+            to: [added, changedFile("a.png")],
+            client: client
+        )
+        #expect(stats(joined, "unstaged:new.png") == sizes(nil, 640_000))
+        #expect(stats(joined, "unstaged:a.png") == .binary(nil))
+    }
+
+    @Test func aCountMismatchLeavesTheFileWithoutSizes() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: objectID("head-a.png"))
+        await client.set(objectSize: 25_000, for: objectID("index-a.png"))
+        await client.truncate(objectSizes: true)
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.staged: [binaryRow("a.png")]], to: [changedFile("a.png", area: .staged)], client: client)
+        #expect(stats(joined, "staged:a.png") == .binary(nil))
+    }
+
+    @Test func noBatchRunsWhenNothingNeedsGit() async {
+        let client = StubRepoClient(files: [])
+        let counted = await LineStatsJoiner.attach(
+            numstat: [.unstaged: [NumstatEntry(path: "a.txt", stats: .counted(added: 1, deleted: 1))]],
+            to: [changedFile("a.txt")],
+            client: client
+        )
+        #expect(counted.first?.lineStats == .counted(added: 1, deleted: 1))
+        #expect(await client.objectSizesCalls.isEmpty)
+
+        await client.set(worktree: Data([0x89, 0x50, 0]), for: "new.png")
+        let added = changedFile("added.png", kind: .added).with(
+            fingerprint: DiffInputFingerprint(
+                old: .absent, new: .notApplicable,
+                worktree: .file(mtimeNs: 1, ctimeNs: 1, size: 1_000, inode: 1), kind: .added, originalPath: nil))
+        let joined = await LineStatsJoiner.attach(
+            numstat: [.unstaged: [binaryRow("added.png")]],
+            to: [changedFile("new.png", kind: .untracked), added],
+            client: client
+        )
+        #expect(stats(joined, "unstaged:new.png") == sizes(nil, 3))
+        #expect(stats(joined, "unstaged:added.png") == sizes(nil, 1_000))
+        #expect(await client.objectSizesCalls.isEmpty)
+    }
+
+    @Test func cancellationBeforeTheBatchLeavesBinaryWithoutSizes() async {
+        let client = StubRepoClient(files: [])
+        await client.set(objectSize: 1_000, for: objectID("index-a.png"))
+        await client.holdReads(true)
+        let files = [changedFile("new.txt", kind: .untracked), changedFile("a.png")]
+        let joining = Task {
+            await LineStatsJoiner.attach(numstat: [.unstaged: [binaryRow("a.png")]], to: files, client: client)
+        }
+        #expect(await eventually { await client.heldReadCount == 1 })
+        joining.cancel()
+        await client.releaseReads()
+
+        let joined = await joining.value
+        #expect(stats(joined, "unstaged:a.png") == .binary(nil))
+        #expect(await client.objectSizesCalls.isEmpty)
     }
 
     // MARK: line counting
