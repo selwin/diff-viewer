@@ -56,13 +56,7 @@ struct FileHeaderView: View {
                         .truncationMode(.middle)
                         .layoutPriority(1)
                 }
-                Button(action: copyRelativePath) {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .fixedSize()
-                .help("Copy Relative Path")
-                .accessibilityLabel("Copy relative path")
+                CopyPathButton(action: copyRelativePath)
                 Spacer()
                 if !file.directory.isEmpty {
                     Text(file.directory)
@@ -87,6 +81,52 @@ struct FileHeaderView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(file.path, forType: .string)
+    }
+}
+
+/// The header's copy-path glyph: quiet at rest, lit with a soft background on hover,
+/// and a green checkmark for a moment after a click so the copy is seen to happen.
+struct CopyPathButton: View {
+    let action: () -> Void
+    @State private var isHovering = false
+    @State private var showsCheckmark = false
+    /// The pending revert; a new click cancels it so the checkmark's time restarts.
+    @State private var revert: Task<Void, Never>?
+
+    var body: some View {
+        Button(action: copy) {
+            Image(systemName: showsCheckmark ? "checkmark" : "doc.on.doc")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(glyphStyle)
+                .contentTransition(.symbolEffect(.replace))
+                // Both glyphs share one frame so the header never shifts.
+                .frame(width: 14, height: 14)
+                .padding(3)
+                .background(.quaternary.opacity(isHovering ? 1 : 0), in: RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.1)) { isHovering = hovering }
+        }
+        .help("Copy Relative Path")
+        .accessibilityLabel(showsCheckmark ? "Copied" : "Copy relative path")
+    }
+
+    private var glyphStyle: AnyShapeStyle {
+        if showsCheckmark { return AnyShapeStyle(.green) }
+        return isHovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+    }
+
+    private func copy() {
+        action()
+        withAnimation(.easeInOut(duration: 0.2)) { showsCheckmark = true }
+        revert?.cancel()
+        revert = Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { showsCheckmark = false }
+        }
     }
 }
 

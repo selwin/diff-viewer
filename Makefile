@@ -31,7 +31,7 @@ build: difft gen
 # Scripted runs keep their state in their own defaults suite (see DebugLaunchOptions), so
 # they never touch an Xcode-run instance's session or preferences.
 run: build
-	DIFFVIEWER_DEFAULTS_SUITE=com.selwin.DiffViewer.scripted $(APP)/Contents/MacOS/DiffViewer -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
+	DIFFVIEWER_DEFAULTS_SUITE=com.selwin.DiffViewer.scripted $(CURDIR)/$(APP)/Contents/MacOS/DiffViewer -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
 
 test: difft gen
 	$(XCB) test | scripts/xcfilter.sh

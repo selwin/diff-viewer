@@ -6,11 +6,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$1; repo=${2:-}; select=${3:-}; delay=${4:-3}
-app=build/Build/Products/Debug/DiffViewer.app/Contents/MacOS/DiffViewer
+app=$PWD/build/Build/Products/Debug/DiffViewer.app/Contents/MacOS/DiffViewer
 # Scripted runs keep their state in their own defaults suite and only ever quit their own
 # instances, so an Xcode-run DiffViewer keeps its session and preferences.
+# The absolute path is what `pkill -f` matches, so launch with it.
 suite=com.selwin.DiffViewer.scripted
-pkill -f "$PWD/$app" 2>/dev/null || true
+pkill -f "$app" 2>/dev/null || true
 sleep 0.5
 if [[ -n $repo ]]; then
   defaults write "$suite" openRepositoryRoots -array "$repo"
