@@ -10,6 +10,18 @@ private let filesStaged = [changedFile("a.swift", area: .staged), changedFile("b
 private let message = "Add the picker"
 /// What git suggests while a merge is in progress.
 private let mergeText = "Merge branch 'feature'"
+/// What `git diff --cached --patch-with-stat` prints: a generation needs a patch to describe.
+private let stagedPatch = """
+     a.swift | 2 +-
+    1 file changed, 1 insertion(+), 1 deletion(-)
+
+    diff --git a/a.swift b/a.swift
+    --- a/a.swift
+    +++ b/a.swift
+    @@ -1 +1 @@
+    -old
+    +new
+    """
 
 private func merging(_ text: String) -> CommitDefaults {
     CommitDefaults(suggestion: CommitDefaults.Suggestion(text: text, source: .merge), isMerging: true)
@@ -30,10 +42,11 @@ struct WindowStateCommitTests {
     /// adopted and waited on as far as the first file list. `holdingDefaults` keeps that
     /// list's defaults read suspended, for the tests that watch a read still in flight.
     private func adopted(
-        files: [ChangedFile] = filesStaged, defaults: CommitDefaults = .none, holdingDefaults: Bool = false
+        files: [ChangedFile] = filesStaged, defaults: CommitDefaults = .none, holdingDefaults: Bool = false,
+        generator: any CommitMessageGenerator = StubCommitMessageGenerator()
     ) async -> Window {
         let h = Harness()
-        let state = h.makeState()
+        let state = h.makeState(commitMessageGenerator: generator)
         let repo = h.repo("A", files: files)
         await repo.client.set(commitDefaults: defaults)
         await repo.client.holdCommitDefaults(holdingDefaults)
@@ -46,8 +59,11 @@ struct WindowStateCommitTests {
     /// The same, plus the reads that follow the publish: the defaults, the commit list
     /// and HEAD. After it the draft holds whatever the defaults imply and every baseline
     /// is stable, so a later "unchanged" assertion means something.
-    private func settled(files: [ChangedFile] = filesStaged, defaults: CommitDefaults = .none) async throws -> Window {
-        let window = await adopted(files: files, defaults: defaults)
+    private func settled(
+        files: [ChangedFile] = filesStaged, defaults: CommitDefaults = .none,
+        generator: any CommitMessageGenerator = StubCommitMessageGenerator()
+    ) async throws -> Window {
+        let window = await adopted(files: files, defaults: defaults, generator: generator)
         try await settleDefaults(window.state)
         let historyTask = try #require(window.state.session?.historyTask)
         await historyTask.value
@@ -530,5 +546,168 @@ struct WindowStateCommitTests {
 
         #expect(await !state.commit(confirming: mergeText))
         #expect(await client.commitMessages.isEmpty)
+    }
+
+    // MARK: Generating the message
+
+    /// Each piece replaces the last, and the finished text is the reader's own from then
+    /// on: the next defaults read may not swap it for git's suggestion.
+    @Test func generationStreamsIntoTheDraftAndOutranksTheSuggestion() async throws {
+        let generator = StubCommitMessageGenerator(texts: ["Add", "Add the picker"])
+        let (_, state, client, _) = try await settled(generator: generator)
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { await !state.isGeneratingCommitMessage })
+        #expect(state.commitMessage == "Add the picker")
+        #expect(state.commitGenerationError == nil)
+        #expect(await client.stagedPatchCalls == 1)
+
+        await client.set(commitDefaults: merging(mergeText))
+        try await refreshSettled(state)
+        #expect(state.commitMessage == "Add the picker")
+    }
+
+    /// A generated message that happens to read like git's own suggestion is the reader's
+    /// all the same: the next defaults read may not swap it for a newer suggestion.
+    @Test func generatedTextEqualToTheSuggestionStaysOwned() async throws {
+        let (_, state, client, _) = try await settled(
+            defaults: merging(mergeText), generator: StubCommitMessageGenerator(texts: [mergeText]))
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { await !state.isGeneratingCommitMessage })
+        #expect(state.commitMessage == mergeText)
+
+        await client.set(commitDefaults: merging("Merge branch 'other'"))
+        try await refreshSettled(state)
+        #expect(state.commitMessage == mergeText)
+    }
+
+    /// A model that gave up says so in the sheet, and what the reader had written stays.
+    @Test func aFailedGenerationReportsAndKeepsTheDraft() async throws {
+        let (_, state, client, _) = try await settled(
+            generator: StubCommitMessageGenerator(failure: StubGenerationError()))
+        await client.set(stagedPatch: stagedPatch)
+        state.commitMessage = message
+
+        state.generateCommitMessage()
+        #expect(await eventually { await state.commitGenerationError != nil })
+        #expect(state.commitGenerationError == "the model gave up")
+        #expect(state.commitMessage == message)
+        #expect(!state.isGeneratingCommitMessage)
+    }
+
+    /// No model, no button: the reason is what the button's help shows, and pressing it
+    /// anyway reads nothing.
+    @Test func anUnavailableModelGeneratesNothing() async throws {
+        let unavailable = StubCommitMessageGenerator(unavailableReason: "Turn on Apple Intelligence")
+        let (_, state, client, _) = try await settled(generator: unavailable)
+
+        #expect(state.canOpenCommitSheet)
+        #expect(!state.canGenerateCommitMessage)
+        #expect(state.commitGenerationUnavailableReason == "Turn on Apple Intelligence")
+
+        state.generateCommitMessage()
+        #expect(!state.isGeneratingCommitMessage)
+        #expect(state.commitMessage == "")
+        #expect(await client.stagedPatchCalls == 0)
+    }
+
+    /// The reader typing over what the model is writing takes the draft back: the run
+    /// stops there, and nothing it streams afterwards reaches the draft.
+    @Test func aReaderEditDuringGenerationCancelsIt() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+        #expect(state.isGeneratingCommitMessage)
+
+        // Taken before the edit, which clears the session's handle on it.
+        let task = try #require(state.session?.commitGenerationTask)
+        state.commitMessage = "Add the picker"
+        #expect(!state.isGeneratingCommitMessage)
+
+        channel.yield("Add the pic")
+        await task.value
+        #expect(state.commitMessage == "Add the picker", "a cancelled run writes nothing more")
+    }
+
+    /// Committing half a message would record whatever the model had reached, so Commit
+    /// waits until the run is over.
+    @Test func commitWaitsForGenerationToFinish() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield(message)
+        #expect(await eventually { await state.commitMessage == message })
+        #expect(!state.canCommit, "the message is still being written")
+
+        channel.finish()
+        #expect(await eventually { await state.canCommit })
+    }
+
+    /// A run that fails partway keeps the piece the reader has already seen, and says why
+    /// the rest never came.
+    @Test func aFailureAfterPartialOutputKeepsItAndReports() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+
+        channel.fail()
+        #expect(await eventually { await state.commitGenerationError == "the model gave up" })
+        #expect(state.commitMessage == "Add")
+        #expect(!state.isGeneratingCommitMessage)
+    }
+
+    /// Cancelling settles the run without an error, and the button is ready again: a
+    /// second press starts a fresh generation.
+    @Test func aCancelledGenerationCanBeRestarted() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+
+        state.cancelCommitMessageGeneration()
+        #expect(!state.isGeneratingCommitMessage)
+        #expect(state.commitGenerationError == nil)
+        #expect(state.commitMessage == "Add")
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 2 })
+        #expect(state.isGeneratingCommitMessage)
+    }
+
+    /// A merge whose tree already equals HEAD opens the sheet with nothing staged: there
+    /// is no patch to summarize, so the model is never asked and the draft stands.
+    @Test func aMergeWithNothingStagedGeneratesNothing() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(
+            files: [], defaults: merging(mergeText), generator: StubCommitMessageGenerator(channel: channel))
+        #expect(state.canOpenCommitSheet)
+        #expect(state.commitMessage == mergeText)
+        await client.set(stagedPatch: "")
+
+        state.generateCommitMessage()
+        #expect(await eventually { await state.commitGenerationError == "No staged changes to summarize" })
+        #expect(state.commitMessage == mergeText)
+        #expect(!state.isGeneratingCommitMessage)
+        #expect(channel.generateCalls == 0)
     }
 }

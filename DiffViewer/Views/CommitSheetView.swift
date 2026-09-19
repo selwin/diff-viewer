@@ -36,9 +36,12 @@ struct CommitSheetView: View {
                             .allowsHitTesting(false)
                     }
                 }
-            // A reopened sheet explains itself first; then merge status before template guidance.
+            // Newest news first: a failed generation, then a reopened sheet explaining
+            // itself, then merge status before template guidance.
             Group {
-                if draftChanged {
+                if let error = windowState.commitGenerationError {
+                    Text(error)
+                } else if draftChanged {
                     Text("The commit message changed. Review it before committing.")
                 } else if windowState.commitDefaults.isMerging {
                     Text("Merge in progress")
@@ -50,6 +53,20 @@ struct CommitSheetView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             HStack {
+                Button {
+                    windowState.generateCommitMessage()
+                } label: {
+                    Label("Generate", systemImage: "sparkles")
+                }
+                .disabled(!windowState.canGenerateCommitMessage)
+                .help(
+                    windowState.commitGenerationUnavailableReason
+                        ?? "Generate a commit message from the staged changes (⌘G)"
+                )
+                .keyboardShortcut("g", modifiers: .command)
+                if windowState.isGeneratingCommitMessage {
+                    ProgressView().controlSize(.small)
+                }
                 Spacer()
                 Button("Cancel") { windowState.isCommitSheetPresented = false }
                     .keyboardShortcut(.cancelAction)

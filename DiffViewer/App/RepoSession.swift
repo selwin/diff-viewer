@@ -51,6 +51,8 @@ final class RepoSession {
     /// Bumped when a refresh that needs a defaults read is accepted, and on close. Only
     /// the read of the current generation publishes.
     var commitDefaultsGeneration = 0
+    /// The commit-message generation in flight, if any. One at a time.
+    var commitGenerationTask: Task<Void, Never>?
     /// One watcher refresh at a time.
     var watcherRefreshRunning = false
     /// Ticks received during a watcher refresh, merged into one follow-up. Carries the

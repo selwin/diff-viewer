@@ -132,11 +132,15 @@ final class WindowState {
     /// defaults do not.
     ///
     /// The setter is the reader's path (the editor, tests), so it bumps `commitDraftRevision`.
+    /// A real change while the model is writing means the reader has taken over: generation
+    /// is cancelled and what it streamed stays. The equality check ignores SwiftUI's
+    /// `TextEditor` writing an unchanged value back.
     /// A defaults read writes `storedCommitMessage` directly, the way `applySelection`
     /// bypasses the `selection` setter, so automatic text never counts as an edit.
     var commitMessage: String {
         get { storedCommitMessage }
         set {
+            if isGeneratingCommitMessage, newValue != storedCommitMessage { cancelCommitMessageGeneration() }
             storedCommitMessage = newValue
             commitDraftRevision += 1
         }
@@ -153,6 +157,11 @@ final class WindowState {
     private(set) var isCommitting = false
     /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
     var isCommitSheetPresented = false
+    /// A commit message is being written by the model.
+    private(set) var isGeneratingCommitMessage = false
+    /// Why the last generation stopped, for the sheet's caption. Cleared when another
+    /// starts and when one is cancelled.
+    private(set) var commitGenerationError: String?
 
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
@@ -171,12 +180,16 @@ final class WindowState {
 
     private let watchRepository: WatcherFactory
     private var initialRefresh: Task<Void, Never>?
+    /// Writes the commit message the sheet's Generate button asks for.
+    private let commitMessageGenerator: any CommitMessageGenerator
 
     init(
         preferences: Preferences, cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
+        commitMessageGenerator: any CommitMessageGenerator = FoundationModelsCommitMessageGenerator(),
         watchRepository: @escaping WatcherFactory
     ) {
         self.preferences = preferences
+        self.commitMessageGenerator = commitMessageGenerator
         self.watchRepository = watchRepository
         diffLoader = DiffLoader(cache: cache, resultCache: resultCache)
     }
@@ -221,6 +234,8 @@ final class WindowState {
         if let session { cancelLineStats(session: session) }
         session?.commitDefaultsGeneration += 1
         session?.commitDefaultsTask?.cancel()
+        session?.commitGenerationTask?.cancel()
+        isGeneratingCommitMessage = false
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -845,9 +860,10 @@ extension WindowState {
     }
 
     /// `canOpenCommitSheet`, plus a non-blank message that is not a commit.template left
-    /// exactly as applied.
+    /// exactly as applied, and no generation still running: a half-written message must
+    /// not be committed.
     var canCommit: Bool {
-        guard canOpenCommitSheet else { return false }
+        guard canOpenCommitSheet, !isGeneratingCommitMessage else { return false }
         guard !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return !commitNeedsTemplateEdit
     }
@@ -967,6 +983,77 @@ extension WindowState {
         let text = new.suggestion?.text
         storedCommitMessage = text ?? ""  // not the setter: this is not an edit
         lastAppliedDefaultMessage = text
+    }
+
+    // MARK: Generating the message
+
+    /// Nil when the model can write a message; otherwise the one-line reason the button
+    /// shows instead.
+    var commitGenerationUnavailableReason: String? { commitMessageGenerator.unavailableReason }
+
+    /// What the sheet's Generate button needs: a commit that could be made, no generation
+    /// already running, and a model to run it.
+    var canGenerateCommitMessage: Bool {
+        canOpenCommitSheet && !isGeneratingCommitMessage && commitGenerationUnavailableReason == nil
+    }
+
+    /// Writes a message for the staged changes into the draft, a growing piece at a time.
+    /// A second call while one is running does nothing.
+    func generateCommitMessage() {
+        guard canGenerateCommitMessage, let session else { return }
+        isGeneratingCommitMessage = true  // before the first suspension: the admission guard
+        commitGenerationError = nil
+        session.commitGenerationTask = Task { [weak self] in
+            await self?.runCommitMessageGeneration(session: session)
+        }
+    }
+
+    /// Stops the generation in flight. Whatever it has written by then stays in the draft:
+    /// it is text the reader has seen, and theirs to finish or clear.
+    func cancelCommitMessageGeneration() {
+        session?.commitGenerationTask?.cancel()
+        session?.commitGenerationTask = nil
+        isGeneratingCommitMessage = false
+        commitGenerationError = nil
+    }
+
+    /// Streamed text bypasses the setter, whose cancel-on-edit would stop the run writing
+    /// it. It still counts as the reader's: the revision moves and the last applied
+    /// suggestion is forgotten, so a later defaults read leaves the draft alone even if the
+    /// model reproduced that suggestion word for word.
+    private func applyGeneratedText(_ text: String) {
+        storedCommitMessage = text
+        lastAppliedDefaultMessage = nil
+        commitDraftRevision += 1
+    }
+
+    /// Reads the staged patch, then streams the model's answer into the draft.
+    private func runCommitMessageGeneration(session: RepoSession) async {
+        // A cancelled run was already settled by whoever cancelled it, and a newer run may
+        // be up by now; only a run that ends on its own turns the flag off.
+        defer { if !Task.isCancelled { isGeneratingCommitMessage = false } }
+        func isCurrent() -> Bool { session === self.session && !isClosed && !Task.isCancelled }
+        do {
+            let patchWithStat = try await session.client.stagedPatch()
+            guard isCurrent() else { return }
+            // A merge whose tree already equals HEAD stages nothing: the sheet opens for
+            // it, but there is no patch to describe.
+            guard CommitMessagePrompt.hasPatch(patchWithStat) else {
+                commitGenerationError = "No staged changes to summarize"
+                return
+            }
+            let request = CommitMessagePrompt.Request(
+                patchWithStat: patchWithStat, recentSubjects: history.commits.map(\.subject))
+            for try await text in commitMessageGenerator.generate(request) {
+                guard isCurrent() else { return }
+                applyGeneratedText(text)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isCurrent() else { return }
+            commitGenerationError = error.localizedDescription
+        }
     }
 }
 

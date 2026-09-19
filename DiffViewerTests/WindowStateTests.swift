@@ -93,6 +93,8 @@ actor StubRepoClient: RepoClient {
     private var holdsCommitDefaults = false
     private var heldCommitDefaults: [CheckedContinuation<Void, Never>] = []
     private(set) var commitDefaultsCalls = 0
+    private var stubbedStagedPatch = ""
+    private(set) var stagedPatchCalls = 0
 
     init(files: [ChangedFile]) { self.files = files }
 
@@ -430,6 +432,13 @@ actor StubRepoClient: RepoClient {
         return snapshot
     }
 
+    func set(stagedPatch text: String) { stubbedStagedPatch = text }
+
+    func stagedPatch() async throws -> String {
+        stagedPatchCalls += 1
+        return stubbedStagedPatch
+    }
+
     /// Held and released with the other writes, so a commit can be queued behind a stage.
     func commit(message: String) async throws {
         commitMessages.append(message)
@@ -440,6 +449,55 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git commit", status: 1, stderr: "pre-commit hook failed")
         }
         if let filesAfterWrite { files = filesAfterWrite }
+    }
+}
+
+/// What a failing stub generation throws.
+struct StubGenerationError: LocalizedError {
+    var errorDescription: String? { "the model gave up" }
+}
+
+/// A stream the test drives by hand: the stub hands its continuation over, and the test
+/// yields, finishes or fails it whenever it likes. A lock rather than an actor so a test
+/// can drive it without awaiting.
+final class StubGenerationChannel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncThrowingStream<String, any Error>.Continuation?
+    private var calls = 0
+
+    /// How many generations the stub started through this channel.
+    var generateCalls: Int { lock.withLock { calls } }
+
+    func register(_ continuation: AsyncThrowingStream<String, any Error>.Continuation) {
+        lock.withLock {
+            self.continuation = continuation
+            calls += 1
+        }
+    }
+
+    func yield(_ text: String) { lock.withLock { continuation }?.yield(text) }
+    func finish() { lock.withLock { continuation }?.finish() }
+    func fail() { lock.withLock { continuation }?.finish(throwing: StubGenerationError()) }
+}
+
+/// A generator under the test's control: it yields `texts` in order, then throws
+/// `failure` if there is one. `unavailableReason` stands in for a model that cannot run.
+/// With a `channel`, it yields nothing of its own and leaves the stream open for the test.
+struct StubCommitMessageGenerator: CommitMessageGenerator {
+    var texts: [String] = []
+    var failure: StubGenerationError?
+    var unavailableReason: String?
+    var channel: StubGenerationChannel?
+
+    func generate(_ request: CommitMessagePrompt.Request) -> AsyncThrowingStream<String, any Error> {
+        AsyncThrowingStream { continuation in
+            if let channel {
+                channel.register(continuation)
+                return
+            }
+            for text in texts { continuation.yield(text) }
+            continuation.finish(throwing: failure)
+        }
     }
 }
 
@@ -480,13 +538,13 @@ final class Harness {
         UserDefaults.standard.removePersistentDomain(forName: suite)
     }
 
-    func makeState() -> WindowState {
+    func makeState(commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator()) -> WindowState {
         let runner = runner
         let cache = DifftCache(runner: { old, new, fileName, qos in
             try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
         })
         let state = WindowState(
-            preferences: preferences, cache: cache,
+            preferences: preferences, cache: cache, commitMessageGenerator: commitMessageGenerator,
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher

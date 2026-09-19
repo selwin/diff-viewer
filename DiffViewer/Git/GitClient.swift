@@ -394,6 +394,18 @@ struct GitClient: RepoClient {
             templateDependency: templatePath.map { .configured(path: $0.path) } ?? .none)
     }
 
+    /// The staged changes as one text: the stat first, then the patch. `--no-ext-diff`
+    /// keeps a configured external differ out of it, so the text is always a git patch.
+    func stagedPatch() async throws -> String {
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["diff", "--cached", "--patch-with-stat", "--no-color", "--no-ext-diff"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        return result.stdoutString
+    }
+
     /// Sizes every spec in one `git cat-file --batch-check`. The specs go in through a
     /// temporary file, which avoids coordinating a concurrent stdin writer.
     func objectSizes(of specs: [String]) async throws -> [Int64?] {

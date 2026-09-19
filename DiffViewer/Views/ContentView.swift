@@ -115,6 +115,7 @@ struct ContentView: View {
     /// alert never races the dismissal. A draft that changed in the meantime reopens the
     /// sheet for the reader to confirm the new text.
     private func handleCommitSheetDismissal() {
+        windowState.cancelCommitMessageGeneration()
         commitDraftChanged = false
         guard let message = pendingCommitMessage else { return }
         pendingCommitMessage = nil

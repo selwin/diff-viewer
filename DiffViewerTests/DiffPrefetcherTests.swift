@@ -68,6 +68,7 @@ struct TaggedClient: RepoClient {
     func perform(_ action: GitFileAction, on paths: [String]) async throws {}
     func trash(_ paths: [String]) async throws {}
     func commitDefaults() async throws -> CommitDefaults { .none }
+    func stagedPatch() async throws -> String { "" }
     func commit(message: String) async throws {}
     func switchBranch(to branch: String) async throws {}
 }
