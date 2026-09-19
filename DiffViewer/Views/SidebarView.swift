@@ -68,17 +68,6 @@ struct SidebarView: View {
         .contextMenu(forSelectionType: DiffSelection.self) { selections in
             contextMenu(for: Set(selections.compactMap(\.fileID)))
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if !windowState.isEmpty {
-                VStack(spacing: 0) {
-                    CommitPickerView()
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                    Divider()
-                }
-                .background(.bar)
-            }
-        }
         // The box belongs to the working tree: a commit already on show is history.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !windowState.isEmpty, windowState.scope == .workingTree {

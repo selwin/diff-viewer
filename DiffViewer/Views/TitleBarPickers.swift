@@ -61,8 +61,7 @@ struct BranchPickerView: View {
     }
 }
 
-/// The title bar's scope pop-up: the same menu as the sidebar's `CommitPickerView`, with
-/// a one-line face.
+/// The title bar's scope pop-up: what the sidebar shows, the working tree or one commit.
 struct ScopePickerView: View {
     @Environment(WindowState.self) private var windowState
 

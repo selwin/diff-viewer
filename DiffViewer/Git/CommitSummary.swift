@@ -22,7 +22,7 @@ extension CommitRef: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(sha) }
 }
 
-/// One line of the commit picker: a commit's identity plus what the menu shows.
+/// One line of the scope picker: a commit's identity plus what the menu shows.
 struct CommitSummary: Sendable, Identifiable, Hashable {
     let ref: CommitRef
     /// Every parent, in git's order. The first is the one `ref` compares against.
