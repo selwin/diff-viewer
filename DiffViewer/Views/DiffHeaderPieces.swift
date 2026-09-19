@@ -1,20 +1,106 @@
+import AppKit
 import SwiftUI
 
-/// Small header views shared by the file and changeset detail headers, so both read the
-/// same way and only one of them has to be changed.
+/// The chrome both headers share: a fixed height, the same padding and background, and
+/// the loading feedback at the trailing edge. `content` goes before the trailing group
+/// and is responsible for filling the width (it holds the only spacer).
+struct HeaderStrip<Content: View>: View {
+    static var height: CGFloat { 32 }
 
-/// "Change 3 of 41" while a block is current, "41 changes" otherwise. A current index
-/// past the end (blocks shrank under it) falls back to the plain count.
-struct ChangeCounterText: View {
-    let count: Int
-    let current: Int?
+    let isLoading: Bool
+    var loadingProgressText: String?
+    @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if let current, current < count {
-            Text("Change \(current + 1) of \(count)")
-        } else {
-            Text("\(count) change\(count == 1 ? "" : "s")")
+        HStack(spacing: 8) {
+            content()
+            if let loadingProgressText {
+                Text(loadingProgressText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            LoadingIndicator(isLoading: isLoading)
         }
+        .padding(.horizontal, 12)
+        .frame(height: Self.height)
+        .background(.bar)
+    }
+}
+
+/// One file's header: kind badge, name, a copy button, and a trailing rail with the
+/// directory and the churn. As the window narrows the directory gives way first, then
+/// the rename source, then the name (truncated in the middle to keep its extension).
+struct FileHeaderView: View {
+    let file: ChangedFile
+    let stats: LineStats?
+    let isLoading: Bool
+    var loadingProgressText: String?
+
+    var body: some View {
+        HeaderStrip(isLoading: isLoading, loadingProgressText: loadingProgressText) {
+            HStack(spacing: 8) {
+                KindBadge(kind: file.kind)
+                    .fixedSize()
+                Text(file.fileName)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(2)
+                    .help(file.path)
+                if let original = file.originalPath {
+                    Text("← \(original)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(1)
+                }
+                Button(action: copyRelativePath) {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help("Copy Relative Path")
+                .accessibilityLabel("Copy relative path")
+                Spacer()
+                if !file.directory.isEmpty {
+                    Text(file.directory)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(0)
+                    if !ChurnLabel.isEmpty(for: stats) {
+                        Divider().frame(height: 14)
+                    }
+                }
+                ChurnLabel(stats: stats)
+                    .fixedSize()
+                    .layoutPriority(2)
+            }
+        }
+    }
+
+    /// The repo-relative path, not the absolute one `FileAction.copyPath` copies.
+    private func copyRelativePath() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(file.path, forType: .string)
+    }
+}
+
+/// The kind's letter on its colour, the same mapping the pane bands draw.
+struct KindBadge: View {
+    let kind: ChangedFile.Kind
+
+    var body: some View {
+        Text(String(kind.rawValue))
+            .font(.system(.caption, design: .monospaced).weight(.bold))
+            .foregroundStyle(.white)
+            .frame(width: 18, height: 18)
+            .background(Color(nsColor: DiffTheme.badge(for: kind)), in: RoundedRectangle(cornerRadius: 4))
+            .accessibilityLabel(kind.label)
     }
 }
 
@@ -26,5 +112,105 @@ struct LoadingIndicator: View {
         if isLoading {
             ProgressView().controlSize(.small)
         }
+    }
+}
+
+/// The +/− counts after a file row (byte counts for a binary file), the whole list's
+/// total on the All changes row, and the rail of a file header.
+struct ChurnLabel: View {
+    let stats: LineStats?
+    /// A selected row inverts its text to white; the counts follow the file name
+    /// there and let the +/− signs carry the meaning.
+    @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.locale) private var locale
+
+    /// True exactly when the label draws nothing: no stats, or counts that are both
+    /// zero. A binary file always shows something, even if only "binary".
+    static func isEmpty(for stats: LineStats?) -> Bool {
+        switch stats {
+        case nil: true
+        case .binary: false
+        case let .counted(added, deleted): added == 0 && deleted == 0
+        }
+    }
+
+    var body: some View {
+        switch stats {
+        case nil:
+            EmptyView()
+        case .binary(nil):
+            binaryFallback
+        case let .binary(sizes?):
+            if let presentation = BinaryChurnText.presentation(for: sizes, locale: locale) {
+                HStack(spacing: 4) {
+                    Text(presentation.primaryText).foregroundStyle(primaryStyle(for: presentation.kind))
+                    if let delta = presentation.deltaText {
+                        Text(delta).foregroundStyle(deltaStyle(for: presentation.kind))
+                    }
+                }
+                .font(.system(.callout, design: .monospaced))
+                .fixedSize()
+                .lineLimit(1)
+                .help(presentation.helpText)
+            } else {
+                binaryFallback
+            }
+        case .counted(let added, let deleted):
+            // A side that did not change is left out, so a pure addition reads "+12"
+            // rather than "+12 −0"; a file with no churn at all shows nothing.
+            HStack(spacing: 4) {
+                if added > 0 {
+                    Text("+\(added)").foregroundStyle(addedStyle)
+                }
+                if deleted > 0 {
+                    Text("−\(deleted)").foregroundStyle(deletedStyle)
+                }
+            }
+            .font(.system(.callout, design: .monospaced))
+            .fixedSize()
+            .lineLimit(1)
+            .help(countedHelpText(added: added, deleted: deleted))
+        }
+    }
+
+    private var addedStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.green)
+    }
+
+    private var deletedStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.red)
+    }
+
+    /// A modified binary's size is context, not churn; only the delta is coloured.
+    private var sizeStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
+    }
+
+    /// Byte counts that could not be read: still a binary, just an unsized one.
+    private var binaryFallback: some View {
+        Text("binary")
+            .font(.system(.callout, design: .monospaced))
+            .foregroundStyle(.tertiary)
+            .fixedSize()
+            .lineLimit(1)
+            .help("Binary file")
+    }
+
+    private func primaryStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
+        switch kind {
+        case .added: addedStyle
+        case .deleted: deletedStyle
+        case .grown, .shrunk, .sameSize: sizeStyle
+        }
+    }
+
+    private func deltaStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
+        kind == .shrunk ? deletedStyle : addedStyle
+    }
+
+    private func countedHelpText(added: Int, deleted: Int) -> String {
+        let addedLabel = added == 1 ? "1 line added" : "\(added) lines added"
+        let deletedLabel = deleted == 1 ? "1 line deleted" : "\(deleted) lines deleted"
+        return "\(addedLabel), \(deletedLabel)"
     }
 }

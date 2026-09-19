@@ -143,11 +143,7 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(String(file.kind.rawValue))
-                .font(.system(.caption, design: .monospaced).weight(.bold))
-                .foregroundStyle(.white)
-                .frame(width: 18, height: 18)
-                .background(badgeColor, in: RoundedRectangle(cornerRadius: 4))
+            KindBadge(kind: file.kind)
             VStack(alignment: .leading, spacing: 1) {
                 Text(file.fileName)
                     .lineLimit(1)
@@ -165,99 +161,5 @@ private struct FileRow: View {
         }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
-    }
-
-    private var badgeColor: Color {
-        Color(nsColor: DiffTheme.badge(for: file.kind))
-    }
-}
-
-/// The +/− counts after a file row (byte counts for a binary file), and the whole list's
-/// total on the All changes row.
-struct ChurnLabel: View {
-    let stats: LineStats?
-    /// A selected row inverts its text to white; the counts follow the file name
-    /// there and let the +/− signs carry the meaning.
-    @Environment(\.backgroundProminence) private var prominence
-    @Environment(\.locale) private var locale
-
-    var body: some View {
-        switch stats {
-        case nil:
-            EmptyView()
-        case .binary(nil):
-            binaryFallback
-        case let .binary(sizes?):
-            if let presentation = BinaryChurnText.presentation(for: sizes, locale: locale) {
-                HStack(spacing: 4) {
-                    Text(presentation.primaryText).foregroundStyle(primaryStyle(for: presentation.kind))
-                    if let delta = presentation.deltaText {
-                        Text(delta).foregroundStyle(deltaStyle(for: presentation.kind))
-                    }
-                }
-                .font(.system(.callout, design: .monospaced))
-                .fixedSize()
-                .lineLimit(1)
-                .help(presentation.helpText)
-            } else {
-                binaryFallback
-            }
-        case .counted(let added, let deleted):
-            // A side that did not change is left out, so a pure addition reads "+12"
-            // rather than "+12 −0"; a file with no churn at all shows nothing.
-            HStack(spacing: 4) {
-                if added > 0 {
-                    Text("+\(added)").foregroundStyle(addedStyle)
-                }
-                if deleted > 0 {
-                    Text("−\(deleted)").foregroundStyle(deletedStyle)
-                }
-            }
-            .font(.system(.callout, design: .monospaced))
-            .fixedSize()
-            .lineLimit(1)
-            .help(countedHelpText(added: added, deleted: deleted))
-        }
-    }
-
-    private var addedStyle: AnyShapeStyle {
-        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.green)
-    }
-
-    private var deletedStyle: AnyShapeStyle {
-        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.red)
-    }
-
-    /// A modified binary's size is context, not churn; only the delta is coloured.
-    private var sizeStyle: AnyShapeStyle {
-        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
-    }
-
-    /// Byte counts that could not be read: still a binary, just an unsized one.
-    private var binaryFallback: some View {
-        Text("binary")
-            .font(.system(.callout, design: .monospaced))
-            .foregroundStyle(.tertiary)
-            .fixedSize()
-            .lineLimit(1)
-            .help("Binary file")
-    }
-
-    private func primaryStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
-        switch kind {
-        case .added: addedStyle
-        case .deleted: deletedStyle
-        case .grown, .shrunk, .sameSize: sizeStyle
-        }
-    }
-
-    private func deltaStyle(for kind: BinaryChurnText.ChangeKind) -> AnyShapeStyle {
-        kind == .shrunk ? deletedStyle : addedStyle
-    }
-
-    private func countedHelpText(added: Int, deleted: Int) -> String {
-        let addedLabel = added == 1 ? "1 line added" : "\(added) lines added"
-        let deletedLabel = deleted == 1 ? "1 line deleted" : "\(deleted) lines deleted"
-        return "\(addedLabel), \(deletedLabel)"
     }
 }

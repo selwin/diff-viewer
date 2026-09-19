@@ -1,10 +1,15 @@
 import SwiftUI
 
 /// Header plus side-by-side panes for every changed file at once. The same shape as
-/// `DiffDetailView`, but the header describes the whole list instead of one file.
+/// `DiffDetailView`, but the header is sticky: it names whichever file owns the row at
+/// the top of the viewport, so it reads as a pinned copy of that file's band.
 struct ChangesetDetailView: View {
     @Environment(WindowState.self) private var windowState
     @Environment(Preferences.self) private var preferences
+    /// Reported by the panes. Tied to the document that produced it, because this view
+    /// stays alive across changeset selections and a bare index could name the wrong
+    /// file in a replacement.
+    @State private var topVisibleSection: VisibleSectionReference?
 
     var body: some View {
         let loader = windowState.diffLoader
@@ -15,72 +20,31 @@ struct ChangesetDetailView: View {
         }
     }
 
-    private func header(loader: DiffLoader) -> some View {
-        HStack(spacing: 10) {
-            // The same two-line stack as `DiffDetailView`, so the header keeps its height
-            // when the reader switches between All changes and a file.
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.body)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
-                    summary(loader: loader)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            }
-            Spacer()
-            if loader.isLoading, let progress = loader.changesetProgress {
-                Text("Loading \(progress.completed) of \(progress.total)…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            LoadingIndicator(isLoading: loader.isLoading)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    /// The whole list, or the rows the reader picked out of it. The count comes from the
-    /// selection rather than the document, so the header names what was asked for even
-    /// while the assembler is still working through it.
-    private var title: String {
-        guard windowState.detailSelection != .allChanges else { return "All changes" }
-        return "\(windowState.selectedFiles.count) files selected"
-    }
-
-    /// The caption line: file count, churn, change counter. Blank before the first
-    /// publication, so a load in progress shows just "All changes".
+    /// Shows the visible file, or a fixed-height loading shell until one is reported.
     @ViewBuilder
-    private func summary(loader: DiffLoader) -> some View {
-        if case let .changeset(document)? = loader.content {
-            let files = document.sections.count
-            Text("\(files) file\(files == 1 ? "" : "s")")
-            if let churn = churnText(of: document) {
-                Text("·")
-                Text(churn)
-            }
-            Text("·")
-            ChangeCounterText(
-                count: document.document.changeBlocks.count, current: windowState.currentChangeIndex)
+    private func header(loader: DiffLoader) -> some View {
+        let progressText = loadingProgressText(loader: loader)
+        if case let .changeset(document)? = loader.content,
+            let reference = topVisibleSection,
+            reference.loadID == document.loadID,
+            document.sections.indices.contains(reference.sectionIndex)
+        {
+            let section = document.sections[reference.sectionIndex]
+            FileHeaderView(
+                file: section.file,
+                stats: ChangesetChurn.stats(
+                    for: section, currentFile: windowState.files.first { $0.id == section.file.id }),
+                isLoading: loader.isLoading,
+                loadingProgressText: progressText
+            )
         } else {
-            // A blank caption keeps the header at its full height until the first
-            // publication fills it in, so nothing below shifts.
-            Text(" ")
+            HeaderStrip(isLoading: loader.isLoading, loadingProgressText: progressText) { Spacer() }
         }
     }
 
-    /// "+340 −120" for the document on screen. Text sections count their own rows; every
-    /// other section follows the sidebar's counts while its file is unchanged. A side that
-    /// did not change is left out, like `ChurnLabel`; no churn at all shows nothing.
-    private func churnText(of document: ChangesetDocument) -> String? {
-        let (added, deleted) = ChangesetChurn.total(sections: document.sections, files: windowState.files)
-        var parts: [String] = []
-        if added > 0 { parts.append("+\(added)") }
-        if deleted > 0 { parts.append("−\(deleted)") }
-        return parts.isEmpty ? nil : parts.joined(separator: " ")
+    private func loadingProgressText(loader: DiffLoader) -> String? {
+        guard loader.isLoading, let progress = loader.changesetProgress else { return nil }
+        return "Loading \(progress.completed) of \(progress.total)…"
     }
 
     @ViewBuilder
@@ -96,7 +60,8 @@ struct ChangesetDetailView: View {
                 scrollTarget: windowState.scrollTarget,
                 currentBlock: windowState.currentChangeIndex,
                 collapseUnchanged: preferences.collapseUnchanged,
-                foldOptions: preferences.foldOptions
+                foldOptions: preferences.foldOptions,
+                onTopVisibleSectionChange: { topVisibleSection = $0 }
             )
         } else if loader.isLoading {
             // Nothing published yet. The panes appear with the first section rather than

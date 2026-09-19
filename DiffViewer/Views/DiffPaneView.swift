@@ -97,8 +97,20 @@ final class DiffPaneView: NSView {
     private var maxLineUnits = 0
     private var lineCache: [Int: CachedLine] = [:]
     private var numberCache: [Int: CTLine] = [:]
-    /// One shaped header line per changeset section index, for this pane's side.
-    var headerCache: [Int: CTLine] = [:]
+    /// The shaped header text per changeset section index, for this pane's side.
+    var headerCache: [Int: HeaderLines] = [:]
+
+    /// A file band's text, shaped once per section and truncated at draw time because
+    /// the width can change. The old pane draws `name`; the new pane draws the rail.
+    /// Only the lines this side draws are shaped.
+    struct HeaderLines {
+        /// Nil on the new pane.
+        let name: CTLine?
+        /// Nil on the old pane, or for a file at the repository root.
+        let directory: CTLine?
+        /// Nil on the old pane, or when neither side changed.
+        let churn: CTLine?
+    }
 
     struct CachedLine {
         let line: CTLine

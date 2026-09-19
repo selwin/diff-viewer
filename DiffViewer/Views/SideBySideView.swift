@@ -53,6 +53,15 @@ final class SideBySideContainerView: NSView {
     private var foldState = FoldState()
     private(set) var folded = FoldedRows.identity(documentRowCount: 0)
     private(set) var collapseUnchanged = true
+    /// Coalesces top-visible-section reports; delivery is always deferred to the next
+    /// main-loop turn because this view is also driven from `updateNSView`.
+    private let visibleSectionPublisher = VisibleSectionPublisher()
+
+    /// Called with the changeset section whose rows are at the top of the viewport, nil
+    /// for a file or an empty changeset. At most once per main-loop turn.
+    var onTopVisibleSectionChange: ((VisibleSectionReference?) -> Void)? {
+        didSet { visibleSectionPublisher.onChange = onTopVisibleSectionChange }
+    }
 
     var foldOptions = FoldOptions() {
         didSet { leftPane.foldOptions = foldOptions; rightPane.foldOptions = foldOptions }
@@ -132,6 +141,7 @@ final class SideBySideContainerView: NSView {
         rightPane.fontSize = fontSize
         switch mode {
         case .replace:
+            visibleSectionPublisher.reset()
             install(content, previousAnchor: anchor)
         case .append:
             append(content)
@@ -199,15 +209,20 @@ final class SideBySideContainerView: NSView {
         applyCurrentBlock()
     }
 
-    /// Hands both panes the current document, with the changeset's sections when there is
-    /// one, so the gutter can number lines per file.
+    /// Hands both panes the current document, with the changeset's sections and section
+    /// index when there is one, so the gutter can number lines per file.
     private func installModels(mode: DocumentUpdate.Mode) {
         guard let document else { return }
         let sections = changeset?.sections ?? []
+        let sectionIndex = changeset?.sectionIndex
         leftPane.install(
-            PaneModel(side: .old, rows: document.rows, lines: document.oldLines, sections: sections), mode: mode)
+            PaneModel(
+                side: .old, rows: document.rows, lines: document.oldLines, sections: sections,
+                sectionIndex: sectionIndex), mode: mode)
         rightPane.install(
-            PaneModel(side: .new, rows: document.rows, lines: document.newLines, sections: sections), mode: mode)
+            PaneModel(
+                side: .new, rows: document.rows, lines: document.newLines, sections: sections,
+                sectionIndex: sectionIndex), mode: mode)
     }
 
     /// Applies a style snapshot built for the installed document. A snapshot is
@@ -339,6 +354,25 @@ final class SideBySideContainerView: NSView {
 
     private func updateOverviewViewport() {
         overview.visibleRows = folded.documentRange(forDisplayRange: visibleDisplayRange)
+        updateTopVisibleSection()
+    }
+
+    /// Reports the section owning the display row at the clip's top edge. Reached after
+    /// a replace, an append and every clip-bounds change, so the report follows scrolling
+    /// and the clamped origin after a resize.
+    private func updateTopVisibleSection() {
+        var reference: VisibleSectionReference?
+        if let changeset, !folded.displayRows.isEmpty {
+            let index = rightPane.layout.row(atY: rightScroll.contentView.bounds.minY)
+            if index < folded.displayRows.count,
+                let section = changeset.sectionIndex.sectionIndex(containingDisplayIndex: index, in: folded)
+            {
+                reference = VisibleSectionReference(loadID: changeset.loadID, sectionIndex: section)
+            }
+        }
+        if visibleSectionPublisher.update(reference) {
+            DispatchQueue.main.async { [weak self] in self?.visibleSectionPublisher.deliver() }
+        }
     }
 
     /// Scrolls both panes so document `row` (or the separator hiding it) sits about a
@@ -401,9 +435,12 @@ struct SideBySideView: NSViewRepresentable {
     var currentBlock: Int?
     var collapseUnchanged = true
     var foldOptions = FoldOptions()
+    var onTopVisibleSectionChange: ((VisibleSectionReference?) -> Void)?
 
     func makeNSView(context: Context) -> SideBySideContainerView {
         let view = SideBySideContainerView(frame: .zero)
+        // Before the content goes in, so the first install's report is not lost.
+        view.onTopVisibleSectionChange = onTopVisibleSectionChange
         view.foldOptions = foldOptions
         view.setCollapseUnchanged(collapseUnchanged)
         view.setContent(content, fontSize: fontSize)
@@ -415,6 +452,7 @@ struct SideBySideView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: SideBySideContainerView, context: Context) {
+        view.onTopVisibleSectionChange = onTopVisibleSectionChange
         // Every changeset revision carries a fresh document id, so each publication
         // reaches the container, which decides whether it appends or replaces.
         if context.coordinator.documentID != content.document.id {

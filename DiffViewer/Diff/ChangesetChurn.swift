@@ -12,18 +12,23 @@ enum ChangesetChurn {
         var added = 0
         var deleted = 0
         for section in sections {
-            if case .text = section.outcome {
-                added += section.added
-                deleted += section.deleted
+            guard case let .counted(a, d)? = stats(for: section, currentFile: current[section.file.id]) else {
                 continue
             }
-            guard let file = current[section.file.id], sameInputs(section.file, file),
-                case let .counted(a, d)? = file.lineStats
-            else { continue }
             added += a
             deleted += d
         }
         return (added, deleted)
+    }
+
+    /// Text sections use their rendered counts; other outcomes use the current file's stats
+    /// while its inputs still match, else nil.
+    static func stats(for section: ChangesetSection, currentFile: ChangedFile?) -> LineStats? {
+        if case .text = section.outcome {
+            return .counted(added: section.added, deleted: section.deleted)
+        }
+        guard let currentFile, sameInputs(section.file, currentFile) else { return nil }
+        return currentFile.lineStats
     }
 
     /// A commit's content cannot change, so its files match without a fingerprint. A

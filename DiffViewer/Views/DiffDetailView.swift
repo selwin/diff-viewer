@@ -16,39 +16,7 @@ struct DiffDetailView: View {
     }
 
     private func header(loader: DiffLoader) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(file.path)
-                        .font(.system(.body, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let original = file.originalPath {
-                        Text("← \(original)")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                HStack(spacing: 8) {
-                    Text(file.kind.label)
-                    Text(file.area.comparisonLabel)
-                    if case let .text(doc)? = loader.content, let language = doc.language {
-                        Text(language)
-                    }
-                    if case let .text(doc)? = loader.content {
-                        ChangeCounterText(count: doc.changeBlocks.count, current: windowState.currentChangeIndex)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-            LoadingIndicator(isLoading: loader.isLoading)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
+        FileHeaderView(file: file, stats: file.lineStats, isLoading: loader.isLoading)
     }
 
     @ViewBuilder

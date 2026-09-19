@@ -76,6 +76,32 @@ struct ChangesetChurnTests {
         #expect(total([section(file, outcome: .notShown)], files: [current]) == (added: 4, deleted: 1))
     }
 
+    @Test func textSectionStatsAreItsOwnCountsWhateverTheFileSays() {
+        let file = changedFile("a.swift").with(lineStats: .counted(added: 100, deleted: 100))
+        let text = section(file, outcome: .text(language: "Swift"), added: 3, deleted: 1)
+        #expect(ChangesetChurn.stats(for: text, currentFile: file) == .counted(added: 3, deleted: 1))
+        #expect(ChangesetChurn.stats(for: text, currentFile: nil) == .counted(added: 3, deleted: 1))
+        #expect(ChangesetChurn.stats(for: text, currentFile: file.edited()) == .counted(added: 3, deleted: 1))
+    }
+
+    @Test func binarySectionStatsAreTheCurrentFilesWhileInputsMatch() {
+        let file = changedFile("image.png")
+        let binary = section(file, outcome: .binary)
+        let sizes = BinarySizes(oldByteCount: 10, newByteCount: 20)
+        #expect(ChangesetChurn.stats(for: binary, currentFile: file.with(lineStats: .binary(sizes))) == .binary(sizes))
+        #expect(ChangesetChurn.stats(for: binary, currentFile: nil) == nil)
+        #expect(ChangesetChurn.stats(for: binary, currentFile: file.edited().with(lineStats: .binary(sizes))) == nil)
+    }
+
+    @Test func commitSectionStatsMatchWithoutAFingerprint() {
+        let commit = CommitRef(sha: objectID("c1"), shortSha: "c1", firstParentSHA: objectID("c0"))
+        let file = changedFile("a.swift", area: .commit(commit)).with(fingerprint: nil)
+        let current = file.with(lineStats: .counted(added: 4, deleted: 1))
+        #expect(
+            ChangesetChurn.stats(for: section(file, outcome: .tooLarge), currentFile: current)
+                == .counted(added: 4, deleted: 1))
+    }
+
     @Test func mixedSectionsCombine() {
         let text = changedFile("a.swift")
         let binary = changedFile("b.bin")

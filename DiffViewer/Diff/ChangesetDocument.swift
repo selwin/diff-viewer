@@ -54,6 +54,8 @@ struct ChangesetDocument: Sendable {
     /// The fixed projection for this revision, built with the load's fold options, so the
     /// view installs it and never folds a changeset itself.
     let folded: FoldedRows
+    /// Row → section lookup over `sections`, built once here.
+    let sectionIndex: SectionIndex
 
     init(
         document: DiffDocument, sections: [ChangesetSection], loadID: UUID, revision: Int,
@@ -64,6 +66,7 @@ struct ChangesetDocument: Sendable {
         self.loadID = loadID
         self.revision = revision
         folded = ChangesetProjection.build(document: document, sections: sections, options: foldOptions)
+        sectionIndex = SectionIndex(sections: sections)
     }
 
     var identity: ChangesetIdentity { ChangesetIdentity(loadID: loadID, revision: revision) }

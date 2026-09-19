@@ -11,39 +11,28 @@ struct PaneModel {
     /// Empty for a single file. Every section is kept so a header row can read its file;
     /// only the ones with rows take part in the line-number lookup.
     let sections: [ChangesetSection]
-    /// Sections with a non-empty `rowRange`, in row order, for the binary search.
-    private let rowSections: [ChangesetSection]
+    /// Row → section lookup over `sections`. A changeset passes the one its document
+    /// already built; otherwise one is built here.
+    private let sectionIndex: SectionIndex
 
-    init(side: Side, rows: [DiffRow], lines: [String], sections: [ChangesetSection] = []) {
+    init(
+        side: Side, rows: [DiffRow], lines: [String], sections: [ChangesetSection] = [],
+        sectionIndex: SectionIndex? = nil
+    ) {
         self.side = side
         self.rows = rows
         self.lines = lines
         self.sections = sections
-        rowSections = sections.filter { !$0.rowRange.isEmpty }
+        self.sectionIndex = sectionIndex ?? SectionIndex(sections: sections)
     }
 
     func cell(_ row: DiffRow) -> DiffSide? {
         side == .old ? row.old : row.new
     }
 
-    /// The section whose `rowRange` contains `row`: the last non-empty section starting
-    /// at or before it, then a containment check, so an empty section sharing the same
-    /// boundary is never chosen and a row outside every section returns nil.
+    /// The section whose `rowRange` contains `row`; nil for a row outside every section.
     func section(containingRow row: Int) -> ChangesetSection? {
-        var low = 0
-        var high = rowSections.count - 1
-        var candidate: Int?
-        while low <= high {
-            let mid = (low + high) / 2
-            if rowSections[mid].rowRange.lowerBound <= row {
-                candidate = mid
-                low = mid + 1
-            } else {
-                high = mid - 1
-            }
-        }
-        guard let candidate, rowSections[candidate].rowRange.contains(row) else { return nil }
-        return rowSections[candidate]
+        sectionIndex.sectionIndex(containingRow: row).map { sections[$0] }
     }
 
     /// The number to show for `cell` in `row`: file-local inside a changeset section,
@@ -60,7 +49,9 @@ struct PaneModel {
     /// when the first text section arrives.
     var gutterDigits: Int {
         guard !sections.isEmpty else { return max(3, String(max(lines.count, 1)).count) }
-        let widest = rowSections.lazy.map { side == .old ? $0.oldLineCount : $0.newLineCount }.max() ?? 0
+        let widest =
+            sections.lazy.filter { !$0.rowRange.isEmpty }
+            .map { side == .old ? $0.oldLineCount : $0.newLineCount }.max() ?? 0
         return max(4, String(max(widest, 1)).count)
     }
 }

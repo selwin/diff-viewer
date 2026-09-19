@@ -306,6 +306,9 @@ fold options → a fresh load; a load cancelled before completion retains nothin
 
 Roughly in priority order.
 
+- **Change counter strip.** "Change 3 of 41" left the file header when it took the
+  name-first layout (2026-09-19). Bring it back in its own thin strip below the header,
+  together with previous/next controls, in both single-file and All changes mode.
 - **Find in diff (⌘F).** Search old side, new side, or both; highlight matches in the
   panes and the overview strip; ⌘G / ⌘⇧G step through matches. Kaleidoscope has it, and
   Sublime Merge users complain it is missing, so it is a visible win. Add an option to
