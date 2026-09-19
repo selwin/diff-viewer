@@ -6,8 +6,8 @@ struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
 
     var body: some View {
-        // Capped for the same reason as the scope pill: a long branch name would otherwise
-        // send every item after it into the overflow menu.
+        // Capped for the same reason as the scope picker: a long branch name would
+        // otherwise send every item after it into the overflow menu.
         CappedWidth(maximumWidth: 240) {
             branchMenu
         }
@@ -40,10 +40,10 @@ struct BranchPickerView: View {
                 .pickerStyle(.inline)
             }
         } label: {
-            Label(windowState.branchDisplayTitle, systemImage: "arrow.triangle.branch")
+            TitleBarPickerLabel(glyph: "arrow.triangle.branch", title: windowState.branchDisplayTitle)
         }
-        // The toolbar shows a menu's label as its icon alone unless told otherwise.
-        .labelStyle(.titleAndIcon)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .disabled(windowState.isSwitchingBranch || windowState.headState == nil)
         .help("Switch branch")
     }
@@ -62,21 +62,21 @@ struct BranchPickerView: View {
 }
 
 /// The title bar's scope pop-up: the same menu as the sidebar's `CommitPickerView`, with
-/// a one-line face the toolbar can draw natively.
+/// a one-line face.
 struct ScopePickerView: View {
     @Environment(WindowState.self) private var windowState
 
     var body: some View {
         // Capped so a long subject ellipsizes instead of pushing the toolbar's other
-        // items into the overflow menu. On the menu, not its text: the toolbar draws the
-        // face natively from the label's string and drops any modifier on the `Text`.
+        // items into the overflow menu.
         CappedWidth(maximumWidth: 360) {
             Menu {
                 ScopeMenuContent()
             } label: {
-                Label(windowState.scopeDisplayTitle, systemImage: icon)
+                TitleBarPickerLabel(glyph: icon, title: windowState.scopeDisplayTitle)
             }
-            .labelStyle(.titleAndIcon)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
             .help(help)
         }
     }
@@ -94,6 +94,37 @@ struct ScopePickerView: View {
         case .workingTree: ScopeMenuContent.scopeSelectionHelp
         case .commit: windowState.scopeDisplayTitle
         }
+    }
+}
+
+/// The face both title bar pop-ups wear: a bordered one-line box at toolbar control
+/// height, like a System Settings pop-up button. Plain data in, so it does not depend on
+/// `WindowState`.
+private struct TitleBarPickerLabel: View {
+    let glyph: String
+    let title: String
+
+    // A plain-style menu draws no disabled state of its own, so the face dims itself.
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: glyph)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
+        // The whole box opens the menu, not only the text.
+        .contentShape(Rectangle())
     }
 }
 
