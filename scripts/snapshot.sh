@@ -10,14 +10,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$1; repo=${2:-}; select=${3:-}
 app=build/Build/Products/Debug/DiffViewer.app/Contents/MacOS/DiffViewer
-pkill -x DiffViewer 2>/dev/null || true
+# Scripted runs keep their state in their own defaults suite and only ever quit their own
+# instances, so an Xcode-run DiffViewer keeps its session and preferences.
+suite=com.selwin.DiffViewer.scripted
+pkill -f "$PWD/$app" 2>/dev/null || true
 sleep 0.5
 if [[ -n $repo ]]; then
-  defaults write com.selwin.DiffViewer openRepositoryRoots -array "$repo"
-  defaults delete com.selwin.DiffViewer lastActiveRepositoryRoot 2>/dev/null || true
+  defaults write "$suite" openRepositoryRoots -array "$repo"
+  defaults delete "$suite" lastActiveRepositoryRoot 2>/dev/null || true
 fi
-if [[ -n ${COLLAPSE:-} ]]; then defaults write com.selwin.DiffViewer collapseUnchanged -bool "$COLLAPSE"; fi
+if [[ -n ${COLLAPSE:-} ]]; then defaults write "$suite" collapseUnchanged -bool "$COLLAPSE"; fi
 rm -f "$out"
-DIFFVIEWER_SNAPSHOT="$out" DIFFVIEWER_NEXT="${NEXT:-0}" DIFFVIEWER_FOLD="${FOLD:-}" DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
+DIFFVIEWER_DEFAULTS_SUITE="$suite" DIFFVIEWER_SNAPSHOT="$out" DIFFVIEWER_NEXT="${NEXT:-0}" DIFFVIEWER_FOLD="${FOLD:-}" DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
 for _ in {1..40}; do [[ -f $out ]] && break; sleep 0.5; done
 ls -la "$out"

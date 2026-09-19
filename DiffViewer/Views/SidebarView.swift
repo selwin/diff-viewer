@@ -7,6 +7,7 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var windowState = windowState
+        let staged = windowState.stagedFiles
         List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it
@@ -46,9 +47,10 @@ struct SidebarView: View {
                     ForEach(windowState.unstagedFiles) { FileRow(file: $0) }
                 }
             }
-            if !windowState.stagedFiles.isEmpty {
-                Section("Staged (\(windowState.stagedFiles.count))") {
-                    ForEach(windowState.stagedFiles) { FileRow(file: $0) }
+            if !staged.isEmpty {
+                Section("Staged (\(staged.count))") {
+                    commitRow
+                    ForEach(staged) { FileRow(file: $0) }
                 }
             }
             // A commit has one list: its own staging is long settled.
@@ -68,18 +70,23 @@ struct SidebarView: View {
         .contextMenu(forSelectionType: DiffSelection.self) { selections in
             contextMenu(for: Set(selections.compactMap(\.fileID)))
         }
-        // The box belongs to the working tree: a commit already on show is history.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !windowState.isEmpty, windowState.scope == .workingTree {
-                VStack(spacing: 0) {
-                    Divider()
-                    CommitBoxView()
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                }
-                .background(.bar)
+    }
+
+    /// Opens the commit sheet. The first row of the Staged section, with selection off so
+    /// it never highlights like a file.
+    private var commitRow: some View {
+        HStack {
+            Spacer()
+            // Hooks and signing can take seconds; the button alone would look stuck.
+            if windowState.isCommitting {
+                ProgressView().controlSize(.small)
             }
+            Button("Commit…") { windowState.isCommitSheetPresented = true }
+                .disabled(!windowState.canOpenCommitSheet)
+                .help("Commit (⌘↩)")
         }
+        .controlSize(.small)
+        .selectionDisabled()
     }
 
     /// The menu for the rows `ids` names, in sidebar order: one code path for one row and

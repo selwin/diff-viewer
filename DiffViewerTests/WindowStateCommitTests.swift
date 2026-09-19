@@ -468,4 +468,67 @@ struct WindowStateCommitTests {
         state.close()
         #expect(!state.canCommit)
     }
+
+    // MARK: canOpenCommitSheet
+
+    /// The sheet is where the message gets written, so a blank draft is no reason to
+    /// keep it shut; only the commit itself waits for one.
+    @Test func canOpenCommitSheetWithoutADraft() async throws {
+        let (_, state, _, _) = try await settled()
+        #expect(state.commitMessage == "")
+        #expect(state.canOpenCommitSheet)
+        #expect(!state.canCommit)
+    }
+
+    /// The same for an unedited template: the sheet opens so it can be edited there.
+    @Test func canOpenCommitSheetWithAnUneditedTemplate() async throws {
+        let boilerplate = "# Write a message"
+        let (_, state, _, _) = try await settled(defaults: template(boilerplate))
+        #expect(state.commitNeedsTemplateEdit)
+        #expect(state.canOpenCommitSheet)
+        #expect(!state.canCommit)
+    }
+
+    /// A merge whose tree equals HEAD stages nothing yet still has to be committed.
+    @Test func canOpenCommitSheetForAMergeWithoutStagedFiles() async throws {
+        let (_, state, _, _) = try await settled(files: [changedFile("b.swift")], defaults: merging(mergeText))
+        #expect(state.commitDefaults.isMerging)
+        #expect(state.canOpenCommitSheet)
+    }
+
+    /// Unstaged changes alone do not allow committing.
+    @Test func cannotOpenCommitSheetWithoutStagedFilesOrMerge() async throws {
+        let (_, state, _, _) = try await settled(files: [changedFile("b.swift")])
+        #expect(!state.canOpenCommitSheet)
+    }
+
+    /// A conflicted row means the merge is not finished.
+    @Test func cannotOpenCommitSheetWithConflicts() async throws {
+        let (_, state, _, _) = try await settled(files: filesStaged + [changedFile("c.swift", kind: .unmerged)])
+        #expect(!state.canOpenCommitSheet)
+    }
+
+    // MARK: Confirming the sheet's message
+
+    /// The sheet hands over the text the reader saw; while the draft still says the same,
+    /// the commit goes ahead as a plain `commit()` would.
+    @Test func aConfirmedMessageThatStillMatchesTheDraftCommits() async throws {
+        let (_, state, client, _) = try await settled()
+        state.commitMessage = message
+        #expect(await state.commit(confirming: message))
+        #expect(await client.commitMessages == [message])
+    }
+
+    /// An untouched merge suggestion confirmed just before the merge was aborted: the
+    /// draft is empty by the time the sheet is gone, and nothing is committed.
+    @Test func aDraftChangedSinceConfirmationIsNotCommitted() async throws {
+        let (_, state, client, _) = try await settled(defaults: merging(mergeText))
+        #expect(state.commitMessage == mergeText)
+        await client.set(commitDefaults: .none)
+        try await refreshSettled(state)
+        #expect(state.commitMessage == "")
+
+        #expect(await !state.commit(confirming: mergeText))
+        #expect(await client.commitMessages.isEmpty)
+    }
 }

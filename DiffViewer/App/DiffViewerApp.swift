@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct DiffViewerApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
-    @State private var services = AppServices()
+    @State private var services = AppServices(defaults: DebugLaunchOptions.defaults)
 
     var body: some Scene {
         WindowGroup(id: AppServices.repositorySceneID, for: RepositoryRoot.self) { $root in
@@ -158,9 +158,9 @@ struct RepositoryCommands: Commands {
             }
             .disabled(preferences.recentRepositoryRoots.isEmpty)
             Divider()
-            Button("Commit") { Task { await windowState?.commit() } }
+            Button("Commit…") { windowState?.isCommitSheetPresented = true }
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(!(windowState?.canCommit ?? false))
+                .disabled(!(windowState?.canOpenCommitSheet ?? false))
         }
         CommandGroup(after: .toolbar) {
             Button("Refresh") { Task { await windowState?.refresh() } }

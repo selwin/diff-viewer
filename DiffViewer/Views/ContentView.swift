@@ -6,6 +6,10 @@ struct ContentView: View {
     @Environment(WindowState.self) private var windowState
     @Environment(Preferences.self) private var preferences
     @Environment(\.appearsActive) private var appearsActive
+    /// The message the reader confirmed, held until the sheet is gone.
+    @State private var pendingCommitMessage: String?
+    /// The sheet was reopened because the draft changed while it was closing.
+    @State private var commitDraftChanged = false
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -98,6 +102,28 @@ struct ContentView: View {
             Button("OK") { windowState.errorMessage = nil }
         } message: {
             Text(windowState.errorMessage ?? "")
+        }
+        .sheet(isPresented: $windowState.isCommitSheetPresented, onDismiss: handleCommitSheetDismissal) {
+            CommitSheetView(draftChanged: commitDraftChanged) { message in
+                pendingCommitMessage = message
+                windowState.isCommitSheetPresented = false
+            }
+        }
+    }
+
+    /// Consumes the confirmed submission after the sheet is gone, so the commit's error
+    /// alert never races the dismissal. A draft that changed in the meantime reopens the
+    /// sheet for the reader to confirm the new text.
+    private func handleCommitSheetDismissal() {
+        commitDraftChanged = false
+        guard let message = pendingCommitMessage else { return }
+        pendingCommitMessage = nil
+        Task {
+            let draftMatched = await windowState.commit(confirming: message)
+            if !draftMatched {
+                commitDraftChanged = true
+                windowState.isCommitSheetPresented = true
+            }
         }
     }
 

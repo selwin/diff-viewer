@@ -128,9 +128,10 @@ final class WindowState {
     /// whichever refresh publishes one, for the same reason as `pendingReselect`.
     private var pendingAllChanges = false
 
-    /// The commit message being written, bound to the commit box.
+    /// The commit-message draft; the reader's own edits bump its revision, applied
+    /// defaults do not.
     ///
-    /// The setter is the reader's path (the box, tests), so it bumps `commitDraftRevision`.
+    /// The setter is the reader's path (the editor, tests), so it bumps `commitDraftRevision`.
     /// A defaults read writes `storedCommitMessage` directly, the way `applySelection`
     /// bypasses the `selection` setter, so automatic text never counts as an edit.
     var commitMessage: String {
@@ -141,8 +142,8 @@ final class WindowState {
         }
     }
     private var storedCommitMessage = ""
-    /// Bumped by every reader write to `commitMessage`, so a commit can tell whether the box
-    /// was edited while git ran. Same idea as `selectionRevision`.
+    /// Bumped by every reader write to `commitMessage`, so a commit can tell whether the
+    /// draft was edited while git ran. Same idea as `selectionRevision`.
     private(set) var commitDraftRevision = 0
     /// git's suggestion (merge, squash, template) and whether a merge is in progress.
     private(set) var commitDefaults = CommitDefaults.none
@@ -150,6 +151,8 @@ final class WindowState {
     private var lastAppliedDefaultMessage: String?
     /// A commit is queued or running.
     private(set) var isCommitting = false
+    /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
+    var isCommitSheetPresented = false
 
     /// How many commits a page holds, and how many `Load More` adds.
     static let commitPageSize = 50
@@ -830,21 +833,27 @@ extension WindowState {
 /// Recording the index as a commit and keeping the draft in step with git's own
 /// suggestion. Same file as the class so the commit state stays `private(set)`.
 extension WindowState {
-    /// An open window in working-tree scope, no commit or branch switch queued or running,
-    /// no conflict rows, something to commit (staged files, or a merge whose tree may equal
-    /// HEAD), a non-blank message that is not a commit.template left exactly as applied.
-    var canCommit: Bool {
+    /// Whether the commit editor can open, regardless of the draft: an open window in
+    /// working-tree scope, no commit or branch switch queued or running, no conflict rows,
+    /// something to commit (staged files, or a merge whose tree may equal HEAD).
+    var canOpenCommitSheet: Bool {
         guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch else {
             return false
         }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
-        guard files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging else { return false }
+        return files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging
+    }
+
+    /// `canOpenCommitSheet`, plus a non-blank message that is not a commit.template left
+    /// exactly as applied.
+    var canCommit: Bool {
+        guard canOpenCommitSheet else { return false }
         guard !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return !commitNeedsTemplateEdit
     }
 
-    /// Whether the draft exactly matches the current template suggestion. Commit refuses
-    /// it and the box says why. An exact string comparison, not git's cleanup-aware check;
+    /// True when the draft exactly matches the configured template. Commit refuses it and
+    /// the editor says why. An exact string comparison, not git's cleanup-aware check;
     /// a safeguard against committing boilerplate.
     var commitNeedsTemplateEdit: Bool {
         guard let suggestion = commitDefaults.suggestion, suggestion.source == .template else { return false }
@@ -864,13 +873,23 @@ extension WindowState {
         }
     }
 
+    /// `commit()` for a message confirmed in the sheet. Checked before the first
+    /// suspension, so a defaults read that replaced an untouched suggestion while the sheet
+    /// was closing cannot slip a message the reader never saw into the commit. Returns
+    /// whether the draft still matched; the caller shows the changed text instead.
+    func commit(confirming message: String) async -> Bool {
+        guard commitMessage == message else { return false }
+        await commit()
+        return true
+    }
+
     private func runCommit(message: String, revision: Int, session: RepoSession) async {
         guard session === self.session, !isClosed else { return }
         var failure: (any Error)?
         do { try await session.client.commit(message: message) } catch { failure = error }
         guard session === self.session, !isClosed else { return }
-        // Whatever the reader typed while git ran, a cleared box included, is theirs and
-        // survives both outcomes. Only an unedited box is settled here.
+        // Whatever the reader typed while git ran, a cleared draft included, is theirs and
+        // survives both outcomes. Only an unedited draft is settled here.
         if commitDraftRevision == revision {
             if failure == nil {
                 storedCommitMessage = ""
@@ -910,7 +929,7 @@ extension WindowState {
     }
 
     /// Reads the suggestion and applies it while its generation is still current and the
-    /// sidebar still shows the working tree. A thrown read applies nothing, so the box
+    /// sidebar still shows the working tree. A thrown read applies nothing, so the draft
     /// keeps its last good state, but it does forget whether a template is configured.
     private func loadCommitDefaults(session: RepoSession, generation: Int) async {
         // Cancelled before it ran: skip the subprocess, not just the publish.
@@ -940,7 +959,7 @@ extension WindowState {
 
     /// The draft is untouched when it still equals what was last applied (or is empty and
     /// nothing was). Untouched → replaced by the new suggestion (nil empties it) and
-    /// remembered; touched → left alone. A merge abort empties the box, a cherry-pick
+    /// remembered; touched → left alone. A merge abort empties the draft, a cherry-pick
     /// fills it, and a half-written message survives every watcher tick.
     private func applyCommitDefaults(_ new: CommitDefaults) {
         commitDefaults = new

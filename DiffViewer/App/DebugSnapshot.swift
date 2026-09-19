@@ -2,12 +2,16 @@ import AppKit
 import Foundation
 
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
+/// - `DIFFVIEWER_DEFAULTS_SUITE=<domain>` keeps preferences and the saved session in that
+///   `UserDefaults` suite, so scripted runs leave an Xcode-run instance's state alone.
 /// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
 ///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`);
 ///   `all` selects All changes.
 /// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
 ///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
 ///   commit's sidebar and diffs can be screenshotted.
+/// - `DIFFVIEWER_COMMIT_SHEET=1` opens the commit sheet after the selection is applied;
+///   `DIFFVIEWER_SNAPSHOT` then renders the sheet instead of the window.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
@@ -35,6 +39,18 @@ import Foundation
 ///   button. A step that cannot run (no key window in time, unknown command, unknown
 ///   window) prints a failure and stops the sequence.
 enum DebugLaunchOptions {
+    /// The store the app runs on: `DIFFVIEWER_DEFAULTS_SUITE` in a Debug build, else standard.
+    static var defaults: UserDefaults {
+        #if DEBUG
+            if let suite = ProcessInfo.processInfo.environment["DIFFVIEWER_DEFAULTS_SUITE"], !suite.isEmpty,
+                let suiteDefaults = UserDefaults(suiteName: suite)
+            {
+                return suiteDefaults
+            }
+        #endif
+        return .standard
+    }
+
     @MainActor private static var applied = false
     @MainActor private static var dumpSignal: (any DispatchSourceProtocol)?
 
@@ -55,7 +71,8 @@ enum DebugLaunchOptions {
             let dump = env["DIFFVIEWER_DUMP_WINDOWS"] == "1"
             let selection = env["DIFFVIEWER_SELECT"] ?? ""
             let scopeSha = env["DIFFVIEWER_SCOPE"] ?? ""
-            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty
+            let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
+            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty || commitSheet
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
@@ -114,6 +131,9 @@ enum DebugLaunchOptions {
                 if !selection.isEmpty {
                     windowState.selection = selection == "all" ? [.allChanges] : [.file(selection)]
                 }
+                if commitSheet {
+                    windowState.isCommitSheetPresented = true
+                }
                 if nextCount > 0 {
                     try? await Task.sleep(for: .seconds(2))
                     for _ in 0..<nextCount { windowState.nextChange() }
@@ -131,7 +151,7 @@ enum DebugLaunchOptions {
                 }
                 if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
                     try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 1 : 3))
-                    snapshot(window, to: path)
+                    snapshot(window.attachedSheet ?? window, to: path)
                 }
             }
         #endif
@@ -271,7 +291,7 @@ enum DebugLaunchOptions {
                 + "lastActive=\(coordinator.lastActiveRepositoryRoot?.name ?? "nil") "
                 + "phase=\(coordinator.phase)"
         )
-        let defaults = UserDefaults.standard
+        let defaults = Self.defaults
         let saved = (defaults.stringArray(forKey: WindowCoordinator.SessionKeys.openRoots) ?? []).map {
             RepositoryRoot(path: $0).name
         }
