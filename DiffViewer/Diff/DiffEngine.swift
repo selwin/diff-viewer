@@ -6,6 +6,17 @@ enum DiffEngine {
         let old: Data
         let new: Data
         let fileName: String
+        /// Distinguishes absent versions from existing zero-byte files.
+        let oldExists: Bool
+        let newExists: Bool
+
+        init(old: Data, new: Data, fileName: String, oldExists: Bool = true, newExists: Bool = true) {
+            self.old = old
+            self.new = new
+            self.fileName = fileName
+            self.oldExists = oldExists
+            self.newExists = newExists
+        }
     }
 
     static func sources(for file: ChangedFile, client: any RepoClient) async throws -> Sources {
@@ -39,7 +50,9 @@ enum DiffEngine {
             }
             new = file.kind == .deleted ? nil : try await client.contents(of: file.path, at: ref.sha)
         }
-        return Sources(old: old ?? Data(), new: new ?? Data(), fileName: file.fileName)
+        return Sources(
+            old: old ?? Data(), new: new ?? Data(), fileName: file.fileName,
+            oldExists: old != nil, newExists: new != nil)
     }
 
     /// Whether a pair is text with differences, i.e. something difft can work on.
