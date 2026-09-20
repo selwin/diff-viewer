@@ -155,4 +155,162 @@ struct DiffLoaderTests {
         }
         #expect(loader.styles == nil)
     }
+
+    // MARK: Image previews
+
+    /// True once `loader` has settled on `.binary` content.
+    private func waitUntilSettledOnBinary(_ loader: DiffLoader) async -> Bool {
+        guard await eventually({ await !loader.isLoading }) else { return false }
+        if case .binary? = loader.content { return true }
+        return false
+    }
+
+    /// The decoded pixel width of a preview side, or nil when it is absent or undecodable.
+    private func decodedWidth(_ side: ImagePreview.Side?) -> Int? {
+        guard case let .decoded(decoded)? = side else { return nil }
+        return decoded.originalPixelWidth
+    }
+
+    /// A client whose worktree `logo.png` is a 7×5 PNG.
+    private func clientWithLogo() async throws -> StubRepoClient {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: try imageData(width: 7, height: 5), for: "logo.png")
+        return client
+    }
+
+    /// A binary file with an image extension publishes its decoded sides with the content;
+    /// the stub's text index side is undecodable. One without stays a plain binary.
+    @Test func aBinaryImagePublishesAPreviewAndOtherBinariesDoNot() async throws {
+        let client = try await clientWithLogo()
+        await client.set(worktree: Data([0, 1, 2]), for: "blob.bin")
+        let loader = DiffLoader(cache: plainDifftCache())
+
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(decodedWidth(loader.imagePreview?.new) == 7)
+        guard case .undecodable? = loader.imagePreview?.old else {
+            Issue.record("undecodable old side expected")
+            return
+        }
+        #expect(loader.styles == nil)
+
+        loader.load(file: changedFile("blob.bin"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(loader.imagePreview == nil)
+    }
+
+    /// The image extension may be on the original path of a rename.
+    @Test func aRenamedImageIsRecognisedByItsOriginalPath() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: try imageData(width: 7, height: 5), for: "logo.bin")
+        let loader = DiffLoader(cache: plainDifftCache())
+        let renamed = ChangedFile(
+            path: "logo.bin", originalPath: "logo.png", kind: .renamed, area: .unstaged, fingerprint: nil)
+
+        loader.load(file: renamed, client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(loader.imagePreview != nil)
+    }
+
+    /// An untracked image has no old side at all, as opposed to an undecodable one.
+    @Test func anUntrackedImageHasNoOldSide() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: try imageData(width: 7, height: 5), for: "new.png")
+        let loader = DiffLoader(cache: plainDifftCache())
+
+        loader.load(file: changedFile("new.png", kind: .untracked), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(loader.imagePreview?.old == nil)
+        #expect(decodedWidth(loader.imagePreview?.new) == 7)
+    }
+
+    /// The preview belongs to its selection: another file, no selection, or All changes
+    /// clears it at once, before the replacement loads.
+    @Test func thePreviewIsClearedWithItsSelection() async throws {
+        let client = try await clientWithLogo()
+        let loader = DiffLoader(cache: plainDifftCache())
+        let loadLogo = {
+            loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+            try #require(await waitUntilSettledOnBinary(loader))
+            #expect(loader.imagePreview != nil)
+        }
+
+        try await loadLogo()
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(loader.imagePreview == nil, "cleared before the other file loads")
+        #expect(await eventually { await !loader.isLoading })
+        guard case .text? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.imagePreview == nil)
+
+        try await loadLogo()
+        loader.load(file: nil, client: client, hideWhitespace: true)
+        #expect(loader.imagePreview == nil)
+
+        try await loadLogo()
+        loader.load(changeset: [changedFile("a.swift")], client: client, hideWhitespace: true)
+        #expect(loader.imagePreview == nil)
+        #expect(await eventually { await !loader.hasActiveWork })
+    }
+
+    /// Reloading the same file keeps the previous preview on screen until the replacement
+    /// is published, as it keeps the content.
+    @Test func aSameFileReloadKeepsThePreviewUntilTheReplacementIsPublished() async throws {
+        let client = try await clientWithLogo()
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+
+        await client.set(worktree: try imageData(width: 3, height: 9), for: "logo.png")
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        #expect(loader.isLoading)
+        #expect(decodedWidth(loader.imagePreview?.new) == 7, "the previous preview stays while reloading")
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(decodedWidth(loader.imagePreview?.new) == 3)
+    }
+
+    /// A same-file reload whose content is no longer an image drops the preview, whether
+    /// the file turned text or merely undecodable.
+    @Test func aSameFileReloadThatIsNoLongerAnImageDropsThePreview() async throws {
+        let client = try await clientWithLogo()
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+
+        await client.set(worktree: Data("text".utf8), for: "logo.png")
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        #expect(await eventually { await !loader.isLoading })
+        guard case .text? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.imagePreview == nil)
+
+        await client.set(worktree: Data([0, 1, 2]), for: "logo.png")
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        #expect(loader.imagePreview == nil)
+    }
+
+    /// A superseded image load never publishes its preview, even when its held read comes
+    /// back after the newer load has published.
+    @Test func aSupersededImageLoadNeverPublishesItsPreview() async throws {
+        let client = try await clientWithLogo()
+        await client.hold(worktree: ["logo.png"])
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        #expect(await eventually { await client.waitingWorktreePaths.contains("logo.png") })
+
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(await eventually { await !loader.isLoading })
+        await client.release(worktree: "logo.png")
+        try? await Task.sleep(for: .milliseconds(100))
+        guard case .text? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.imagePreview == nil)
+    }
 }
