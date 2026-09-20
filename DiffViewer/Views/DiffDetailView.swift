@@ -37,8 +37,12 @@ struct DiffDetailView: View {
                     foldOptions: preferences.foldOptions
                 )
             case .binary?:
-                ContentUnavailableView(
-                    "Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
+                if let preview = loader.imagePreview {
+                    ImagePreviewView(preview: preview)
+                } else {
+                    ContentUnavailableView(
+                        "Binary file", systemImage: "doc.zipper", description: Text("Binary files are not shown."))
+                }
             case .identical?:
                 ContentUnavailableView(
                     "No differences", systemImage: "equal.circle",
