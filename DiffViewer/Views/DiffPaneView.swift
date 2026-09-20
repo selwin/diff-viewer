@@ -234,10 +234,16 @@ final class DiffPaneView: NSView {
                 context.fill(fullWidthRect(rowRect))
             }
             let cached = cachedLine(for: cell.lineIndex, model: model)
+            // The gutter tints are translucent, so nothing may be drawn under the gutter.
+            context.saveGState()
+            context.clip(
+                to: NSRect(
+                    x: rowRect.minX + gutterWidth, y: rowRect.minY, width: rowRect.width, height: rowRect.height))
             drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
             drawLine(
                 cached.line, at: CGPoint(x: gutterWidth + textInset, y: rowRect.minY + 2 + ascent), context: context)
+            context.restoreGState()
         } else {
             drawPad(rowRect, context: context)
         }
