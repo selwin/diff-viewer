@@ -1,4 +1,7 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 @testable import DiffViewer
 
@@ -187,4 +190,30 @@ func commitSummary(
         authorName: authorName,
         authoredAt: authoredAt
     )
+}
+
+// MARK: Images
+
+private struct ImageFixtureFailure: Error {
+    let step: String
+}
+
+/// A solid-colour image of the given size, encoded as `type`. `properties` are passed to
+/// the destination, e.g. `kCGImagePropertyOrientation`.
+func imageData(width: Int, height: Int, type: UTType = .png, properties: [CFString: Any] = [:]) throws -> Data {
+    guard
+        let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { throw ImageFixtureFailure(step: "context") }
+    context.setFillColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    guard let image = context.makeImage() else { throw ImageFixtureFailure(step: "makeImage") }
+    let data = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
+        throw ImageFixtureFailure(step: "destination")
+    }
+    CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { throw ImageFixtureFailure(step: "finalize") }
+    return data as Data
 }

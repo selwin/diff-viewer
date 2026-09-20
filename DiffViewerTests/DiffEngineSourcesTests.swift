@@ -26,6 +26,7 @@ struct DiffEngineSourcesTests {
         #expect(reads.allSatisfy { $0.path == "src/a.swift" })
         #expect(sources.old == Data("\(parent):src/a.swift".utf8))
         #expect(sources.new == Data("\(sha):src/a.swift".utf8))
+        #expect(sources.oldExists && sources.newExists)
     }
 
     @Test func addedReadsOnlyTheCommit() async throws {
@@ -34,6 +35,8 @@ struct DiffEngineSourcesTests {
         let reads = await client.contentRevisions
         #expect(reads.map(\.revision) == [sha])
         #expect(sources.old.isEmpty)
+        #expect(!sources.oldExists)
+        #expect(sources.newExists)
     }
 
     @Test func deletedReadsOnlyTheParent() async throws {
@@ -42,6 +45,8 @@ struct DiffEngineSourcesTests {
         let reads = await client.contentRevisions
         #expect(reads.map(\.revision) == [parent])
         #expect(sources.new.isEmpty)
+        #expect(sources.oldExists)
+        #expect(!sources.newExists)
     }
 
     /// A root commit has no `^` to read: its old side is empty by construction, and no
@@ -52,6 +57,7 @@ struct DiffEngineSourcesTests {
         let reads = await client.contentRevisions
         #expect(reads.map(\.revision) == [sha])
         #expect(sources.old.isEmpty)
+        #expect(!sources.oldExists)
         #expect(!sources.new.isEmpty)
     }
 
@@ -61,5 +67,20 @@ struct DiffEngineSourcesTests {
         #expect(await client.contentRevisions.isEmpty)
         #expect(sources.old == Data("old src/a.swift".utf8))
         #expect(sources.new == Data("new src/a.swift".utf8))
+    }
+
+    @Test func anEmptyWorktreeFileStillExists() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: Data(), for: "src/a.swift")
+        let sources = try await DiffEngine.sources(for: changedFile("src/a.swift"), client: client)
+        #expect(sources.new.isEmpty)
+        #expect(sources.newExists)
+    }
+
+    @Test func anUntrackedFileHasNoOldSide() async throws {
+        let client = StubRepoClient(files: [])
+        let sources = try await DiffEngine.sources(for: changedFile("src/a.swift", kind: .untracked), client: client)
+        #expect(!sources.oldExists)
+        #expect(sources.newExists)
     }
 }

@@ -28,7 +28,7 @@ Where DiffViewer already stands versus the bar:
 | Sidebar filter (name / ext / kind) | yes | partial | yes | **no** |
 | Folder outline in sidebar | yes | no (long-requested) | no | **no** |
 | Rename / move detection | yes | yes | yes | **no** (`--no-renames`) |
-| Image diff | no | yes | no (top request) | **no** |
+| Image diff | no | yes | no (top request) | **yes** (side by side, no onion-skin) |
 | Text selection / copy from panes | yes | yes | yes | **yes** |
 
 ---
@@ -344,9 +344,8 @@ Roughly in priority order.
 
 ## Later: worth having, not urgent
 
-- **Image diff.** Show old and new images side by side with dimensions and size; optional
-  swipe or onion-skin slider. Sublime Merge has it; it is JuxtaCode's most requested
-  feature. Also covers the "Binary file" dead end for the most common binary case.
+- **Image diff, second pass.** The side-by-side preview landed (see *Landed*); still
+  open: a swipe or onion-skin slider, zoom, and images inside All changes.
 - **Quick Look for other binaries** (Kaleidoscope, JuxtaCode): press Space on a binary
   file to preview the worktree version.
 - **Connector lines between panes** for modified rows, as in Kaleidoscope's Fluid layout
@@ -372,6 +371,15 @@ Roughly in priority order.
   is the minimum. Listed in README as a non-goal for now.
 
 ## Landed since this list was written
+
+### Image preview (2026-09-20)
+
+Selecting a binary file with an image extension shows the decodable versions side by
+side, fit to the pane and never above one source pixel per point, over a checkerboard,
+with a "W × H · size" caption. A missing or undecodable side shows a notice; if neither
+side decodes, the binary placeholder remains. Decoding runs off the main actor, forwards
+cancellation, and limits each preview's longest dimension to 4096 px. All changes still
+shows the "Binary file" notice.
 
 ### Commit picker (2026-09-13)
 

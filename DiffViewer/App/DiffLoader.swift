@@ -18,6 +18,9 @@ final class DiffLoader {
     private(set) var errorMessage: String?
     /// Syntax styles for `content`, published in the same turn as the content itself.
     private(set) var styles: DocumentStyles?
+    /// Preview for the current single-file binary content. Published with `content` and
+    /// retained during same-file reloads.
+    private(set) var imagePreview: ImagePreview?
     /// How much of an All-changes load has been published, while one is running.
     private(set) var changesetProgress: (completed: Int, total: Int)?
 
@@ -34,9 +37,8 @@ final class DiffLoader {
         self.resultCache = resultCache
     }
 
-    /// Stops any in-flight diff. Published content and styles stay as they are; the
-    /// cancelled generation can no longer publish. Returns whether anything was actually
-    /// in flight.
+    /// Stops any in-flight diff. Published presentation state stays as it is; the cancelled
+    /// generation can no longer publish. Returns whether anything was actually in flight.
     @discardableResult
     func cancelActiveWork() -> Bool {
         let wasActive = hasActiveWork
@@ -54,10 +56,12 @@ final class DiffLoader {
         if case .changeset = content {
             content = nil
             styles = nil
+            imagePreview = nil
             contentFileID = nil
         }
         guard let file, let client else {
             content = nil
+            imagePreview = nil
             contentFileID = nil
             isLoading = false
             errorMessage = nil
@@ -66,6 +70,7 @@ final class DiffLoader {
         if contentFileID != file.id {
             content = nil
             styles = nil
+            imagePreview = nil
             contentFileID = file.id
         }
         isLoading = true
@@ -78,9 +83,19 @@ final class DiffLoader {
                     sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
                     priority: .foreground)
                 try Task.checkCancellation()
+                var preview: ImagePreview?
+                if case .binary = output.content,
+                    ImagePreview.hasImageExtension(file.path)
+                        || file.originalPath.map(ImagePreview.hasImageExtension) == true
+                {
+                    preview = try await ImagePreview.decode(
+                        old: sources.oldExists ? sources.old : nil, new: sources.newExists ? sources.new : nil)
+                    try Task.checkCancellation()
+                }
                 guard gen == generation else { return }
                 content = output.content
                 contentFileID = file.id
+                imagePreview = preview
                 if case let .text(document) = output.content, let syntax = output.styles {
                     // A cache hit for the document already on screen keeps its snapshot,
                     // so the panes do not reshape lines they already have.
@@ -113,6 +128,7 @@ final class DiffLoader {
         let gen = generation
         let onScreen = if case .changeset = content { true } else { false }
         let preserved = preserveCurrentContent && client != nil && !files.isEmpty && onScreen
+        imagePreview = nil
         if !preserved {
             content = nil
             contentFileID = nil

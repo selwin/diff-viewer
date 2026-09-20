@@ -43,6 +43,10 @@ enum DiffTheme {
     static let addedCount = NSColor.systemGreen
     static let deletedCount = NSColor.systemRed
 
+    // The transparency checkerboard behind image previews.
+    static let checkerLight = dynamic(light: .white, dark: rgb(58, 58, 60))
+    static let checkerDark = dynamic(light: rgb(214, 214, 214), dark: rgb(38, 38, 40))
+
     /// The sidebar badge colour for a change kind. Shared so the sidebar and the
     /// changeset file headers can never drift apart.
     static func badge(for kind: ChangedFile.Kind) -> NSColor {

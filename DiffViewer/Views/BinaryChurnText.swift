@@ -25,14 +25,14 @@ enum BinaryChurnText {
         case let (nil, new?):
             return Presentation(
                 kind: .added,
-                primaryText: plus + size(new, locale),
+                primaryText: plus + FileSizeText.string(new, locale: locale),
                 deltaText: nil,
                 helpText: "Added, \(bytes(new, locale))"
             )
         case let (old?, nil):
             return Presentation(
                 kind: .deleted,
-                primaryText: minus + size(old, locale),
+                primaryText: minus + FileSizeText.string(old, locale: locale),
                 deltaText: nil,
                 helpText: "Deleted, \(bytes(old, locale))"
             )
@@ -42,15 +42,15 @@ enum BinaryChurnText {
             if delta == 0 {
                 return Presentation(
                     kind: .sameSize,
-                    primaryText: size(new, locale),
+                    primaryText: FileSizeText.string(new, locale: locale),
                     deltaText: nil,
                     helpText: "\(bytes(new, locale)), size unchanged"
                 )
             }
             return Presentation(
                 kind: delta > 0 ? .grown : .shrunk,
-                primaryText: size(new, locale),
-                deltaText: (delta > 0 ? plus : minus) + size(abs(delta), locale),
+                primaryText: FileSizeText.string(new, locale: locale),
+                deltaText: (delta > 0 ? plus : minus) + FileSizeText.string(abs(delta), locale: locale),
                 helpText: "\(bytes(old, locale)) → \(bytes(new, locale))"
             )
         }
@@ -59,19 +59,6 @@ enum BinaryChurnText {
     private static let plus = "+"
     /// U+2212, the minus the line counts use; the formatter's own negatives vary by locale.
     private static let minus = "−"
-
-    /// Finder-style rounded size of a non-negative count: "300 bytes", "4 kB", "1.2 MB".
-    private static func size(_ count: Int64, _ locale: Locale) -> String {
-        count.formatted(
-            ByteCountFormatStyle(
-                style: .file,
-                allowedUnits: .all,
-                spellsOutZero: false,
-                includesActualByteCount: false,
-                locale: locale
-            )
-        )
-    }
 
     /// Exact grouped count: "1 byte", "12,345 bytes".
     private static func bytes(_ count: Int64, _ locale: Locale) -> String {

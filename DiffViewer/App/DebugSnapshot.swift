@@ -17,6 +17,9 @@ import Foundation
 /// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
 ///   visible separator row (or flips Collapse Unchanged Lines), in order, after the diff
 ///   has loaded. Clicks go through the real mouse path.
+/// - `DIFFVIEWER_SCROLL_X=<points>[,...]` scrolls the panes horizontally to each offset
+///   in turn after the diff has loaded, through the clip view like a scroller does, so
+///   partial redraws on horizontal scroll can be screenshotted with `screencapture`.
 /// - `DIFFVIEWER_SNAPSHOT=<path.png>` renders the window contents to a PNG afterwards
 ///   (works even when the window is on another Space, unlike `screencapture`).
 /// - `DIFFVIEWER_OPEN=<JSON array of paths>` opens those repositories, in order, as if
@@ -76,6 +79,7 @@ enum DebugLaunchOptions {
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
+            let scrollXs = (env["DIFFVIEWER_SCROLL_X"] ?? "").split(separator: ",").compactMap { Double($0) }
             // One ordered sequence: opens finish before the target window is chosen, so the
             // selection, folding, and snapshot all act on the same window.
             Task { @MainActor in
@@ -149,8 +153,12 @@ enum DebugLaunchOptions {
                         try? await Task.sleep(for: .seconds(0.2))
                     }
                 }
+                if !scrollXs.isEmpty {
+                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 0.5 : 2))
+                    await scrollHorizontally(to: scrollXs, in: window)
+                }
                 if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
-                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 1 : 3))
+                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
                     snapshot(window.attachedSheet ?? window, to: path)
                 }
             }
@@ -330,6 +338,20 @@ enum DebugLaunchOptions {
             try? await Task.sleep(for: interval)
         }
         return condition()
+    }
+
+    /// Scrolls the right pane's clip view to each x in turn; the container syncs the left pane.
+    @MainActor
+    private static func scrollHorizontally(to xs: [Double], in window: NSWindow) async {
+        guard let container = window.contentView?.descendant(SideBySideContainerView.self),
+            let scroll = container.rightPane.enclosingScrollView
+        else { return }
+        let clip = scroll.contentView
+        for x in xs {
+            clip.scroll(to: NSPoint(x: x, y: clip.bounds.origin.y))
+            scroll.reflectScrolledClipView(clip)
+            try? await Task.sleep(for: .seconds(0.3))
+        }
     }
 
     @MainActor
