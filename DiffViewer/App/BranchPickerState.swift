@@ -8,12 +8,26 @@ enum BranchReadStatus: Equatable, Sendable {
     case failed
 }
 
+/// How the picker's automatic fetch went. The remote is unknown until it is resolved,
+/// which is why `.fetching` and `.failed` both allow a nil one.
+enum FetchStatus: Equatable, Sendable {
+    case idle
+    /// Nil while the remote is still being resolved.
+    case fetching(remote: String?)
+    case fetched(remote: String, at: Date)
+    /// A nil remote means remote discovery itself failed.
+    case failed(remote: String?, message: String)
+    /// No eligible remote could be resolved.
+    case noFetchTarget
+}
+
 /// What the window hands the branch picker on every change.
 struct BranchPickerSnapshot: Equatable, Sendable {
     var headState: HeadState?
     var branches: [LocalBranch]
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
+    var fetchStatus: FetchStatus = .idle
 }
 
 struct BranchPickerRow: Equatable {
@@ -48,23 +62,28 @@ struct BranchPickerHeaderText: Equatable {
     let title: String
     let showsCurrentPill: Bool
     let detail: String
+    /// True while a fetch runs, whether or not its remote is known yet.
+    var showsSpinner = false
 
     static func make(snapshot: BranchPickerSnapshot) -> BranchPickerHeaderText {
+        let spinner = if case .fetching = snapshot.fetchStatus { true } else { false }
         guard let headState = snapshot.headState else {
             let title = snapshot.readStatus == .failed ? "Couldn't read branches" : "Loading…"
-            return BranchPickerHeaderText(title: title, showsCurrentPill: false, detail: "")
+            return BranchPickerHeaderText(
+                title: title, showsCurrentPill: false, detail: "", showsSpinner: spinner)
         }
         switch headState {
         case let .detached(sha):
             return BranchPickerHeaderText(
-                title: "Detached " + sha.prefix(7), showsCurrentPill: false, detail: "")
+                title: "Detached " + sha.prefix(7), showsCurrentPill: false, detail: "", showsSpinner: spinner)
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
             let detail = snapshot.branches.first { $0.name == name }.map { branch in
                 guard let upstream = branch.upstream else { return "no upstream" }
                 return upstream.tracking.summary ?? "up to date"
             }
-            return BranchPickerHeaderText(title: name, showsCurrentPill: true, detail: detail ?? "")
+            return BranchPickerHeaderText(
+                title: name, showsCurrentPill: true, detail: detail ?? "", showsSpinner: spinner)
         }
     }
 }
@@ -122,10 +141,27 @@ struct BranchPickerState {
         }
     }
 
-    /// A failed read keeps the last list up; the footer says the counts may be stale.
+    /// A failed read keeps the last list up, and saying the counts may be stale outranks
+    /// any fetch news: the numbers on screen are what the reader is judging.
     var footer: BranchPickerFooter {
-        guard !rows.isEmpty, snapshot.readStatus == .failed else { return .none }
-        return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
+        if !rows.isEmpty, snapshot.readStatus == .failed {
+            return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
+        }
+        switch snapshot.fetchStatus {
+        case let .fetched(remote, at):
+            return .text("Fetched \(remote) \(Self.fetchedTime(at))", tooltip: nil)
+        case let .failed(remote, message):
+            let text = remote.map { "Couldn't fetch \($0)" } ?? "Couldn't load remotes"
+            return .text(text, tooltip: message)
+        case .idle, .fetching, .noFetchTarget:
+            return .none
+        }
+    }
+
+    /// Wall-clock time rather than "just now", which would go stale while the popover
+    /// stays open.
+    static func fetchedTime(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
     }
 
     var headerText: BranchPickerHeaderText {
@@ -151,7 +187,7 @@ struct BranchPickerState {
         guard new != snapshot else { return .none }
         let old = snapshot
         snapshot = new
-        // A read status or a switch flag moves no row. A switch flag does change whether a
+        // A read status, a fetch status or a switch flag moves no row. A switch flag does change whether a
         // row can activate, which its cell holds, so every row is refreshed in place.
         guard new.branches != old.branches || new.headState != old.headState else {
             return new.isSwitchingBranch != old.isSwitchingBranch

@@ -57,6 +57,11 @@ actor StubRepoClient: RepoClient {
     /// Every push asked for, in order, whether or not it succeeded.
     private(set) var pushCalls: [(branch: String, remote: String, remoteRef: String)] = []
     private var failsFetch = false
+    private var holdsFetch = false
+    private var heldFetch: [CheckedContinuation<Void, Never>] = []
+    private var failsRemoteNames = false
+    private var holdsRemoteNames = false
+    private var heldRemoteNames: [CheckedContinuation<Void, Never>] = []
     private var failsPull = false
     private var failsPush = false
     private var failsSwitchBranch = false
@@ -291,6 +296,8 @@ actor StubRepoClient: RepoClient {
     }
     /// Releases the newest held branches read, so completion order can be chosen.
     func releaseLastLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeLast().resume() } }
+    /// Releases the oldest held branches read, for the other half of that choice.
+    func releaseFirstLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeFirst().resume() } }
 
     /// Makes `switchBranch` throw, after recording the call and moving HEAD.
     func fail(switchBranch on: Bool) { failsSwitchBranch = on }
@@ -343,13 +350,42 @@ actor StubRepoClient: RepoClient {
     func fail(pull on: Bool) { failsPull = on }
     func fail(push on: Bool) { failsPush = on }
 
+    /// Makes `remoteNames` throw, after recording the call.
+    func fail(remoteNames on: Bool) { failsRemoteNames = on }
+    /// Suspends `remoteNames` after it records the call.
+    func holdRemoteNames(_ on: Bool) { holdsRemoteNames = on }
+    var heldRemoteNamesCount: Int { heldRemoteNames.count }
+    func releaseRemoteNames() {
+        let waiting = heldRemoteNames
+        heldRemoteNames = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Suspends `fetch` after it records the call.
+    func holdFetch(_ on: Bool) { holdsFetch = on }
+    var heldFetchCount: Int { heldFetch.count }
+    func releaseFetch() {
+        let waiting = heldFetch
+        heldFetch = []
+        for continuation in waiting { continuation.resume() }
+    }
+
     func remoteNames() async throws -> [String] {
         remoteNamesCalls += 1
-        return stubbedRemoteNames
+        let snapshot = stubbedRemoteNames
+        if holdsRemoteNames {
+            await withCheckedContinuation { heldRemoteNames.append($0) }
+        }
+        if failsRemoteNames {
+            throw ProcessError.failed(command: "git remote", status: 128, stderr: "no remotes")
+        }
+        return snapshot
     }
 
     func fetch(remote: String) async throws {
         fetchCalls.append(remote)
+        if holdsFetch {
+            await withCheckedContinuation { heldFetch.append($0) }
+        }
         if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
     }
 
@@ -579,6 +615,9 @@ final class Harness {
         UserDefaults.standard.removePersistentDomain(forName: suite)
     }
 
+    /// What `WindowState` reads as the current time; tests move it to expire cooldowns.
+    var clock = Date(timeIntervalSince1970: 1_789_300_000)
+
     func makeState(commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator()) -> WindowState {
         let runner = runner
         let cache = DifftCache(runner: { old, new, fileName, qos in
@@ -586,6 +625,7 @@ final class Harness {
         })
         let state = WindowState(
             preferences: preferences, cache: cache, commitMessageGenerator: commitMessageGenerator,
+            now: { [weak self] in self?.clock ?? Date() },
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher

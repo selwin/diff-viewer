@@ -15,10 +15,11 @@ struct BranchPickerStateTests {
 
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
-        isSwitchingBranch: Bool = false
+        isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
-            headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch)
+            headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
+            fetchStatus: fetchStatus)
     }
 
     private func state(_ snapshot: BranchPickerSnapshot) -> BranchPickerState {
@@ -212,6 +213,55 @@ struct BranchPickerStateTests {
         #expect(
             state(snapshot(branches: [main], readStatus: .failed)).footer
                 == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
+    }
+
+    // MARK: Fetching
+
+    @Test func theSpinnerOnlyShowsWhileFetching() {
+        #expect(state(snapshot(branches: [main], fetchStatus: .fetching(remote: nil))).headerText.showsSpinner)
+        #expect(state(snapshot(branches: [main], fetchStatus: .fetching(remote: "origin"))).headerText.showsSpinner)
+        #expect(!state(snapshot(branches: [main])).headerText.showsSpinner)
+        #expect(
+            !state(snapshot(branches: [main], fetchStatus: .fetched(remote: "origin", at: Self.now)))
+                .headerText.showsSpinner)
+        // A header with no HEAD yet still reports the fetch.
+        #expect(
+            state(snapshot(headState: nil, branches: [], readStatus: .unread, fetchStatus: .fetching(remote: nil)))
+                .headerText.showsSpinner)
+    }
+
+    @Test func theFooterReportsTheFetch() {
+        let time = BranchPickerState.fetchedTime(Self.now)
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: .fetched(remote: "origin", at: Self.now))).footer
+                == .text("Fetched origin \(time)", tooltip: nil))
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: .failed(remote: nil, message: "no remotes"))).footer
+                == .text("Couldn't load remotes", tooltip: "no remotes"))
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: .failed(remote: "origin", message: "host down"))).footer
+                == .text("Couldn't fetch origin", tooltip: "host down"))
+        #expect(state(snapshot(branches: [main], fetchStatus: .noFetchTarget)).footer == BranchPickerFooter.none)
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: .fetching(remote: "origin"))).footer
+                == BranchPickerFooter.none)
+    }
+
+    /// The counts on screen are what the reader is judging, so their staleness outranks
+    /// news about the fetch.
+    @Test func aStaleReadOutranksTheFetch() {
+        let taken = snapshot(
+            branches: [main], readStatus: .failed, fetchStatus: .fetched(remote: "origin", at: Self.now))
+        #expect(state(taken).footer == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
+    }
+
+    @Test func aFetchStatusChangeLeavesTheRowsAlone() {
+        var picker = state(snapshot(branches: [main, feature]))
+        let rows = picker.rows
+        #expect(
+            picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil)))
+                == PickerTableChange.none)
+        #expect(picker.rows == rows)
     }
 
     @Test func theEmptyStateFollowsTheReadStatus() {

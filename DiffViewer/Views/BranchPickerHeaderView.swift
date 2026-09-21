@@ -12,13 +12,18 @@ final class BranchPickerHeaderView: NSVisualEffectView {
     private let pill = CurrentPillView(frame: .zero)
     private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private let hairline = HairlineView(frame: .zero)
+    private let spinner = NSProgressIndicator(frame: .zero)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
         material = .headerView
         blendingMode = .withinWindow
-        for view in [title, pill, detail, hairline] { addSubview(view) }
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.sizeToFit()
+        for view in [title, pill, detail, hairline, spinner] { addSubview(view) }
         pill.isHidden = true
     }
 
@@ -31,6 +36,12 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         title.stringValue = text.title
         pill.isHidden = !text.showsCurrentPill
         detail.stringValue = text.detail
+        spinner.isHidden = !text.showsSpinner
+        if text.showsSpinner {
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+        }
         needsLayout = true
     }
 
@@ -52,11 +63,18 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         let maxX = bounds.width - Self.sidePadding
         let titleSize = CommitPickerMetrics.naturalSize(of: title)
         let pillWidth = pill.isHidden ? 0 : pill.intrinsicContentSize.width + 8
+        let spinnerSize = spinner.frame.size
+        let spinnerWidth = spinner.isHidden ? 0 : spinnerSize.width + 8
         // Laid out against `maxX` rather than the text's own width, so buttons added on
         // the trailing edge later only have to shrink it.
-        let titleWidth = min(titleSize.width, maxX - Self.sidePadding - pillWidth)
+        let titleWidth = min(titleSize.width, maxX - Self.sidePadding - pillWidth - spinnerWidth)
         title.frame = NSRect(
             x: Self.sidePadding, y: Self.topPadding, width: max(titleWidth, 0), height: titleSize.height)
+        if !spinner.isHidden {
+            spinner.frame = NSRect(
+                x: maxX - spinnerSize.width, y: CommitPickerMetrics.capCenterY(of: title) - spinnerSize.height / 2,
+                width: spinnerSize.width, height: spinnerSize.height)
+        }
         if !pill.isHidden {
             let pillSize = pill.intrinsicContentSize
             pill.frame = backingAlignedRect(

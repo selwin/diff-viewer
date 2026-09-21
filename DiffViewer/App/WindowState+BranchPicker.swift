@@ -11,6 +11,6 @@ extension WindowState {
     var branchPickerSnapshot: BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: branchReadStatus,
-            isSwitchingBranch: isSwitchingBranch)
+            isSwitchingBranch: isSwitchingBranch, fetchStatus: fetchStatus)
     }
 }
