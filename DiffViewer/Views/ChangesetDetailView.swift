@@ -14,10 +14,21 @@ struct ChangesetDetailView: View {
     var body: some View {
         let loader = windowState.diffLoader
         VStack(spacing: 0) {
-            header(loader: loader)
-            Divider()
+            // A repository with nothing to show has nothing for a header to name.
+            if showsHeader(loader: loader) {
+                header(loader: loader)
+                Divider()
+            }
             content(loader: loader)
         }
+    }
+
+    /// True while the content is loading, failed, or a document: the strip carries the
+    /// spinner and progress text before the first section arrives.
+    private func showsHeader(loader: DiffLoader) -> Bool {
+        if loader.errorMessage != nil || loader.isLoading { return true }
+        if case .changeset? = loader.content { return true }
+        return false
     }
 
     /// Shows the visible file, or a fixed-height loading shell until one is reported.
@@ -71,7 +82,7 @@ struct ChangesetDetailView: View {
             // The assembler publishes nothing for an empty list, so this is also what a
             // repository with no changes at all shows.
             ContentUnavailableView(
-                "No changes", systemImage: "equal.circle", description: Text(emptyDescription))
+                "No changes", systemImage: "checkmark.circle", description: Text(emptyDescription))
         }
     }
 
