@@ -14,6 +14,7 @@ import Foundation
 ///   `DIFFVIEWER_SNAPSHOT` then renders the sheet instead of the window.
 /// - `DIFFVIEWER_COMMIT_PICKER=1` opens the commit picker popover the same way;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
+/// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
 /// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
 ///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
@@ -84,7 +85,9 @@ enum DebugLaunchOptions {
             let scopeSha = env["DIFFVIEWER_SCOPE"] ?? ""
             let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
             let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
-            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker
+            let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
+            let needsWindow =
+                !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
@@ -129,13 +132,10 @@ enum DebugLaunchOptions {
                     }
                 }
                 guard needsWindow else { return }
-                @MainActor func target() -> WindowState? {
-                    let key = coordinator.keyWindowState
-                    return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
-                }
-                _ = await eventually { target() != nil }
+                _ = await eventually { targetState(coordinator) != nil }
                 try? await Task.sleep(for: .seconds(0.5))
-                guard let windowState = target(), let window = services.windows[windowState.id] else { return }
+                guard let windowState = targetState(coordinator), let window = services.windows[windowState.id]
+                else { return }
                 // The snapshot renders offscreen, so lift the visibility gate for this window.
                 windowState.isVisible = true
                 if !scopeSha.isEmpty {
@@ -146,6 +146,7 @@ enum DebugLaunchOptions {
                 }
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
+                windowState.isBranchPickerPresented = branchPicker
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
                     try? await Task.sleep(for: .seconds(1))
@@ -172,10 +173,18 @@ enum DebugLaunchOptions {
                 }
                 if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
                     try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
-                    snapshot(commitPickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
+                    snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
                 }
             }
         #endif
+    }
+
+    /// The window the debug hooks act on: the key one, or the first populated one when
+    /// the app is not active.
+    @MainActor
+    private static func targetState(_ coordinator: WindowCoordinator) -> WindowState? {
+        let key = coordinator.keyWindowState
+        return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
     }
 
     private static func decodeStringArray(_ json: String?) -> [String] {
@@ -303,7 +312,8 @@ enum DebugLaunchOptions {
         let states = coordinator.windows.values.map { state in
             "state repo=\(state.repoName) key=\(state.isKey) visible=\(state.isVisible) "
                 + "files=\(state.files.count) stale=\(state.diffStale) "
-                + "scope=\(state.scopeDisplayTitle) picker=\(state.isCommitPickerPresented)"
+                + "scope=\(state.scopeDisplayTitle) picker=\(state.isCommitPickerPresented) "
+                + "branchPicker=\(state.isBranchPickerPresented)"
         }
         lines.append(contentsOf: states.sorted())
         lines.append(
@@ -352,7 +362,7 @@ enum DebugLaunchOptions {
             // Activation can be refused while another app is in use; an inactive app has
             // no key window, so make the picker's (or the target) key by hand.
             print("### DIFFVIEWER_KEYS: no key window; making one key without activation")
-            (commitPickerWindow(of: target) ?? target).makeKey()
+            (pickerWindow(of: target) ?? target).makeKey()
         }
         for key in keys {
             if key == "picker" {
@@ -360,7 +370,7 @@ enum DebugLaunchOptions {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
-            let window = NSApp.keyWindow ?? commitPickerWindow(of: target) ?? target
+            let window = NSApp.keyWindow ?? pickerWindow(of: target) ?? target
             if let mouse = key.split(separator: ":").first, ["click", "dblclick", "winclick"].contains(mouse) {
                 let kind = mouse == "winclick" ? "click" : String(mouse)
                 postMouse(kind, key.dropFirst(mouse.count + 1), in: mouse == "winclick" ? target : window)
@@ -465,12 +475,16 @@ enum DebugLaunchOptions {
         }
     }
 
-    /// The commit picker popover's window while it is up: a child of `window` hosting
-    /// the picker's container.
+    /// A picker popover's window while it is up: a child of `window` hosting either
+    /// picker's container.
     @MainActor
-    private static func commitPickerWindow(of window: NSWindow) -> NSWindow? {
+    private static func pickerWindow(of window: NSWindow) -> NSWindow? {
         let candidates = (window.childWindows ?? []) + NSApp.windows
-        return candidates.first { $0.isVisible && $0.contentView?.descendant(CommitPickerContainerView.self) != nil }
+        return candidates.first { candidate in
+            guard candidate.isVisible, let content = candidate.contentView else { return false }
+            return content.descendant(CommitPickerContainerView.self) != nil
+                || content.descendant(BranchPickerContainerView.self) != nil
+        }
     }
 
     @MainActor

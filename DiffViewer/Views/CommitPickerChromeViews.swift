@@ -151,16 +151,21 @@ final class CommitPickerFooterView: NSView {
     func configure(_ footer: CommitPickerFooter) {
         switch footer {
         case .none:
-            label.stringValue = ""
+            configure(text: "", tooltip: nil, isLoading: false, showsRetry: false)
         case .loading:
-            label.stringValue = "Loading…"
+            configure(text: "Loading…", tooltip: nil, isLoading: true, showsRetry: false)
         case .failed:
-            label.stringValue = "Couldn't load history"
+            configure(text: "Couldn't load history", tooltip: nil, isLoading: false, showsRetry: true)
         }
-        let loading = footer == .loading
-        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        spinner.isHidden = !loading
-        retry.isHidden = footer != .failed
+    }
+
+    /// The text-level face, for a picker whose footer is not the commit picker's enum.
+    func configure(text: String, tooltip: String?, isLoading: Bool, showsRetry: Bool) {
+        label.stringValue = text
+        label.toolTip = tooltip
+        if isLoading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        spinner.isHidden = !isLoading
+        retry.isHidden = !showsRetry
         needsLayout = true
     }
 
@@ -214,17 +219,21 @@ final class CommitPickerEmptyStateView: NSView {
 
     /// Hidden when nil.
     func configure(_ state: CommitPickerEmptyState?) {
-        isHidden = state == nil
         switch state {
-        case .none: label.stringValue = ""
-        case .loading: label.stringValue = "Loading…"
-        case .noCommits: label.stringValue = "No commits yet"
-        case .failed: label.stringValue = "Couldn't load history"
+        case .none: configure(text: nil, isLoading: false, showsRetry: false)
+        case .loading: configure(text: "Loading…", isLoading: true, showsRetry: false)
+        case .noCommits: configure(text: "No commits yet", isLoading: false, showsRetry: false)
+        case .failed: configure(text: "Couldn't load history", isLoading: false, showsRetry: true)
         }
-        let loading = state == .loading
-        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        spinner.isHidden = !loading
-        retry.isHidden = state != .failed
+    }
+
+    /// The text-level face; a nil text hides the view.
+    func configure(text: String?, isLoading: Bool, showsRetry: Bool) {
+        isHidden = text == nil
+        label.stringValue = text ?? ""
+        if isLoading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        spinner.isHidden = !isLoading
+        retry.isHidden = !showsRetry
         needsLayout = true
     }
 

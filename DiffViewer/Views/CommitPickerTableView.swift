@@ -2,7 +2,7 @@ import AppKit
 
 /// What the picker's table asks of its owner on a plain key press or a click.
 @MainActor
-protocol CommitPickerTableHandler: AnyObject {
+protocol PickerTableHandler: AnyObject {
     func moveUp()
     func moveDown()
     func moveToFirst()
@@ -17,7 +17,7 @@ protocol CommitPickerTableHandler: AnyObject {
 /// drag off the row cancels; clicks in the gutter, which belongs to the day labels, and
 /// below the rows are swallowed. Tracks the hovered row.
 final class CommitPickerTableView: NSTableView {
-    weak var handler: (any CommitPickerTableHandler)?
+    weak var handler: (any PickerTableHandler)?
 
     private var trackingArea: NSTrackingArea?
     private(set) var hoveredRow: Int?
@@ -49,7 +49,7 @@ final class CommitPickerTableView: NSTableView {
         pressedRow = contentRow(at: convert(event.locationInWindow, from: nil))
     }
 
-    /// Drops a press in flight: after a reload the same index can name another commit.
+    /// Drops a press in flight: after a reload the same index can name another row.
     func cancelPress() {
         pressedRow = nil
     }

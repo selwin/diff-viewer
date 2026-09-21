@@ -2,9 +2,10 @@ import Foundation
 
 /// What the commit picker reads from a window. Read-only, like `+Presentation`.
 extension WindowState {
-    /// An open window with a repository, and no commit sheet up: the popover never opens over the sheet.
+    /// An open window with a repository, and no commit sheet or branch picker up: the
+    /// popover never opens over another one.
     var canOpenCommitPicker: Bool {
-        session != nil && !isClosed && !isCommitSheetPresented
+        session != nil && !isClosed && !isCommitSheetPresented && !isBranchPickerPresented
     }
 
     /// Distinct paths in the displayed scope: a file both staged and unstaged counts once.

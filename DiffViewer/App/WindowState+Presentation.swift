@@ -43,7 +43,7 @@ extension WindowState {
         return "\(base) · \(upstream.shortName): \(detail)"
     }
 
-    /// The branch picker's selection: nil while HEAD is detached or unread.
+    /// The branch HEAD is on: nil while HEAD is detached or unread.
     var currentBranchName: String? {
         if case let .named(name)? = headState { return name }
         return nil

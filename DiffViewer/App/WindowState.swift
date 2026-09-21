@@ -105,6 +105,8 @@ final class WindowState {
     private(set) var headState: HeadState?
     /// The local branches the picker lists, read with `headState` on the same ticket.
     private(set) var branches: [LocalBranch] = []
+    /// How the last paired HEAD + branch read went, so the picker can tell unread from empty.
+    private(set) var branchReadStatus: BranchReadStatus = .unread
     /// The branch names the picker's menu lists, in the order they were read.
     var localBranches: [String] { branches.map(\.name) }
     /// The list's entry for the branch HEAD is on, or nil when HEAD is detached, unread, or
@@ -164,6 +166,8 @@ final class WindowState {
     var isCommitSheetPresented = false
     /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
     var isCommitPickerPresented = false
+    /// The branch picker popover is up, on the same terms as the commit picker's flag.
+    var isBranchPickerPresented = false
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -245,6 +249,7 @@ final class WindowState {
         isGeneratingCommitMessage = false
         isCommitSheetPresented = false
         isCommitPickerPresented = false
+        isBranchPickerPresented = false
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -773,25 +778,26 @@ extension WindowState {
         guard session === self.session, !isClosed else { return }
         session.headStateCheckSerial += 1
         let ticket = session.headStateCheckSerial
-        // A failure leaves the last known branch on show: the next tick reads again, and stale beats blank.
+        // A failure leaves the last known pair on show: the next tick reads again, and
+        // stale beats blank. Nothing is published until both reads are in, so the picker
+        // never sees a HEAD the branch list has not caught up with.
         let state: HeadState
+        let list: [LocalBranch]
         do {
             state = try await session.client.headState()
+            // A superseded or closed request stops here rather than starting a second
+            // git process for an answer nobody will publish.
+            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
+            list = try await session.client.localBranches()
         } catch {
+            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
+            branchReadStatus = .failed
             return
         }
         guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
         headState = state
-        // Separate reads can disagree; the picker keeps a row for the current selection.
-        // A failed list read keeps the last list, for the same reason as above.
-        let list: [LocalBranch]
-        do {
-            list = try await session.client.localBranches()
-        } catch {
-            return
-        }
-        guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
         branches = list
+        branchReadStatus = .loaded
     }
 
     /// Drops a history read whose answer is no longer wanted, and settles the state its
@@ -865,12 +871,12 @@ extension WindowState {
 /// suggestion. Same file as the class so the commit state stays `private(set)`.
 extension WindowState {
     /// Whether the commit editor can open, regardless of the draft: an open window in
-    /// working-tree scope, no commit or branch switch queued or running, the commit picker
+    /// working-tree scope, no commit or branch switch queued or running, both pickers
     /// down, no conflict rows, something to commit (staged files, or a merge whose tree may
     /// equal HEAD).
     var canOpenCommitSheet: Bool {
         guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch,
-            !isCommitPickerPresented
+            !isCommitPickerPresented, !isBranchPickerPresented
         else { return false }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
         return files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging

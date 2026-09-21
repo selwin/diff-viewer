@@ -38,8 +38,8 @@ final class CommitPickerPinnedRowView: NSView {
     func configure(trailing: String, showsPill: Bool) {
         content.configure(
             ScopeRowContentView.Content(
-                gutterTitle: "Now", gutterSubtitle: nil, subject: "Working Tree", showsPill: showsPill,
-                trailing: trailing, trailingStyle: .fileCount))
+                gutterTitle: "Now", gutterSubtitle: nil, subject: "Working Tree", showsCurrentPill: showsPill,
+                trailing: trailing, trailingStyle: .secondary, accessibilityActionName: "Show"))
         setAccessibilityValue(trailing)
     }
 

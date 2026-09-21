@@ -104,30 +104,35 @@ final class CurrentPillView: NSView {
     }
 }
 
-/// One scope's face, shared by the table's cells and the pinned Working Tree row:
-/// gutter labels on the left, the subject, an optional CURRENT pill, and trailing text.
+/// One row's face, shared by the commit picker's cells and pinned Working Tree row and
+/// by the branch picker's cells: gutter labels on the left, the subject, an optional
+/// CURRENT pill, and trailing text.
 /// The pill and trailing text are centred on the subject's capitals. As a table cell it
-/// stays an accessibility cell; a press, or the "Show" action, activates its scope.
+/// stays an accessibility cell; a press, or the named accessibility action, activates
+/// the row.
 final class ScopeRowContentView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("ScopeRowContentView")
 
-    /// Set by the table's owner; nil inside the pinned row, which presses as a whole.
+    /// Set by the table's owner; nil inside the pinned row, which presses as a whole,
+    /// and on rows that cannot be activated.
     var onActivate: (() -> Void)?
 
     enum TrailingStyle {
         /// A commit's hash: monospaced, tertiary.
         case hash
-        /// The Working Tree's file count: secondary.
-        case fileCount
+        /// Plain words beside the subject — a file count, a branch's tracking: secondary.
+        case secondary
     }
 
     struct Content {
         var gutterTitle: String?
         var gutterSubtitle: String?
         var subject: String
-        var showsPill: Bool
+        var showsCurrentPill: Bool
         var trailing: String
         var trailingStyle: TrailingStyle
+        /// The accessibility action's name: what activating this row does.
+        var accessibilityActionName: String
     }
 
     private let gutterTitle = CommitPickerMetrics.label(
@@ -136,6 +141,7 @@ final class ScopeRowContentView: NSTableCellView {
         font: .systemFont(ofSize: 11), color: .secondaryLabelColor, alignment: .right)
     private let subject = CommitPickerMetrics.label(font: .systemFont(ofSize: 13.5), color: .labelColor)
     private let pill = CurrentPillView(frame: .zero)
+    private var accessibilityActionName = "Show"
     private let trailing = CommitPickerMetrics.label(
         font: .monospacedSystemFont(ofSize: 12, weight: .regular), color: .tertiaryLabelColor, alignment: .right)
     override init(frame: NSRect) {
@@ -161,24 +167,29 @@ final class ScopeRowContentView: NSTableCellView {
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         guard onActivate != nil else { return nil }
-        return [NSAccessibilityCustomAction(name: "Show") { [weak self] in self?.accessibilityPerformPress() ?? false }]
+        return [
+            NSAccessibilityCustomAction(name: accessibilityActionName) { [weak self] in
+                self?.accessibilityPerformPress() ?? false
+            }
+        ]
     }
 
     func configure(_ content: Content) {
         gutterTitle.stringValue = content.gutterTitle ?? ""
         gutterSubtitle.stringValue = content.gutterSubtitle ?? ""
         subject.stringValue = content.subject
-        pill.isHidden = !content.showsPill
+        pill.isHidden = !content.showsCurrentPill
         trailing.stringValue = content.trailing
+        accessibilityActionName = content.accessibilityActionName
         switch content.trailingStyle {
         case .hash:
             trailing.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             trailing.textColor = .tertiaryLabelColor
-        case .fileCount:
+        case .secondary:
             trailing.font = .systemFont(ofSize: 13)
             trailing.textColor = .secondaryLabelColor
         }
-        setAccessibilityLabel(content.showsPill ? "\(content.subject), current" : content.subject)
+        setAccessibilityLabel(content.showsCurrentPill ? "\(content.subject), current" : content.subject)
         needsLayout = true
     }
 

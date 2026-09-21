@@ -164,6 +164,9 @@ struct RepositoryCommands: Commands {
             Button("Choose Commit…") { windowState?.isCommitPickerPresented = true }
                 .keyboardShortcut("k")
                 .disabled(!(windowState?.canOpenCommitPicker ?? false))
+            Button("Choose Branch…") { windowState?.isBranchPickerPresented = true }
+                .keyboardShortcut("b")
+                .disabled(!(windowState?.canOpenBranchPicker ?? false))
         }
         CommandGroup(after: .toolbar) {
             Button("Refresh") { Task { await windowState?.refresh() } }
