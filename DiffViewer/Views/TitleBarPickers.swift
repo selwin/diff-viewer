@@ -156,11 +156,12 @@ private struct CappedWidth: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         assert(subviews.count == 1)
-        let width = min(proposal.width ?? maximumWidth, maximumWidth)
-        let size = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        // The ideal width, not the proposed one: the toolbar proposes the width it measured
+        // last time, so honouring it would freeze the item at the size of its old label.
+        let ideal = subviews[0].sizeThatFits(ProposedViewSize(width: nil, height: proposal.height))
         // Caps the ideal width, never the minimum: a picker squeezed below it would overlap its neighbour.
         let minimum = subviews[0].sizeThatFits(.zero).width
-        return CGSize(width: max(min(size.width, width), minimum), height: size.height)
+        return CGSize(width: max(min(ideal.width, maximumWidth), minimum), height: ideal.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
