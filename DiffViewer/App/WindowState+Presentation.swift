@@ -17,19 +17,7 @@ extension WindowState {
         var row: Int?
     }
 
-    /// What the picker shows in place of a commit list.
-    enum HistoryPlaceholder {
-        case loading
-        case empty
-        case failed
-    }
-
-    /// Nil when there are commits to list.
-    var historyPlaceholder: HistoryPlaceholder? {
-        guard history.commits.isEmpty else { return nil }
-        if isLoadingHistory { return .loading }
-        return historyErrorMessage == nil ? .empty : .failed
-    }
+    static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
 
     /// The branch picker's face: the current branch, or where a detached HEAD sits.
     var branchDisplayTitle: String {

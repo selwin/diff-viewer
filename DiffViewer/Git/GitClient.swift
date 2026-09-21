@@ -209,7 +209,7 @@ struct GitClient: RepoClient {
             Self.executable,
             arguments: [
                 "log", "-z", "--first-parent", "-n", String(limit),
-                "--format=%H%x00%h%x00%P%x00%an%x00%aI%x00%s", revision,
+                "--format=%H%x00%h%x00%P%x00%cI%x00%s", revision,
             ],
             currentDirectory: repoRoot,
             environment: callEnvironment

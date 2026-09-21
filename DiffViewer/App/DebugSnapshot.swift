@@ -12,6 +12,14 @@ import Foundation
 ///   commit's sidebar and diffs can be screenshotted.
 /// - `DIFFVIEWER_COMMIT_SHEET=1` opens the commit sheet after the selection is applied;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the sheet instead of the window.
+/// - `DIFFVIEWER_COMMIT_PICKER=1` opens the commit picker popover the same way;
+///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
+/// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
+///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
+///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
+///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
+///   popover from outside), or `picker` to toggle the commit picker. Activation must
+///   come from outside, as for tab steps.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
@@ -75,7 +83,8 @@ enum DebugLaunchOptions {
             let selection = env["DIFFVIEWER_SELECT"] ?? ""
             let scopeSha = env["DIFFVIEWER_SCOPE"] ?? ""
             let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
-            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty || commitSheet
+            let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
+            let needsWindow = !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
@@ -135,8 +144,12 @@ enum DebugLaunchOptions {
                 if !selection.isEmpty {
                     windowState.selection = selection == "all" ? [.allChanges] : [.file(selection)]
                 }
-                if commitSheet {
-                    windowState.isCommitSheetPresented = true
+                windowState.isCommitSheetPresented = commitSheet
+                windowState.isCommitPickerPresented = commitPicker
+                let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
+                if !keys.isEmpty {
+                    try? await Task.sleep(for: .seconds(1))
+                    await sendKeys(keys, in: windowState, window: window)
                 }
                 if nextCount > 0 {
                     try? await Task.sleep(for: .seconds(2))
@@ -159,7 +172,7 @@ enum DebugLaunchOptions {
                 }
                 if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
                     try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
-                    snapshot(window.attachedSheet ?? window, to: path)
+                    snapshot(commitPickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
                 }
             }
         #endif
@@ -289,7 +302,8 @@ enum DebugLaunchOptions {
         }
         let states = coordinator.windows.values.map { state in
             "state repo=\(state.repoName) key=\(state.isKey) visible=\(state.isVisible) "
-                + "files=\(state.files.count) stale=\(state.diffStale)"
+                + "files=\(state.files.count) stale=\(state.diffStale) "
+                + "scope=\(state.scopeDisplayTitle) picker=\(state.isCommitPickerPresented)"
         }
         lines.append(contentsOf: states.sorted())
         lines.append(
@@ -327,6 +341,67 @@ enum DebugLaunchOptions {
         }
         windowState.select(commit: commit)
         try? await Task.sleep(for: .seconds(1))
+    }
+
+    /// Types `keys` into whichever window is key as each is sent, so a Return that
+    /// closes a sheet or popover hands the rest to the window beneath. `picker` and
+    /// `winclick` act on the target window, which is not key while the popover is.
+    @MainActor
+    private static func sendKeys(_ keys: [String], in windowState: WindowState, window target: NSWindow) async {
+        if await !eventually({ NSApp.keyWindow != nil }) {
+            // Activation can be refused while another app is in use; an inactive app has
+            // no key window, so make the picker's (or the target) key by hand.
+            print("### DIFFVIEWER_KEYS: no key window; making one key without activation")
+            (commitPickerWindow(of: target) ?? target).makeKey()
+        }
+        for key in keys {
+            if key == "picker" {
+                windowState.isCommitPickerPresented.toggle()
+                try? await Task.sleep(for: .seconds(1))
+                continue
+            }
+            let window = NSApp.keyWindow ?? commitPickerWindow(of: target) ?? target
+            if let mouse = key.split(separator: ":").first, ["click", "dblclick", "winclick"].contains(mouse) {
+                let kind = mouse == "winclick" ? "click" : String(mouse)
+                postMouse(kind, key.dropFirst(mouse.count + 1), in: mouse == "winclick" ? target : window)
+                try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
+            let code = UInt16(key)
+            let characters = code == nil ? key : ""
+            for type in [NSEvent.EventType.keyDown, .keyUp] {
+                guard
+                    let event = NSEvent.keyEvent(
+                        with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, characters: characters,
+                        charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code ?? 0)
+                else { continue }
+                window.sendEvent(event)
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+    }
+
+    /// Posts a click or double-click at `<x>x<y>` (top-left content coordinates) through
+    /// the event queue, so table tracking loops see the mouse-up.
+    @MainActor
+    private static func postMouse(_ kind: String, _ spec: Substring, in window: NSWindow) {
+        let parts = spec.split(separator: "x").compactMap { Double($0) }
+        guard parts.count == 2, let content = window.contentView else { return }
+        let point = NSPoint(x: parts[0], y: content.bounds.height - parts[1])
+        func post(_ type: NSEvent.EventType, clickCount: Int) {
+            guard
+                let event = NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount,
+                    pressure: 1)
+            else { return }
+            NSApp.postEvent(event, atStart: false)
+        }
+        for count in 1...(kind == "dblclick" ? 2 : 1) {
+            post(.leftMouseDown, clickCount: count)
+            post(.leftMouseUp, clickCount: count)
+        }
     }
 
     @MainActor
@@ -388,6 +463,14 @@ enum DebugLaunchOptions {
             pane.mouseDown(with: event)
             return
         }
+    }
+
+    /// The commit picker popover's window while it is up: a child of `window` hosting
+    /// the picker's container.
+    @MainActor
+    private static func commitPickerWindow(of window: NSWindow) -> NSWindow? {
+        let candidates = (window.childWindows ?? []) + NSApp.windows
+        return candidates.first { $0.isVisible && $0.contentView?.descendant(CommitPickerContainerView.self) != nil }
     }
 
     @MainActor

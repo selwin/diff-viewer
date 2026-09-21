@@ -157,6 +157,8 @@ final class WindowState {
     private(set) var isCommitting = false
     /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
     var isCommitSheetPresented = false
+    /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
+    var isCommitPickerPresented = false
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -236,6 +238,8 @@ final class WindowState {
         session?.commitDefaultsTask?.cancel()
         session?.commitGenerationTask?.cancel()
         isGeneratingCommitMessage = false
+        isCommitSheetPresented = false
+        isCommitPickerPresented = false
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -706,6 +710,13 @@ extension WindowState {
         startHistoryLoad(session: session, source: .revision(history.revision))
     }
 
+    /// The picker's Retry: the same `commitLimit`, so a failed Load More never grows the request.
+    func retryHistoryLoad() {
+        guard let session, !isClosed, !isLoadingHistory, historyErrorMessage != nil else { return }
+        // Read HEAD again: the last good history may belong to another branch.
+        startHistoryLoad(session: session, source: .currentHead)
+    }
+
     /// Reloads the commit list only when HEAD has moved since the page was read. One
     /// `rev-parse` per watcher tick, instead of a full log on every edit to the tree.
     private func reloadHistoryIfHeadMoved(session: RepoSession) async {
@@ -849,12 +860,13 @@ extension WindowState {
 /// suggestion. Same file as the class so the commit state stays `private(set)`.
 extension WindowState {
     /// Whether the commit editor can open, regardless of the draft: an open window in
-    /// working-tree scope, no commit or branch switch queued or running, no conflict rows,
-    /// something to commit (staged files, or a merge whose tree may equal HEAD).
+    /// working-tree scope, no commit or branch switch queued or running, the commit picker
+    /// down, no conflict rows, something to commit (staged files, or a merge whose tree may
+    /// equal HEAD).
     var canOpenCommitSheet: Bool {
-        guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch else {
-            return false
-        }
+        guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch,
+            !isCommitPickerPresented
+        else { return false }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
         return files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging
     }

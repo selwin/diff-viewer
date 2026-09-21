@@ -78,10 +78,12 @@ import Testing
             try FileManager.default.removeItem(at: url.appendingPathComponent(path))
         }
 
+        /// `environment` is merged over the fixture's fixed identity for the commit call
+        /// alone, so a test can pin a `GIT_COMMITTER_DATE` per commit.
         @discardableResult
-        func commit(_ subject: String) async throws -> String {
+        func commit(_ subject: String, environment: [String: String] = [:]) async throws -> String {
             try await git(["add", "-A"])
-            try await git(["commit", "--allow-empty", "-m", subject])
+            try await git(["commit", "--allow-empty", "-m", subject], extraEnvironment: environment)
             return try await git(["rev-parse", "HEAD"])
         }
 
@@ -229,7 +231,24 @@ import Testing
         #expect(commits.first?.ref.sha == head)
         #expect(commits.last?.ref.firstParentSHA == nil, "the root commit has no parent")
         #expect(commits.first?.ref.firstParentSHA == commits[1].ref.sha)
-        #expect(commits.allSatisfy { $0.authorName == "Tester" })
+    }
+
+    /// The list is in git's first-parent traversal order, not sorted by date: committer
+    /// dates can run backwards (rebases, clock skew) and each is reported as stamped.
+    @Test func recentCommitsKeepTraversalOrderAndCommitterDates() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        let stamps = ["2026-09-19T10:00:00+00:00", "2026-09-17T10:00:00+00:00", "2026-09-18T10:00:00+00:00"]
+        var shas: [String] = []
+        for (index, stamp) in stamps.enumerated() {
+            try repo.write("a.txt", "line \(index)\n")
+            shas.append(try await repo.commit("Commit \(index)", environment: ["GIT_COMMITTER_DATE": stamp]))
+        }
+
+        let commits = try await repo.client.recentCommits(startingAt: shas[2], limit: 10)
+        #expect(commits.map(\.ref.sha) == shas.reversed())
+        let iso = ISO8601DateFormatter()
+        #expect(commits.map(\.committedAt) == stamps.reversed().map { iso.date(from: $0) })
     }
 
     @Test func recentCommitsFollowsFirstParentsOnly() async throws {

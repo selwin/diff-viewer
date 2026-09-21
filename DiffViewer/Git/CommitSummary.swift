@@ -22,25 +22,38 @@ extension CommitRef: Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(sha) }
 }
 
-/// One line of the scope picker: a commit's identity plus what the menu shows.
-struct CommitSummary: Sendable, Identifiable, Hashable {
+/// One row of the commit picker: a commit's identity plus what the row shows.
+struct CommitSummary: Sendable, Identifiable {
     let ref: CommitRef
     /// Every parent, in git's order. The first is the one `ref` compares against.
     let parents: [String]
     let subject: String
-    let authorName: String
-    let authoredAt: Date
+    /// The committer timestamp, used for the picker's date labels.
+    let committedAt: Date
 
     /// Derives the ref from the parsed parents so the two can never disagree.
-    init(sha: String, shortSha: String, parents: [String], subject: String, authorName: String, authoredAt: Date) {
+    init(sha: String, shortSha: String, parents: [String], subject: String, committedAt: Date) {
         self.ref = CommitRef(sha: sha, shortSha: shortSha, firstParentSHA: parents.first)
         self.parents = parents
         self.subject = subject
-        self.authorName = authorName
-        self.authoredAt = authoredAt
+        self.committedAt = committedAt
     }
 
     var id: String { ref.sha }
     var isMerge: Bool { parents.count > 1 }
     var isRoot: Bool { parents.isEmpty }
+}
+
+/// Unlike `CommitRef`, a summary compares everything it displays, `shortSha` included,
+/// so a refresh that lengthens git's abbreviation is seen as a change.
+extension CommitSummary: Hashable {
+    static func == (lhs: CommitSummary, rhs: CommitSummary) -> Bool {
+        lhs.ref.sha == rhs.ref.sha
+            && lhs.ref.shortSha == rhs.ref.shortSha
+            && lhs.parents == rhs.parents
+            && lhs.subject == rhs.subject
+            && lhs.committedAt == rhs.committedAt
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(ref) }
 }

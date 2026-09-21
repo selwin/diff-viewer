@@ -383,9 +383,13 @@ shows the "Binary file" notice.
 
 ### Commit picker (2026-09-13)
 
-A popup at the top of the sidebar scopes the file list and the diffs to the working tree
-(the default, unchanged) or to one commit from the branch's first-parent history, shown
-against its first parent.
+The picker scopes the file list and the diffs to the working tree (the default,
+unchanged) or to one commit from the branch's first-parent history, shown against its
+first parent. Since 2026-09-21 it is a popover under the title-bar scope button (⌘K opens
+it too; a click outside closes it): a header
+naming the displayed scope with a CURRENT pill, a pinned Working Tree row, a day-grouped
+commit list with a date gutter, keyboard navigation, type-select, paging as you scroll,
+and Retry on a failed load.
 
 **Scope change.** This reverses the commit-browsing half of the "Commit browsing,
 ref-range compare, folder compare, blame, file history" entry under *Not doing*, the way
@@ -401,8 +405,17 @@ the *path* were missing, which would otherwise render an unreachable commit as a
 added wholesale. History loading has its own generation counter, separate from the file
 list's, and a watcher tick in commit scope does nothing unless HEAD has moved.
 
-Follow-ups it leaves open: a keyboard shortcut for the picker, a filter over the commit
-list once it is long, and the ⌘R-only path for re-reading a commit's files.
+Follow-ups it leaves open:
+
+- **Commit picker search**: a search field between the pinned row and the list (⌘F),
+  matching subject, hash prefix and body (needs `%b` in the log format), highlighted
+  subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
+  the filter empties the list, and eventually searching beyond the loaded pages.
+- **Cursor paging**: Load More re-reads from page 1 with a larger limit
+  (`recentCommits(startingAt:limit:)`), so reaching 2,000 commits in pages of 50 reads
+  about 41,000 records in total; `startingAt: last.firstParentSHA` with append would fix
+  it. Measure before optimising the table diff further.
+- The ⌘R-only path for re-reading a commit's files.
 
 ### Sidebar context menu (2026-09-14)
 

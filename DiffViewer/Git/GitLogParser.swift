@@ -18,8 +18,8 @@ enum GitLogParseError: Error, LocalizedError {
 }
 
 /// Parses `git log -z` written with the field layout in `GitClient.recentCommits`:
-/// six NUL-separated fields per commit — sha, abbreviated sha, parents, author name,
-/// author date, subject — with git's `-z` terminator after each commit.
+/// five NUL-separated fields per commit — sha, abbreviated sha, parents, committer
+/// date, subject — with git's `-z` terminator after each commit.
 ///
 /// Fields are read strictly positionally. There is deliberately no attempt to
 /// resynchronise on a field that looks like an object id: a commit subject may itself
@@ -36,7 +36,7 @@ enum GitLogParser {
             .map { String(decoding: $0, as: UTF8.self) }
         // `-z` terminates the last commit too, leaving one empty field behind it.
         if fields.last == "" { fields.removeLast() }
-        guard fields.count.isMultiple(of: 6) else {
+        guard fields.count.isMultiple(of: 5) else {
             throw GitLogParseError.malformedFraming(fieldCount: fields.count)
         }
 
@@ -44,12 +44,12 @@ enum GitLogParser {
         dates.formatOptions = [.withInternetDateTime]
 
         var commits: [CommitSummary] = []
-        commits.reserveCapacity(fields.count / 6)
-        for start in stride(from: 0, to: fields.count, by: 6) {
+        commits.reserveCapacity(fields.count / 5)
+        for start in stride(from: 0, to: fields.count, by: 5) {
             let sha = fields[start]
             guard isObjectID(sha) else { throw GitLogParseError.notAnObjectID(sha) }
-            guard let authoredAt = dates.date(from: fields[start + 4]) else {
-                throw GitLogParseError.unreadableDate(fields[start + 4])
+            guard let committedAt = dates.date(from: fields[start + 3]) else {
+                throw GitLogParseError.unreadableDate(fields[start + 3])
             }
             commits.append(
                 CommitSummary(
@@ -57,9 +57,8 @@ enum GitLogParser {
                     shortSha: fields[start + 1],
                     // Empty at a root commit; `%P` is space-separated.
                     parents: fields[start + 2].split(separator: " ").map(String.init),
-                    subject: fields[start + 5],
-                    authorName: fields[start + 3],
-                    authoredAt: authoredAt
+                    subject: fields[start + 4],
+                    committedAt: committedAt
                 ))
         }
         return commits

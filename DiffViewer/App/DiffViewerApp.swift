@@ -161,6 +161,9 @@ struct RepositoryCommands: Commands {
             Button("Commit…") { windowState?.isCommitSheetPresented = true }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!(windowState?.canOpenCommitSheet ?? false))
+            Button("Choose Commit…") { windowState?.isCommitPickerPresented = true }
+                .keyboardShortcut("k")
+                .disabled(!(windowState?.canOpenCommitPicker ?? false))
         }
         CommandGroup(after: .toolbar) {
             Button("Refresh") { Task { await windowState?.refresh() } }

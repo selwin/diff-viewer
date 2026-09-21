@@ -61,22 +61,27 @@ struct BranchPickerView: View {
     }
 }
 
-/// The title bar's scope pop-up: what the sidebar shows, the working tree or one commit.
+/// The title bar's scope button: what the sidebar shows, the working tree or one commit.
+/// Opens the commit picker popover, which ⌘K also opens here by setting the same flag.
 struct ScopePickerView: View {
     @Environment(WindowState.self) private var windowState
 
     var body: some View {
+        @Bindable var windowState = windowState
         // Capped so a long subject ellipsizes instead of pushing the toolbar's other
         // items into the overflow menu.
         CappedWidth(maximumWidth: 360) {
-            Menu {
-                ScopeMenuContent()
+            Button {
+                windowState.isCommitPickerPresented = true
             } label: {
                 TitleBarPickerLabel(glyph: icon, title: windowState.scopeDisplayTitle)
             }
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
+            .disabled(!windowState.canOpenCommitPicker)
             .help(help)
+            .popover(isPresented: $windowState.isCommitPickerPresented, arrowEdge: .bottom) {
+                CommitPickerPopover()
+            }
         }
     }
 
@@ -90,20 +95,20 @@ struct ScopePickerView: View {
     /// The whole subject, since the face may have cut it short.
     private var help: String {
         switch windowState.scope {
-        case .workingTree: ScopeMenuContent.scopeSelectionHelp
+        case .workingTree: WindowState.scopeSelectionHelp
         case .commit: windowState.scopeDisplayTitle
         }
     }
 }
 
-/// The face both title bar pop-ups wear: an outlined one-line box at toolbar control
+/// The face both title bar pickers wear: an outlined one-line box at toolbar control
 /// height with no fill, so it sits flat on the title bar. Plain data in, so it does not depend on
 /// `WindowState`.
 private struct TitleBarPickerLabel: View {
     let glyph: String
     let title: String
 
-    // A plain-style menu draws no disabled state of its own, so the face dims itself.
+    // A plain-style menu or button draws no disabled state of its own, so the face dims itself.
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -122,12 +127,12 @@ private struct TitleBarPickerLabel: View {
         .padding(.horizontal, 8)
         .frame(height: 26)
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
-        // The whole box opens the menu, not only the text.
+        // The whole box opens the picker, not only the text.
         .contentShape(Rectangle())
     }
 }
 
-/// Caps the menu's reported ideal width so long labels can truncate instead of forcing
+/// Caps the picker's reported ideal width so long labels can truncate instead of forcing
 /// the toolbar item into overflow. Lays out exactly one child.
 private struct CappedWidth: Layout {
     let maximumWidth: CGFloat
@@ -136,7 +141,7 @@ private struct CappedWidth: Layout {
         assert(subviews.count == 1)
         let width = min(proposal.width ?? maximumWidth, maximumWidth)
         let size = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
-        // Caps the ideal width, never the minimum: a menu squeezed below it would overlap its neighbour.
+        // Caps the ideal width, never the minimum: a picker squeezed below it would overlap its neighbour.
         let minimum = subviews[0].sizeThatFits(.zero).width
         return CGSize(width: max(min(size.width, width), minimum), height: size.height)
     }

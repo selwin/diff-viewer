@@ -248,7 +248,8 @@ struct WindowStateScopeTests {
         #expect(await eventually { await !state.isLoadingHistory })
         #expect(state.history.commits.isEmpty)
         #expect(state.historyErrorMessage == nil)
-        #expect(state.historyPlaceholder == .empty)
+        let snapshot = state.commitPickerSnapshot
+        #expect(snapshot.commits.isEmpty && !snapshot.isLoadingHistory && !snapshot.historyLoadFailed)
     }
 
     @Test func aFailedHistoryReadIsRetriedOnTheNextTick() async {
@@ -261,7 +262,7 @@ struct WindowStateScopeTests {
         await repo.client.fail(history: true)
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await state.historyErrorMessage != nil })
-        #expect(state.historyPlaceholder == .failed)
+        #expect(state.commitPickerSnapshot.historyLoadFailed)
 
         await repo.client.fail(history: false)
         // Only a ref change checks HEAD again; an edit in the tree does not.
