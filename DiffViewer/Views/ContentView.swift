@@ -10,6 +10,9 @@ struct ContentView: View {
     @State private var pendingCommitMessage: String?
     /// The sheet was reopened because the draft changed while it was closing.
     @State private var commitDraftChanged = false
+    /// An error alert is up; a new message waits for it to be dismissed rather than
+    /// stacking another sheet on it.
+    @State private var isPresentingError = false
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -92,17 +95,7 @@ struct ContentView: View {
                 .help("Refresh (⌘R)")
             }
         }
-        .alert(
-            "Error",
-            isPresented: Binding(
-                get: { windowState.errorMessage != nil },
-                set: { if !$0 { windowState.errorMessage = nil } }
-            )
-        ) {
-            Button("OK") { windowState.errorMessage = nil }
-        } message: {
-            Text(windowState.errorMessage ?? "")
-        }
+        .onChange(of: windowState.errorMessage, initial: true) { presentErrorIfNeeded() }
         .sheet(isPresented: $windowState.isCommitSheetPresented, onDismiss: handleCommitSheetDismissal) {
             CommitSheetView(draftChanged: commitDraftChanged) { message in
                 pendingCommitMessage = message
@@ -125,6 +118,18 @@ struct ContentView: View {
                 commitDraftChanged = true
                 windowState.isCommitSheetPresented = true
             }
+        }
+    }
+
+    private func presentErrorIfNeeded() {
+        guard !isPresentingError, let message = windowState.errorMessage else { return }
+        isPresentingError = true
+        let window = services.windows[windowState.id]
+        Task {
+            await ErrorAlert.present(message, in: window)
+            isPresentingError = false
+            if windowState.errorMessage == message { windowState.errorMessage = nil }
+            presentErrorIfNeeded()
         }
     }
 
