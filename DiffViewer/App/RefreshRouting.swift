@@ -19,7 +19,9 @@ enum RefreshRouting {
     ) -> RefreshWork {
         guard !changes.isEmpty else { return .none }
         let inWorkingTree = scope == .workingTree
-        let metadata = changes.contains(.refs) || changes.contains(.rescan)
+        // Configuration too: a branch's upstream lives there, and the title bar shows it.
+        let metadata =
+            changes.contains(.refs) || changes.contains(.rescan) || changes.contains(.configuration)
 
         // Every change can move the file list: a soft reset is `.refs` alone yet changes
         // what is staged, and `info/exclude` changes what is untracked.
@@ -29,7 +31,7 @@ enum RefreshRouting {
         // Not `.index`: staging changes nothing the commit box prefills from. A worktree
         // write matters only when a template may live there; unknown is taken as may.
         work.commitDefaults =
-            metadata || changes.contains(.commitState) || changes.contains(.configuration)
+            metadata || changes.contains(.commitState)
             || (changes.contains(.worktree) && template != .none)
         return work
     }

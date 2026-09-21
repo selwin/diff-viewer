@@ -21,7 +21,7 @@ struct RefreshRoutingTests {
         (.index, RefreshWork(status: true, repositoryMetadata: false, commitDefaults: false)),
         (.refs, RefreshWork(status: true, repositoryMetadata: true, commitDefaults: true)),
         (.commitState, RefreshWork(status: true, repositoryMetadata: false, commitDefaults: true)),
-        (.configuration, RefreshWork(status: true, repositoryMetadata: false, commitDefaults: true)),
+        (.configuration, RefreshWork(status: true, repositoryMetadata: true, commitDefaults: true)),
         (.rescan, RefreshWork(status: true, repositoryMetadata: true, commitDefaults: true)),
     ])
     func eachChangeAloneInWorkingTreeScope(change: RepoChange, expected: RefreshWork) {
@@ -39,9 +39,12 @@ struct RefreshRoutingTests {
     }
 
     /// A commit's file list and the commit box do not depend on the working tree, but the
-    /// title bar's branch and history still follow HEAD.
+    /// title bar's branch, upstream, and history still follow the refs and their config.
     @Test func commitScopeKeepsOnlyMetadata() {
-        #expect(work([.worktree, .index, .commitState, .configuration], scope: commit) == .none)
+        #expect(work([.worktree, .index, .commitState], scope: commit) == .none)
+        #expect(
+            work([.configuration], scope: commit)
+                == RefreshWork(status: false, repositoryMetadata: true, commitDefaults: false))
         #expect(
             work([.refs], scope: commit) == RefreshWork(status: false, repositoryMetadata: true, commitDefaults: false))
         #expect(

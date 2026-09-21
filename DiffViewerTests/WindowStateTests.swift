@@ -43,7 +43,7 @@ actor StubRepoClient: RepoClient {
     private var stubbedHeadState: HeadState = .named("main")
     private var failsHeadState = false
     private(set) var headStateCalls = 0
-    private var stubbedLocalBranches: [String] = ["main"]
+    private var stubbedLocalBranches: [LocalBranch] = [LocalBranch(name: "main", upstream: nil, tracking: nil)]
     private var failsLocalBranches = false
     private var holdsLocalBranches = false
     private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
@@ -266,7 +266,11 @@ actor StubRepoClient: RepoClient {
 
     // MARK: Branches
 
-    func set(localBranches names: [String]) { stubbedLocalBranches = names }
+    /// Plain names, for the tests that only care about the list the picker shows.
+    func set(localBranches names: [String]) {
+        stubbedLocalBranches = names.map { LocalBranch(name: $0, upstream: nil, tracking: nil) }
+    }
+    func set(localBranches branches: [LocalBranch]) { stubbedLocalBranches = branches }
     func fail(localBranches on: Bool) { failsLocalBranches = on }
     /// Suspends `localBranches` after it records the call.
     func holdLocalBranches(_ on: Bool) { holdsLocalBranches = on }
@@ -294,7 +298,7 @@ actor StubRepoClient: RepoClient {
     /// The head sha a switch leaves behind, applied whether or not the switch fails.
     func set(headAfterSwitch sha: String?) { headAfterSwitch = .some(sha) }
 
-    func localBranches() async throws -> [String] {
+    func localBranches() async throws -> [LocalBranch] {
         localBranchesCalls += 1
         // Snapshot before suspending, the way `status()` does: a held read reports what
         // the repository looked like when it was asked.

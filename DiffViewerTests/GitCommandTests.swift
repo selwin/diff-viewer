@@ -372,7 +372,7 @@ import Testing
         try await repo.git(["branch", "feature/x"])
         try await repo.git(["tag", "main"])
 
-        #expect(try await repo.client.localBranches() == ["feature/x", "main", "zeta"])
+        #expect(try await repo.client.localBranches().map(\.name) == ["feature/x", "main", "zeta"])
     }
 
     /// git allows a Unicode line separator inside a ref name and a non-breaking space at
@@ -387,7 +387,7 @@ import Testing
             try await repo.git(["branch", name])
         }
 
-        let listed = try await repo.client.localBranches()
+        let listed = try await repo.client.localBranches().map(\.name)
         for name in names {
             #expect(listed.contains(name))
             try await repo.client.switchBranch(to: name)
@@ -398,7 +398,47 @@ import Testing
     @Test func localBranchesOfAnUnbornRepositoryIsEmpty() async throws {
         let repo = try Repo()
         try await repo.initialize()
-        #expect(try await repo.client.localBranches() == [])
+        #expect(try await repo.client.localBranches().isEmpty)
+    }
+
+    /// The counts come from the remote-tracking ref, so a commit made after pushing
+    /// reads as one ahead with no fetch of any kind.
+    @Test func localBranchesReportsAheadOfTheUpstream() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try repo.write("b.txt", "two\n")
+        try await repo.commit("Second commit")
+
+        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(main.upstream == "origin/main")
+        #expect(main.tracking == .counts(ahead: 1, behind: 0))
+        // The fixture deletes its directory when it goes: keep it until the reads are done.
+        _ = remote
+    }
+
+    /// Deleting the remote-tracking ref is what a pruned remote branch leaves behind.
+    @Test func localBranchesReportsAGoneUpstream() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["update-ref", "-d", "refs/remotes/origin/main"])
+
+        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(main.upstream == "origin/main")
+        #expect(main.tracking == .gone)
+        _ = remote
+    }
+
+    /// A repository with one commit pushed to a bare remote, so `main` tracks
+    /// `origin/main` and is in sync.
+    private func pushedRepo() async throws -> (repo: Repo, remote: Repo) {
+        let remote = try Repo()
+        try await remote.git(["init", "--bare"])
+
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["remote", "add", "origin", remote.url.path])
+        try await repo.git(["push", "-u", "origin", "main"])
+        return (repo, remote)
     }
 
     @Test func switchBranchMovesHead() async throws {
@@ -455,7 +495,7 @@ import Testing
         await #expect(throws: (any Error).self) {
             try await repo.client.switchBranch(to: "feature")
         }
-        #expect(try await repo.client.localBranches() == ["main"])
+        #expect(try await repo.client.localBranches().map(\.name) == ["main"])
         #expect(try await repo.client.headState() == .named("main"))
     }
 
@@ -465,7 +505,7 @@ import Testing
         await #expect(throws: (any Error).self) {
             try await repo.client.switchBranch(to: "-c")
         }
-        #expect(try await repo.client.localBranches() == ["main", "side"])
+        #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
         #expect(try await repo.client.headState() == .named("main"))
     }
 

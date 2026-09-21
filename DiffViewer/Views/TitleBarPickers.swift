@@ -8,7 +8,8 @@ struct BranchPickerView: View {
     var body: some View {
         // Capped for the same reason as the scope picker: a long branch name would
         // otherwise send every item after it into the overflow menu.
-        CappedWidth(maximumWidth: 240) {
+        // Allows extra width for the tracking counts after the branch name.
+        CappedWidth(maximumWidth: 300) {
             branchMenu
         }
     }
@@ -40,12 +41,18 @@ struct BranchPickerView: View {
                 .pickerStyle(.inline)
             }
         } label: {
-            TitleBarPickerLabel(glyph: "arrow.triangle.branch", title: windowState.branchDisplayTitle)
+            TitleBarPickerLabel(
+                glyph: "arrow.triangle.branch",
+                title: windowState.branchDisplayTitle,
+                subtitle: windowState.branchTrackingSummary)
         }
+        // The button menu style is what lets the plain button style below apply: the
+        // default style draws its own hover capsule behind the label's outlined box.
+        .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .disabled(windowState.isSwitchingBranch || windowState.headState == nil)
-        .help("Switch branch")
+        .help(windowState.branchSwitchHelp)
     }
 
     /// No local state: the face follows HEAD, and a switch that fails leaves it where git
@@ -107,21 +114,38 @@ struct ScopePickerView: View {
 private struct TitleBarPickerLabel: View {
     let glyph: String
     let title: String
+    /// Follows the title after a separator, in secondary colour. Nil draws nothing.
+    var subtitle: String?
 
     // A plain-style menu or button draws no disabled state of its own, so the face dims itself.
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(spacing: 6) {
+            // Explicit scales throughout: a `Menu` hands its label a larger symbol scale
+            // than a `Button` does, and the two pickers must match.
             Image(systemName: glyph)
                 .font(.caption)
+                .imageScale(.medium)
                 .foregroundStyle(.secondary)
             Text(title)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            if let subtitle {
+                // Its own element, so the stack's spacing pads the dot evenly on both sides.
+                Text("·")
+                    .foregroundStyle(.secondary)
+                Text(subtitle)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                    // Keeps the counts whole: a long title ellipsizes in front of them.
+                    .layoutPriority(1)
+            }
+            // Small, medium-weight chevrons match a native pop-up button's indicator.
             Image(systemName: "chevron.up.chevron.down")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 9, weight: .medium))
+                .imageScale(.medium)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
