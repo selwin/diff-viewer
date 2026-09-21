@@ -42,7 +42,7 @@ struct BranchPickerView: View {
             }
         } label: {
             TitleBarPickerLabel(
-                glyph: "arrow.triangle.branch",
+                icon: .gitBranch,
                 title: windowState.branchDisplayTitle,
                 subtitle: windowState.branchTrackingSummary)
         }
@@ -81,7 +81,7 @@ struct ScopePickerView: View {
             Button {
                 windowState.isCommitPickerPresented = true
             } label: {
-                TitleBarPickerLabel(glyph: icon, title: windowState.scopeDisplayTitle)
+                TitleBarPickerLabel(icon: .gitCommit, title: windowState.scopeDisplayTitle)
             }
             .buttonStyle(.plain)
             .disabled(!windowState.canOpenCommitPicker)
@@ -89,13 +89,6 @@ struct ScopePickerView: View {
             .popover(isPresented: $windowState.isCommitPickerPresented, arrowEdge: .bottom) {
                 CommitPickerPopover()
             }
-        }
-    }
-
-    private var icon: String {
-        switch windowState.scope {
-        case .workingTree: "circle.and.line.horizontal"
-        case .commit: "smallcircle.filled.circle"
         }
     }
 
@@ -112,7 +105,7 @@ struct ScopePickerView: View {
 /// height with no fill, so it sits flat on the title bar. Plain data in, so it does not depend on
 /// `WindowState`.
 private struct TitleBarPickerLabel: View {
-    let glyph: String
+    let icon: ImageResource
     let title: String
     /// Follows the title after a separator, in secondary colour. Nil draws nothing.
     var subtitle: String?
@@ -122,11 +115,11 @@ private struct TitleBarPickerLabel: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Explicit scales throughout: a `Menu` hands its label a larger symbol scale
-            // than a `Button` does, and the two pickers must match.
-            Image(systemName: glyph)
-                .font(.caption)
-                .imageScale(.medium)
+            // A fixed frame, because a `Menu` and a `Button` scale their labels differently
+            // and a template image takes no font: pinning it keeps both faces matching the chevron.
+            Image(icon)
+                .resizable()
+                .frame(width: 14, height: 14)
                 .foregroundStyle(.secondary)
             Text(title)
                 .lineLimit(1)

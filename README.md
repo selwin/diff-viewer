@@ -73,6 +73,9 @@ repository. swift-format rewrites the file and stops the commit, so re-stage and
 The `difft` binary is copied from Homebrew if installed, otherwise downloaded from the
 difftastic GitHub release, into `DiffViewer/Resources/bin/` (git-ignored).
 
+The title bar's branch and commit icons are [Octicons](https://primer.style/octicons) by
+GitHub, MIT licensed (`DiffViewer/Assets.xcassets/Octicons-LICENSE`).
+
 ## Use
 
 Open a repository with ⌘O, drag a folder onto the window, or `open -a DiffViewer <repo>`.
