@@ -71,4 +71,12 @@ protocol RepoClient: Sendable {
     /// Switches to an existing local branch without creating a tracking branch. Throws
     /// git's and the hooks' diagnostics when it refuses or a post-checkout hook fails.
     func switchBranch(to branch: String) async throws
+    /// The names of the configured remotes, in git's order.
+    func remoteNames() async throws -> [String]
+    /// Updates the remote-tracking refs of `remote`, never pruning. Throws git's diagnostics.
+    func fetch(remote: String) async throws
+    /// Brings the current branch up to date with its upstream, merging or rebasing as config says.
+    func pull() async throws
+    /// Sends `branch` to `remoteRef` on `remote`, fast-forward only.
+    func push(branch: String, to remote: String, remoteRef: String) async throws
 }

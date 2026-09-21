@@ -44,6 +44,6 @@ struct UpstreamTrackingTests {
     }
 
     @Test func goneSaysSo() {
-        #expect(UpstreamTracking.gone.summary == "remote gone")
+        #expect(UpstreamTracking.gone.summary == "upstream gone")
     }
 }

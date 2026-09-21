@@ -25,24 +25,24 @@ struct WindowStateBranchTrackingTests {
     @Test(
         arguments: [(LocalBranch, HeadState, String?, String)]([
             (
-                LocalBranch(name: "main", upstream: "origin/main", tracking: .counts(ahead: 1, behind: 2)),
+                localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2))),
                 HeadState.named("main"), "2 behind, 1 ahead", "Switch branch · origin/main: 2 behind, 1 ahead"
             ),
             (
-                LocalBranch(name: "main", upstream: "origin/main", tracking: .counts(ahead: 0, behind: 0)),
+                localBranch("main", upstream: upstream("origin/main")),
                 .named("main"), nil, "Switch branch · origin/main: up to date"
             ),
             (
-                LocalBranch(name: "main", upstream: "origin/main", tracking: .gone),
-                .named("main"), "remote gone", "Switch branch · origin/main: gone"
+                localBranch("main", upstream: upstream("origin/main", tracking: .gone)),
+                .named("main"), "upstream gone", "Switch branch · origin/main: gone"
             ),
             (
-                LocalBranch(name: "main", upstream: nil, tracking: nil),
+                localBranch("main"),
                 .named("main"), nil, "Switch branch"
             ),
             // Detached: no branch is current, so its upstream is not the reader's.
             (
-                LocalBranch(name: "main", upstream: "origin/main", tracking: .counts(ahead: 1, behind: 2)),
+                localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2))),
                 .detached(sha: String(repeating: "a", count: 40)), nil, "Switch branch"
             ),
         ]))
@@ -58,12 +58,12 @@ struct WindowStateBranchTrackingTests {
     /// An upstream is set and unset in branch configuration, so a configuration tick
     /// alone must re-read the list and update the face.
     @Test func aConfigurationTickRefreshesTheTracking() async throws {
-        let untracked = LocalBranch(name: "main", upstream: nil, tracking: nil)
+        let untracked = localBranch("main")
         let (h, state, client, root) = try await settled(branches: [untracked], headState: .named("main"))
         #expect(state.branchTrackingSummary == nil)
 
         await client.set(localBranches: [
-            LocalBranch(name: "main", upstream: "origin/main", tracking: .counts(ahead: 3, behind: 0))
+            localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 3, behind: 0)))
         ])
         h.tick(root, [.configuration])
         #expect(await eventually { await state.branchTrackingSummary == "3 ahead" })

@@ -43,13 +43,22 @@ actor StubRepoClient: RepoClient {
     private var stubbedHeadState: HeadState = .named("main")
     private var failsHeadState = false
     private(set) var headStateCalls = 0
-    private var stubbedLocalBranches: [LocalBranch] = [LocalBranch(name: "main", upstream: nil, tracking: nil)]
+    private var stubbedLocalBranches: [LocalBranch] = [localBranch("main")]
     private var failsLocalBranches = false
     private var holdsLocalBranches = false
     private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
     private(set) var localBranchesCalls = 0
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
+    private var stubbedRemoteNames: [String] = ["origin"]
+    private(set) var remoteNamesCalls = 0
+    private(set) var fetchCalls: [String] = []
+    private(set) var pullCalls = 0
+    /// Every push asked for, in order, whether or not it succeeded.
+    private(set) var pushCalls: [(branch: String, remote: String, remoteRef: String)] = []
+    private var failsFetch = false
+    private var failsPull = false
+    private var failsPush = false
     private var failsSwitchBranch = false
     private var holdsSwitchBranch = false
     private var heldSwitchBranch: [CheckedContinuation<Void, Never>] = []
@@ -268,7 +277,7 @@ actor StubRepoClient: RepoClient {
 
     /// Plain names, for the tests that only care about the list the picker shows.
     func set(localBranches names: [String]) {
-        stubbedLocalBranches = names.map { LocalBranch(name: $0, upstream: nil, tracking: nil) }
+        stubbedLocalBranches = names.map { localBranch($0) }
     }
     func set(localBranches branches: [LocalBranch]) { stubbedLocalBranches = branches }
     func fail(localBranches on: Bool) { failsLocalBranches = on }
@@ -324,6 +333,34 @@ actor StubRepoClient: RepoClient {
         if failsSwitchBranch {
             throw ProcessError.failed(command: "git switch", status: 1, stderr: "post-checkout hook failed")
         }
+    }
+
+    // MARK: Remotes
+
+    func set(remoteNames names: [String]) { stubbedRemoteNames = names }
+    /// Makes `fetch` throw, after recording the call.
+    func fail(fetch on: Bool) { failsFetch = on }
+    func fail(pull on: Bool) { failsPull = on }
+    func fail(push on: Bool) { failsPush = on }
+
+    func remoteNames() async throws -> [String] {
+        remoteNamesCalls += 1
+        return stubbedRemoteNames
+    }
+
+    func fetch(remote: String) async throws {
+        fetchCalls.append(remote)
+        if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
+    }
+
+    func pull() async throws {
+        pullCalls += 1
+        if failsPull { throw ProcessError.failed(command: "git pull", status: 1, stderr: "pull failed") }
+    }
+
+    func push(branch: String, to remote: String, remoteRef: String) async throws {
+        pushCalls.append((branch: branch, remote: remote, remoteRef: remoteRef))
+        if failsPush { throw ProcessError.failed(command: "git push", status: 1, stderr: "push failed") }
     }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {

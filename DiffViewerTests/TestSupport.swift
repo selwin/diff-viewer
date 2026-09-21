@@ -190,6 +190,29 @@ func commitSummary(
     )
 }
 
+// MARK: Branches
+
+func localBranch(
+    _ name: String,
+    upstream: BranchUpstream? = nil,
+    tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+) -> LocalBranch {
+    LocalBranch(name: name, upstream: upstream, tipCommittedAt: tipCommittedAt)
+}
+
+/// `remoteRef` defaults to the branch half of `shortName`: `origin/main` tracks
+/// `refs/heads/main`.
+func upstream(
+    _ shortName: String,
+    remote: String = "origin",
+    remoteRef: String? = nil,
+    tracking: UpstreamTracking = .counts(ahead: 0, behind: 0)
+) -> BranchUpstream {
+    let branch = shortName.hasPrefix(remote + "/") ? String(shortName.dropFirst(remote.count + 1)) : shortName
+    return BranchUpstream(
+        shortName: shortName, remote: remote, remoteRef: remoteRef ?? "refs/heads/\(branch)", tracking: tracking)
+}
+
 // MARK: Images
 
 private struct ImageFixtureFailure: Error {
