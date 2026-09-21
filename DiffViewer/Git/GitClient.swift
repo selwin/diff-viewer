@@ -171,14 +171,22 @@ struct GitClient: RepoClient {
         return String(line.dropFirst(prefix.count))
     }
 
-    /// Local branch names sorted by ref name. An unborn branch has no ref and is omitted.
-    func localBranches() async throws -> [String] {
+    /// Local branches sorted by ref name. An unborn branch has no ref and is omitted.
+    func localBranches() async throws -> [LocalBranch] {
         // `%(refname)`, not `%(refname:short)`: when a tag and a branch share a name, git
         // shortens `refs/heads/main` only as far as `heads/main` to stay unambiguous.
         // Stripping the prefix ourselves always yields the plain branch name.
+        //
+        // The upstream fields ride along on the same process; `nobracket` drops the `[ ]`
+        // git would otherwise wrap the counts in. NUL separates the fields, newline the
+        // branches.
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["for-each-ref", "--format=%(refname)", "refs/heads/"],
+            arguments: [
+                "for-each-ref",
+                "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)",
+                "refs/heads/",
+            ],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
@@ -186,7 +194,16 @@ struct GitClient: RepoClient {
         // inside a name.
         return result.stdoutString
             .split(separator: "\n")
-            .map { Self.branchName(fromRef: String($0)) }
+            .map { line in
+                let fields = line.components(separatedBy: "\0")
+                let upstream = fields.count > 1 ? fields[1] : ""
+                let track = fields.count > 2 ? fields[2] : ""
+                return LocalBranch(
+                    name: Self.branchName(fromRef: fields[0]),
+                    upstream: upstream.isEmpty ? nil : upstream,
+                    // No upstream name means no upstream, whatever the track field says.
+                    tracking: upstream.isEmpty ? nil : UpstreamTracking.parse(track))
+            }
     }
 
     /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headState()`

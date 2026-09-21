@@ -28,6 +28,21 @@ extension WindowState {
         }
     }
 
+    /// The branch picker's suffix: how far the current branch is from its upstream, or
+    /// nil when in sync, untracked, or detached. Counts are as old as the last fetch.
+    var branchTrackingSummary: String? {
+        currentBranch?.tracking?.summary
+    }
+
+    /// The branch picker's help: the upstream, named whenever there is one, and where the
+    /// branch stands against it.
+    var branchSwitchHelp: String {
+        let base = "Switch branch"
+        guard let branch = currentBranch, let upstream = branch.upstream else { return base }
+        let detail = branch.tracking == .gone ? "gone" : (branch.tracking?.summary ?? "up to date")
+        return "\(base) · \(upstream): \(detail)"
+    }
+
     /// The branch picker's selection: nil while HEAD is detached or unread.
     var currentBranchName: String? {
         if case let .named(name)? = headState { return name }

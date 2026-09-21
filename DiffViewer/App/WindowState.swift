@@ -104,7 +104,12 @@ final class WindowState {
     /// Where HEAD points, or nil until the first read returns: nil shows no branch, not a wrong one.
     private(set) var headState: HeadState?
     /// The local branches the picker lists, read with `headState` on the same ticket.
-    private(set) var localBranches: [String] = []
+    private(set) var branches: [LocalBranch] = []
+    /// The branch names the picker's menu lists, in the order they were read.
+    var localBranches: [String] { branches.map(\.name) }
+    /// The list's entry for the branch HEAD is on, or nil when HEAD is detached, unread, or
+    /// the branch is missing from the list.
+    var currentBranch: LocalBranch? { branches.first { $0.name == currentBranchName } }
     /// True while a branch switch is queued, running, or refreshing repository state.
     private(set) var isSwitchingBranch = false
     private(set) var commitLimit = WindowState.commitPageSize
@@ -779,14 +784,14 @@ extension WindowState {
         headState = state
         // Separate reads can disagree; the picker keeps a row for the current selection.
         // A failed list read keeps the last list, for the same reason as above.
-        let branches: [String]
+        let list: [LocalBranch]
         do {
-            branches = try await session.client.localBranches()
+            list = try await session.client.localBranches()
         } catch {
             return
         }
         guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return }
-        localBranches = branches
+        branches = list
     }
 
     /// Drops a history read whose answer is no longer wanted, and settles the state its
