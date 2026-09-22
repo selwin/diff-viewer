@@ -263,6 +263,18 @@ final class SideBySideContainerView: NSView {
         refold(anchor: anchor)
     }
 
+    /// Hides the panes without tearing them down, so folds, scroll position and selection
+    /// survive. Resigns first responder on the way out so Copy and Select All cannot act
+    /// on text nobody can see.
+    func setHidden(_ hidden: Bool) {
+        guard hidden != isHidden else { return }
+        isHidden = hidden
+        guard hidden, let window else { return }
+        if let responder = window.firstResponder as? NSView, responder === self || responder.isDescendant(of: self) {
+            window.makeFirstResponder(nil)
+        }
+    }
+
     var currentBlock: Int? {
         didSet {
             overview.currentBlock = currentBlock
@@ -445,6 +457,8 @@ struct SideBySideView: NSViewRepresentable {
     var currentBlock: Int?
     var collapseUnchanged = true
     var foldOptions = FoldOptions()
+    /// Kept in the hierarchy but out of sight, so a caller can layer another view over it.
+    var isHidden = false
     var onTopVisibleSectionChange: ((VisibleSectionReference?) -> Void)?
 
     func makeNSView(context: Context) -> SideBySideContainerView {
@@ -455,6 +469,7 @@ struct SideBySideView: NSViewRepresentable {
         view.setCollapseUnchanged(collapseUnchanged)
         view.setContent(content, fontSize: fontSize)
         context.coordinator.documentID = content.document.id
+        view.setHidden(isHidden)
         view.setStyles(styles)
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)
         view.currentBlock = currentBlock
@@ -472,6 +487,7 @@ struct SideBySideView: NSViewRepresentable {
             view.setFontSize(fontSize)
         }
         view.setCollapseUnchanged(collapseUnchanged)
+        view.setHidden(isHidden)
         view.setStyles(styles)
         if view.currentBlock != currentBlock { view.currentBlock = currentBlock }
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)

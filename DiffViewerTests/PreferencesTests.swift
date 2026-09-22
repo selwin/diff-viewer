@@ -48,6 +48,16 @@ struct PreferencesTests {
         #expect(!Preferences(defaults: defaults).confirmDestructiveFileActions)
     }
 
+    @Test func showsSVGPreviewDefaultsToTrueAndRoundTrips() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+        #expect(preferences.showsSVGPreview)
+        preferences.showsSVGPreview = false
+        #expect(defaults.bool(forKey: "showsSVGPreview") == false)
+        #expect(!Preferences(defaults: defaults).showsSVGPreview)
+    }
+
     @Test func clampsStoredFontSize() {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

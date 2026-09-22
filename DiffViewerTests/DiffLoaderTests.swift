@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 
@@ -165,10 +166,10 @@ struct DiffLoaderTests {
         return false
     }
 
-    /// The decoded pixel width of a preview side, or nil when it is absent or undecodable.
-    private func decodedWidth(_ side: ImagePreview.Side?) -> Int? {
+    /// The decoded display width of a preview side, or nil when it is absent or undecodable.
+    private func decodedWidth(_ side: ImagePreview.Side?) -> CGFloat? {
         guard case let .decoded(decoded)? = side else { return nil }
-        return decoded.originalPixelWidth
+        return decoded.displaySize.width
     }
 
     /// A client whose worktree `logo.png` is a 7×5 PNG.
@@ -311,6 +312,109 @@ struct DiffLoaderTests {
             Issue.record("text expected")
             return
         }
+        #expect(loader.imagePreview == nil)
+    }
+
+    // MARK: SVG previews
+
+    private func svgData(width: Int, height: Int) -> Data {
+        Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"\(width)\" height=\"\(height)\"></svg>".utf8)
+    }
+
+    /// True once `loader` has settled on `.text` content.
+    private func waitUntilSettledOnText(_ loader: DiffLoader) async -> Bool {
+        guard await eventually({ await !loader.isLoading }) else { return false }
+        if case .text? = loader.content { return true }
+        return false
+    }
+
+    /// An SVG is text, so it keeps its text diff and styles and gains a preview. The
+    /// stub's index side is plain text, so only the new side decodes.
+    @Test func anSVGPublishesBothTextAndAPreview() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
+        let loader = DiffLoader(cache: plainDifftCache())
+
+        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        guard case let .text(document)? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(loader.styles?.documentID == document.id)
+        #expect(decodedWidth(loader.imagePreview?.new) == 40)
+    }
+
+    /// Text that is not an SVG at all stays a plain text diff.
+    @Test func anInvalidSVGPublishesTextWithoutAPreview() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: Data("not svg at all".utf8), for: "icon.svg")
+        let loader = DiffLoader(cache: plainDifftCache())
+
+        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        #expect(loader.imagePreview == nil)
+    }
+
+    /// A PNG renamed to an SVG is binary and still previews, each side decoded by the
+    /// format of its own name.
+    @Test func aPNGRenamedToSVGPreviews() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(index: try imageData(width: 7, height: 5), for: "icon.svg")
+        await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
+        let loader = DiffLoader(cache: plainDifftCache())
+        let renamed = ChangedFile(
+            path: "icon.svg", originalPath: "a.png", kind: .renamed, area: .unstaged, fingerprint: nil)
+
+        loader.load(file: renamed, client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnBinary(loader))
+        guard case let .decoded(old)? = loader.imagePreview?.old, case let .decoded(new)? = loader.imagePreview?.new
+        else {
+            Issue.record("both sides decoded expected")
+            return
+        }
+        #expect(old.format == .raster && old.displaySize == CGSize(width: 7, height: 5))
+        #expect(new.format == .svg && new.displaySize == CGSize(width: 40, height: 20))
+    }
+
+    /// A rename away from an image name keeps the preview: the side that has no format of
+    /// its own borrows the other's.
+    @Test func aRenameToANonImageNamePreviewsWithTheOriginalFormat() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: svgData(width: 40, height: 20), for: "icon.bin")
+        let loader = DiffLoader(cache: plainDifftCache())
+        let renamed = ChangedFile(
+            path: "icon.bin", originalPath: "icon.svg", kind: .renamed, area: .unstaged, fingerprint: nil)
+
+        loader.load(file: renamed, client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        #expect(decodedWidth(loader.imagePreview?.new) == 40)
+    }
+
+    /// An untracked SVG has no old side at all.
+    @Test func anUntrackedSVGHasNoOldSide() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: svgData(width: 12, height: 8), for: "new.svg")
+        let loader = DiffLoader(cache: plainDifftCache())
+
+        loader.load(file: changedFile("new.svg", kind: .untracked), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        #expect(loader.imagePreview?.old == nil)
+        #expect(decodedWidth(loader.imagePreview?.new) == 12)
+    }
+
+    /// Selecting a source file after an SVG clears the preview, as for any other selection.
+    @Test func selectingAnotherFileClearsTheSVGPreview() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
+        let loader = DiffLoader(cache: plainDifftCache())
+        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        #expect(loader.imagePreview != nil)
+
+        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        #expect(loader.imagePreview == nil)
+        try #require(await waitUntilSettledOnText(loader))
         #expect(loader.imagePreview == nil)
     }
 }

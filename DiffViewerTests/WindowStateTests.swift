@@ -33,6 +33,8 @@ actor StubRepoClient: RepoClient {
     private(set) var numstatCalls = 0
     /// Worktree contents by path, overriding the default "new \(path)" body.
     private var worktree: [String: Data?] = [:]
+    /// Index bytes by path; an unlisted path gets the stub's fixed text.
+    private var index: [String: Data] = [:]
     /// Object sizes by spec; an unlisted spec is one git has no object for.
     private var objectSizesBySpec: [String: Int64] = [:]
     private var failsObjectSizes = false
@@ -149,6 +151,7 @@ actor StubRepoClient: RepoClient {
         for continuation in waiting { continuation.resume() }
     }
     func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
+    func set(index data: Data, for path: String) { index[path] = data }
     /// The size `objectSizes` answers for `spec`; nil is what git says for a missing object.
     func set(objectSize size: Int64?, for spec: String) { objectSizesBySpec[spec] = size }
     /// Makes `objectSizes` throw, after recording the call.
@@ -459,7 +462,7 @@ actor StubRepoClient: RepoClient {
     func indexContents(of path: String) async throws -> Data? {
         beginRead(path)
         defer { endRead() }
-        return Data("old \(path)".utf8)
+        return index[path] ?? Data("old \(path)".utf8)
     }
 
     func headContents(of path: String) async throws -> Data? {

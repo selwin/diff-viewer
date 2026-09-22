@@ -44,16 +44,14 @@ private struct ImageSideView: View {
     private var content: some View {
         switch side {
         case let .decoded(decoded)?:
-            // Capped at one source pixel per point so small images are never upscaled.
+            // Shown at most at its own size, in its own aspect ratio: a capped bitmap of a
+            // huge SVG is drawn larger than its resolution rather than distorted.
             Image(decorative: decoded.image, scale: 1)
                 .resizable()
                 .interpolation(.high)
-                .scaledToFit()
+                .aspectRatio(decoded.displaySize, contentMode: .fit)
                 .background(Checkerboard())
-                .frame(
-                    maxWidth: CGFloat(decoded.originalPixelWidth),
-                    maxHeight: CGFloat(decoded.originalPixelHeight)
-                )
+                .frame(maxWidth: decoded.displaySize.width, maxHeight: decoded.displaySize.height)
                 .padding(16)
         case .undecodable?:
             notice("Couldn't decode image")
@@ -66,7 +64,9 @@ private struct ImageSideView: View {
         switch side {
         case let .decoded(decoded)?:
             let size = FileSizeText.string(Int64(decoded.byteCount), locale: locale)
-            return "\(decoded.originalPixelWidth) × \(decoded.originalPixelHeight) · \(size)"
+            let (width, height) = dimensions(decoded)
+            let unit = decoded.format == .svg ? "pt" : "px"
+            return "\(width) × \(height) \(unit) · \(size)"
         case let .undecodable(byteCount)?:
             return FileSizeText.string(Int64(byteCount), locale: locale)
         case nil:
@@ -74,19 +74,45 @@ private struct ImageSideView: View {
         }
     }
 
+    private func dimensions(_ decoded: ImagePreview.Decoded) -> (width: String, height: String) {
+        (
+            PreviewDimensionText.string(decoded.displaySize.width, format: decoded.format, locale: locale),
+            PreviewDimensionText.string(decoded.displaySize.height, format: decoded.format, locale: locale)
+        )
+    }
+
     private var accessibilityValue: String {
         switch side {
         case let .decoded(decoded)?:
-            "\(decoded.originalPixelWidth) by \(decoded.originalPixelHeight) pixels, "
+            let (width, height) = dimensions(decoded)
+            // An SVG has no resolution of its own; its size is in points.
+            let unit = decoded.format == .svg ? "points" : "pixels"
+            return "\(width) by \(height) \(unit), "
                 + FileSizeText.string(Int64(decoded.byteCount), locale: locale)
         case let .undecodable(byteCount)?:
-            "Couldn't decode image, \(FileSizeText.string(Int64(byteCount), locale: locale))"
-        case nil: absentText
+            return "Couldn't decode image, \(FileSizeText.string(Int64(byteCount), locale: locale))"
+        case nil: return absentText
         }
     }
 
     private func notice(_ text: String) -> some View {
         Text(text).foregroundStyle(Color(nsColor: DiffTheme.noticeText))
+    }
+}
+
+/// One dimension of a preview's display size. Raster sizes are whole pixels; an SVG's
+/// intrinsic size can be fractional, so it keeps up to two decimals and, below 0.01,
+/// two significant digits, so no accepted size ever reads as zero.
+enum PreviewDimensionText {
+    static func string(_ value: CGFloat, format: ImagePreview.Format, locale: Locale) -> String {
+        let number = FloatingPointFormatStyle<Double>.number.locale(locale)
+        let style =
+            switch format {
+            case .raster: number.precision(.fractionLength(0))
+            case .svg where value < 0.01: number.precision(.significantDigits(1...2))
+            case .svg: number.precision(.fractionLength(0...2))
+            }
+        return Double(value).formatted(style)
     }
 }
 
