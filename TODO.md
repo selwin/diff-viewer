@@ -346,6 +346,18 @@ Roughly in priority order.
 
 - **Image diff, second pass.** The side-by-side preview landed (see *Landed*); still
   open: a swipe or onion-skin slider, zoom, and images inside All changes.
+- **SVG (and image) previews inside All changes.** Today a binary section shows the
+  "Binary file" notice and an SVG section shows its source rows. Medium effort, and the
+  cost is all in the pane: `PaneLayout` assumes one row height for every display row, so
+  an image band needs either variable-height rows (touches `y(forRow:)`, hit testing,
+  the overview strip, and scroll anchoring) or a fixed-height "preview" display row
+  (say 160 pt, thumbnails scaled to fit, no zoom) drawn by `DiffPaneView+Changeset`
+  from a per-section `ImagePreview`. The fixed-height row is the boring choice and
+  keeps the layout math intact. The rest is small: `ChangesetAssembler` decodes the
+  preview alongside the diff (the loader already knows how, per side and format), the
+  section carries it, and `ChangesetProjection` emits the preview row after the file
+  header, before the source rows for an SVG. Open question for SVG: preview and source
+  both, or a per-section Preview / Source toggle like the single-file header.
 - **Quick Look for other binaries** (Kaleidoscope, JuxtaCode): press Space on a binary
   file to preview the worktree version.
 - **Connector lines between panes** for modified rows, as in Kaleidoscope's Fluid layout
@@ -380,6 +392,15 @@ with a "W × H · size" caption. A missing or undecodable side shows a notice; i
 side decodes, the binary placeholder remains. Decoding runs off the main actor, forwards
 cancellation, and limits each preview's longest dimension to 4096 px. All changes still
 shows the "Binary file" notice.
+
+### SVG preview (2026-09-22)
+
+An SVG stays a text diff, and its single-file view also decodes a rendered preview
+(through `NSImage`, since ImageIO cannot read SVG) with a Preview / Source toggle in the
+file header. The preference persists; Next / Previous Change while previewing reveals
+Source for that file only. The source panes stay alive under the preview, so folds,
+scroll position and selection survive the toggle. A PNG → SVG rename decodes each side
+with its own decoder. All changes still shows SVG as source rows.
 
 ### Commit picker (2026-09-13)
 

@@ -122,7 +122,8 @@ final class DiffPaneView: NSView {
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
-    override var acceptsFirstResponder: Bool { model != nil }
+    /// A hidden pane stays loaded but must not take key events; its text is not on screen.
+    override var acceptsFirstResponder: Bool { model != nil && !isHiddenOrHasHiddenAncestor }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

@@ -18,8 +18,8 @@ final class DiffLoader {
     private(set) var errorMessage: String?
     /// Syntax styles for `content`, published in the same turn as the content itself.
     private(set) var styles: DocumentStyles?
-    /// Preview for the current single-file binary content. Published with `content` and
-    /// retained during same-file reloads.
+    /// Rendered preview for the current single file. Published with content and retained
+    /// during same-file reloads.
     private(set) var imagePreview: ImagePreview?
     /// How much of an All-changes load has been published, while one is running.
     private(set) var changesetProgress: (completed: Int, total: Int)?
@@ -83,13 +83,26 @@ final class DiffLoader {
                     sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
                     priority: .foreground)
                 try Task.checkCancellation()
+                // SVG stays a text diff, so it is previewed on its text content too.
+                let oldFormat = ImagePreview.format(for: file.originalPath ?? file.path)
+                let newFormat = ImagePreview.format(for: file.path)
+                let wantsPreview =
+                    switch output.content {
+                    case .binary: oldFormat != nil || newFormat != nil
+                    case .text: oldFormat == .svg || newFormat == .svg
+                    default: false
+                    }
                 var preview: ImagePreview?
-                if case .binary = output.content,
-                    ImagePreview.hasImageExtension(file.path)
-                        || file.originalPath.map(ImagePreview.hasImageExtension) == true
-                {
-                    preview = try await ImagePreview.decode(
-                        old: sources.oldExists ? sources.old : nil, new: sources.newExists ? sources.new : nil)
+                if wantsPreview {
+                    // A rename may name an image on one side only; that side's decoder
+                    // is the best guess for the other's bytes.
+                    let oldInput = (oldFormat ?? newFormat).flatMap { format in
+                        sources.oldExists ? ImagePreview.Input(data: sources.old, format: format) : nil
+                    }
+                    let newInput = (newFormat ?? oldFormat).flatMap { format in
+                        sources.newExists ? ImagePreview.Input(data: sources.new, format: format) : nil
+                    }
+                    preview = try await ImagePreview.decode(old: oldInput, new: newInput)
                     try Task.checkCancellation()
                 }
                 guard gen == generation else { return }

@@ -25,6 +25,12 @@ final class Preferences {
         didSet { defaults.set(collapseUnchanged, forKey: Keys.collapseUnchanged) }
     }
 
+    /// Prefer rendered SVG previews when available. Changing this does not recompute
+    /// the diff.
+    var showsSVGPreview: Bool {
+        didSet { defaults.set(showsSVGPreview, forKey: Keys.showsSVGPreview) }
+    }
+
     /// Destructive sidebar actions (Discard Changes, Delete File) ask before running.
     /// The alert's "Don't ask again" box turns this off; the View-menu toggle turns it
     /// back on, which is the only way back — there is no Settings scene.
@@ -55,6 +61,7 @@ final class Preferences {
         static let hideWhitespace = "hideWhitespace"
         static let fontSize = "fontSize"
         static let collapseUnchanged = "collapseUnchanged"
+        static let showsSVGPreview = "showsSVGPreview"
         static let collapseContextLines = "collapseContextLines"
         static let confirmDestructiveFileActions = "confirmDestructiveFileActions"
     }
@@ -67,6 +74,7 @@ final class Preferences {
         let storedSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 12
         fontSize = min(max(storedSize, Self.fontSizeRange.lowerBound), Self.fontSizeRange.upperBound)
         collapseUnchanged = defaults.object(forKey: Keys.collapseUnchanged) as? Bool ?? true
+        showsSVGPreview = defaults.object(forKey: Keys.showsSVGPreview) as? Bool ?? true
         confirmDestructiveFileActions =
             defaults.object(forKey: Keys.confirmDestructiveFileActions) as? Bool ?? true
         foldOptions = FoldOptions.validated(contextLines: defaults.object(forKey: Keys.collapseContextLines) as? Int)

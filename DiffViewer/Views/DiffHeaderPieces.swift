@@ -36,6 +36,8 @@ struct FileHeaderView: View {
     let stats: LineStats?
     let isLoading: Bool
     var loadingProgressText: String?
+    /// Nil when the file has no rendered preview to switch to.
+    var showsPreview: Binding<Bool>?
 
     var body: some View {
         HeaderStrip(isLoading: isLoading, loadingProgressText: loadingProgressText) {
@@ -57,6 +59,18 @@ struct FileHeaderView: View {
                         .layoutPriority(1)
                 }
                 CopyPathButton(action: copyRelativePath)
+                if let showsPreview {
+                    Picker("View", selection: showsPreview) {
+                        Label("Preview", systemImage: "photo").tag(true)
+                        Label("Source", systemImage: "text.alignleft").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+                    .layoutPriority(2)
+                    .help("Show the rendered SVG or its source")
+                }
                 Spacer()
                 if !file.directory.isEmpty {
                     Text(file.directory)
