@@ -131,8 +131,9 @@ final class WindowState {
     /// scope task's own `refresh`, which may be superseded by a watcher refresh that
     /// publishes the files instead.
     private var pendingReselections: [PendingSelection] = []
-    /// Set when a window or a scope is about to show its first list, and consumed by
-    /// whichever refresh publishes one, for the same reason as `pendingReselect`.
+    /// Armed on adoption, on a scope change, and by every empty list a refresh publishes;
+    /// consumed by the refresh that publishes a list with rows. Held here for the same
+    /// reason as `pendingReselections`.
     private var pendingAllChanges = false
 
     /// The commit-message draft; the reader's own edits bump its revision, applied
@@ -424,7 +425,9 @@ final class WindowState {
             let pending = pendingReselections
             pendingReselections = []
             let wantsAllChanges = pendingAllChanges
-            pendingAllChanges = false
+            // An empty list is not a first list: it keeps the flag armed, so a repository
+            // with no changes lands on All changes when its first change arrives.
+            pendingAllChanges = newFiles.isEmpty
             // Taken before `files` is replaced, so it describes the pane on screen.
             let keyBefore = detailIdentity
             let before = Dictionary(files.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -452,9 +455,9 @@ final class WindowState {
             applySelection(
                 SidebarReselection.selection(after: pending, surviving: surviving, in: sidebarRows),
                 from: keyBefore)
-            // Only the first list for a window or a scope lands on All changes: a
-            // selection a *later* refresh emptied because its files vanished stays empty,
-            // which is what the restoration rule and the detail area both read.
+            // All changes is the default after a first list or an empty one. A selection a
+            // refresh emptied because its files vanished from a list that still has rows stays
+            // empty, which is what the restoration rule and the detail area both read.
             // `selectionBeforeWasEmpty` guards a choice made while this read was in flight.
             if wantsAllChanges, storedSelection.isEmpty, selectionBeforeWasEmpty {
                 applySelection([.allChanges], from: keyBefore)

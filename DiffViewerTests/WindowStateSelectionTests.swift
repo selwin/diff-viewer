@@ -91,6 +91,42 @@ struct WindowStateSelectionTests {
         #expect(await repo.client.contentReads > reads, "a shorter list is a different changeset")
     }
 
+    // MARK: An empty list
+
+    @Test func aCleanRepositoryLandsOnAllChangesWhenItsFirstChangeArrives() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: [])
+        #expect(state.selection == [.allChanges])
+        #expect(sections(state) == nil, "an empty list publishes no changeset")
+
+        await repo.client.set(files: [files[0]])
+        h.tick(repo.root, [.worktree])
+
+        #expect(await eventually { await state.files.map(\.id) == [self.files[0].id] })
+        #expect(state.selection == [.allChanges])
+        await awaitChangeset([files[0]], in: state)
+    }
+
+    @Test func anEmptiedSelectionIsRefilledByTheNextListWithRows() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: [files[0]])
+        // What the sidebar's binding writes when the last row, All changes included, goes.
+        state.selection = []
+        await repo.client.set(files: [])
+        h.tick(repo.root, [.worktree])
+        #expect(await eventually { await state.files.isEmpty })
+        #expect(state.selection == [])
+
+        await repo.client.set(files: [files[1]])
+        h.tick(repo.root, [.worktree])
+
+        #expect(await eventually { await state.files.map(\.id) == [self.files[1].id] })
+        #expect(state.selection == [.allChanges], "a list with rows after an empty one lands on All changes")
+        await awaitChangeset([files[1]], in: state)
+    }
+
     // MARK: Survivors
 
     @Test func aRefreshKeepsTheSelectedFilesThatAreStillThere() async {
