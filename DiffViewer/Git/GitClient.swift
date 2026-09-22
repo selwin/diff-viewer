@@ -6,7 +6,8 @@ struct GitClient: RepoClient {
     /// Merged over `baseEnvironment` on every call, so tests can hand git a neutral identity
     /// and keep the developer's own config out.
     private let environmentOverrides: [String: String]
-    /// Awaited only by the calls that run the user's hooks: `commit` and `switchBranch`.
+    /// Awaited by the calls that run the user's hooks — `commit`, `switchBranch` — and by
+    /// the remote commands, whose credential helpers resolve on the login PATH too.
     private let resolveHookEnvironment: @Sendable () async -> [String: String]
 
     init(
@@ -30,13 +31,15 @@ struct GitClient: RepoClient {
 
     /// What every instance call passes to git: the static settings with this client's
     /// overrides on top.
-    private var callEnvironment: [String: String] {
+    var callEnvironment: [String: String] {
         Self.baseEnvironment.merging(environmentOverrides) { _, instance in instance }
     }
 
-    /// What a call that runs hooks passes to git. Later wins: hooks need the login
-    /// shell's PATH, and a caller's own overrides still beat both.
-    private func hookEnvironment() async -> [String: String] {
+    /// What a call that runs hooks or talks to a remote passes to git. Later wins: hooks
+    /// and credential helpers need the login shell's PATH, and a caller's own overrides
+    /// still beat both. Internal, with `callEnvironment` and `commandDiagnostics`, for
+    /// the remote commands in `GitClient+Remote.swift`.
+    func hookEnvironment() async -> [String: String] {
         var environment = Self.baseEnvironment.merging(await resolveHookEnvironment()) { _, resolved in resolved }
         environment.merge(environmentOverrides) { _, instance in instance }
         return environment
@@ -156,19 +159,7 @@ struct GitClient: RepoClient {
 
     /// The branch a successful `git symbolic-ref HEAD` names.
     private func branchName(from result: ProcessResult) -> String {
-        Self.branchName(fromRef: result.stdoutString)
-    }
-
-    /// The branch name a full ref names: `refs/heads/main` → `main`. Only the line
-    /// terminator is removed: git permits Unicode separators and trailing non-breaking
-    /// spaces in a ref name, and trimming whitespace would corrupt those.
-    private static func branchName(fromRef ref: String) -> String {
-        let line = ref.hasSuffix("\n") ? String(ref.dropLast()) : ref
-        let prefix = "refs/heads/"
-        // A ref outside `refs/heads/` is not a branch, and there is nothing better to
-        // call it than what git wrote.
-        guard line.hasPrefix(prefix) else { return line }
-        return String(line.dropFirst(prefix.count))
+        LocalBranchParser.branchName(fromRef: result.stdoutString)
     }
 
     /// Local branches sorted by ref name. An unborn branch has no ref and is omitted.
@@ -177,33 +168,21 @@ struct GitClient: RepoClient {
         // shortens `refs/heads/main` only as far as `heads/main` to stay unambiguous.
         // Stripping the prefix ourselves always yields the plain branch name.
         //
-        // The upstream fields ride along on the same process; `nobracket` drops the `[ ]`
-        // git would otherwise wrap the counts in. NUL separates the fields, newline the
-        // branches.
+        // The upstream and date fields ride along on the same process; `nobracket` drops
+        // the `[ ]` git would otherwise wrap the counts in. NUL separates the fields,
+        // newline the branches.
         let result = try await ProcessRunner.check(
             Self.executable,
             arguments: [
                 "for-each-ref",
-                "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)",
+                "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)"
+                    + "%00%(upstream:remotename)%00%(upstream:remoteref)%00%(committerdate:iso-strict)",
                 "refs/heads/",
             ],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
-        // The literal terminator, not `isNewline`, which would also split on a U+2028
-        // inside a name.
-        return result.stdoutString
-            .split(separator: "\n")
-            .map { line in
-                let fields = line.components(separatedBy: "\0")
-                let upstream = fields.count > 1 ? fields[1] : ""
-                let track = fields.count > 2 ? fields[2] : ""
-                return LocalBranch(
-                    name: Self.branchName(fromRef: fields[0]),
-                    upstream: upstream.isEmpty ? nil : upstream,
-                    // No upstream name means no upstream, whatever the track field says.
-                    tracking: upstream.isEmpty ? nil : UpstreamTracking.parse(track))
-            }
+        return try LocalBranchParser.parse(result.stdoutString)
     }
 
     /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headState()`
@@ -480,7 +459,7 @@ struct GitClient: RepoClient {
         // Not `check`: its label would echo the temp file's path into the alert.
         guard result.status == 0 else {
             throw ProcessError.failed(
-                command: "git commit", status: result.status, stderr: Self.hookDiagnostics(result))
+                command: "git commit", status: result.status, stderr: Self.commandDiagnostics(result))
         }
     }
 
@@ -502,13 +481,12 @@ struct GitClient: RepoClient {
         )
         guard result.status == 0 else {
             throw ProcessError.failed(
-                command: "git switch", status: result.status, stderr: Self.hookDiagnostics(result))
+                command: "git switch", status: result.status, stderr: Self.commandDiagnostics(result))
         }
     }
 
-    /// Both streams of a failed hook-running command, because hooks often explain
-    /// themselves on stdout while git warns on stderr.
-    private static func hookDiagnostics(_ result: ProcessResult) -> String {
+    /// Combines stderr and stdout, because git and hooks may report failures on either.
+    static func commandDiagnostics(_ result: ProcessResult) -> String {
         [result.stderrString, result.stdoutString]
             .filter { !$0.isEmpty }
             .joined(separator: "\n")

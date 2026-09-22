@@ -43,8 +43,19 @@ final class RepoSession {
     var historyTask: Task<Void, Never>?
     /// The tail of the chain of repository writes: sidebar file actions, commits, and branch switches. Each
     /// new write waits for this task before touching the repository, so two quick clicks
-    /// cannot run two `git` writes at once and collide on `index.lock`.
+    /// cannot run two `git` writes at once and collide on `index.lock`. A fetch is not on
+    /// this chain: it runs independently, updating the refs the remote's configured
+    /// mappings name rather than the worktree or the index.
     var repositoryWriteTask: Task<Void, Never>?
+    /// When each remote was last fetched successfully, so reopening the branch picker
+    /// does not fetch again straight away.
+    var lastSuccessfulFetchAtByRemote: [String: Date] = [:]
+    /// Bumped every time a HEAD + branch read publishes, loaded or failed. A caller that
+    /// needs a published read can tell one that landed meanwhile from none at all.
+    var branchReadGeneration = 0
+    /// Who is waiting for the next published branch read, resumed by that publication and
+    /// by `close()`, so nobody waits on a window that has stopped reading.
+    var branchReadWaiters: [CheckedContinuation<Void, Never>] = []
     /// The commit-defaults read in flight, if any. Superseded by generation, not by the
     /// refresh serial: a `.settings` refresh does not start one and must not cancel one.
     var commitDefaultsTask: Task<Void, Never>?
@@ -91,6 +102,8 @@ enum RefreshCause: Sendable {
     case commit
     /// A branch switch finished, successfully or not, and the working tree was re-read.
     case branchSwitch
+    /// A pull finished, successfully or not, and the working tree was re-read.
+    case pull
 
     /// Whether a refresh for this cause starts a commit-defaults read. A settings change
     /// has no bearing on the suggestion, and the watcher decides from its routing.

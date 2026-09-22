@@ -25,8 +25,8 @@ struct CommitPickerRow: Equatable {
     let isDisplayedScope: Bool
 }
 
-/// How the table must update after `CommitPickerState.apply`.
-enum CommitPickerTableChange: Equatable {
+/// How the table must update after a picker state's `apply`; both pickers report it.
+enum PickerTableChange: Equatable {
     case none
     /// Appended rows and existing rows that need refreshing.
     case incremental(inserted: Range<Int>?, refreshed: IndexSet)
@@ -145,7 +145,7 @@ struct CommitPickerState {
 
     /// Takes a new snapshot and reports what the table must do. Header, footer and the
     /// Working Tree text are re-read after every call; only the rows are reported.
-    mutating func apply(_ new: CommitPickerSnapshot) -> CommitPickerTableChange {
+    mutating func apply(_ new: CommitPickerSnapshot) -> PickerTableChange {
         guard new != snapshot else { return .none }
         let old = snapshot
         snapshot = new
@@ -153,7 +153,7 @@ struct CommitPickerState {
 
         let oldRows = rows
         rows = Self.makeRows(snapshot: new, grouping: grouping)
-        let change: CommitPickerTableChange
+        let change: PickerTableChange
         if rows.count >= oldRows.count, zip(oldRows, rows).allSatisfy({ $0.commit.ref.sha == $1.commit.ref.sha }) {
             let inserted = rows.count > oldRows.count ? oldRows.count..<rows.count : nil
             var refreshed = IndexSet()

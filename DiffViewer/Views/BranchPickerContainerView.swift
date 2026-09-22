@@ -1,20 +1,19 @@
 import AppKit
 
-/// The commit picker's AppKit root: header, gutter, the pinned Working Tree row, the
-/// commit table, and the footer or empty state, laid out top-down by hand. Owns the
-/// `CommitPickerState` and applies each snapshot to the table as the state directs.
+/// The branch picker's AppKit root: header, gutter, the branch table, and the footer or
+/// empty state, laid out top-down by hand. Owns the `BranchPickerState` and applies each
+/// snapshot to the table as the state directs.
 @MainActor
-final class CommitPickerContainerView: NSView {
-    private(set) var state: CommitPickerState
+final class BranchPickerContainerView: NSView {
+    private(set) var state: BranchPickerState
 
-    var onActivate: (DiffScope) -> Void = { _ in }
+    var onActivate: (String) -> Void = { _ in }
     var onDismiss: () -> Void = {}
-    var onLoadMore: () -> Void = {}
-    var onRetry: () -> Void = {}
+    var onPull: () -> Void = {}
+    var onPush: () -> Void = {}
 
-    let header = CommitPickerHeaderView(frame: .zero)
+    let header = BranchPickerHeaderView(frame: .zero)
     let gutter = CommitPickerGutterView(frame: .zero)
-    let pinnedRow = CommitPickerPinnedRowView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = CommitPickerTableView()
     let footer = CommitPickerFooterView(frame: .zero)
@@ -27,21 +26,23 @@ final class CommitPickerContainerView: NSView {
     private var hasFocusedTable = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
-    /// Set from the moment a load is decided until the deferred request runs or a load
-    /// is seen in a snapshot, so a scroll cannot queue the request twice.
-    private var isLoadMorePending = false
-    /// Bumped by `tearDown`, so work scheduled for a presentation can tell it is over.
-    private(set) var teardownGeneration = 0
 
-    init(state: CommitPickerState) {
+    init(state: BranchPickerState) {
         self.state = state
         super.init(frame: .zero)
         clipsToBounds = true
         configureTable()
-        for view in [gutter, header, pinnedRow, scrollView, footer, emptyState] { addSubview(view) }
-        pinnedRow.onActivate = { [weak self] in self?.onActivate(.workingTree) }
-        footer.onRetry = { [weak self] in self?.requestRetry() }
-        emptyState.onRetry = { [weak self] in self?.requestRetry() }
+        // The popover stays up during an operation, and the table keeps the keyboard:
+        // a button click must not leave focus on a button that is about to disable.
+        header.onPull = { [weak self] in
+            self?.onPull()
+            self?.returnFocusToTable()
+        }
+        header.onPush = { [weak self] in
+            self?.onPush()
+            self?.returnFocusToTable()
+        }
+        for view in [gutter, header, scrollView, footer, emptyState] { addSubview(view) }
         renderChrome()
     }
 
@@ -49,7 +50,7 @@ final class CommitPickerContainerView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func configureTable() {
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("scope"))
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("branch"))
         column.resizingMask = .autoresizingMask
         tableView.addTableColumn(column)
         tableView.headerView = nil
@@ -72,10 +73,7 @@ final class CommitPickerContainerView: NSView {
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.tableView.refreshHover()
-                self?.requestMoreIfNeeded()
-            }
+            MainActor.assumeIsolated { self?.tableView.refreshHover() }
         }
     }
 
@@ -84,10 +82,9 @@ final class CommitPickerContainerView: NSView {
 
     // MARK: Snapshots
 
-    /// An unchanged snapshot is skipped; pagination is re-checked on scroll and layout.
-    func apply(_ snapshot: CommitPickerSnapshot) {
+    /// An unchanged snapshot is skipped.
+    func apply(_ snapshot: BranchPickerSnapshot) {
         guard snapshot != state.snapshot else { return }
-        if snapshot.isLoadingHistory { isLoadMorePending = false }
         // A reload can move or drop the table's selection; none of that is the reader's.
         isApplyingSelection = true
         switch state.apply(snapshot) {
@@ -107,8 +104,10 @@ final class CommitPickerContainerView: NSView {
         isApplyingSelection = false
         syncSelection()
         renderChrome()
+        // Rows that arrive after the first layout get the initial reveal here: layout
+        // may not run again.
+        revealInitialHighlightIfReady()
         tableView.refreshHover()
-        requestMoreIfNeeded()
     }
 
     /// Moves the table's selection to the highlight without scrolling.
@@ -124,13 +123,22 @@ final class CommitPickerContainerView: NSView {
     }
 
     private func renderChrome() {
-        header.configure(state.headerText)
-        pinnedRow.configure(
-            trailing: state.workingTreeTrailingText, showsPill: state.snapshot.displayedScope == .workingTree)
-        pinnedRow.isHighlighted = state.highlightedScope == .workingTree
-        footer.configure(state.footer)
-        footer.isHidden = state.footer == .none
-        emptyState.configure(state.emptyState)
+        let buttons = state.syncButtons
+        header.configure(state.headerText, pull: buttons.pull, push: buttons.push)
+        switch state.footer {
+        case .none:
+            footer.configure(text: "", tooltip: nil, isLoading: false, showsRetry: false)
+            footer.isHidden = true
+        case let .text(text, tooltip):
+            footer.configure(text: text, tooltip: tooltip, isLoading: false, showsRetry: false)
+            footer.isHidden = false
+        }
+        switch state.emptyState {
+        case nil: emptyState.configure(text: nil, isLoading: false, showsRetry: false)
+        case .loading: emptyState.configure(text: "Loading…", isLoading: true, showsRetry: false)
+        case .noBranches: emptyState.configure(text: "No branches", isLoading: false, showsRetry: false)
+        case .failed: emptyState.configure(text: "Couldn't read branches", isLoading: false, showsRetry: false)
+        }
         needsLayout = true
     }
 
@@ -138,45 +146,12 @@ final class CommitPickerContainerView: NSView {
 
     func highlight(tableRow row: Int) {
         state.highlight(tableRow: row)
-        pinnedRow.isHighlighted = false
     }
 
-    /// After a keyboard move: the selection and pinned row follow, and the highlight
-    /// is scrolled into view.
+    /// After a keyboard move: the selection follows, and the highlight is scrolled into view.
     private func showHighlight() {
         syncSelection()
-        pinnedRow.isHighlighted = state.highlightedScope == .workingTree
         revealHighlight()
-    }
-
-    // MARK: Loading
-
-    /// Asks for the next page once the last row is on screen. Never immediate: this runs
-    /// from `apply`, inside a SwiftUI update, where the window's state must not change.
-    private func requestMoreIfNeeded() {
-        guard !isLoadMorePending, state.shouldRequestMore(lastVisibleRow: lastVisibleRow()) else { return }
-        isLoadMorePending = true
-        let generation = teardownGeneration
-        // Defer past the SwiftUI update, then re-check that loading is still wanted.
-        Task { @MainActor [weak self] in
-            guard let self, generation == teardownGeneration, window != nil else { return }
-            isLoadMorePending = false
-            guard state.shouldRequestMore(lastVisibleRow: lastVisibleRow()) else { return }
-            onLoadMore()
-        }
-    }
-
-    private func lastVisibleRow() -> Int? {
-        let rows = tableView.rows(in: tableView.visibleRect)
-        return rows.length > 0 ? rows.location + rows.length - 1 : nil
-    }
-
-    private func requestRetry() {
-        let generation = teardownGeneration
-        Task { @MainActor [weak self] in
-            guard let self, generation == teardownGeneration, window != nil else { return }
-            onRetry()
-        }
     }
 
     // MARK: Layout
@@ -189,8 +164,7 @@ final class CommitPickerContainerView: NSView {
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         gutter.frame = NSRect(
             x: 0, y: headerHeight, width: CommitPickerMetrics.gutterWidth, height: height - headerHeight)
-        pinnedRow.frame = NSRect(x: 0, y: headerHeight + 8, width: width, height: CommitPickerMetrics.rowHeight)
-        let tableTop = pinnedRow.frame.maxY + 8
+        let tableTop = headerHeight + 8
         let footerHeight = footer.isHidden ? 0 : CommitPickerMetrics.footerHeight
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop - footerHeight, 0))
         footer.frame = NSRect(x: 0, y: height - footerHeight, width: width, height: footerHeight)
@@ -198,16 +172,20 @@ final class CommitPickerContainerView: NSView {
         tableView.sizeLastColumnToFit()
         // The table only knows its rows once it has laid out, so the initial highlight
         // is selected here rather than in `init`.
-        if !hasRevealedHighlight, scrollView.frame.height > 0 {
-            hasRevealedHighlight = true
-            syncSelection()
-            revealHighlight()
-        }
-        requestMoreIfNeeded()
+        revealInitialHighlightIfReady()
     }
 
-    /// Shows the highlighted row, or the top for Working Tree. Called once when the
-    /// popover first has a height, then only for keyboard moves; snapshots never scroll.
+    /// Consumes the one initial reveal, but only once there is a row to reveal: branches
+    /// can arrive after the popover opened, and the current branch still has to be shown.
+    private func revealInitialHighlightIfReady() {
+        guard !hasRevealedHighlight, scrollView.frame.height > 0, state.highlightedTableRow != nil else { return }
+        hasRevealedHighlight = true
+        syncSelection()
+        revealHighlight()
+    }
+
+    /// Shows the highlighted row: once the rows and layout are first ready, then only
+    /// after keyboard navigation.
     private func revealHighlight() {
         if let row = state.highlightedTableRow {
             tableView.scrollRowToVisible(row)
@@ -222,10 +200,7 @@ final class CommitPickerContainerView: NSView {
         super.viewDidMoveToWindow()
         removeKeyObserver()
         // SwiftUI dismantles the view lazily after a dismissal, but detaches it at once.
-        guard let window else {
-            teardownGeneration += 1
-            return
-        }
+        guard let window else { return }
         window.initialFirstResponder = tableView
         keyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
@@ -237,12 +212,15 @@ final class CommitPickerContainerView: NSView {
 
     /// The table takes focus once per presentation, as soon as the popover's window is
     /// key: it is key from the moment it shows when the app is active. Under a scripted
-    /// launch it is not key and this waits for the `didBecomeKey` observer, which was seen
-    /// to land the table when `DebugLaunchOptions` makes the window key by hand.
+    /// launch it is not key and this waits for the `didBecomeKey` observer.
     private func focusTableOnce() {
         guard !hasFocusedTable, let window, window.isKeyWindow else { return }
         hasFocusedTable = true
         window.makeFirstResponder(tableView)
+    }
+
+    private func returnFocusToTable() {
+        window?.makeFirstResponder(tableView)
     }
 
     private func removeKeyObserver() {
@@ -254,7 +232,6 @@ final class CommitPickerContainerView: NSView {
         removeKeyObserver()
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
-        teardownGeneration += 1
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -263,7 +240,7 @@ final class CommitPickerContainerView: NSView {
 }
 
 /// Plain keys in the table move the highlight and reveal it; Return and Escape act.
-extension CommitPickerContainerView: PickerTableHandler {
+extension BranchPickerContainerView: PickerTableHandler {
     func moveUp() {
         state.moveUp()
         showHighlight()
@@ -285,12 +262,13 @@ extension CommitPickerContainerView: PickerTableHandler {
     }
 
     func activate() {
-        onActivate(state.highlightedScope)
+        guard let row = state.highlightedTableRow else { return }
+        activate(tableRow: row)
     }
 
     func activate(tableRow row: Int) {
-        guard let scope = state.scope(forTableRow: row) else { return }
-        onActivate(scope)
+        guard state.canActivate(tableRow: row), let name = state.branchName(forTableRow: row) else { return }
+        onActivate(name)
     }
 
     func cancel() {

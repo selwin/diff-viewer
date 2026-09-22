@@ -43,13 +43,31 @@ actor StubRepoClient: RepoClient {
     private var stubbedHeadState: HeadState = .named("main")
     private var failsHeadState = false
     private(set) var headStateCalls = 0
-    private var stubbedLocalBranches: [LocalBranch] = [LocalBranch(name: "main", upstream: nil, tracking: nil)]
+    private var stubbedLocalBranches: [LocalBranch] = [localBranch("main")]
     private var failsLocalBranches = false
     private var holdsLocalBranches = false
     private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
     private(set) var localBranchesCalls = 0
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
+    private var stubbedRemoteNames: [String] = ["origin"]
+    private(set) var remoteNamesCalls = 0
+    private(set) var fetchCalls: [String] = []
+    private(set) var pullCalls = 0
+    /// Every push asked for, in order, whether or not it succeeded.
+    private(set) var pushCalls: [(branch: String, remote: String, remoteRef: String)] = []
+    private var failsFetch = false
+    private var holdsFetch = false
+    private var heldFetch: [CheckedContinuation<Void, Never>] = []
+    private var failsRemoteNames = false
+    private var holdsRemoteNames = false
+    private var heldRemoteNames: [CheckedContinuation<Void, Never>] = []
+    private var failsPull = false
+    private var holdsPull = false
+    private var heldPull: [CheckedContinuation<Void, Never>] = []
+    private var failsPush = false
+    private var holdsPush = false
+    private var heldPush: [CheckedContinuation<Void, Never>] = []
     private var failsSwitchBranch = false
     private var holdsSwitchBranch = false
     private var heldSwitchBranch: [CheckedContinuation<Void, Never>] = []
@@ -268,7 +286,7 @@ actor StubRepoClient: RepoClient {
 
     /// Plain names, for the tests that only care about the list the picker shows.
     func set(localBranches names: [String]) {
-        stubbedLocalBranches = names.map { LocalBranch(name: $0, upstream: nil, tracking: nil) }
+        stubbedLocalBranches = names.map { localBranch($0) }
     }
     func set(localBranches branches: [LocalBranch]) { stubbedLocalBranches = branches }
     func fail(localBranches on: Bool) { failsLocalBranches = on }
@@ -282,6 +300,8 @@ actor StubRepoClient: RepoClient {
     }
     /// Releases the newest held branches read, so completion order can be chosen.
     func releaseLastLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeLast().resume() } }
+    /// Releases the oldest held branches read, for the other half of that choice.
+    func releaseFirstLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeFirst().resume() } }
 
     /// Makes `switchBranch` throw, after recording the call and moving HEAD.
     func fail(switchBranch on: Bool) { failsSwitchBranch = on }
@@ -324,6 +344,86 @@ actor StubRepoClient: RepoClient {
         if failsSwitchBranch {
             throw ProcessError.failed(command: "git switch", status: 1, stderr: "post-checkout hook failed")
         }
+    }
+
+    // MARK: Remotes
+
+    func set(remoteNames names: [String]) { stubbedRemoteNames = names }
+    /// Makes `fetch` throw, after recording the call.
+    func fail(fetch on: Bool) { failsFetch = on }
+    func fail(pull on: Bool) { failsPull = on }
+    func fail(push on: Bool) { failsPush = on }
+
+    /// Makes `remoteNames` throw, after recording the call.
+    func fail(remoteNames on: Bool) { failsRemoteNames = on }
+    /// Suspends `remoteNames` after it records the call.
+    func holdRemoteNames(_ on: Bool) { holdsRemoteNames = on }
+    var heldRemoteNamesCount: Int { heldRemoteNames.count }
+    func releaseRemoteNames() {
+        let waiting = heldRemoteNames
+        heldRemoteNames = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Suspends `fetch` after it records the call.
+    func holdFetch(_ on: Bool) { holdsFetch = on }
+    var heldFetchCount: Int { heldFetch.count }
+    func releaseFetch() {
+        let waiting = heldFetch
+        heldFetch = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func remoteNames() async throws -> [String] {
+        remoteNamesCalls += 1
+        let snapshot = stubbedRemoteNames
+        if holdsRemoteNames {
+            await withCheckedContinuation { heldRemoteNames.append($0) }
+        }
+        if failsRemoteNames {
+            throw ProcessError.failed(command: "git remote", status: 128, stderr: "no remotes")
+        }
+        return snapshot
+    }
+
+    func fetch(remote: String) async throws {
+        fetchCalls.append(remote)
+        if holdsFetch {
+            await withCheckedContinuation { heldFetch.append($0) }
+        }
+        if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
+    }
+
+    /// Suspends `pull` after it records the call.
+    func holdPull(_ on: Bool) { holdsPull = on }
+    var heldPullCount: Int { heldPull.count }
+    func releasePull() {
+        let waiting = heldPull
+        heldPull = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Suspends `push` after it records the call.
+    func holdPush(_ on: Bool) { holdsPush = on }
+    var heldPushCount: Int { heldPush.count }
+    func releasePush() {
+        let waiting = heldPush
+        heldPush = []
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func pull() async throws {
+        pullCalls += 1
+        if holdsPull {
+            await withCheckedContinuation { heldPull.append($0) }
+        }
+        if failsPull { throw ProcessError.failed(command: "git pull", status: 1, stderr: "pull failed") }
+    }
+
+    func push(branch: String, to remote: String, remoteRef: String) async throws {
+        pushCalls.append((branch: branch, remote: remote, remoteRef: remoteRef))
+        if holdsPush {
+            await withCheckedContinuation { heldPush.append($0) }
+        }
+        if failsPush { throw ProcessError.failed(command: "git push", status: 1, stderr: "push failed") }
     }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
@@ -542,6 +642,9 @@ final class Harness {
         UserDefaults.standard.removePersistentDomain(forName: suite)
     }
 
+    /// What `WindowState` reads as the current time; tests move it to expire cooldowns.
+    var clock = Date(timeIntervalSince1970: 1_789_300_000)
+
     func makeState(commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator()) -> WindowState {
         let runner = runner
         let cache = DifftCache(runner: { old, new, fileName, qos in
@@ -549,6 +652,7 @@ final class Harness {
         })
         let state = WindowState(
             preferences: preferences, cache: cache, commitMessageGenerator: commitMessageGenerator,
+            now: { [weak self] in self?.clock ?? Date() },
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher

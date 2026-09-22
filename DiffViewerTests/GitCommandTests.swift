@@ -409,8 +409,8 @@ import Testing
         try await repo.commit("Second commit")
 
         let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
-        #expect(main.upstream == "origin/main")
-        #expect(main.tracking == .counts(ahead: 1, behind: 0))
+        #expect(main.upstream?.shortName == "origin/main")
+        #expect(main.upstream?.tracking == .counts(ahead: 1, behind: 0))
         // The fixture deletes its directory when it goes: keep it until the reads are done.
         _ = remote
     }
@@ -421,8 +421,8 @@ import Testing
         try await repo.git(["update-ref", "-d", "refs/remotes/origin/main"])
 
         let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
-        #expect(main.upstream == "origin/main")
-        #expect(main.tracking == .gone)
+        #expect(main.upstream?.shortName == "origin/main")
+        #expect(main.upstream?.tracking == .gone)
         _ = remote
     }
 
@@ -439,6 +439,276 @@ import Testing
         try await repo.git(["remote", "add", "origin", remote.url.path])
         try await repo.git(["push", "-u", "origin", "main"])
         return (repo, remote)
+    }
+
+    /// A second working clone of the same bare remote, so a test can push from one side
+    /// and fetch or pull from the other. Every remote here is a local path: nothing in
+    /// these tests goes over a network.
+    private func clone(of remote: Repo) async throws -> Repo {
+        let clone = try Repo()
+        try await clone.git(["clone", remote.url.path, "."])
+        try await clone.prepareForCommits()
+        return clone
+    }
+
+    // MARK: Remotes
+
+    @Test func remoteNamesListsConfiguredRemotes() async throws {
+        let bare = try Repo()
+        try await bare.initialize()
+        #expect(try await bare.client.remoteNames().isEmpty)
+
+        let (repo, remote) = try await pushedRepo()
+        #expect(try await repo.client.remoteNames() == ["origin"])
+        _ = remote
+    }
+
+    @Test func fetchUpdatesTheBehindCount() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let other = try await clone(of: remote)
+        try other.write("b.txt", "two\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+
+        let before = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(before.upstream?.tracking == .counts(ahead: 0, behind: 0), "no fetch yet")
+
+        try await repo.client.fetch(remote: "origin")
+
+        let after = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(after.upstream?.tracking == .counts(ahead: 0, behind: 1))
+    }
+
+    /// Pruning is configurable, and a reader's fetch must never be the thing that deletes
+    /// a ref or a tag out from under them.
+    @Test func fetchNeverPrunes() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "fetch.prune", "true"])
+        try await repo.git(["config", "fetch.pruneTags", "true"])
+        try await repo.git(["config", "--add", "remote.origin.fetch", "refs/tags/*:refs/tags/*"])
+        try await repo.git(["tag", "local-only"])
+        let stale = try await repo.git(["rev-parse", "HEAD"])
+        try await repo.git(["update-ref", "refs/remotes/origin/stale", stale])
+
+        try await repo.client.fetch(remote: "origin")
+
+        #expect(try await repo.git(["rev-parse", "--verify", "refs/tags/local-only"]) != "")
+        #expect(try await repo.git(["rev-parse", "--verify", "refs/remotes/origin/stale"]) == stale)
+        _ = remote
+    }
+
+    /// The counts compare against whatever ref the remote's mappings put the upstream in,
+    /// so the fetch has to refresh that ref rather than a guessed `refs/remotes/origin/*`.
+    @Test func fetchRefreshesANonstandardUpstreamMapping() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git([
+            "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/company/*",
+        ])
+        try await repo.git(["config", "branch.main.remote", "origin"])
+        try await repo.git(["config", "branch.main.merge", "refs/heads/main"])
+
+        let other = try await clone(of: remote)
+        try other.write("b.txt", "two\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+
+        try await repo.client.fetch(remote: "origin")
+
+        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(main.upstream?.shortName == "company/main")
+        #expect(main.upstream?.tracking == .counts(ahead: 0, behind: 1))
+    }
+
+    @Test func fetchFromAMissingRemoteThrows() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try FileManager.default.removeItem(at: remote.url)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fetch(remote: "origin")
+        }
+    }
+
+    /// Git would read the name as an option rather than a remote.
+    @Test func fetchRejectsARemoteNameThatLooksLikeAnOption() async throws {
+        let (repo, remote) = try await pushedRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fetch(remote: "--all")
+        }
+        _ = remote
+    }
+
+    @Test func pullFastForwards() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let other = try await clone(of: remote)
+        try other.write("b.txt", "two\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+        let tip = try await other.git(["rev-parse", "HEAD"])
+
+        try await repo.client.pull()
+
+        #expect(try await repo.git(["rev-parse", "HEAD"]) == tip)
+        #expect(try Data(contentsOf: repo.url.appendingPathComponent("b.txt")) == Data("two\n".utf8))
+    }
+
+    /// `--no-edit` is a merge option; the rebase path has to keep working with it passed.
+    @Test func pullUnderRebaseConfigWorks() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "pull.rebase", "true"])
+        let other = try await clone(of: remote)
+        try other.write("remote.txt", "theirs\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+
+        try repo.write("local.txt", "mine\n")
+        try await repo.commit("Local commit")
+
+        try await repo.client.pull()
+
+        let parents = try await repo.git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(separator: " ")
+        #expect(parents.count == 2, "a rebase leaves linear history, not a merge")
+        #expect(try await repo.git(["rev-list", "--count", "HEAD"]) == "3")
+    }
+
+    /// `pull.rebase=interactive` would open the sequence editor and wait. The pull must
+    /// fail at once instead, and git aborts the rebase before touching the branch.
+    @Test func interactiveRebasePullFailsPromptlyAndLeavesTheBranchAlone() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "pull.rebase", "interactive"])
+        let other = try await clone(of: remote)
+        try other.write("remote.txt", "theirs\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+
+        try repo.write("local.txt", "mine\n")
+        try await repo.commit("Local commit")
+        let head = try await repo.git(["rev-parse", "HEAD"])
+
+        let error = await #expect(throws: ProcessError.self) { try await repo.client.pull() }
+        #expect(error?.localizedDescription.contains("interactive rebase") == true)
+        #expect(try await repo.git(["rev-parse", "HEAD"]) == head)
+        #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent(".git/rebase-merge").path))
+    }
+
+    /// A conflicted merge leaves the repository mid-merge, and the caller has to see the
+    /// failure rather than a pull that looks done.
+    @Test func conflictingPullThrowsAndLeavesMergeState() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "pull.rebase", "false"])
+        let other = try await clone(of: remote)
+        try other.write("a.txt", "theirs\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+
+        try repo.write("a.txt", "mine\n")
+        try await repo.commit("Local commit")
+
+        await #expect(throws: (any Error).self) { try await repo.client.pull() }
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent(".git/MERGE_HEAD").path))
+    }
+
+    /// `push.default=matching` would send every branch that exists on both sides. The
+    /// explicit refspec is what keeps a push to one branch from moving another.
+    @Test func pushPushesOnlyTheNamedBranch() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "push.default", "matching"])
+        try await repo.git(["branch", "feature"])
+        try await repo.git(["push", "origin", "feature"])
+        let featureBefore = try await remote.git(["rev-parse", "refs/heads/feature"])
+
+        try await repo.git(["checkout", "feature"])
+        try repo.write("feature.txt", "f\n")
+        try await repo.commit("Feature commit")
+        try await repo.git(["checkout", "main"])
+        try repo.write("main.txt", "m\n")
+        let mainTip = try await repo.commit("Main commit")
+
+        try await repo.client.push(branch: "main", to: "origin", remoteRef: "refs/heads/main")
+
+        #expect(try await remote.git(["rev-parse", "refs/heads/main"]) == mainTip)
+        #expect(try await remote.git(["rev-parse", "refs/heads/feature"]) == featureBefore)
+    }
+
+    /// A `+` in `remote.<name>.push` forces only the refspec it applies to; naming the
+    /// refspec on the command line leaves that configuration out of it.
+    @Test func pushIgnoresAForceRefspecInConfig() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "remote.origin.push", "+refs/heads/*:refs/heads/*"])
+        try repo.write("b.txt", "two\n")
+        try await repo.commit("Second commit")
+        try await repo.git(["push", "origin", "main"])
+        let remoteTip = try await remote.git(["rev-parse", "refs/heads/main"])
+
+        // A rewritten history: the remote tip is no longer an ancestor of ours.
+        try await repo.git(["reset", "--hard", "HEAD~1"])
+        try repo.write("c.txt", "three\n")
+        try await repo.commit("Rewritten commit")
+
+        do {
+            try await repo.client.push(branch: "main", to: "origin", remoteRef: "refs/heads/main")
+            Issue.record("a non-fast-forward push should be rejected")
+        } catch {
+            #expect(error.localizedDescription.contains("rejected"), "\(error.localizedDescription)")
+        }
+        #expect(try await remote.git(["rev-parse", "refs/heads/main"]) == remoteTip)
+    }
+
+    /// `push.followTags=true` would send annotated tags along with the branch; a viewer's
+    /// push publishes the branch and nothing else.
+    @Test func pushLeavesTagsBehind() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "push.followTags", "true"])
+        try repo.write("b.txt", "two\n")
+        let tip = try await repo.commit("Second commit")
+        try await repo.git(["tag", "-a", "v1", "-m", "Version 1"])
+
+        try await repo.client.push(branch: "main", to: "origin", remoteRef: "refs/heads/main")
+
+        #expect(try await remote.git(["rev-parse", "refs/heads/main"]) == tip)
+        await #expect(throws: (any Error).self) {
+            try await remote.git(["rev-parse", "--verify", "refs/tags/v1"])
+        }
+    }
+
+    @Test func pushBehindTheUpstreamIsRejected() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let other = try await clone(of: remote)
+        try other.write("b.txt", "two\n")
+        try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+        let remoteTip = try await remote.git(["rev-parse", "refs/heads/main"])
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.push(branch: "main", to: "origin", remoteRef: "refs/heads/main")
+        }
+        #expect(try await remote.git(["rev-parse", "refs/heads/main"]) == remoteTip)
+    }
+
+    /// Git would read either name as an option rather than a branch or a remote.
+    @Test func pushRejectsANameThatLooksLikeAnOption() async throws {
+        let (repo, remote) = try await pushedRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.push(branch: "--mirror", to: "origin", remoteRef: "refs/heads/main")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.push(branch: "main", to: "--mirror", remoteRef: "refs/heads/main")
+        }
+        _ = remote
+    }
+
+    /// The tip date orders the picker and the remote ref is what a push names, so both
+    /// have to survive the round trip through `for-each-ref`.
+    @Test func localBranchesCarryTipDatesAndUpstreamRefs() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let stamp = "2026-09-19T10:00:00+00:00"
+        try repo.write("b.txt", "two\n")
+        try await repo.commit("Dated commit", environment: ["GIT_COMMITTER_DATE": stamp])
+
+        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
+        #expect(main.tipCommittedAt == ISO8601DateFormatter().date(from: stamp))
+        #expect(main.upstream?.remote == "origin")
+        #expect(main.upstream?.remoteRef == "refs/heads/main")
+        _ = remote
     }
 
     @Test func switchBranchMovesHead() async throws {

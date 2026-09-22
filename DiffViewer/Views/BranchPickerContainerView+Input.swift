@@ -2,7 +2,7 @@ import AppKit
 
 /// The table's data source and delegate: rows come from `state`, and a selection the
 /// keyboard or type-select makes becomes the highlight.
-extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
+extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
         state.rows.count
     }
@@ -16,8 +16,13 @@ extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         cell.configure(
             ScopeRowContentView.Content(
                 gutterTitle: entry.dayLabel?.title, gutterSubtitle: entry.dayLabel?.subtitle,
-                subject: entry.commit.subject, showsCurrentPill: entry.isDisplayedScope,
-                trailing: entry.commit.ref.shortSha, trailingStyle: .hash, accessibilityActionName: "Show"))
+                subject: entry.branch.name, showsCurrentPill: entry.isCurrent, trailing: entry.trailingText,
+                trailingStyle: .secondary, accessibilityActionName: "Switch to branch"))
+        // No callback on a row that cannot be switched to: the action must not be offered.
+        guard state.canActivate(tableRow: row) else {
+            cell.onActivate = nil
+            return cell
+        }
         // Read the row back from the cell: a recycled cell can move.
         cell.onActivate = { [weak self, weak cell] in
             guard let self, let cell else { return }
@@ -37,10 +42,10 @@ extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
     }
 
     func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        state.rows.indices.contains(row) ? state.rows[row].commit.subject : nil
+        state.rows.indices.contains(row) ? state.rows[row].branch.name : nil
     }
 
-    /// An empty selection changes nothing: the highlight is Working Tree or a row.
+    /// An empty selection changes nothing: the highlight is always a row.
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
         if tableView.selectedRow >= 0 {

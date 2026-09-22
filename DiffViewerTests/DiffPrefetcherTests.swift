@@ -71,6 +71,10 @@ struct TaggedClient: RepoClient {
     func stagedPatch() async throws -> String { "" }
     func commit(message: String) async throws {}
     func switchBranch(to branch: String) async throws {}
+    func remoteNames() async throws -> [String] { [] }
+    func fetch(remote: String) async throws {}
+    func pull() async throws {}
+    func push(branch: String, to remote: String, remoteRef: String) async throws {}
 }
 
 @MainActor

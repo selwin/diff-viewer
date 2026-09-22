@@ -1,70 +1,32 @@
 import SwiftUI
 
-/// The title bar's branch pop-up: the current branch on its face, every local branch in
-/// its menu. Choosing one checks it out.
+/// The title bar's branch button: the current branch and how far it is from its
+/// upstream. Opens the branch picker popover, which ⌘B also opens here by setting the
+/// same flag.
 struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
 
     var body: some View {
+        @Bindable var windowState = windowState
         // Capped for the same reason as the scope picker: a long branch name would
-        // otherwise send every item after it into the overflow menu.
+        // otherwise push the toolbar's other items into the overflow menu.
         // Allows extra width for the tracking counts after the branch name.
         CappedWidth(maximumWidth: 300) {
-            branchMenu
-        }
-    }
-
-    private var branchMenu: some View {
-        Menu {
-            if windowState.headState == nil {
-                // No picker until HEAD has been read: a selection with no rows would be
-                // an empty menu, and there is no failed-read state to tell apart.
-                Text("Loading…")
-            } else {
-                Picker("Branch", selection: selection) {
-                    // The selection always has a row, whatever the list says: the branch
-                    // list and HEAD are separate reads, and an unborn branch or a stale
-                    // list can leave the current name out. Without its row SwiftUI logs
-                    // an invalid-selection warning and shows no tick.
-                    if let current = windowState.currentBranchName, !windowState.localBranches.contains(current) {
-                        Text(current).tag(String?.some(current))
-                            .disabled(true)
-                    }
-                    if windowState.currentBranchName == nil {
-                        Text(windowState.branchDisplayTitle).tag(String?.none)
-                            .disabled(true)
-                    }
-                    ForEach(windowState.localBranches, id: \.self) { name in
-                        Text(name).tag(String?.some(name))
-                    }
-                }
-                .pickerStyle(.inline)
+            Button {
+                windowState.isBranchPickerPresented = true
+            } label: {
+                TitleBarPickerLabel(
+                    icon: .gitBranch,
+                    title: windowState.branchDisplayTitle,
+                    subtitle: windowState.branchTrackingSummary)
             }
-        } label: {
-            TitleBarPickerLabel(
-                icon: .gitBranch,
-                title: windowState.branchDisplayTitle,
-                subtitle: windowState.branchTrackingSummary)
-        }
-        // The button menu style is what lets the plain button style below apply: the
-        // default style draws its own hover capsule behind the label's outlined box.
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .disabled(windowState.isSwitchingBranch || windowState.headState == nil)
-        .help(windowState.branchSwitchHelp)
-    }
-
-    /// No local state: the face follows HEAD, and a switch that fails leaves it where git
-    /// left it. The disabled rows can never be chosen, so a nil never reaches the setter.
-    private var selection: Binding<String?> {
-        Binding(
-            get: { windowState.currentBranchName },
-            set: { newValue in
-                guard let name = newValue, name != windowState.currentBranchName else { return }
-                Task { await windowState.switchBranch(to: name) }
+            .buttonStyle(.plain)
+            .disabled(!windowState.canOpenBranchPicker)
+            .help(windowState.branchSwitchHelp)
+            .popover(isPresented: $windowState.isBranchPickerPresented, arrowEdge: .bottom) {
+                BranchPickerPopover()
             }
-        )
+        }
     }
 }
 
