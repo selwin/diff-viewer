@@ -63,7 +63,11 @@ actor StubRepoClient: RepoClient {
     private var holdsRemoteNames = false
     private var heldRemoteNames: [CheckedContinuation<Void, Never>] = []
     private var failsPull = false
+    private var holdsPull = false
+    private var heldPull: [CheckedContinuation<Void, Never>] = []
     private var failsPush = false
+    private var holdsPush = false
+    private var heldPush: [CheckedContinuation<Void, Never>] = []
     private var failsSwitchBranch = false
     private var holdsSwitchBranch = false
     private var heldSwitchBranch: [CheckedContinuation<Void, Never>] = []
@@ -389,13 +393,36 @@ actor StubRepoClient: RepoClient {
         if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
     }
 
+    /// Suspends `pull` after it records the call.
+    func holdPull(_ on: Bool) { holdsPull = on }
+    var heldPullCount: Int { heldPull.count }
+    func releasePull() {
+        let waiting = heldPull
+        heldPull = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Suspends `push` after it records the call.
+    func holdPush(_ on: Bool) { holdsPush = on }
+    var heldPushCount: Int { heldPush.count }
+    func releasePush() {
+        let waiting = heldPush
+        heldPush = []
+        for continuation in waiting { continuation.resume() }
+    }
+
     func pull() async throws {
         pullCalls += 1
+        if holdsPull {
+            await withCheckedContinuation { heldPull.append($0) }
+        }
         if failsPull { throw ProcessError.failed(command: "git pull", status: 1, stderr: "pull failed") }
     }
 
     func push(branch: String, to remote: String, remoteRef: String) async throws {
         pushCalls.append((branch: branch, remote: remote, remoteRef: remoteRef))
+        if holdsPush {
+            await withCheckedContinuation { heldPush.append($0) }
+        }
         if failsPush { throw ProcessError.failed(command: "git push", status: 1, stderr: "push failed") }
     }
 

@@ -177,6 +177,8 @@ final class WindowState {
     /// How the picker's automatic fetch is going: it drives the header's spinner and the
     /// footer's news.
     private(set) var fetchStatus: FetchStatus = .idle
+    /// The pull or push queued or running, or nil when neither is.
+    private(set) var activeSyncOperation: SyncOperation?
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -1211,9 +1213,9 @@ extension WindowState {
         await fetchForBranchPicker(attempted: [])
     }
 
-    /// Waits for a branch read to publish, without starting a second one when a read is
-    /// already on its way: a read superseded here was superseded by a newer ticket, and
-    /// the newest read publishes unless the window closes, which wakes the waiters too.
+    /// Starts a branch read and waits for a publication. A read superseded here waits for
+    /// its replacement instead of retrying: the newest read publishes unless the window
+    /// closes, which wakes the waiters too.
     private func awaitBranchRead(session: RepoSession) async {
         let before = session.branchReadGeneration
         if await refreshHeadState(session: session) { return }
@@ -1227,7 +1229,8 @@ extension WindowState {
         // Re-checked here because the flag may already be false again by the time the
         // presentation's task runs.
         guard let session, !isClosed, isBranchPickerPresented else { return }
-        // Stage 4's pull and push will share this admission guard.
+        // A pull or push is about to move the same counts; let it publish them.
+        guard activeSyncOperation == nil else { return }
         if case .fetching = fetchStatus { return }
         let previous = fetchStatus
         fetchStatus = .fetching(remote: nil)  // before the first suspension: the reservation
@@ -1292,5 +1295,113 @@ extension WindowState {
             wanted != remote, !attempted.contains(wanted)
         else { return }
         await fetchForBranchPicker(attempted: attempted.union([remote]))
+    }
+}
+
+// MARK: - Pull and push
+
+/// Moving commits between the current branch and its upstream, from the branch picker.
+/// Same file as the class so `activeSyncOperation` stays `private(set)`.
+extension WindowState {
+    /// Brings the current branch up to date with its upstream.
+    func pull() async {
+        await sync(.pull)
+    }
+
+    /// Sends the current branch to its upstream, fast-forward only.
+    func push() async {
+        await sync(.push)
+    }
+
+    /// Admits one operation at a time, and only one the counts on screen allow. Runs on
+    /// the write chain, which serializes sync operations with the local writes, so
+    /// revalidation and execution both see the branch state the reader acted on.
+    private func sync(_ operation: SyncOperation) async {
+        guard let session, !isClosed, activeSyncOperation == nil, !isSwitchingBranch else { return }
+        if case .fetching = fetchStatus { return }
+        guard
+            let target = SyncPolicy.target(
+                readStatus: branchReadStatus, headState: headState, branches: branches),
+            SyncPolicy.allows(operation, on: target)
+        else { return }
+        activeSyncOperation = operation  // before the first suspension: the admission guard
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runSync(operation, requested: target.destination, session: session)
+        }
+    }
+
+    /// Revalidates against the repository, runs git, and re-reads what the operation could
+    /// have changed. The reservation is released on every exit, so a skipped operation
+    /// leaves the buttons live again.
+    private func runSync(_ operation: SyncOperation, requested: SyncDestination, session: RepoSession) async {
+        defer { activeSyncOperation = nil }
+        guard session === self.session, !isClosed else { return }
+
+        // The write ahead of this one may have moved HEAD or retargeted the upstream, so
+        // the destination is read from the repository rather than from what the picker
+        // showed. Read directly: a published read would be news for the picker before this
+        // has decided whether it is acting at all.
+        let state: HeadState
+        let list: [LocalBranch]
+        do {
+            state = try await session.client.headState()
+            guard session === self.session, !isClosed else { return }
+            list = try await session.client.localBranches()
+        } catch {
+            guard session === self.session, !isClosed else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard session === self.session, !isClosed else { return }
+
+        let fresh = SyncPolicy.target(readStatus: .loaded, headState: state, branches: list)
+        guard let fresh, fresh.destination == requested else {
+            // Somewhere else entirely now: say so, because the reader asked for this.
+            // Every re-read here waits for a published one: the buttons stay in their
+            // running state until the counts they will be drawn from have landed.
+            await awaitBranchRead(session: session)
+            guard session === self.session, !isClosed else { return }
+            errorMessage =
+                operation == .pull
+                ? "Branch or upstream changed before the pull could start"
+                : "Branch or upstream changed before the push could start"
+            return
+        }
+        // The same destination with nothing left to do — someone else pulled, or the
+        // counts were stale. The refreshed header says so; an alert would only repeat it.
+        guard SyncPolicy.allows(operation, on: fresh) else {
+            await awaitBranchRead(session: session)
+            return
+        }
+
+        var failure: (any Error)?
+        do {
+            switch operation {
+            case .pull:
+                try await session.client.pull()
+            case .push:
+                try await session.client.push(
+                    branch: requested.branch, to: requested.remote, remoteRef: requested.remoteRef)
+            }
+        } catch { failure = error }
+        guard session === self.session, !isClosed else { return }
+
+        switch operation {
+        case .pull:
+            // Either outcome re-reads: a failed pull can leave conflicts, a merge in
+            // progress, or an autostash put back. A commit's files cannot have changed,
+            // so commit scope skips the re-read, as a branch switch does.
+            if scope == .workingTree { await refresh(session: session, cause: .pull) }
+            guard session === self.session, !isClosed else { return }
+            await reloadHistoryIfHeadMoved(session: session)
+            guard session === self.session, !isClosed else { return }
+            await awaitBranchRead(session: session)
+        case .push:
+            // A push changes no file and no commit of ours: only the counts move.
+            await awaitBranchRead(session: session)
+        }
+        guard session === self.session, !isClosed, let failure else { return }
+        // After the refresh, so the news survives it.
+        errorMessage = failure.localizedDescription
     }
 }

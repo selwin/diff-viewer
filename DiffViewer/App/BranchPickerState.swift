@@ -28,6 +28,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
     var fetchStatus: FetchStatus = .idle
+    /// The pull or push in flight, or nil when neither is running.
+    var activeSyncOperation: SyncOperation?
 }
 
 struct BranchPickerRow: Equatable {
@@ -168,6 +170,15 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
+    /// Both buttons at once, so a view configures them from one reading of the snapshot.
+    var syncButtons: (pull: PickerButtonState, push: PickerButtonState) {
+        let isFetching = if case .fetching = snapshot.fetchStatus { true } else { false }
+        return SyncPolicy.buttons(
+            target: SyncPolicy.target(
+                readStatus: snapshot.readStatus, headState: snapshot.headState, branches: snapshot.branches),
+            active: snapshot.activeSyncOperation, isSwitching: snapshot.isSwitchingBranch, isFetching: isFetching)
+    }
+
     func branchName(forTableRow row: Int) -> String? {
         rows.indices.contains(row) ? rows[row].branch.name : nil
     }
@@ -187,7 +198,7 @@ struct BranchPickerState {
         guard new != snapshot else { return .none }
         let old = snapshot
         snapshot = new
-        // A read status, a fetch status or a switch flag moves no row. A switch flag does change whether a
+        // A read status, a fetch status or a sync in flight moves no row. A switch flag does change whether a
         // row can activate, which its cell holds, so every row is refreshed in place.
         guard new.branches != old.branches || new.headState != old.headState else {
             return new.isSwitchingBranch != old.isSwitchingBranch

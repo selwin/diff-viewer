@@ -102,6 +102,8 @@ enum RefreshCause: Sendable {
     case commit
     /// A branch switch finished, successfully or not, and the working tree was re-read.
     case branchSwitch
+    /// A pull finished, successfully or not, and the working tree was re-read.
+    case pull
 
     /// Whether a refresh for this cause starts a commit-defaults read. A settings change
     /// has no bearing on the suggestion, and the watcher decides from its routing.

@@ -9,6 +9,8 @@ final class BranchPickerContainerView: NSView {
 
     var onActivate: (String) -> Void = { _ in }
     var onDismiss: () -> Void = {}
+    var onPull: () -> Void = {}
+    var onPush: () -> Void = {}
 
     let header = BranchPickerHeaderView(frame: .zero)
     let gutter = CommitPickerGutterView(frame: .zero)
@@ -30,6 +32,16 @@ final class BranchPickerContainerView: NSView {
         super.init(frame: .zero)
         clipsToBounds = true
         configureTable()
+        // The popover stays up during an operation, and the table keeps the keyboard:
+        // a button click must not leave focus on a button that is about to disable.
+        header.onPull = { [weak self] in
+            self?.onPull()
+            self?.returnFocusToTable()
+        }
+        header.onPush = { [weak self] in
+            self?.onPush()
+            self?.returnFocusToTable()
+        }
         for view in [gutter, header, scrollView, footer, emptyState] { addSubview(view) }
         renderChrome()
     }
@@ -111,7 +123,8 @@ final class BranchPickerContainerView: NSView {
     }
 
     private func renderChrome() {
-        header.configure(state.headerText)
+        let buttons = state.syncButtons
+        header.configure(state.headerText, pull: buttons.pull, push: buttons.push)
         switch state.footer {
         case .none:
             footer.configure(text: "", tooltip: nil, isLoading: false, showsRetry: false)
@@ -204,6 +217,10 @@ final class BranchPickerContainerView: NSView {
         guard !hasFocusedTable, let window, window.isKeyWindow else { return }
         hasFocusedTable = true
         window.makeFirstResponder(tableView)
+    }
+
+    private func returnFocusToTable() {
+        window?.makeFirstResponder(tableView)
     }
 
     private func removeKeyObserver() {

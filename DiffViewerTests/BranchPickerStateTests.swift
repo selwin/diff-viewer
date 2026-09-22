@@ -15,11 +15,12 @@ struct BranchPickerStateTests {
 
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
-        isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle
+        isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle,
+        activeSyncOperation: SyncOperation? = nil
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
-            fetchStatus: fetchStatus)
+            fetchStatus: fetchStatus, activeSyncOperation: activeSyncOperation)
     }
 
     private func state(_ snapshot: BranchPickerSnapshot) -> BranchPickerState {
@@ -262,6 +263,28 @@ struct BranchPickerStateTests {
             picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil)))
                 == PickerTableChange.none)
         #expect(picker.rows == rows)
+    }
+
+    // MARK: Sync buttons
+
+    @Test func theButtonsFollowTheSnapshot() {
+        let behind = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)))
+        #expect(state(snapshot(branches: [behind])).syncButtons == (.enabled, .hidden))
+        // The fetch behind the picker holds the same counts the buttons would move.
+        let fetching = snapshot(branches: [behind], fetchStatus: .fetching(remote: "origin"))
+        #expect(state(fetching).syncButtons == (.disabled(reason: "Fetching…"), .hidden))
+        let pulling = snapshot(branches: [behind], activeSyncOperation: .pull)
+        #expect(state(pulling).syncButtons == (.running, .hidden), "nothing to push, so nothing greys out")
+        #expect(state(snapshot(branches: [main])).syncButtons == (.hidden, .hidden), "no upstream")
+    }
+
+    @Test func aSyncOperationChangeLeavesTheRowsAlone() {
+        var picker = state(snapshot(branches: [main, feature]))
+        let rows = picker.rows
+        #expect(
+            picker.apply(snapshot(branches: [main, feature], activeSyncOperation: .push)) == PickerTableChange.none)
+        #expect(picker.rows == rows)
+        #expect(picker.syncButtons == (.hidden, .running), "the operation in flight outranks the missing target")
     }
 
     @Test func theEmptyStateFollowsTheReadStatus() {
