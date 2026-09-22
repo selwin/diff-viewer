@@ -1,12 +1,13 @@
 # TODO
 
-Roadmap for DiffViewer after Stage 5. Every item is judged by the question in CLAUDE.md:
-does it make reading a diff faster, clearer, or more pleasant? Items are grouped by
-priority; within a group, order is a suggestion. Competitor references come from the
-research notes at the bottom (Kaleidoscope 7.0, Sublime Merge build 2125, JuxtaCode 1.4,
-all as of September 2026).
+Open work for DiffViewer. Every item is judged by the question in CLAUDE.md: does it
+make reading a diff faster, clearer, or more pleasant? Items are grouped by priority;
+within a group, order is a suggestion. Shipped features are not listed here; their
+design notes live in git history and their behaviour in CLAUDE.md and README. Competitor
+references come from the research notes at the bottom (Kaleidoscope 7.0, Sublime Merge
+build 2125, JuxtaCode 1.4, all as of September 2026).
 
-Where DiffViewer already stands versus the bar:
+Where DiffViewer stands versus the bar:
 
 | Capability | Kaleidoscope | Sublime Merge | JuxtaCode | DiffViewer |
 |---|---|---|---|---|
@@ -15,8 +16,8 @@ Where DiffViewer already stands versus the bar:
 | Full syntax colouring both panes | yes | yes | yes | yes |
 | Ignore whitespace | yes (3 kinds + regex filters) | yes | not documented | yes (one toggle) |
 | Live working-copy refresh | yes (7.0 headline) | yes | yes | yes |
-| Multiple repos at once | tabs | repo tabs | tabs + windows | **no** |
-| Aggregate +/- churn | counts by kind only | per-commit only | none | **no** |
+| Multiple repos at once | tabs | repo tabs | tabs + windows | **yes** (native tabs, no change indicator) |
+| Aggregate +/- churn | counts by kind only | per-commit only | none | **yes** (All changes row and header) |
 | Per-file +/- churn in sidebar | no | no | no | **yes** |
 | Stage / unstage / discard from file list | no (viewer) | yes | no | **yes** (whole file) |
 | All files in one scroll | no (per file) | yes (default view) | no | **yes** (All changes) |
@@ -33,272 +34,72 @@ Where DiffViewer already stands versus the bar:
 
 ---
 
-## Requested: sidebar churn and sidebar actions
+## Requested
 
-Three items Selwin asked for on 2026-09-12. They take priority over the "Now" list below.
-A, B and D have landed; B and D are written up under "Landed since this list was
-written". D was added on 2026-09-14, after B shipped single-select.
+Items Selwin asked for. They take priority over the "Next" list below. Earlier requests
+(per-file churn, the sidebar context menu, multi-selection with bulk actions) have
+shipped and are gone from here.
 
-### A. Per-file churn in the sidebar (done 2026-09-13)
+### C. Branch state in the title bar (remainder)
 
-Shipped as designed below, with two changes: `LineStats` is an enum (`.counted` /
-`.binary`) so that `nil` can mean "unknown" (numstat failed, unmerged, unreadable), and
-only untracked files need a worktree line count because git's numstat already covers
-tracked added and deleted files. Section-header sums, the grand total, and the
-detail-header counts remain under feature 2.
+The branch picker landed on 2026-09-18. Still open from the original request:
 
-**Goal.** Every changed, added, or deleted file in the sidebar shows how much churn it
-has: a trailing `+12 −4` in monospaced caption, green/red, on each `FileRow`.
+- **In-progress operations.** If `.git/rebase-merge`, `.git/rebase-apply`,
+  `.git/MERGE_HEAD`, or `.git/CHERRY_PICK_HEAD` exists, append the state to the branch
+  name, e.g. `main (rebasing)`, the way the git prompt scripts do. Cheap file-exists
+  checks, no extra git calls; `RepoWatcher` already fires on `.git` changes.
+- **Ahead/behind counts** from `git rev-list --left-right --count @{u}...HEAD`, if
+  they stay cheap.
 
-**Design.** This is the sidebar half of feature 2 below; do it first and leave the
-aggregate totals, section-header sums, and detail-header counts for a follow-up.
-- `git diff --numstat -z` (unstaged) and `git diff --cached --numstat -z` (staged),
-  run alongside `status()` on every refresh, joined to `ChangedFile` by path and area.
-- Added / untracked files have no numstat entry: count the worktree file's lines and
-  show them as all additions. Deleted files: count HEAD (or index) lines as all
-  deletions. Binary files report `-`: show "binary" instead of numbers.
-- Pass `-w` when Hide Whitespace is on so the counts match the panes.
-- Add `LineStats { added: Int, deleted: Int }?` to `ChangedFile`, a `GitNumstatParser`
-  shaped like `GitStatusParser`, and a `numstat(area:)` method on `RepoClient`.
-- Optional: a five-block GitHub-style bar per row, only if it stays subtle.
-
-**Tests.** `GitNumstatParser` (rename lines, binary `-`, `-z` framing), join of numstat
-rows to status rows, untracked/deleted line counting.
-
-#### A.1 Follow-up: sizes for binary files (requested 2026-09-13)
-
-**Goal.** A binary row currently says only `binary`. Show its size instead, in KB, so an
-image or asset change is as informative as a `+12 −4` text change: `48 KB` for an added
-or deleted file, `48 KB → 51 KB` for a modified one.
-
-**Design.**
-- Sizes come from git objects, not the worktree, so staged and unstaged rows agree with
-  what the diff shows. Old side: `HEAD:path` (unstaged and staged rows); new side:
-  `:path` (the index) for staged rows, the worktree file for unstaged rows, `FileManager`
-  for untracked. Deleted files have only an old side, added files only a new side.
-- One `git cat-file --batch-check` call per refresh, fed every needed object spec on
-  stdin, returns `<oid> <type> <size>` lines; parse with a `GitCatFileSizeParser` in the
-  style of the numstat parser. Worktree sizes come from `FileManager.attributesOfItem`.
-- Model: `LineStats.binary` gains `(oldBytes: Int?, newBytes: Int?)`. Format with
-  `ByteCountFormatter` in decimal KB, one decimal below 100 KB, switching to MB above
-  1 MB (`1.2 MB`). Keep the `binary` word only when both sizes are unknown.
-- `ChurnLabel` renders the size in the same tertiary monospaced caption. Modified rows
-  colour the arrow's right side green or red depending on whether the file grew or
-  shrank; equal sizes show one value.
-- Only run cat-file when the status contains at least one binary row.
-
-**Tests.** `GitCatFileSizeParser` (missing objects, `-z` framing), size formatting
-thresholds, old/new pairing per `Kind` and `Area`.
-
-### C. Show the current branch
-
-_Landed as the title-bar branch picker (2026-09-18): the subtitle became a pop-up that also
-switches local branches. Still open here: the in-progress operation suffix and the
-ahead/behind counts._
-
-**Goal.** The window always shows which branch the open repository is on, and updates
-when the branch changes underneath the app (checkout in a terminal, a coding agent
-switching branches, a rebase in progress).
-
-**Design.**
-- Source: `git symbolic-ref --short -q HEAD`. When it fails the head is detached; fall
-  back to `git rev-parse --short HEAD` and show it as `detached at 1a2b3c4`. Add a
-  `currentBranch()` method to `RepoClient` next to `status()` and run it in the same
-  refresh so the two never disagree.
-- Placement: window subtitle under the repo name, via `.navigationSubtitle`, so it
-  reads "diff-viewer — main" in the title bar without taking sidebar space. In the tabs
-  model the tab title stays the repo name; the branch is per window and per session.
-- In-progress operations: if `.git/rebase-merge`, `.git/rebase-apply`, `.git/MERGE_HEAD`,
-  or `.git/CHERRY_PICK_HEAD` exists, append the state, e.g. `main (rebasing)`, the way
-  the git prompt scripts do. Cheap file-exists checks, no extra git calls.
-- Refresh: `RepoWatcher` already fires on `.git` changes; `.git/HEAD` rewrites cover
-  checkouts, so no new watcher is needed. Read-only, so it fits the current scope
-  regardless of the sidebar context menu.
-- Optional later: clicking the subtitle copies the branch name; upstream ahead/behind
-  counts (`git rev-list --left-right --count @{u}...HEAD`) if they stay cheap.
-
-**Tests.** Parsing of the symbolic-ref and detached fallbacks, and the in-progress
-state suffix from a set of existing marker files.
+**Tests.** The in-progress state suffix from a set of existing marker files.
 
 ---
 
-### D. Multi-selection in the sidebar, with bulk context-menu actions (done 2026-09-16)
+### E. Find in the diff (requested 2026-09-22)
 
-Shipped as designed below, with one change of substance: the detail pane shows a
-multi-selection as a changeset of the selected files (the All-changes machinery over a
-subset), not the most recently added file. The rest of the deviations are under
-"Landed since this list was written".
-
-**Goal.** ⇧-click and ⌘-click select several files in the sidebar, and the context menu
-acts on all of them at once: stage five files, discard three, trash every untracked
-file in a folder, or copy all their paths, in one gesture and one confirmation.
+**Goal.** ⌘F opens a find bar; typing highlights every match in both panes and the
+overview strip, ⌘G / ⌘⇧G step through them, and the bar reads "3 of 41". It works the
+same in a single file and in All changes, so a reader can find a symbol across every
+changed file without leaving the scroll. Kaleidoscope has this; Sublime Merge and
+JuxtaCode do not.
 
 **Design.**
-- `List(selection:)` binds a `Set<ChangedFile.ID>` instead of the optional id. The
-  detail pane still shows one file: keep `selectedFileID` as the row the reader is
-  reading and derive it from the set (the most recently added id when several are
-  selected; the only one when one is). `DIFFVIEWER_SELECT` and the reselect rule keep
-  working through that single id.
-- `.contextMenu(forSelectionType:)` already hands over the whole selection when the
-  right-clicked row is part of it, and the clicked row alone when it is not, which is
-  the macOS convention; nothing changes there.
-- Menu model: the actions offered are the ones every selected row offers
-  (`FileAction.menu(for:)` intersected across the set), so a mixed staged/unstaged
-  selection gets only the harmless items. Titles pluralise with the count: "Stage 3
-  Files", "Discard Changes to 3 Files…", "Move 3 Files to the Trash…", "Copy 3 Paths".
-  Reveal in Finder selects all of them; Open opens each.
-- One git process per action, not one per file: `git add -- a b c`, `git reset -q --`,
-  `git restore --` all take several pathspecs, so `GitFileAction.arguments(for paths:)`
-  takes a list and `RepoClient.perform(_:on:)` takes `[String]`. Trash goes through
-  `NSWorkspace.recycle` (one call, one undo). The per-write status read validates
-  every row by id and kind; rows that changed meaning while the action waited are
-  dropped from the batch and the rest run, so a stale row never blocks the others.
-- One confirmation for the batch, naming the count, with the same "Don't ask again".
-  One refresh after the batch, not one per file.
-- Selection afterwards: whatever survived stays selected; if nothing did, the row at
-  the first removed index, as today for one file.
-- ⌘A selects every row when the sidebar has focus (the panes keep their own ⌘A for
-  text). Copy Path joins the absolute paths with newlines.
+- Model: a `FindQuery` (text, case-sensitive flag, side: old / new / both, changed
+  lines only) and a `FindMatch` (row index, side, UTF-16 range in that line). A `Finder`
+  in `Diff/` walks `DiffDocument.rows` rather than the raw line arrays, so a match is
+  born knowing its row; an equal row can match on both sides and reports each once.
+  Plain substring search with `String.range(of:options:)`; no regex in the first cut.
+- Changed lines only: rows whose `DiffRow.Kind` is not `.equal`. Off by default. The
+  three options persist in `Preferences`.
+- Where it runs: on a background task owned by `WindowState`, debounced as the user
+  types and cancelled by the next keystroke. A 20k-line file is a few milliseconds of
+  substring search, but All changes can be ten times that, and the main thread never
+  waits on it. In All changes the query is re-run over the rows the
+  `ChangesetAssembler` appends, and the current match index is clamped rather than
+  reset, so the counter does not jump while files are still arriving.
+- Drawing: `DiffPaneView` gains a `matches` property next to `styles`, keyed by document
+  row, applied without re-layout the way `DocumentStyles` is. Matches are filled behind
+  the text in a translucent find colour; the current match uses the accent colour. The
+  current match also becomes the pane's `PaneSelection`, so ⌘C copies it and the eye
+  lands on it. `ChangeOverviewView` gets a `matchRows` list and draws a thin tick per
+  row, a different shape from the change marks so the two read apart.
+- Navigation: ⌘G / ⌘⇧G and the bar's ‹ › buttons step with the `ChangeNavigator` index
+  math, wrapping at the ends, and scroll through a `ScrollTarget`. Return in the field
+  is next, ⇧Return previous. A match inside a folded `DisplayRow.separator` is revealed
+  first, reusing the expand path, so no match is unreachable in All changes.
+- Find bar: a thin strip under the file header (Safari-style: field, options menu in the
+  field, counter, ‹ ›, Done), not a sheet. Escape closes it and clears the highlights;
+  the query text survives so ⌘F reopens with it. ⌘E puts the pane selection into the
+  field. Menu items live in `RepositoryCommands` under Edit ▸ Find. ⌘G already generates
+  a message inside the commit sheet; the sheet is modal, so the two never compete.
+- Sidebar: files with at least one match could show a count badge later; not in the
+  first cut.
 
-**Tests.** Menu intersection across mixed selections, pluralised titles, the
-multi-path argument builder, batch validation dropping only the changed rows, and the
-post-batch selection rule. UI by screenshots.
-
-## Now: the three planned features
-
-### 1. Tabs: several repositories open at once (Safari-style)
-
-**Goal.** ⌘T opens a new tab, each tab is one repository with its own file list, selection,
-diff, and watcher. Tabs reorder by drag, close with ⌘W, restore on relaunch.
-
-**Competitor notes.** Sublime Merge uses one tab per repository with a change indicator dot
-when a background repo changed. Kaleidoscope uses one tab per comparison and lets `ksdiff
---label` re-target an existing tab. JuxtaCode uses tabs for commits and separate windows
-for repos, disambiguating same-named repos by path in the title.
-
-**Design.**
-- Use native macOS window tabbing rather than a custom tab bar. Set
-  `NSWindow.tabbingMode = .preferred` and `tabbingIdentifier` on the main window; AppKit
-  then gives Safari-style tabs, ⌘T / ⌘W / ⌘⇧] / ⌘⇧[ / "Merge All Windows", drag to
-  reorder, and tear-off, for free. Each tab is a window with its own scene state.
-- Split `AppState` into two types:
-  - `Preferences` (one per app): font size, hide whitespace, recent repos, tab restore
-    list. Backed by `UserDefaults` as today.
-  - `RepoSession` (one per tab/window): `repoRoot`, `GitClient`, `RepoWatcher`, `files`,
-    `selectedFileID`, `DiffLoader`, change-navigation state. This is essentially today's
-    `AppState` minus the persisted prefs.
-- A preference change (font size, whitespace) applies to every session; each session
-  reloads its diff on whitespace changes.
-- Tab title = repo name; if two open tabs share a name, append the parent directory
-  (JuxtaCode's rule). Window subtitle shows the selected file path.
-- Change indicator: when a watcher fires in a non-key window, mark its tab (e.g. a dot
-  in the title, or `NSWindowTab.accessoryView` badge with the changed-file count) and clear
-  it when the tab becomes key. This is the Sublime Merge behaviour that makes tabs useful
-  while a coding agent works in another repo.
-- Opening a repo that is already open in another tab focuses that tab instead of opening
-  a duplicate (Kaleidoscope's `--label` semantic).
-- Persist the list of open repo roots and the selected tab; restore all on launch instead
-  of only `recentRepos.first`. Files opened via `open -a DiffViewer` or drag-and-drop go
-  into a new tab unless the drop lands on an empty tab.
-- Watcher cost: one FSEvents stream per open repo is fine; pause a session's watcher when
-  its window is miniaturised or its tab has been inactive for a long time (Kaleidoscope
-  offers pause/resume; we can automate it).
-
-**Tests.** Tab-title disambiguation, "focus existing tab instead of duplicate" lookup,
-restore list round-trip. No UI tests; verify with `scripts/screenshot.sh`.
-
-### 2. Churn indicators: how much changed, in aggregate and per file
-
-**Goal.** At a glance: total lines added / deleted across the working tree, split by
-staged and unstaged, plus per-file counts in the sidebar.
-
-**Competitor notes.** None of the three does this well. Kaleidoscope's changeset header
-shows only counts of modified / added / deleted / moved files. Sublime Merge has a
-lines-changed indicator on commits, not on the working tree. JuxtaCode has no stats at
-all. This is a cheap differentiator.
-
-**Design.**
-- Source of truth: `git diff --numstat -z` (unstaged) and `git diff --cached --numstat -z`
-  (staged), run alongside `status` on every refresh. Pass `-w` when Hide Whitespace is on
-  so the numbers agree with what the panes show. Untracked files have no numstat entry:
-  count their lines in the worktree file (they are all additions). Binary files report
-  `-` in numstat; show them as "binary" rather than 0.
-- Add `LineStats { added: Int, deleted: Int }` to `ChangedFile` (optional, nil for
-  binary), populated by a `GitNumstatParser` with the same shape as `GitStatusParser`.
-- Sidebar: per-file trailing `+12 −4` in monospaced caption, green/red. Section headers
-  become `Unstaged (7) +340 −120`. A footer or toolbar item shows the grand total, with
-  the counts-by-kind Kaleidoscope shows (`5 modified, 2 added, 1 deleted`).
-- Detail header: per-file `+12 −4` next to the existing "N changes" text. For the open
-  file, prefer the exact counts derived from `DiffDocument.rows` (added/deleted/modified
-  row counts) since those already respect the whitespace mode and difft's alignment.
-- Optional visual: the GitHub-style five-block bar per file row (proportional green/red
-  squares). Only if it stays subtle; the numbers matter more.
-- Keep the numbers in sync with `RepoWatcher` refreshes; numstat on a 500-file working
-  tree is well under 100 ms and runs off the main thread with `status`.
-
-**Tests.** `GitNumstatParser` (rename lines, binary `-`, `-z` framing), `DiffDocument`
-row-count stats, aggregate summation across areas.
-
-### 3. All-changes view (shipped 2026-09-15)
-
-Every changed file's hunks in one continuous side-by-side scroll, selected by default,
-like Sublime Merge's changes pane. "Unified" means *unified across files*; the view stays
-side by side, as CLAUDE.md requires.
-
-**What shipped.**
-- An "All changes" row above the sidebar sections, selected whenever a list arrives
-  (first list, scope change). Clicking a file still opens the single-file view.
-- One flat `DiffDocument` for the whole list (`ChangesetDocument`: rows and lines
-  concatenated, one `ChangesetSection` per file), so navigation, the overview strip, text
-  selection and copy work unchanged. Change blocks never span a file boundary.
-- A file header per section drawn by the pane renderer: kind badge, name, directory,
-  `← old path` on the left; `+N −M`, language and the comparison label on the right.
-  Gutter numbers are file-local. A file with no rows shows a one-line notice (binary,
-  identical, no visible changes, too large, not shown, or the error).
-- Fixed context per hunk (the `collapseContextLines` default); the Collapse Unchanged
-  toggle does not apply and separators are inert.
-- Streaming: `ChangesetAssembler` diffs and highlights three files at a time in sidebar
-  order and publishes the contiguous completed prefix every 150 ms, text before styles.
-  Each revision is appended in place, keeping the scroll position and selection. The
-  header reads "Loading 7 of 12…" meanwhile.
-- Limits, applied before anything else runs: 200 files per changeset and 1 MB of source
-  per file; a rejected file becomes a notice and stays readable from the sidebar.
-
-**Deferred**, in rough priority order:
-- Keep the finished changeset across selection changes (3.1 below).
-- Sticky file header while scrolling; scroll-spy highlight of the current file in the
-  sidebar; ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in the overview strip.
-- Click-to-expand context inside the changeset, and a per-file `DiffDocument` cache so
-  opening a file after All changes has loaded it is instant.
-- Tooltips for truncated header paths and notice text.
-- Section-aware scroll anchoring on a full replace; an aggregate source-byte budget with
-  size preflight; an app-wide bound on concurrent git, difft and highlight work.
-
-#### 3.1 Follow-up: keep the All-changes document across selection changes (requested 2026-09-15)
-
-**Problem.** Clicking a file in the sidebar and then All changes again reloads the whole
-changeset from scratch: `DiffLoader.load(changeset:)` clears its content and starts a new
-`ChangesetAssembler`, which reads every file from git again, realigns, rebuilds the flat
-document and re-highlights each file, streaming sections in from an empty view. Only
-`DifftCache` is memoised, so the difft subprocesses are skipped but everything else runs
-twice. The reader sees a visible reload for a document that has not changed.
-
-**Design.**
-- `DiffLoader` keeps the last *completed* `ChangesetDocument` and its final
-  `DocumentStyles`, keyed by the sidebar's file ids in order, `hideWhitespace`, and the
-  fold options it was projected with. Reselecting All changes with the same key publishes
-  the retained document and styles at once, with no assembler; a different key runs the
-  load as today. A watcher refresh or a scope change produces a different list, so the key
-  invalidates itself; a cancelled or partial load is never retained.
-- One retained changeset per window (the loader is per window), released when the
-  window's list changes, so the bound is the last admitted changeset (200 files × 1 MB).
-- Optional, larger: the per-file `DiffDocument` cache already deferred from Stage 3, so
-  that opening a single file after All changes has loaded it is instant too. That touches
-  `DiffEngine` and the prefetcher and should be its own item.
-
-**Tests.** `DiffLoaderTests`: same key → the retained document is published synchronously
-and no assembler runs (the fake client sees no reads); changed list, whitespace mode, or
-fold options → a fresh load; a load cancelled before completion retains nothing.
+**Tests.** Match enumeration across sides and rows, including a line that matches on
+both sides of an equal row and adjacent or overlapping occurrences; case folding; the
+changed-lines-only filter; next/previous wrapping; index stability when rows are
+appended mid-search; and mapping a match in a hidden range to the rows that must be
+revealed. The bar and highlights are verified by screenshots.
 
 ---
 
@@ -309,17 +110,47 @@ Roughly in priority order.
 - **Change counter strip.** "Change 3 of 41" left the file header when it took the
   name-first layout (2026-09-19). Bring it back in its own thin strip below the header,
   together with previous/next controls, in both single-file and All changes mode.
-- **Find in diff (⌘F).** Search old side, new side, or both; highlight matches in the
-  panes and the overview strip; ⌘G / ⌘⇧G step through matches. Kaleidoscope has it, and
-  Sublime Merge users complain it is missing, so it is a visible win. Add an option to
-  search only changed lines.
+- **Find in diff (⌘F).** Requested on 2026-09-22 and written up as item E under
+  "Requested" above.
 - **Jump to line (⌘L).** Pick old or new line number; scroll and flash the row.
-- **Text selection and copy.** Per-pane click-drag selection, double-click word select,
-  triple-click line select, ⌘C copying plain text (one side only), and ⌘A selecting the
-  current pane have landed. Remaining: the context menu (Copy, Copy Path, Copy Line
-  Number, Reveal in Finder, Open in Default Editor) and the deferred conventions
-  (shift-click extend, Escape to clear, dimming when the window is not key, autoscroll
-  while the mouse is held still).
+- **Pane context menu and selection conventions.** Selection and ⌘C / ⌘A have landed.
+  Remaining: the context menu (Copy, Copy Path, Copy Line Number, Reveal in Finder, Open
+  in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
+  dimming when the window is not key, autoscroll while the mouse is held still).
+- **File menu mirror for the sidebar actions.** Stage / Unstage / Discard / Delete on
+  the File menu with ⌘S / ⌘⇧S / ⌘⌫, acting on the sidebar selection, so the actions are
+  discoverable and reachable from the keyboard. With it: Stage All / Unstage All on the
+  section headers; one-step discard of a staged change (`git restore --staged
+  --worktree`); a split menu for a mixed selection ("Stage 2 Files" + "Unstage 1 File")
+  if the intersection rule proves too strict; and `NSWorkspace.recycle` instead of the
+  `FileManager.trashItem` loop so a batch trash is one Finder undo.
+- **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
+  the overview strip; click-to-expand context inside the changeset (separators are
+  inert today); tooltips for truncated header paths and notice text; section-aware
+  scroll anchoring on a full replace; an aggregate source-byte budget with size
+  preflight; an app-wide bound on concurrent git, difft and highlight work.
+- **Churn, remaining pieces.** Section headers become `Unstaged (7) +340 −120`, and a
+  counts-by-kind line (`5 modified, 2 added, 1 deleted`) somewhere unobtrusive. The
+  per-file counts, the All changes total, and the changeset header total have shipped.
+- **Tab change indicator.** When a watcher fires in a non-key window, mark its tab (a
+  dot in the title, or an `NSWindowTab.accessoryView` badge with the changed-file
+  count) and clear it when the tab becomes key. This is the Sublime Merge behaviour
+  that makes tabs useful while a coding agent works in another repo.
+- **Commit picker search.** A search field between the pinned row and the list,
+  matching subject, hash prefix and body (needs `%b` in the log format), highlighted
+  subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
+  the filter empties the list, and eventually searching beyond the loaded pages. Its
+  shortcut must not fight the diff's ⌘F (item E): the picker is a popover, so ⌘F while
+  it is open goes to the picker.
+- **Commit picker paging and refresh.** Load More re-reads from page 1 with a larger
+  limit, so reaching 2,000 commits in pages of 50 reads about 41,000 records in total;
+  `startingAt: last.firstParentSHA` with append would fix it. Measure before optimising
+  the table diff further. Also: the ⌘R-only path for re-reading a commit's files.
+- **Commit follow-ups.** Amend; a `--no-verify` toggle; sign-off; commit-and-push;
+  honouring `commit.cleanup`; a 50/72 column guide; a summary/description split; an
+  identity check via `git var GIT_AUTHOR_IDENT` before enabling the button; timeouts on
+  git calls (a hanging gpg pinentry); undo last commit; and watching a linked
+  worktree's git dir (HEAD, the index and merge metadata there are missed today).
 - **Rename and move detection.** Status currently runs with `--no-renames`. Switch to
   `--find-renames` and show `old → new` in the sidebar and header (already supported by
   `ChangedFile.originalPath`); diff the renamed pair instead of showing a delete plus an
@@ -331,8 +162,7 @@ Roughly in priority order.
   grouped by directory (Kaleidoscope 6.7). Cheap with `OutlineGroup`.
 - **Wrap long lines toggle.** Kaleidoscope and Sublime Merge have it. This breaks the
   fixed-row-height assumption in `PaneLayout`; needs per-row heights with a prefix-sum
-  table so both panes stay aligned (the taller side wins per row). Do this after the
-  changeset view so the row model only changes once.
+  table so both panes stay aligned (the taller side wins per row).
 - **Next/previous change crossing files in single-file mode.** Kaleidoscope 7.0's ⌘↓ at
   the last change advances to the next file. Small change to `ChangeNavigator`.
 - **Larger-file highlighting.** README follow-up: highlight visible rows first, or cache
@@ -344,7 +174,7 @@ Roughly in priority order.
 
 ## Later: worth having, not urgent
 
-- **Image diff, second pass.** The side-by-side preview landed (see *Landed*); still
+- **Image diff, second pass.** The side-by-side preview landed (2026-09-20); still
   open: a swipe or onion-skin slider, zoom, and images inside All changes.
 - **SVG (and image) previews inside All changes.** Today a binary section shows the
   "Binary file" notice and an SVG section shows its source rows. Medium effort, and the
@@ -382,179 +212,16 @@ Roughly in priority order.
   `diffviewer <repo>` opener plus a `kaleidoscope://changeset?path=` style URL scheme
   is the minimum. Listed in README as a non-goal for now.
 
-## Landed since this list was written
-
-### Image preview (2026-09-20)
-
-Selecting a binary file with an image extension shows the decodable versions side by
-side, fit to the pane and never above one source pixel per point, over a checkerboard,
-with a "W × H · size" caption. A missing or undecodable side shows a notice; if neither
-side decodes, the binary placeholder remains. Decoding runs off the main actor, forwards
-cancellation, and limits each preview's longest dimension to 4096 px. All changes still
-shows the "Binary file" notice.
-
-### SVG preview (2026-09-22)
-
-An SVG stays a text diff, and its single-file view also decodes a rendered preview
-(through `NSImage`, since ImageIO cannot read SVG) with a Preview / Source toggle in the
-file header. The preference persists; Next / Previous Change while previewing reveals
-Source for that file only. The source panes stay alive under the preview, so folds,
-scroll position and selection survive the toggle. A PNG → SVG rename decodes each side
-with its own decoder. All changes still shows SVG as source rows.
-
-### Commit picker (2026-09-13)
-
-The picker scopes the file list and the diffs to the working tree (the default,
-unchanged) or to one commit from the branch's first-parent history, shown against its
-first parent. Since 2026-09-21 it is a popover under the title-bar scope button (⌘K opens
-it too; a click outside closes it): a header
-naming the displayed scope with a CURRENT pill, a pinned Working Tree row, a day-grouped
-commit list with a date gutter, keyboard navigation, type-select, paging as you scroll,
-and Retry on a failed load.
-
-**Scope change.** This reverses the commit-browsing half of the "Commit browsing,
-ref-range compare, folder compare, blame, file history" entry under *Not doing*, the way
-the sidebar context menu below revises the read-only principle. What stays out: comparing two arbitrary
-commits, folder compare, blame, and per-file history. `CLAUDE.md` carries the same
-non-goal list and needs the same edit — it is not in the repository, so it could not be
-updated here.
-
-**Notes for whatever builds on this.** A commit is named by a `CommitRef` carrying its
-first parent, so every read states both sides explicitly: `git diff-tree` prints nothing
-at all for a merge given only the commit, and git reports an unreadable revision as though
-the *path* were missing, which would otherwise render an unreachable commit as a file
-added wholesale. History loading has its own generation counter, separate from the file
-list's, and a watcher tick in commit scope does nothing unless HEAD has moved.
-
-Follow-ups it leaves open:
-
-- **Commit picker search**: a search field between the pinned row and the list (⌘F),
-  matching subject, hash prefix and body (needs `%b` in the log format), highlighted
-  subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
-  the filter empties the list, and eventually searching beyond the loaded pages.
-- **Cursor paging**: Load More re-reads from page 1 with a larger limit
-  (`recentCommits(startingAt:limit:)`), so reaching 2,000 commits in pages of 50 reads
-  about 41,000 records in total; `startingAt: last.firstParentSHA` with append would fix
-  it. Measure before optimising the table diff further.
-- The ⌘R-only path for re-reading a commit's files.
-
-### Sidebar context menu (2026-09-14)
-
-Right-clicking a file in the sidebar offers the whole-file writes its area and kind allow
-(Stage, spelled Stage Deletion or Mark Resolved where that is what `git add` means;
-Unstage; Discard Changes, spelled Restore File for a deleted one; Delete File) plus Reveal
-in Finder, Open in Default Editor, and Copy Path. The clicked row is acted on whether or
-not it is the selected one, and commit scope offers no writes at all.
-
-**Scope change.** This is the first feature that writes to the repository, so the
-"Read-only" principle in CLAUDE.md became a whole-file rule: never file contents, never a
-commit, but a file may move between the working tree, the index, and HEAD. CLAUDE.md and
-README were updated with it. Hunk-level staging stays out, as *Not doing* still says.
-(Commits came in later; see *Commit* below.)
-
-**Deviations from the original design** (its text is in git history). Staged rows get
-Unstage only; the one-step discard of a staged change was dropped. The confirmation is an
-`NSAlert` sheet with a suppression checkbox, since SwiftUI's alerts cannot host one, and
-because there is no Settings scene a "Confirm Destructive File Actions" toggle in the View
-menu is the way back once it is suppressed. Deleting an untracked file goes through
-`FileManager.trashItem`. Every git command runs with `--literal-pathspecs`, or a real file
-named `a[1].txt` would be read as a glob and match nothing. The selection stays on the same
-path wherever it still exists and otherwise falls to the row at the same sidebar index. The
-refresh after a write is immediate and not an optimisation: `RepoWatcher` sets
-`kFSEventStreamCreateFlagIgnoreSelf`, so a write this process makes fires no event.
-
-Follow-ups it leaves open: the File-menu mirror with ⌘S / ⌘⇧S / ⌘⌫, so the actions are
-discoverable and reachable from the keyboard, and one-step discard of a staged change
-(`git restore --staged --worktree`). Multi-selection with bulk actions landed on
-2026-09-16 (below).
-
-### Multi-selection with bulk actions (2026-09-16)
-
-⌘-click, ⇧-click and ⌘A select several sidebar rows. Two or more selected files show as
-one changeset in the detail pane, built by the All-changes assembler over just those files
-in sidebar order; a set that includes the All changes row shows All changes (⌘A and a
-⇧-click range from the top include it). The context menu offers the intersection of what
-every selected row allows, so a mixed staged and unstaged selection gets only Reveal, Open
-and Copy; titles carry the count ("Stage 3 Files", "Discard Changes to 3 Files…", "Restore
-3 Files", "Delete 3 Files…", "Copy 3 Paths", where Copy counts unique paths). One
-confirmation per batch, one git process per batch, one refresh per batch.
-
-**Deviations from design D.** The detail pane shows the selection as a changeset rather
-than one file. Batch trash is a `FileManager.trashItem` loop, not `NSWorkspace.recycle`,
-so there is no single Finder undo yet. `GitClient.perform` ignores an empty list at the
-boundary: `git reset -q --` with no pathspec resets the whole index.
-
-**What the batch forced into the model.** The selection is a `Set<DiffSelection>` whose
-setter is the user's path: it bumps a revision and drops any pending reselection, while
-refreshes mutate the stored set through one private method that does neither. A write
-restores the rows it acted on only if the revision is unchanged when it finishes, and a
-user write during the write's own refresh clears the request, so a deselection or a
-switch to All changes mid-write is never reversed. Surviving rows stay selected and the
-missing ones are re-found by path; the row-index fallback applies once, for the topmost
-lost row. The refresh alone decides whether to reload the pane, from a content key
-(mode plus the ids the pane is built from), because applying a selection never reloads.
-Every attempted write refreshes, success or failure: `git restore` checks out entries one
-by one without rolling back, and a trash loop can stop halfway. A successful refresh
-clears only an error a refresh raised, so a batch failure survives the watcher.
-
-Follow-ups it leaves open: Stage All / Unstage All on the section headers; a split menu
-for a mixed selection ("Stage 2 Files" + "Unstage 1 File") if the intersection rule
-proves too strict; `NSWorkspace.recycle` for one Finder undo; and the File-menu mirror
-above, which should act on the selection.
-
-### Commit (2026-09-18)
-
-A message box at the bottom of the sidebar, in working-tree scope, with a Commit button
-and ⌘↩ on the File menu. It records the index as `git commit --cleanup=strip -F <file>`
-with the text in the box, prefilled the way the editor flow would be: `SQUASH_MSG` then
-`MERGE_MSG` when both exist, else one of them, else `commit.template`. Nothing is staged
-for you. Commit is disabled with nothing staged (unless `MERGE_HEAD` exists, since a merge
-may commit a tree equal to HEAD), a blank message, an unmerged row, or a template left
-exactly as applied. Hooks run with the PATH of the user's login shell, resolved once from
-`$SHELL -l -c` under a five-second deadline so a Finder-launched app still finds Homebrew
-tools.
-
-**Scope change.** CLAUDE.md's "never commits" became "may record the index as a commit".
-Still nothing finer than a file: no hunks, no amend, no message composed for the user.
-
-**Stances worth knowing.** `--cleanup=strip` is what an edited message gets in the editor
-flow, and git applies `core.commentChar` itself; under `commentChar=auto` a prefilled
-`# Conflicts:` block can survive, and the target is parity with `git commit` in an editor,
-which the tests assert against the system git, not that every `#` line disappears. The
-unedited-template refusal is an exact string comparison, a safeguard against committing
-boilerplate rather than git's cleanup-aware check. The login-shell PATH reads login startup
-files only; a PATH set in `.zshrc` alone is not seen. Two known differences from the editor
-flow: `prepare-commit-msg` receives source `message`, not `merge`; and merge metadata
-changed outside the app in a *linked worktree* is not watched, a pre-existing watcher limit
-(HEAD and the index there are missed too).
-
-**What it forced into the model.** Commits share the serialized write chain with the
-sidebar actions, so a commit can never meet a stage on `index.lock`; git stays the
-authority on whether the index can be committed and `canCommit` only shapes the UI. The
-defaults load in a serial-checked task after each file list publishes, so a slow template
-never delays the sidebar and a stale read applies nothing. The draft is untouched when it
-still equals what was last applied, and only an untouched draft follows the suggestion; a
-draft edit revision, bumped by the reader's writes alone, decides what a finished commit
-may clear or restore, so a failing hook keeps the message unless the reader edited the box
-while git ran.
-
-Follow-ups it leaves open: amend; a `--no-verify` toggle; sign-off; commit-and-push;
-honouring `commit.cleanup`; a 50/72 column guide; a summary/description split; an
-identity check via `git var GIT_AUTHOR_IDENT` before enabling the button; timeouts on git
-calls (a hanging gpg pinentry); undo last commit; Stage All on the section header; and
-watching a linked worktree's git dir.
-
 ## Not doing (and why)
 
 - **Inline / unified text layout.** Side by side only (CLAUDE.md). Sublime Merge's
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
 - **Ref-range compare, folder compare, blame, file history.** Non-goals in CLAUDE.md.
   Sublime Merge's blame and Kaleidoscope's two-commit Compare are git-client features, not
-  viewer features. Commit *browsing* has moved into scope — see below.
+  viewer features. Commit *browsing* is in scope and shipped as the commit picker.
 - **Hunk-level staging, discarding, or cherry-picking** from the changeset headers
-  (Sublime Merge). Whole-file stage / unstage / discard / delete is now in scope via the
-  sidebar context menu (see "Sidebar context menu" under Landed); anything finer than a
-  file is not.
+  (Sublime Merge). Whole-file stage / unstage / discard / delete is in scope via the
+  sidebar context menu; anything finer than a file is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.
