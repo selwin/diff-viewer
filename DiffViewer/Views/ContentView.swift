@@ -94,6 +94,18 @@ struct ContentView: View {
                 }
                 .help("Refresh (⌘R)")
             }
+            // Splits Find into its own capsule; `ToolbarSpacer` is ignored here.
+            ToolbarItem(placement: .primaryAction) { Color.clear.frame(width: 0) }
+                .sharedBackgroundVisibility(.hidden)
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    windowState.showFindBar()
+                } label: {
+                    Label("Find", systemImage: "magnifyingglass")
+                }
+                .help("Find (⌘F)")
+                .disabled(!windowState.isFindAvailable)
+            }
         }
         .onChange(of: windowState.errorMessage, initial: true) { presentErrorIfNeeded() }
         .sheet(isPresented: $windowState.isCommitSheetPresented, onDismiss: handleCommitSheetDismissal) {
