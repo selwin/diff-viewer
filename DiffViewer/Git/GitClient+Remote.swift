@@ -1,6 +1,7 @@
 import Foundation
 
-/// The commands that talk to a remote: listing, fetch, pull, push. Split from
+/// The commands that talk to a remote: listing, fetch, pull, push, publish, and
+/// fast-forwarding a branch that is not checked out. Split from
 /// `GitClient.swift` to keep that file under the length lint.
 extension GitClient {
     /// Uses the hook environment and disables git's terminal credential prompts. Final:
@@ -96,5 +97,138 @@ extension GitClient {
             throw ProcessError.failed(
                 command: "git push", status: result.status, stderr: Self.commandDiagnostics(result))
         }
+    }
+
+    /// Pushes `branch` to `remote` under the same name and sets it as the upstream.
+    /// Never forces, so a diverged remote branch rejects it.
+    func publish(branch: String, to remote: String) async throws {
+        // Git itself would read a leading dash as an option.
+        guard !branch.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git push", status: 128, stderr: "'\(branch)' is not a branch name")
+        }
+        guard !remote.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git push", status: 128, stderr: "'\(remote)' is not a remote name")
+        }
+        // Explicit refspec with no `+` and no `--force`, as in `push`. `--set-upstream`
+        // writes `branch.<b>.remote` and `.merge` even when the remote's fetch mapping
+        // does not cover the new branch.
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: [
+                "push", "--set-upstream", "--no-follow-tags", remote, "refs/heads/\(branch):refs/heads/\(branch)",
+            ],
+            currentDirectory: repoRoot,
+            environment: await remoteEnvironment()
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git push", status: result.status, stderr: Self.commandDiagnostics(result))
+        }
+    }
+
+    /// Moves `branch`, which must not be checked out, to the tip of `remoteRef` on
+    /// `remote`, fast-forward only. `localRef` is the branch's upstream ref,
+    /// `refs/remotes/...`; on success the branch equals it.
+    func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws {
+        // Git itself would read a leading dash as an option.
+        guard !branch.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git fetch", status: 128, stderr: "'\(branch)' is not a branch name")
+        }
+        guard !remote.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git fetch", status: 128, stderr: "'\(remote)' is not a remote name")
+        }
+        // The first step force-writes `localRef`; anywhere else, such as a local upstream
+        // in `refs/heads/`, it could overwrite the reader's own branch.
+        guard localRef.hasPrefix("refs/remotes/") else {
+            throw ProcessError.failed(
+                command: "git fetch", status: 128, stderr: "'\(localRef)' is not a remote-tracking ref")
+        }
+        // A symbolic ref would pass the prefix check yet write through to its target.
+        let symbolic = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["symbolic-ref", "-q", localRef],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        if symbolic.status == 0 {
+            throw ProcessError.failed(
+                command: "git fetch", status: 128, stderr: "'\(localRef)' is a symbolic ref")
+        }
+        // Status 1 is "not symbolic", which includes a ref the fetch has yet to create.
+        guard symbolic.status == 1 else {
+            throw ProcessError.failed(
+                command: "git symbolic-ref", status: symbolic.status, stderr: Self.commandDiagnostics(symbolic))
+        }
+        let environment = await remoteEnvironment()
+        // One explicit refspec, so the upstream ref becomes the remote tip whatever the
+        // remote's configured mappings cover.
+        let fetch = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["fetch", "--no-prune", "--no-prune-tags", "--no-tags", remote, "+\(remoteRef):\(localRef)"],
+            currentDirectory: repoRoot,
+            environment: environment
+        )
+        guard fetch.status == 0 else {
+            throw ProcessError.failed(
+                command: "git fetch", status: fetch.status, stderr: Self.commandDiagnostics(fetch))
+        }
+        // Non-forced, so git refuses a non-fast-forward and a branch checked out in any
+        // worktree rather than moving it.
+        let update = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["fetch", ".", "\(localRef):refs/heads/\(branch)"],
+            currentDirectory: repoRoot,
+            environment: environment
+        )
+        guard update.status == 0 else {
+            throw ProcessError.failed(
+                command: "git fetch", status: update.status, stderr: Self.commandDiagnostics(update))
+        }
+    }
+
+    /// The remote of every branch with an upstream configured, keyed by branch name. Unlike
+    /// `localBranches`, it still names the remote when the fetch mapping does not cover
+    /// the upstream and git reports no upstream at all.
+    func configuredUpstreamRemotes() async throws -> [String: String] {
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["config", "-z", "--get-regexp", #"^branch\..+\.(remote|merge)$"#],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // Status 1 is "no such key"; any other non-zero is a real config failure.
+        if result.status == 1 { return [:] }
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git config branch.*", status: result.status, stderr: result.stderrString)
+        }
+        return Self.parseUpstreamRemotes(result.stdoutString)
+    }
+
+    /// Parses `git config -z --get-regexp` records, `key\nvalue\0`, keeping branches with
+    /// both `.remote` and `.merge`: a remote alone tracks nothing. The name is what lies
+    /// between `branch.` and the variable, so a dotted branch name survives; git
+    /// lowercases only the section and variable, never the branch name.
+    static func parseUpstreamRemotes(_ output: String) -> [String: String] {
+        var remotes: [String: String] = [:]
+        var merging: Set<String> = []
+        let prefix = "branch."
+        for record in output.split(separator: "\0") {
+            guard let newline = record.firstIndex(of: "\n") else { continue }
+            let key = record[..<newline]
+            let value = String(record[record.index(after: newline)...])
+            for suffix in [".remote", ".merge"] {
+                guard key.hasPrefix(prefix), key.hasSuffix(suffix), key.count > prefix.count + suffix.count else {
+                    continue
+                }
+                let name = String(key.dropFirst(prefix.count).dropLast(suffix.count))
+                if suffix == ".remote" { remotes[name] = value } else { merging.insert(name) }
+            }
+        }
+        return remotes.filter { merging.contains($0.key) }
     }
 }

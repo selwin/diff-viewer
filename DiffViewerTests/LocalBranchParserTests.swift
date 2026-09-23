@@ -13,9 +13,10 @@ struct LocalBranchParserTests {
         track: String = "",
         remote: String = "origin",
         remoteRef: String = "refs/heads/main",
-        date: String = LocalBranchParserTests.date
+        date: String = LocalBranchParserTests.date,
+        localRef: String = "refs/remotes/origin/main"
     ) -> String {
-        [ref, shortName, track, remote, remoteRef, date].joined(separator: "\0")
+        [ref, shortName, track, remote, remoteRef, date, localRef].joined(separator: "\0")
     }
 
     @Test func everyUpstreamFieldIsRead() throws {
@@ -28,6 +29,7 @@ struct LocalBranchParserTests {
         #expect(upstream.shortName == "origin/main")
         #expect(upstream.remote == "origin")
         #expect(upstream.remoteRef == "refs/heads/main")
+        #expect(upstream.localRef == "refs/remotes/origin/main")
         #expect(upstream.tracking == .counts(ahead: 1, behind: 2))
     }
 
@@ -49,7 +51,7 @@ struct LocalBranchParserTests {
         }
     }
 
-    @Test func aRecordWithoutSixFieldsThrows() {
+    @Test func aRecordWithoutSevenFieldsThrows() {
         #expect(throws: LocalBranchParseError.self) {
             try LocalBranchParser.parse("refs/heads/main\0origin/main\n")
         }
@@ -65,11 +67,11 @@ struct LocalBranchParserTests {
 
     @Test func everyLineBecomesABranch() throws {
         let lines = [
-            line(ref: "refs/heads/feature", shortName: "", remote: "", remoteRef: ""),
+            line(ref: "refs/heads/feature", shortName: "", remote: "", remoteRef: "", localRef: ""),
             line(track: "behind 3"),
             line(
                 ref: "refs/heads/zeta", shortName: "upstream/zeta", remote: "upstream",
-                remoteRef: "refs/heads/zeta"),
+                remoteRef: "refs/heads/zeta", localRef: "refs/remotes/mirror/zeta"),
         ]
         let output = lines.joined(separator: "\n") + "\n"
 
@@ -77,5 +79,6 @@ struct LocalBranchParserTests {
         #expect(branches.map(\.name) == ["feature", "main", "zeta"])
         #expect(branches.map { $0.upstream?.shortName } == [nil, "origin/main", "upstream/zeta"])
         #expect(branches.last?.upstream?.remote == "upstream")
+        #expect(branches.last?.upstream?.localRef == "refs/remotes/mirror/zeta")
     }
 }

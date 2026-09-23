@@ -696,8 +696,228 @@ import Testing
         _ = remote
     }
 
-    /// The tip date orders the picker and the remote ref is what a push names, so both
-    /// have to survive the round trip through `for-each-ref`.
+    /// Pushes a new commit to `remote`'s `main` from a second clone and returns it, so
+    /// the first repository's remote-tracking ref is stale until it fetches.
+    private func advanceRemoteMain(of remote: Repo) async throws -> String {
+        let other = try await clone(of: remote)
+        try other.write("b.txt", "two\n")
+        let tip = try await other.commit("Clone commit")
+        try await other.git(["push", "origin", "main"])
+        return tip
+    }
+
+    @Test func publishCreatesTheRemoteBranchAndSetsTheUpstream() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["checkout", "-b", "feature"])
+        try repo.write("f.txt", "f\n")
+        let tip = try await repo.commit("Feature commit")
+
+        try await repo.client.publish(branch: "feature", to: "origin")
+
+        #expect(try await remote.git(["rev-parse", "refs/heads/feature"]) == tip)
+        let upstreamRef = try await repo.git(["rev-parse", "--symbolic-full-name", "feature@{u}"])
+        #expect(upstreamRef == "refs/remotes/origin/feature")
+        let feature = try #require(try await repo.client.localBranches().first { $0.name == "feature" })
+        #expect(feature.upstream?.tracking == .counts(ahead: 0, behind: 0))
+    }
+
+    /// With a fetch mapping that misses the new branch, git reports no upstream at all;
+    /// the configured remote is the only trace that the publish happened.
+    @Test func publishUnderANarrowMappingIsSeenOnlyThroughConfiguredRemotes() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git([
+            "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main",
+        ])
+        try await repo.git(["branch", "Feature.x"])
+
+        try await repo.client.publish(branch: "Feature.x", to: "origin")
+
+        #expect(try await remote.git(["rev-parse", "--verify", "refs/heads/Feature.x"]) != "")
+        #expect(try await repo.client.configuredUpstreamRemotes() == ["main": "origin", "Feature.x": "origin"])
+        let branch = try #require(try await repo.client.localBranches().first { $0.name == "Feature.x" })
+        #expect(branch.upstream == nil)
+    }
+
+    @Test func configuredUpstreamRemotesIsEmptyWithoutBranchConfig() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        #expect(try await repo.client.configuredUpstreamRemotes().isEmpty)
+    }
+
+    @Test func publishOntoADivergedRemoteBranchIsRejected() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let other = try await clone(of: remote)
+        try await other.git(["checkout", "-b", "feature"])
+        try other.write("theirs.txt", "theirs\n")
+        try await other.commit("Their feature")
+        try await other.git(["push", "origin", "feature"])
+        let remoteTip = try await remote.git(["rev-parse", "refs/heads/feature"])
+
+        try await repo.git(["checkout", "-b", "feature"])
+        try repo.write("mine.txt", "mine\n")
+        try await repo.commit("My feature")
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.publish(branch: "feature", to: "origin")
+        }
+        #expect(try await remote.git(["rev-parse", "refs/heads/feature"]) == remoteTip)
+    }
+
+    /// The upstream ref is stale (no fetch since the remote moved), and the branch must
+    /// still land on the remote tip without HEAD, the current branch, or the worktree
+    /// changing.
+    @Test func fastForwardMovesABranchThatIsNotCheckedOut() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["branch", "--track", "base", "origin/main"])
+        let tip = try await advanceRemoteMain(of: remote)
+        let head = try await repo.git(["rev-parse", "HEAD"])
+        try repo.write("a.txt", "edited\n")
+
+        try await repo.client.fastForward(
+            branch: "base", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
+
+        #expect(try await repo.git(["rev-parse", "refs/heads/base"]) == tip)
+        #expect(try await repo.git(["rev-parse", "HEAD"]) == head)
+        #expect(try await repo.client.headState() == .named("main"))
+        #expect(try Data(contentsOf: repo.url.appendingPathComponent("a.txt")) == Data("edited\n".utf8))
+        #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("b.txt").path))
+        let base = try #require(try await repo.client.localBranches().first { $0.name == "base" })
+        #expect(base.upstream?.tracking == .counts(ahead: 0, behind: 0))
+    }
+
+    /// The explicit refspec writes the upstream ref wherever the mapping puts it, so the
+    /// branch reaches the remote tip rather than whatever `refs/remotes/origin/*` holds.
+    @Test func fastForwardReachesTheRemoteTipUnderACustomMapping() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/mirror/*"])
+        try await repo.git(["fetch", "origin"])
+        try await repo.git(["branch", "base"])
+        try await repo.git(["config", "branch.base.remote", "origin"])
+        try await repo.git(["config", "branch.base.merge", "refs/heads/main"])
+        let tip = try await advanceRemoteMain(of: remote)
+
+        let before = try #require(try await repo.client.localBranches().first { $0.name == "base" })
+        let upstream = try #require(before.upstream)
+        #expect(upstream.localRef == "refs/remotes/mirror/main")
+
+        try await repo.client.fastForward(
+            branch: "base", remote: upstream.remote, remoteRef: upstream.remoteRef, localRef: upstream.localRef)
+
+        #expect(try await repo.git(["rev-parse", "refs/heads/base"]) == tip)
+        let after = try #require(try await repo.client.localBranches().first { $0.name == "base" })
+        #expect(after.upstream?.tracking == .counts(ahead: 0, behind: 0))
+    }
+
+    @Test func fastForwardOfADivergedBranchIsRefused() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["checkout", "-b", "base"])
+        try repo.write("mine.txt", "mine\n")
+        let baseTip = try await repo.commit("Local commit")
+        try await repo.git(["checkout", "main"])
+        _ = try await advanceRemoteMain(of: remote)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "base", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
+        }
+        #expect(try await repo.git(["rev-parse", "refs/heads/base"]) == baseTip)
+    }
+
+    /// Git will not move a branch checked out in a worktree; that one is `pull`'s job.
+    @Test func fastForwardOfTheCheckedOutBranchIsRefused() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let head = try await repo.git(["rev-parse", "HEAD"])
+        _ = try await advanceRemoteMain(of: remote)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "main", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
+        }
+        #expect(try await repo.git(["rev-parse", "HEAD"]) == head)
+    }
+
+    /// The first step force-writes `localRef`, so one naming a local branch would
+    /// overwrite it with the remote tip.
+    @Test func fastForwardRefusesALocalRefOutsideRemoteTracking() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["branch", "base"])
+        try await repo.git(["branch", "feature"])
+        let baseTip = try await repo.git(["rev-parse", "refs/heads/base"])
+        _ = try await advanceRemoteMain(of: remote)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "feature", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/heads/base")
+        }
+        #expect(try await repo.git(["rev-parse", "refs/heads/base"]) == baseTip)
+        #expect(try await repo.git(["rev-parse", "refs/heads/feature"]) == baseTip)
+    }
+
+    /// A symbolic ref under `refs/remotes/` passes the prefix check, and the forced
+    /// fetch would write through it to the branch it points at.
+    @Test func fastForwardRefusesASymbolicLocalRef() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["branch", "base"])
+        try await repo.git(["branch", "feature"])
+        try await repo.git(["symbolic-ref", "refs/remotes/trap/main", "refs/heads/base"])
+        let baseTip = try await repo.git(["rev-parse", "refs/heads/base"])
+        _ = try await advanceRemoteMain(of: remote)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "feature", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/remotes/trap/main")
+        }
+        #expect(try await repo.git(["rev-parse", "refs/heads/base"]) == baseTip)
+    }
+
+    @Test func fastForwardOfABranchCheckedOutInALinkedWorktreeIsRefused() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let worktree = repo.url.appendingPathComponent(".git/linked-worktree")
+        try await repo.git(["worktree", "add", "-b", "linked", worktree.path])
+        let linkedTip = try await repo.git(["rev-parse", "refs/heads/linked"])
+        _ = try await advanceRemoteMain(of: remote)
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "linked", remote: "origin", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
+        }
+        #expect(try await repo.git(["rev-parse", "refs/heads/linked"]) == linkedTip)
+    }
+
+    /// A remote without a merge ref tracks nothing, so that branch still needs publishing.
+    @Test func configuredUpstreamRemotesSkipsABranchWithoutAMergeRef() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["branch", "lonely"])
+        try await repo.git(["config", "branch.lonely.remote", "origin"])
+
+        #expect(try await repo.client.configuredUpstreamRemotes() == ["main": "origin"])
+        _ = remote
+    }
+
+    /// Git would read either name as an option rather than a branch or a remote.
+    @Test func publishAndFastForwardRejectNamesThatLookLikeOptions() async throws {
+        let (repo, remote) = try await pushedRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.publish(branch: "--mirror", to: "origin")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.publish(branch: "main", to: "--mirror")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "--dry-run", remote: "origin", remoteRef: "refs/heads/main",
+                localRef: "refs/remotes/origin/main")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.fastForward(
+                branch: "main", remote: "--all", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
+        }
+        _ = remote
+    }
+
+    /// The tip date orders the picker and the upstream refs are what a push or a
+    /// fast-forward names, so all of them have to survive the round trip through
+    /// `for-each-ref`.
     @Test func localBranchesCarryTipDatesAndUpstreamRefs() async throws {
         let (repo, remote) = try await pushedRepo()
         let stamp = "2026-09-19T10:00:00+00:00"
@@ -708,6 +928,7 @@ import Testing
         #expect(main.tipCommittedAt == ISO8601DateFormatter().date(from: stamp))
         #expect(main.upstream?.remote == "origin")
         #expect(main.upstream?.remoteRef == "refs/heads/main")
+        #expect(main.upstream?.localRef == "refs/remotes/origin/main")
         _ = remote
     }
 

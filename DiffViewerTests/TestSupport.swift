@@ -201,16 +201,18 @@ func localBranch(
 }
 
 /// `remoteRef` defaults to the branch half of `shortName`: `origin/main` tracks
-/// `refs/heads/main`.
+/// `refs/heads/main`. `localRef` defaults to `refs/remotes/<shortName>`.
 func upstream(
     _ shortName: String,
     remote: String = "origin",
     remoteRef: String? = nil,
+    localRef: String? = nil,
     tracking: UpstreamTracking = .counts(ahead: 0, behind: 0)
 ) -> BranchUpstream {
     let branch = shortName.hasPrefix(remote + "/") ? String(shortName.dropFirst(remote.count + 1)) : shortName
     return BranchUpstream(
-        shortName: shortName, remote: remote, remoteRef: remoteRef ?? "refs/heads/\(branch)", tracking: tracking)
+        shortName: shortName, remote: remote, remoteRef: remoteRef ?? "refs/heads/\(branch)",
+        localRef: localRef ?? "refs/remotes/\(shortName)", tracking: tracking)
 }
 
 // MARK: Images

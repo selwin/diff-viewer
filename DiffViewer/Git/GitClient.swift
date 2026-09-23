@@ -176,7 +176,8 @@ struct GitClient: RepoClient {
             arguments: [
                 "for-each-ref",
                 "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)"
-                    + "%00%(upstream:remotename)%00%(upstream:remoteref)%00%(committerdate:iso-strict)",
+                    + "%00%(upstream:remotename)%00%(upstream:remoteref)%00%(committerdate:iso-strict)"
+                    + "%00%(upstream)",
                 "refs/heads/",
             ],
             currentDirectory: repoRoot,
