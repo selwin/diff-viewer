@@ -12,10 +12,16 @@ import Observation
 @MainActor
 @Observable
 final class DiffLoader {
-    private(set) var content: DiffContent?
+    private(set) var content: DiffContent? {
+        didSet { onPresentationChange?() }
+    }
     private(set) var contentFileID: ChangedFile.ID?
     private(set) var isLoading = false
-    private(set) var errorMessage: String?
+    /// The detail view hides the panes while an error is set, even with content still
+    /// loaded, so both count as a change to what is presented.
+    private(set) var errorMessage: String? {
+        didSet { onPresentationChange?() }
+    }
     /// Syntax styles for `content`, published in the same turn as the content itself.
     private(set) var styles: DocumentStyles?
     /// Rendered preview for the current single file. Published with content and retained
@@ -23,6 +29,10 @@ final class DiffLoader {
     private(set) var imagePreview: ImagePreview?
     /// How much of an All-changes load has been published, while one is running.
     private(set) var changesetProgress: (completed: Int, total: Int)?
+
+    /// Called after every write to `content` or `errorMessage`, so find can drop its state
+    /// the moment the panes stop showing searchable text.
+    @ObservationIgnored var onPresentationChange: (@MainActor () -> Void)?
 
     /// True while a diff (including its highlighting) is in flight.
     var hasActiveWork: Bool { isLoading }
