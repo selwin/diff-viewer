@@ -28,6 +28,9 @@ enum DiffTheme {
     static let addedToken = dynamic(light: rgb(74, 194, 107, 0.45), dark: rgb(46, 160, 67, 0.42))
     static let addedGutter = dynamic(light: rgb(172, 238, 187), dark: rgb(46, 160, 67, 0.30))
 
+    /// Find hits. The current match has no colour of its own; it is selected.
+    static let findMatch = dynamic(light: rgb(255, 214, 0, 0.45), dark: rgb(255, 214, 0, 0.30))
+
     static let padBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(28, 30, 34))
     static let padStripe = dynamic(light: rgb(0, 0, 0, 0.06), dark: rgb(255, 255, 255, 0.05))
 
