@@ -13,17 +13,26 @@ extension DiffPaneView {
         return (origin + x0, origin + x1)
     }
 
-    /// Over the token highlights and under the selection, so the current match (which is
-    /// selected) reads differently from the others.
+    /// Over the token highlights and under the selection. A match that is exactly the
+    /// selection is the current one and gets its own colour; `drawSelection` skips it.
     func drawFindMatches(ofRow row: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext) {
         guard let ranges = findMatches[row] else { return }
-        DiffTheme.findMatch.setFill()
+        let current = selectedFindMatch(inRow: row)
         for range in ranges {
             let (x0, x1) = horizontalBounds(range, in: cached)
             guard x1 > x0 else { continue }
-            context.fill(
-                NSRect(
-                    x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
+            (range == current ? DiffTheme.findCurrentMatch : DiffTheme.findMatch).setFill()
+            let rect = NSRect(
+                x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2)
+            context.addPath(CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            context.fillPath()
         }
+    }
+
+    /// The selection's range in `row` when it covers exactly one find match there.
+    func selectedFindMatch(inRow row: Int) -> Range<Int>? {
+        guard let selection, selection.start.row == row, selection.end.row == row else { return nil }
+        let range = selection.start.offset..<selection.end.offset
+        return findMatches[row]?.contains(range) == true ? range : nil
     }
 }

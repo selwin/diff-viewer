@@ -111,6 +111,22 @@ only file in a section); which file ⌘S targets in All changes from a scroll po
 
 ---
 
+### H. Find button in the toolbar (requested 2026-09-23)
+
+**Goal.** Find is reachable today only through ⌘F and Edit ▸ Find, so readers who don't
+know the shortcut never see it. Add a visible way in.
+
+**Design.**
+- A `magnifyingglass` button in the toolbar next to the other diff controls, with the
+  tooltip "Find (⌘F)". It opens the bar or refocuses the field (`showFindBar()`), and
+  shows as on while the bar is open.
+- Disabled when `isFindAvailable` is false (binary, identical or failed selections),
+  like Find… in the menu.
+
+**Tests.** None; UI, checked by screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.

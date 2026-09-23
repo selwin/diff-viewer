@@ -351,7 +351,9 @@ final class DiffPaneView: NSView {
     /// The selected span of one row, drawn over the token highlights and under the text.
     /// A row whose newline is selected extends one character past the end of the line.
     private func drawSelection(ofRow row: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext) {
-        guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength) else { return }
+        guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength),
+            selectedFindMatch(inRow: row) == nil
+        else { return }
         var (x0, x1) = horizontalBounds(range, in: cached)
         if selection.includesLineEnd(ofRow: row) { x1 += charWidth }
         guard x1 > x0 else { return }

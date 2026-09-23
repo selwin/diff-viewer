@@ -28,8 +28,10 @@ enum DiffTheme {
     static let addedToken = dynamic(light: rgb(74, 194, 107, 0.45), dark: rgb(46, 160, 67, 0.42))
     static let addedGutter = dynamic(light: rgb(172, 238, 187), dark: rgb(46, 160, 67, 0.30))
 
-    /// Find hits. The current match has no colour of its own; it is selected.
-    static let findMatch = dynamic(light: rgb(255, 214, 0, 0.45), dark: rgb(255, 214, 0, 0.30))
+    /// Find hits, near-opaque so they read on added and deleted rows too. The current
+    /// match is a stronger orange so it stands out while the Find field has focus.
+    static let findMatch = dynamic(light: rgb(255, 229, 110, 0.9), dark: rgb(255, 214, 0, 0.5))
+    static let findCurrentMatch = dynamic(light: rgb(255, 176, 0), dark: rgb(255, 150, 0, 0.8))
 
     static let padBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(28, 30, 34))
     static let padStripe = dynamic(light: rgb(0, 0, 0, 0.06), dark: rgb(255, 255, 255, 0.05))
