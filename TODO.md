@@ -137,6 +137,28 @@ any other branch.
 
 ---
 
+### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
+
+**Goal.** Stage the files just read and commit them without touching the mouse. Commit…
+already has ⌘Return, and inside the sheet ⌘G generates a message and ⌘Return commits;
+staging is only reachable from the sidebar context menu.
+
+**Design.**
+- File menu items acting on the sidebar selection (one file or several): Stage ⌘S,
+  Unstage ⌘⇧S, Discard ⌘⌫, and Stage All / Unstage All ⌥⌘S / ⌥⌘⇧S. Each is disabled
+  when it doesn't apply, using the same rules as the context menu (`FileAction`), and
+  runs through `FileActionRunner` so Discard still confirms.
+- After staging or unstaging, keep the sidebar selection on the next file in the
+  section the file left, so repeated ⌘S walks down the Unstaged list. With All changes
+  selected, ⌘S stages the file whose section is at the top of the scroll.
+- The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
+- This absorbs the "File menu mirror for the sidebar actions" item from the Next list.
+
+**Tests.** Which file becomes selected after staging or unstaging (middle, last, and
+only file in a section); which file ⌘S targets in All changes from a scroll position.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -151,10 +173,8 @@ Roughly in priority order.
   Remaining: the context menu (Copy, Copy Path, Copy Line Number, Reveal in Finder, Open
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
-- **File menu mirror for the sidebar actions.** Stage / Unstage / Discard / Delete on
-  the File menu with ⌘S / ⌘⇧S / ⌘⌫, acting on the sidebar selection, so the actions are
-  discoverable and reachable from the keyboard. With it: Stage All / Unstage All on the
-  section headers; one-step discard of a staged change (`git restore --staged
+- **Sidebar action follow-ups.** The File menu shortcuts are item G under "Requested".
+  Still open: Stage All / Unstage All buttons on the section headers; one-step discard of a staged change (`git restore --staged
   --worktree`); a split menu for a mixed selection ("Stage 2 Files" + "Unstage 1 File")
   if the intersection rule proves too strict; and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.

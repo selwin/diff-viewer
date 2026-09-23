@@ -3,7 +3,7 @@ import Foundation
 /// The document content one pane draws from. A changeset also carries its sections, so
 /// the pane can show file-local line numbers instead of numbers into the flat document.
 struct PaneModel {
-    enum Side { case old, new }
+    typealias Side = DocumentSide
 
     let side: Side
     let rows: [DiffRow]
