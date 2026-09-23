@@ -168,6 +168,21 @@ struct RepositoryCommands: Commands {
                 .keyboardShortcut("b")
                 .disabled(!(windowState?.canOpenBranchPicker ?? false))
         }
+        // Replaced rather than extended: this group holds the default Find submenu, which
+        // would otherwise claim ⌘F a second time.
+        CommandGroup(replacing: .textEditing) {
+            Menu("Find") {
+                Button("Find…") { windowState?.showFindBar() }
+                    .keyboardShortcut("f")
+                    .disabled(!(windowState?.isFindAvailable ?? false))
+                Button("Find Next") { windowState?.find.next() }
+                    .keyboardShortcut("g")
+                    .disabled(!(windowState?.canStepFind ?? false))
+                Button("Find Previous") { windowState?.find.previous() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                    .disabled(!(windowState?.canStepFind ?? false))
+            }
+        }
         CommandGroup(after: .toolbar) {
             Button("Refresh") { Task { await windowState?.refresh() } }
                 .keyboardShortcut("r")

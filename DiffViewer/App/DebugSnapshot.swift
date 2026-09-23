@@ -23,6 +23,8 @@ import Foundation
 ///   come from outside, as for tab steps.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
+/// - `DIFFVIEWER_FIND=<query>` opens the find bar with that query after the Next Change
+///   presses, and waits for its search to finish before the steps below.
 /// - `DIFFVIEWER_FOLD=<up|down|run|all|toggle>[,...]` clicks that control on the first
 ///   visible separator row (or flips Collapse Unchanged Lines), in order, after the diff
 ///   has loaded. Clicks go through the real mouse path.
@@ -86,12 +88,12 @@ enum DebugLaunchOptions {
             let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
             let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
             let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
+            let findQuery = env["DIFFVIEWER_FIND"] ?? ""
             let needsWindow =
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
+                || !findQuery.isEmpty
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
-            let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
-            let scrollXs = (env["DIFFVIEWER_SCROLL_X"] ?? "").split(separator: ",").compactMap { Double($0) }
             // One ordered sequence: opens finish before the target window is chosen, so the
             // selection, folding, and snapshot all act on the same window.
             Task { @MainActor in
@@ -156,25 +158,9 @@ enum DebugLaunchOptions {
                     try? await Task.sleep(for: .seconds(2))
                     for _ in 0..<nextCount { windowState.nextChange() }
                 }
-                if !folds.isEmpty {
-                    try? await Task.sleep(for: .seconds(nextCount > 0 ? 0.5 : 2))
-                    for fold in folds {
-                        if fold == "toggle" {
-                            services.preferences.collapseUnchanged.toggle()
-                        } else {
-                            clickSeparator(fold, in: window)
-                        }
-                        try? await Task.sleep(for: .seconds(0.2))
-                    }
-                }
-                if !scrollXs.isEmpty {
-                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty ? 0.5 : 2))
-                    await scrollHorizontally(to: scrollXs, in: window)
-                }
-                if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
-                    try? await Task.sleep(for: .seconds(nextCount > 0 || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
-                    snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
-                }
+                await finishSequence(
+                    env: env, afterNext: nextCount > 0, windowState: windowState, window: window,
+                    services: services)
             }
         #endif
     }
@@ -496,6 +482,61 @@ enum DebugLaunchOptions {
         if let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: URL(fileURLWithPath: path))
         }
+    }
+}
+
+extension DebugLaunchOptions {
+    /// The steps after the selection and Next Change presses: find, folds, horizontal
+    /// scrolls, then the snapshot. A failed find exits first, so no snapshot is written.
+    @MainActor
+    fileprivate static func finishSequence(
+        env: [String: String], afterNext: Bool, windowState: WindowState, window: NSWindow,
+        services: AppServices
+    ) async {
+        let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
+        let scrollXs = (env["DIFFVIEWER_SCROLL_X"] ?? "").split(separator: ",").compactMap { Double($0) }
+        if let query = env["DIFFVIEWER_FIND"], !query.isEmpty {
+            if let failure = await openFind(query, in: windowState) {
+                fputs("### DIFFVIEWER_FIND FAILED: \(failure)\n", stderr)
+                exit(1)
+            }
+        }
+        if !folds.isEmpty {
+            try? await Task.sleep(for: .seconds(afterNext ? 0.5 : 2))
+            for fold in folds {
+                if fold == "toggle" {
+                    services.preferences.collapseUnchanged.toggle()
+                } else {
+                    clickSeparator(fold, in: window)
+                }
+                try? await Task.sleep(for: .seconds(0.2))
+            }
+        }
+        if !scrollXs.isEmpty {
+            try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty ? 0.5 : 2))
+            await scrollHorizontally(to: scrollXs, in: window)
+        }
+        if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
+            try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
+            snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
+        }
+    }
+
+    /// Opens the find bar on `query` and waits for its search to finish (no match counts),
+    /// then 100 ms for the panes to draw it. Returns nil, or why it could not.
+    @MainActor
+    private static func openFind(_ query: String, in windowState: WindowState) async -> String? {
+        guard await eventually(attempts: 100, { windowState.isFindAvailable }) else {
+            return "nothing searchable on screen"
+        }
+        windowState.showFindBar()
+        windowState.find.query = query
+        let finished = await eventually(attempts: 100) {
+            windowState.find.isCurrent && windowState.find.results?.key.query == query
+        }
+        guard finished else { return "search for \(query) did not finish" }
+        try? await Task.sleep(for: .milliseconds(100))
+        return nil
     }
 }
 
