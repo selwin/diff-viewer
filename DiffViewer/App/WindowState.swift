@@ -20,6 +20,7 @@ final class WindowState {
     let id = WindowID()
     let preferences: Preferences
     let diffLoader: DiffLoader
+    let find = FindState()
 
     private(set) var session: RepoSession?
     private(set) var files: [ChangedFile] = []
@@ -64,6 +65,7 @@ final class WindowState {
         guard detailIdentity != keyBefore else { return false }
         currentChangeIndex = nil
         scrollTarget = nil
+        find.contentUnavailable()
         return true
     }
 
@@ -219,6 +221,10 @@ final class WindowState {
         self.now = now
         self.watchRepository = watchRepository
         diffLoader = DiffLoader(cache: cache, resultCache: resultCache)
+        diffLoader.onPresentationChange = { [weak self] in
+            guard let self, !isFindAvailable else { return }
+            find.contentUnavailable()
+        }
     }
 
     /// The window and tab title. The repository name, extended with parent folders by
@@ -277,6 +283,7 @@ final class WindowState {
             stopWatcher(session: session)
         }
         diffLoader.cancelActiveWork()
+        find.contentUnavailable()
         isLoading = false
     }
 

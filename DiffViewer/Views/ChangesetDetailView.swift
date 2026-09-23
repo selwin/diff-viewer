@@ -19,6 +19,10 @@ struct ChangesetDetailView: View {
                 header(loader: loader)
                 Divider()
             }
+            if windowState.find.isPresented, windowState.isFindAvailable {
+                FindBarView(find: windowState.find)
+                Divider()
+            }
             content(loader: loader)
         }
     }
@@ -72,7 +76,14 @@ struct ChangesetDetailView: View {
                 currentBlock: windowState.currentChangeIndex,
                 collapseUnchanged: preferences.collapseUnchanged,
                 foldOptions: preferences.foldOptions,
-                onTopVisibleSectionChange: { topVisibleSection = $0 }
+                onTopVisibleSectionChange: { topVisibleSection = $0 },
+                findPresentation: windowState.find.presentation,
+                findReveal: windowState.find.activeReveal,
+                paneFocusRequest: windowState.find.paneFocusRequest,
+                onDisplayedDocumentChange: { windowState.reportDisplayed($0) },
+                onPaneInteraction: { windowState.find.notePaneInteraction($0) },
+                onVisibleRowsChange: { windowState.find.noteVisibleRows($0, contentID: $1) },
+                onPaneFocusApplied: { windowState.find.acknowledgePaneFocus(id: $0) }
             )
         } else if loader.isLoading {
             // Nothing published yet. The panes appear with the first section rather than

@@ -30,6 +30,11 @@ final class DiffPaneView: NSView {
         didSet { lineCache.removeAll(); needsDisplay = true }
     }
 
+    /// Find hits per document row, in raw UTF-16 offsets on this pane's side.
+    var findMatches: [Int: [Range<Int>]] = [:] {
+        didSet { needsDisplay = true }
+    }
+
     /// Folded projection of `model.rows`. Only the row count changes; caches are
     /// keyed by line index and stay valid.
     var displayRows: [DisplayRow] = [] {
@@ -41,8 +46,9 @@ final class DiffPaneView: NSView {
         didSet { if selection != oldValue { needsDisplay = true } }
     }
 
-    /// Called when a selection starts here, so the other pane can drop its own.
-    var onSelectionStart: (() -> Void)?
+    /// Called when a text selection starts or Select All is invoked here, so the other pane
+    /// can drop its selection. Programmatic selection changes do not call it.
+    var onInteraction: (() -> Void)?
 
     var foldOptions = FoldOptions()
 
@@ -76,11 +82,13 @@ final class DiffPaneView: NSView {
         switch mode {
         case .replace:
             selection = nil
+            findMatches = [:]
             lineCache.removeAll()
             numberCache.removeAll()
             headerCache.removeAll()
             recomputeMetrics()
         case .append:
+            // Rows are append-only, so the find fills stay valid until the next search lands.
             extendMetrics(from: previousLineCount)
         }
         needsDisplay = true
@@ -241,6 +249,7 @@ final class DiffPaneView: NSView {
                 to: NSRect(
                     x: rowRect.minX + gutterWidth, y: rowRect.minY, width: rowRect.width, height: rowRect.height))
             drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
+            drawFindMatches(ofRow: index, cached: cached, in: rowRect, context: context)
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
             drawLine(
                 cached.line, at: CGPoint(x: gutterWidth + textInset, y: rowRect.minY + 2 + ascent), context: context)
@@ -314,16 +323,24 @@ final class DiffPaneView: NSView {
         return gutterRect
     }
 
+    /// The x span of a raw UTF-16 range in a shaped line, relative to the text origin, left
+    /// edge first. Right-to-left text puts the logical start on the right. A range that mixes
+    /// directions still gets one span, between its two ends.
+    func horizontalBounds(_ range: Range<Int>, in cached: CachedLine) -> (x0: CGFloat, x1: CGFloat) {
+        let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
+        let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
+        let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
+        let x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
+        return (min(x0, x1), max(x0, x1))
+    }
+
     private func drawHighlights(
         _ highlights: [Range<Int>], cached: CachedLine, in rowRect: NSRect, tokenColor: NSColor, context: CGContext
     ) {
         guard !highlights.isEmpty else { return }
         tokenColor.setFill()
         for range in highlights {
-            let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
-            let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
-            let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
-            let x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
+            let (x0, x1) = horizontalBounds(range, in: cached)
             guard x1 > x0 else { continue }
             context.fill(
                 NSRect(
@@ -334,11 +351,10 @@ final class DiffPaneView: NSView {
     /// The selected span of one row, drawn over the token highlights and under the text.
     /// A row whose newline is selected extends one character past the end of the line.
     private func drawSelection(ofRow row: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext) {
-        guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength) else { return }
-        let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
-        let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
-        let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
-        var x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
+        guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength),
+            selectedFindMatch(inRow: row) == nil
+        else { return }
+        var (x0, x1) = horizontalBounds(range, in: cached)
         if selection.includesLineEnd(ofRow: row) { x1 += charWidth }
         guard x1 > x0 else { return }
         NSColor.selectedTextBackgroundColor.setFill()

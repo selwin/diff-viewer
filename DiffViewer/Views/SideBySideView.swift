@@ -1,36 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// What the panes show. `.file` folds with user state and the collapse-unchanged
-/// preference; `.changeset` is a fixed projection from `ChangesetProjection`:
-/// no fold state, no fold actions, no collapse toggle.
-enum PaneContent {
-    case file(DiffDocument)
-    case changeset(ChangesetDocument)
-
-    var document: DiffDocument {
-        switch self {
-        case let .file(document): document
-        case let .changeset(changeset): changeset.document
-        }
-    }
-
-    /// Nil for a file, which is why a file always installs as a replace.
-    var identity: ChangesetIdentity? {
-        switch self {
-        case .file: nil
-        case let .changeset(changeset): changeset.identity
-        }
-    }
-
-    var changesetDocument: ChangesetDocument? {
-        switch self {
-        case .file: nil
-        case let .changeset(changeset): changeset
-        }
-    }
-}
-
 /// Two diff panes with a shared vertical scroll position and independent
 /// horizontal scrolling. Owns the per-file folding state; the panes and the
 /// overview strip always see the same projection.
@@ -56,6 +26,29 @@ final class SideBySideContainerView: NSView {
     /// Coalesces top-visible-section reports; delivery is always deferred to the next
     /// main-loop turn because this view is also driven from `updateNSView`.
     private let visibleSectionPublisher = VisibleSectionPublisher()
+
+    /// Fresh whenever `folded` changes for new content or a refold, so a find result can
+    /// tell whether it was computed against the rows on screen.
+    private(set) var projectionID = UUID()
+    /// The results whose fills the panes hold; nil after a clear or a fresh install.
+    var appliedResultsID: UUID?
+    private var isDisplayedDocumentReportPending = false
+    /// Kept until a window can make the pane first responder.
+    var pendingFocus: PaneFocusRequest?
+
+    /// What find results are keyed by: the changeset's load, or the file document.
+    var installedContentID: UUID? { changeset?.loadID ?? document?.id }
+
+    /// Called with the rows the panes show after each projection change, at most once per
+    /// main-loop turn and never with nothing installed.
+    var onDisplayedDocumentChange: ((DisplayedDocument) -> Void)?
+    /// Called when the reader clicks or selects all in a pane.
+    var onPaneInteraction: ((DocumentSide) -> Void)?
+    /// Called with the visible document rows and the installed content id on every
+    /// viewport update.
+    var onVisibleRowsChange: ((Range<Int>, UUID) -> Void)?
+    /// Called on the next main-loop turn with the id of a focus request once it succeeds.
+    var onPaneFocusApplied: ((UUID) -> Void)?
 
     /// Called with the changeset section whose rows are at the top of the viewport, nil
     /// for a file or an empty changeset. At most once per main-loop turn.
@@ -93,8 +86,14 @@ final class SideBySideContainerView: NSView {
             pane.onFoldAction = { [weak self] action in self?.handle(action) }
             addSubview(scroll)
         }
-        leftPane.onSelectionStart = { [weak self] in self?.rightPane.selection = nil }
-        rightPane.onSelectionStart = { [weak self] in self?.leftPane.selection = nil }
+        leftPane.onInteraction = { [weak self] in
+            self?.rightPane.selection = nil
+            self?.onPaneInteraction?(.old)
+        }
+        rightPane.onInteraction = { [weak self] in
+            self?.leftPane.selection = nil
+            self?.onPaneInteraction?(.new)
+        }
         divider.wantsLayer = true
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
         addSubview(divider)
@@ -135,6 +134,11 @@ final class SideBySideContainerView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyPendingFocus()
     }
 
     // MARK: - Inputs
@@ -179,6 +183,8 @@ final class SideBySideContainerView: NSView {
             pane.onFoldAction = isChangeset ? nil : { [weak self] action in self?.handle(action) }
         }
         installModels(mode: .replace)
+        // The panes dropped their fills; the same results must be able to apply again.
+        appliedResultsID = nil
         // Styles are applied separately by `setStyles`; the panes must not keep the
         // previous document's colours until then.
         leftPane.styles = nil
@@ -210,6 +216,7 @@ final class SideBySideContainerView: NSView {
         overview.rows = incoming.document.rows
         overview.changeBlocks = incoming.document.changeBlocks
         folded = incoming.folded
+        projectionChanged()
         leftPane.displayRows = folded.displayRows
         rightPane.displayRows = folded.displayRows
         needsLayout = true
@@ -306,10 +313,29 @@ final class SideBySideContainerView: NSView {
         } else {
             folded = .identity(documentRowCount: document?.rows.count ?? 0)
         }
+        projectionChanged()
         leftPane.displayRows = folded.displayRows
         rightPane.displayRows = folded.displayRows
         applyCurrentBlock()
         restoreScroll(anchor)
+    }
+
+    /// Called wherever `folded` is reassigned. Runs inside `updateNSView`, so the report is
+    /// deferred, and built at delivery so a coalesced pair reports the later projection.
+    private func projectionChanged() {
+        projectionID = UUID()
+        guard !isDisplayedDocumentReportPending else { return }
+        isDisplayedDocumentReportPending = true
+        DispatchQueue.main.async { [weak self] in self?.deliverDisplayedDocument() }
+    }
+
+    private func deliverDisplayedDocument() {
+        isDisplayedDocumentReportPending = false
+        guard let document, let contentID = installedContentID else { return }
+        onDisplayedDocumentChange?(
+            DisplayedDocument(
+                document: document, displayRows: folded.displayRows, contentID: contentID,
+                projectionID: projectionID))
     }
 
     private func applyCurrentBlock() {
@@ -375,7 +401,9 @@ final class SideBySideContainerView: NSView {
     }
 
     private func updateOverviewViewport() {
-        overview.visibleRows = folded.documentRange(forDisplayRange: visibleDisplayRange)
+        let rows = folded.documentRange(forDisplayRange: visibleDisplayRange)
+        overview.visibleRows = rows
+        if let contentID = installedContentID { onVisibleRowsChange?(rows, contentID) }
         updateTopVisibleSection()
     }
 
@@ -409,6 +437,11 @@ final class SideBySideContainerView: NSView {
         rightScroll.contentView.scroll(to: NSPoint(x: rightScroll.contentView.bounds.origin.x, y: y))
         rightScroll.reflectScrolledClipView(rightScroll.contentView)
     }
+
+    // MARK: - Sides
+
+    func pane(for side: DocumentSide) -> DiffPaneView { side == .old ? leftPane : rightPane }
+    func scrollView(for side: DocumentSide) -> NSScrollView { side == .old ? leftScroll : rightScroll }
 
     var visibleDisplayRange: Range<Int> {
         let clip = rightScroll.contentView.bounds
@@ -460,24 +493,32 @@ struct SideBySideView: NSViewRepresentable {
     /// Kept in the hierarchy but out of sight, so a caller can layer another view over it.
     var isHidden = false
     var onTopVisibleSectionChange: ((VisibleSectionReference?) -> Void)?
+    var findPresentation: FindPresentation?
+    var findReveal: FindReveal?
+    var paneFocusRequest: PaneFocusRequest?
+    var onDisplayedDocumentChange: ((DisplayedDocument) -> Void)?
+    var onPaneInteraction: ((DocumentSide) -> Void)?
+    var onVisibleRowsChange: ((Range<Int>, UUID) -> Void)?
+    var onPaneFocusApplied: ((UUID) -> Void)?
 
     func makeNSView(context: Context) -> SideBySideContainerView {
         let view = SideBySideContainerView(frame: .zero)
         // Before the content goes in, so the first install's report is not lost.
-        view.onTopVisibleSectionChange = onTopVisibleSectionChange
+        setCallbacks(on: view)
         view.foldOptions = foldOptions
         view.setCollapseUnchanged(collapseUnchanged)
         view.setContent(content, fontSize: fontSize)
         context.coordinator.documentID = content.document.id
         view.setHidden(isHidden)
         view.setStyles(styles)
+        applyFindInputs(to: view, coordinator: context.coordinator)
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)
         view.currentBlock = currentBlock
         return view
     }
 
     func updateNSView(_ view: SideBySideContainerView, context: Context) {
-        view.onTopVisibleSectionChange = onTopVisibleSectionChange
+        setCallbacks(on: view)
         // Every changeset revision carries a fresh document id, so each publication
         // reaches the container, which decides whether it appends or replaces.
         if context.coordinator.documentID != content.document.id {
@@ -489,8 +530,38 @@ struct SideBySideView: NSViewRepresentable {
         view.setCollapseUnchanged(collapseUnchanged)
         view.setHidden(isHidden)
         view.setStyles(styles)
+        applyFindInputs(to: view, coordinator: context.coordinator)
         if view.currentBlock != currentBlock { view.currentBlock = currentBlock }
         applyScrollTargetIfNeeded(to: view, coordinator: context.coordinator)
+    }
+
+    private func setCallbacks(on view: SideBySideContainerView) {
+        view.onTopVisibleSectionChange = onTopVisibleSectionChange
+        view.onDisplayedDocumentChange = onDisplayedDocumentChange
+        view.onPaneInteraction = onPaneInteraction
+        view.onVisibleRowsChange = onVisibleRowsChange
+        view.onPaneFocusApplied = onPaneFocusApplied
+    }
+
+    /// Shared by both paths so they cannot drift. Runs after the content is installed;
+    /// the presentation goes first so a reveal lands on the projection it selects in.
+    private func applyFindInputs(to view: SideBySideContainerView, coordinator: Coordinator) {
+        if coordinator.lastFindPresentation != findPresentation {
+            coordinator.lastFindPresentation = findPresentation
+            view.setFindPresentation(findPresentation)
+        }
+        if let findReveal, coordinator.findRevealID != findReveal.id {
+            coordinator.findRevealID = findReveal.id
+            view.reveal(findReveal)
+        }
+        // After `setHidden`, so a request cancelled in this update never lands; an unchanged
+        // one is retried, since a pane that was hidden could not take focus earlier.
+        if coordinator.lastPaneFocusRequest != paneFocusRequest {
+            coordinator.lastPaneFocusRequest = paneFocusRequest
+            view.setPaneFocusRequest(paneFocusRequest)
+        } else {
+            view.applyPendingFocus()
+        }
     }
 
     private func applyScrollTargetIfNeeded(to view: SideBySideContainerView, coordinator: Coordinator) {
@@ -504,5 +575,8 @@ struct SideBySideView: NSViewRepresentable {
     final class Coordinator {
         var documentID: UUID?
         var scrollTargetID: UUID?
+        var lastFindPresentation: FindPresentation?
+        var findRevealID: UUID?
+        var lastPaneFocusRequest: PaneFocusRequest?
     }
 }

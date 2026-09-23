@@ -93,7 +93,7 @@ extension DiffPaneView {
         }
         guard let position = textPosition(at: point) else { return super.mouseDown(with: event) }
         window?.makeFirstResponder(self)
-        onSelectionStart?()
+        onInteraction?()
         if event.clickCount >= 3 {
             selection = PaneSelection(
                 anchor: TextPosition(row: position.row, offset: 0),
@@ -138,7 +138,7 @@ extension DiffPaneView {
 
     override func selectAll(_ sender: Any?) {
         guard let model else { return }
-        onSelectionStart?()
+        onInteraction?()
         selection = model.fullSelection
     }
 }

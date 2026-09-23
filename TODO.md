@@ -22,7 +22,7 @@ Where DiffViewer stands versus the bar:
 | Stage / unstage / discard from file list | no (viewer) | yes | no | **yes** (whole file) |
 | All files in one scroll | no (per file) | yes (default view) | no | **yes** (All changes) |
 | Collapse unchanged / context expansion | yes | yes (default) | no | **yes** (fixed context in All changes) |
-| Find in diff | yes | no | no | **no** |
+| Find in diff | yes | no | no | **yes** |
 | Jump to line | yes | no | no | **no** |
 | Wrap long lines | yes | yes | no | **no** |
 | Browse a previous commit's diffs | yes (changesets) | yes (graph) | yes (tabs) | **yes** (picker) |
@@ -52,54 +52,6 @@ The branch picker landed on 2026-09-18. Still open from the original request:
   they stay cheap.
 
 **Tests.** The in-progress state suffix from a set of existing marker files.
-
----
-
-### E. Find in the diff (requested 2026-09-22)
-
-**Goal.** ⌘F opens a find bar; typing highlights every match in both panes and the
-overview strip, ⌘G / ⌘⇧G step through them, and the bar reads "3 of 41". It works the
-same in a single file and in All changes, so a reader can find a symbol across every
-changed file without leaving the scroll. Kaleidoscope has this; Sublime Merge and
-JuxtaCode do not.
-
-**Design.**
-- Model: a `FindQuery` (text, case-sensitive flag, side: old / new / both, changed
-  lines only) and a `FindMatch` (row index, side, UTF-16 range in that line). A `Finder`
-  in `Diff/` walks `DiffDocument.rows` rather than the raw line arrays, so a match is
-  born knowing its row; an equal row can match on both sides and reports each once.
-  Plain substring search with `String.range(of:options:)`; no regex in the first cut.
-- Changed lines only: rows whose `DiffRow.Kind` is not `.equal`. Off by default. The
-  three options persist in `Preferences`.
-- Where it runs: on a background task owned by `WindowState`, debounced as the user
-  types and cancelled by the next keystroke. A 20k-line file is a few milliseconds of
-  substring search, but All changes can be ten times that, and the main thread never
-  waits on it. In All changes the query is re-run over the rows the
-  `ChangesetAssembler` appends, and the current match index is clamped rather than
-  reset, so the counter does not jump while files are still arriving.
-- Drawing: `DiffPaneView` gains a `matches` property next to `styles`, keyed by document
-  row, applied without re-layout the way `DocumentStyles` is. Matches are filled behind
-  the text in a translucent find colour; the current match uses the accent colour. The
-  current match also becomes the pane's `PaneSelection`, so ⌘C copies it and the eye
-  lands on it. `ChangeOverviewView` gets a `matchRows` list and draws a thin tick per
-  row, a different shape from the change marks so the two read apart.
-- Navigation: ⌘G / ⌘⇧G and the bar's ‹ › buttons step with the `ChangeNavigator` index
-  math, wrapping at the ends, and scroll through a `ScrollTarget`. Return in the field
-  is next, ⇧Return previous. A match inside a folded `DisplayRow.separator` is revealed
-  first, reusing the expand path, so no match is unreachable in All changes.
-- Find bar: a thin strip under the file header (Safari-style: field, options menu in the
-  field, counter, ‹ ›, Done), not a sheet. Escape closes it and clears the highlights;
-  the query text survives so ⌘F reopens with it. ⌘E puts the pane selection into the
-  field. Menu items live in `RepositoryCommands` under Edit ▸ Find. ⌘G already generates
-  a message inside the commit sheet; the sheet is modal, so the two never compete.
-- Sidebar: files with at least one match could show a count badge later; not in the
-  first cut.
-
-**Tests.** Match enumeration across sides and rows, including a line that matches on
-both sides of an equal row and adjacent or overlapping occurrences; case folding; the
-changed-lines-only filter; next/previous wrapping; index stability when rows are
-appended mid-search; and mapping a match in a hidden range to the rows that must be
-revealed. The bar and highlights are verified by screenshots.
 
 ---
 
@@ -137,6 +89,44 @@ any other branch.
 
 ---
 
+### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
+
+**Goal.** Stage the files just read and commit them without touching the mouse. Commit…
+already has ⌘Return, and inside the sheet ⌘G generates a message and ⌘Return commits;
+staging is only reachable from the sidebar context menu.
+
+**Design.**
+- File menu items acting on the sidebar selection (one file or several): Stage ⌘S,
+  Unstage ⌘⇧S, Discard ⌘⌫, and Stage All / Unstage All ⌥⌘S / ⌥⌘⇧S. Each is disabled
+  when it doesn't apply, using the same rules as the context menu (`FileAction`), and
+  runs through `FileActionRunner` so Discard still confirms.
+- After staging or unstaging, keep the sidebar selection on the next file in the
+  section the file left, so repeated ⌘S walks down the Unstaged list. With All changes
+  selected, ⌘S stages the file whose section is at the top of the scroll.
+- The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
+- This absorbs the "File menu mirror for the sidebar actions" item from the Next list.
+
+**Tests.** Which file becomes selected after staging or unstaging (middle, last, and
+only file in a section); which file ⌘S targets in All changes from a scroll position.
+
+---
+
+### H. Find button in the toolbar (requested 2026-09-23)
+
+**Goal.** Find is reachable today only through ⌘F and Edit ▸ Find, so readers who don't
+know the shortcut never see it. Add a visible way in.
+
+**Design.**
+- A `magnifyingglass` button in the toolbar next to the other diff controls, with the
+  tooltip "Find (⌘F)". It opens the bar or refocuses the field (`showFindBar()`), and
+  shows as on while the bar is open.
+- Disabled when `isFindAvailable` is false (binary, identical or failed selections),
+  like Find… in the menu.
+
+**Tests.** None; UI, checked by screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -144,17 +134,13 @@ Roughly in priority order.
 - **Change counter strip.** "Change 3 of 41" left the file header when it took the
   name-first layout (2026-09-19). Bring it back in its own thin strip below the header,
   together with previous/next controls, in both single-file and All changes mode.
-- **Find in diff (⌘F).** Requested on 2026-09-22 and written up as item E under
-  "Requested" above.
 - **Jump to line (⌘L).** Pick old or new line number; scroll and flash the row.
 - **Pane context menu and selection conventions.** Selection and ⌘C / ⌘A have landed.
   Remaining: the context menu (Copy, Copy Path, Copy Line Number, Reveal in Finder, Open
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
-- **File menu mirror for the sidebar actions.** Stage / Unstage / Discard / Delete on
-  the File menu with ⌘S / ⌘⇧S / ⌘⌫, acting on the sidebar selection, so the actions are
-  discoverable and reachable from the keyboard. With it: Stage All / Unstage All on the
-  section headers; one-step discard of a staged change (`git restore --staged
+- **Sidebar action follow-ups.** The File menu shortcuts are item G under "Requested".
+  Still open: Stage All / Unstage All buttons on the section headers; one-step discard of a staged change (`git restore --staged
   --worktree`); a split menu for a mixed selection ("Stage 2 Files" + "Unstage 1 File")
   if the intersection rule proves too strict; and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
@@ -174,7 +160,7 @@ Roughly in priority order.
   matching subject, hash prefix and body (needs `%b` in the log format), highlighted
   subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
   the filter empties the list, and eventually searching beyond the loaded pages. Its
-  shortcut must not fight the diff's ⌘F (item E): the picker is a popover, so ⌘F while
+  shortcut must not fight the diff's ⌘F: the picker is a popover, so ⌘F while
   it is open goes to the picker.
 - **Commit picker paging and refresh.** Load More re-reads from page 1 with a larger
   limit, so reaching 2,000 commits in pages of 50 reads about 41,000 records in total;

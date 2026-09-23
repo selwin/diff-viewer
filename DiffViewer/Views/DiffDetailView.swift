@@ -14,10 +14,18 @@ struct DiffDetailView: View {
         VStack(spacing: 0) {
             header(loader: loader)
             Divider()
+            if windowState.find.isPresented, windowState.isFindAvailable {
+                FindBarView(find: windowState.find)
+                Divider()
+            }
             content(loader: loader)
         }
         // The parent keys this view by file id, so the override resets with the selection.
         .onChange(of: windowState.scrollTarget?.id) { _, newValue in
+            if newValue != nil, showsPreview(loader: loader) { sourceRevealedByNavigation = true }
+        }
+        // A find reveal lands in the source, so it drops the preview the same way.
+        .onChange(of: windowState.find.activeReveal?.id) { _, newValue in
             if newValue != nil, showsPreview(loader: loader) { sourceRevealedByNavigation = true }
         }
     }
@@ -66,7 +74,14 @@ struct DiffDetailView: View {
                         currentBlock: windowState.currentChangeIndex,
                         collapseUnchanged: preferences.collapseUnchanged,
                         foldOptions: preferences.foldOptions,
-                        isHidden: previewing
+                        isHidden: previewing,
+                        findPresentation: windowState.find.presentation,
+                        findReveal: windowState.find.activeReveal,
+                        paneFocusRequest: windowState.find.paneFocusRequest,
+                        onDisplayedDocumentChange: { windowState.reportDisplayed($0) },
+                        onPaneInteraction: { windowState.find.notePaneInteraction($0) },
+                        onVisibleRowsChange: { windowState.find.noteVisibleRows($0, contentID: $1) },
+                        onPaneFocusApplied: { windowState.find.acknowledgePaneFocus(id: $0) }
                     )
                     if previewing, let preview = loader.imagePreview {
                         ImagePreviewView(preview: preview)

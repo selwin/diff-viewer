@@ -1,5 +1,8 @@
 import Foundation
 
+/// Which line array a row's cell indexes.
+enum DocumentSide: Sendable, Equatable { case old, new }
+
 /// One side (old or new) of an aligned diff row.
 struct DiffSide: Sendable, Equatable {
     /// 0-based index into the side's line array.
