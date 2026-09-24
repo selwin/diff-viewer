@@ -204,8 +204,9 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// A row's Pull and Push, or Publish, or nil past the end. Uses the same fetch checks
-    /// as `WindowState`'s admission, so an enabled button is always admitted.
+    /// A row's Pull and Push, or Publish, or nil past the end. Uses the same immediate
+    /// fetch checks as `WindowState`'s admission: Pull is admitted exactly as shown, while
+    /// Push may still wait for its remote's fetch and be re-checked afterwards.
     func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
         guard rows.indices.contains(row) else { return nil }
         return Self.syncButtons(for: rows[row], snapshot: snapshot)
