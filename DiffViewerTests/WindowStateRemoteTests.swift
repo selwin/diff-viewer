@@ -717,6 +717,70 @@ struct WindowStateSyncTests {
         await repo.client.releaseFetch()
     }
 
+    /// A fetch can only take a push away, so the push is admitted and waits for it.
+    @Test func aPushWaitsForItsRemotesFetch() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0))
+        await repo.client.holdFetch(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+
+        let pushing = Task { await state.push(branch: "main") }
+        #expect(await eventually { await state.activeSync == ActiveSync(branch: "main", operation: .push) })
+        #expect(await repo.client.pushCalls.isEmpty, "the fetch is still running")
+
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+        await pushing.value
+        #expect(await repo.client.pushCalls.map(\.remote) == ["origin"])
+        #expect(state.activeSync == nil)
+    }
+
+    /// The fetch showed the remote moved on, so a fast-forward push would be refused.
+    @Test func aPushSkipsWhenItsRemotesFetchDivergesTheBranch() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0))
+        await repo.client.holdFetch(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+
+        let pushing = Task { await state.push(branch: "main") }
+        #expect(await eventually { await state.activeSync == ActiveSync(branch: "main", operation: .push) })
+        await repo.client.set(localBranches: main(ahead: 1, behind: 2))
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+        await pushing.value
+        #expect(await repo.client.pushCalls.isEmpty)
+        #expect(state.errorMessage == nil, "the row says Pull first")
+        #expect(state.activeSync == nil)
+    }
+
+    /// Discovery that ends while a push runs leaves the remote-tracking refs to the push.
+    @Test func discoveryStartsNoFetchWhileAPushRuns() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0))
+        await repo.client.holdRemoteNames(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
+
+        await repo.client.holdPush(true)
+        let pushing = Task { await state.push(branch: "main") }
+        #expect(await eventually { await repo.client.heldPushCount == 1 })
+        await repo.client.holdRemoteNames(false)
+        await repo.client.releaseRemoteNames()
+        #expect(await eventually { await state.fetchStatus == .idle }, "released as it was before the opening")
+        #expect(await repo.client.fetchCalls.isEmpty)
+
+        await repo.client.holdPush(false)
+        await repo.client.releasePush()
+        await pushing.value
+        #expect(await repo.client.pushCalls.map(\.remote) == ["origin"])
+        #expect(await repo.client.fetchCalls.isEmpty)
+    }
+
     @Test func aPullIsRefusedWhileABranchSwitchRuns() async {
         let h = Harness()
         let state = h.makeState()

@@ -142,7 +142,8 @@ enum SyncPolicy {
     }
 
     /// Whether a fetch may still move `target`'s counts: remote discovery (it may pick
-    /// that remote) or a fetch of its remote. Other remotes' fetches don't count.
+    /// that remote) or a fetch of its remote. Other remotes' fetches don't count. Only
+    /// a pull is refused during one; a push waits it out instead.
     static func isFetching(target: SyncTarget?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
         if fetchStatus == .fetching(remote: nil) { return true }
         guard let target else { return false }
@@ -154,7 +155,9 @@ enum SyncPolicy {
     /// button the reader clicked keeps its spinner even while the refresh behind it moves
     /// the counts or takes the target away. The other button keeps the visibility the
     /// counts give it: a hidden Pull does not surface, greyed, just because a push runs.
-    /// A branch that tracks nothing gets Publish in Push's place.
+    /// A branch that tracks nothing gets Publish in Push's place. Pull waits out a fetch
+    /// that may move its counts. Push doesn't: a fetch can only take it away, and a push
+    /// waits for the fetch after the click and re-checks before it runs.
     static func rowButtons(
         branch: LocalBranch, isCurrent: Bool, readStatus: BranchReadStatus, active: ActiveSync?,
         isSwitching: Bool, isDiscovering: Bool, fetchingRemotes: Set<String>, remotes: [String],
@@ -191,13 +194,14 @@ enum SyncPolicy {
                 fetchingRemotes: fetchingRemotes)
         }
         guard let target else { return .hidden }
-        let waiting = busy ?? (isDiscovering || fetchingRemotes.contains(target.destination.remote) ? "Fetching…" : nil)
+        let fetchMayMoveCounts = isDiscovering || fetchingRemotes.contains(target.destination.remote)
+        let pullWaiting = busy ?? (fetchMayMoveCounts ? "Fetching…" : nil)
         let diverged = showsPull && showsPush
         let pull: PickerButtonState
         if !showsPull {
             pull = .hidden
-        } else if let waiting {
-            pull = .disabled(reason: waiting)
+        } else if let pullWaiting {
+            pull = .disabled(reason: pullWaiting)
         } else {
             // A branch that isn't checked out can only fast-forward.
             pull = diverged && !isCurrent ? .disabled(reason: "Has local commits; switch to it to pull") : .enabled
@@ -205,8 +209,8 @@ enum SyncPolicy {
         let push: PickerButtonState
         if !showsPush {
             push = .hidden
-        } else if let waiting {
-            push = .disabled(reason: waiting)
+        } else if let busy {
+            push = .disabled(reason: busy)
         } else {
             // Diverged: a fast-forward push would be refused, and the pull comes first.
             push = diverged ? .disabled(reason: "Pull first") : .enabled
