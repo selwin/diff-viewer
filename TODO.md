@@ -114,6 +114,27 @@ screenshot.
 
 ---
 
+### J. Delete branches whose upstream is gone (requested 2026-09-24)
+
+**Goal.** Once a PR merges and its remote branch is deleted, the local branch stays in
+the branch picker as "upstream gone" forever; git never removes it. Let the reader clear
+it from the picker instead of dropping to a terminal.
+
+**Design.**
+- A trash button in the row's accessory slot, in place of the sync buttons, only on
+  rows whose upstream is gone and never on the checked-out branch.
+- It confirms first ("Delete branch image-preview?"), then runs `git branch -D`. `-D`
+  rather than `-d` because PRs are squash-merged, so git doesn't see these branches as
+  merged into main.
+- Maybe later: a "Delete N gone branches" action in the picker footer.
+- Deleting a branch is not in the list of allowed actions under "Whole files, never
+  contents" in CLAUDE.md; extend that principle when this lands.
+
+**Tests.** Which rows offer delete: an upstream-gone branch does; the current branch,
+branches with no upstream, and branches whose upstream still exists don't.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.

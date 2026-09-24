@@ -319,16 +319,20 @@ struct BranchPickerStateTests {
         #expect(picker.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .enabled))
         #expect(picker.syncButtons(forTableRow: 2) == .hidden, "no upstream")
         #expect(picker.syncButtons(forTableRow: 3) == nil)
-        // A fetch of a row's remote holds the counts its buttons would move; another
-        // remote's fetch does not.
-        let fetching = state(snapshot(branches: [behind, ahead], fetchingRemotes: ["fork"]))
-        #expect(fetching.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .enabled, push: .hidden))
+        // A fetch of a row's remote holds a Pull, not a Push; another remote's fetch holds
+        // neither.
+        let fetchingFork = state(snapshot(branches: [behind, ahead], fetchingRemotes: ["fork"]))
+        #expect(fetchingFork.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .enabled, push: .hidden))
+        #expect(fetchingFork.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .enabled))
+        let fetchingOrigin = state(snapshot(branches: [behind, ahead], fetchingRemotes: ["origin"]))
         #expect(
-            fetching.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .disabled(reason: "Fetching…")))
+            fetchingOrigin.syncButtons(forTableRow: 0)
+                == RowSyncButtons(pull: .disabled(reason: "Fetching…"), push: .hidden))
         let discovering = state(snapshot(branches: [behind, ahead], fetchStatus: .fetching(remote: nil)))
         #expect(
             discovering.syncButtons(forTableRow: 0)
                 == RowSyncButtons(pull: .disabled(reason: "Fetching…"), push: .hidden))
+        #expect(discovering.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .enabled))
     }
 
     @Test func aSyncChangeReportsButtonsWithoutARowChange() {

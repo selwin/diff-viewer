@@ -115,16 +115,29 @@ struct SyncPolicyTests {
         #expect(buttons(tracked(ahead: 0, behind: 2), readStatus: .failed) == .hidden, "stale counts")
     }
 
-    @Test func aSwitchDiscoveryOrThisRowsFetchDisablesWhateverWouldShow() {
+    @Test func aSwitchDisablesWhateverWouldShow() {
         let diverged = tracked(ahead: 1, behind: 2)
         let switching = PickerButtonState.disabled(reason: "Switching branch…")
         #expect(buttons(diverged, isSwitching: true) == RowSyncButtons(pull: switching, push: switching))
+    }
+
+    /// A fetch may still move a pull's counts; it can only take a push away, and the push
+    /// waits for it after the click.
+    @Test func discoveryOrThisRowsFetchDisablesPullOnly() {
         let fetching = PickerButtonState.disabled(reason: "Fetching…")
-        #expect(buttons(diverged, isDiscovering: true) == RowSyncButtons(pull: fetching, push: fetching))
-        #expect(buttons(diverged, fetchingRemotes: ["origin"]) == RowSyncButtons(pull: fetching, push: fetching))
+        let diverged = tracked(ahead: 1, behind: 2)
+        let pullFirst = PickerButtonState.disabled(reason: "Pull first")
+        #expect(buttons(diverged, isDiscovering: true) == RowSyncButtons(pull: fetching, push: pullFirst))
+        #expect(buttons(diverged, fetchingRemotes: ["origin"]) == RowSyncButtons(pull: fetching, push: pullFirst))
+        let behind = tracked(ahead: 0, behind: 2)
+        #expect(buttons(behind, isDiscovering: true) == RowSyncButtons(pull: fetching, push: .hidden))
+        #expect(buttons(behind, fetchingRemotes: ["origin"]) == RowSyncButtons(pull: fetching, push: .hidden))
+        let ahead = tracked(ahead: 1, behind: 0)
+        #expect(buttons(ahead, isDiscovering: true) == RowSyncButtons(pull: .hidden, push: .enabled))
+        #expect(buttons(ahead, fetchingRemotes: ["origin"]) == RowSyncButtons(pull: .hidden, push: .enabled))
         #expect(
-            buttons(tracked(ahead: 0, behind: 2), fetchingRemotes: ["fork"])
-                == RowSyncButtons(pull: .enabled, push: .hidden), "another remote's fetch")
+            buttons(behind, fetchingRemotes: ["fork"]) == RowSyncButtons(pull: .enabled, push: .hidden),
+            "another remote's fetch")
         #expect(buttons(tracked(ahead: 0, behind: 0), isDiscovering: true) == .hidden, "nothing to disable")
     }
 
