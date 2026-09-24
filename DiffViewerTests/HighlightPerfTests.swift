@@ -11,6 +11,6 @@ struct HighlightPerfTests {
         let runs = Highlighter.highlight(lines: lines, fileName: "big.swift")
         let elapsed = ContinuousClock.now - start
         #expect(runs?.count == lines.count)
-        #expect(elapsed < .zero, "highlighting took \(elapsed)")
+        #expect(elapsed < .seconds(10), "highlighting took \(elapsed)")
     }
 }

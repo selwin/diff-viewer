@@ -19,8 +19,8 @@ Build a diff viewer with Apple Design Award–level craft: an app that feels lik
 could have shipped it, that is instant on a 20,000-line file, and that disappears so the
 code is all you see.
 
-The bar is set by Kaleidoscope, JuxtaCode, Sublime Merge and Github's pull request reviewing
-experience. We want to this to be speedy when reviewing large diffs.
+The bar is set by Kaleidoscope, JuxtaCode, Sublime Merge and GitHub's pull request reviewing
+experience. We want this to be speedy when reviewing large diffs.
 
 ## What it does today
 
