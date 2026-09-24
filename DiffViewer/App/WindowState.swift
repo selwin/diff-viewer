@@ -180,16 +180,16 @@ final class WindowState {
     /// How the picker's automatic fetch is going: it drives the header's spinner and the
     /// footer's news.
     private(set) var fetchStatus: FetchStatus = .idle
-    /// Every remote with a fetch in flight, the primary's included. A remote stays here
-    /// until the branch read after its fetch lands, so nothing acts on its old counts.
+    /// Every remote being fetched, the current branch's included. A remote stays here until
+    /// the branch re-read after its fetch lands, so nothing acts on its old counts.
     private(set) var fetchingRemotes: Set<String> = []
-    /// The repository's remotes, as of the picker's last successful remote discovery.
+    /// The repository's remotes, as last read when the picker opened.
     private(set) var remotes: [String] = []
-    /// Branch name to the remote its config tracks, as of the last opening that could read
-    /// it. Unlike `upstream`, it includes branches whose upstream git cannot map.
+    /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
+    /// branches whose upstream the fetch mapping doesn't cover.
     private(set) var configuredUpstreamRemotes: [String: String] = [:]
-    /// Why each secondary remote's fetch failed, for the footer. Reset per opening and
-    /// cleared when that remote's fetch succeeds.
+    /// Remote to git's message, for each remote other than the current branch's whose
+    /// fetch failed. Reset when the picker opens; a remote's entry clears when it succeeds.
     private(set) var secondaryFetchFailures: [String: String] = [:]
     /// The pull or push queued or running, or nil when neither is.
     private(set) var activeSyncOperation: SyncOperation?
@@ -1246,10 +1246,10 @@ extension WindowState {
         await withCheckedContinuation { session.branchReadWaiters.append($0) }
     }
 
-    /// Fetches the remote the header describes, reporting through `fetchStatus`.
-    /// `attempted` carries the remotes this opening has already tried, so the follow-up
-    /// cannot bounce between two remotes that keep pointing at each other. Returns the
-    /// remotes it covered, or nil when the opening stopped before the remotes were known.
+    /// Fetches the current branch's remote, reporting through `fetchStatus`. `attempted`
+    /// holds the remotes this opening already tried, so the follow-up cannot bounce between
+    /// two of them. Returns the remotes it covered, or nil when the opening stopped and the
+    /// other remotes should be skipped.
     private func fetchPrimaryRemote(attempted: Set<String>) async -> Set<String>? {
         // Re-checked here because the flag may already be false again by the time the
         // presentation's task runs.
@@ -1293,8 +1293,7 @@ extension WindowState {
             finish(.failed(remote: nil, message: error.localizedDescription))
             return nil
         }
-        // A failure keeps the last answer: it describes rows, and is no reason to skip
-        // the fetch.
+        // A failed read keeps the previous value; the fetch doesn't depend on it.
         let configured = try? await session.client.configuredUpstreamRemotes()
         guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
             finish(previous)
@@ -1336,8 +1335,8 @@ extension WindowState {
     }
 
     /// Fetches every other remote a listed branch tracks, all at once, so a slow remote
-    /// holds back only its own rows. Each fetch starts before the first suspension, so
-    /// the guards here cover them all; failures are footer news, as the primary's are.
+    /// holds back only its own rows. All of them start before the first suspension, so
+    /// the guard below applies to each.
     private func fetchSecondaryRemotes(excluding covered: Set<String>, session: RepoSession) async {
         guard session === self.session, !isClosed, isBranchPickerPresented, activeSyncOperation == nil else { return }
         let tracked = Set(branches.compactMap { $0.upstream?.remote })
@@ -1386,11 +1385,9 @@ extension WindowState {
         guard session === self.session, !isClosed else { return result }
         // Only a success starts a cooldown: a failure has to stay retryable.
         if case let .success(at) = result { session.lastSuccessfulFetchAtByRemote[remote] = at }
-        // Re-read either way, and while still marked, so nothing reads the fetch as
-        // settled on pre-fetch numbers: a fetch is not atomic and a failing one may have
-        // updated refs before it stopped. The counts have to come from a read that
-        // published, which is not always this one: a watcher tick can supersede it, and
-        // then its answer is the one to wait for.
+        // Re-read even after a failure, since a fetch can update refs before it fails. The
+        // remote stays marked until a read publishes (possibly a watcher's that superseded
+        // this one), so nothing acts on pre-fetch counts.
         await awaitBranchRead(session: session)
         guard session === self.session, !isClosed else { return result }
         fetchingRemotes.remove(remote)

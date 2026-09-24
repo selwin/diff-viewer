@@ -66,7 +66,7 @@ actor StubRepoClient: RepoClient {
     private var failsFetch = false
     private var holdsFetch = false
     private var heldFetch: [CheckedContinuation<Void, Never>] = []
-    /// Remotes whose `fetch` suspends or throws whatever the switches above say.
+    /// Per-remote holds and failures, on top of the switches above.
     private var heldFetchRemotes: Set<String> = []
     private var failingFetchRemotes: Set<String> = []
     private var failsRemoteNames = false

@@ -30,12 +30,13 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var fetchStatus: FetchStatus = .idle
     /// The pull or push in flight, or nil when neither is running.
     var activeSyncOperation: SyncOperation?
-    /// Every remote with a fetch in flight, the primary's included.
+    /// Every remote being fetched, the current branch's included.
     var fetchingRemotes: Set<String> = []
     var remotes: [String] = []
-    /// Branch name to the remote its config tracks.
+    /// Branch name to its configured upstream remote, including upstreams git can't map.
     var configuredUpstreamRemotes: [String: String] = [:]
-    /// Remote to git's message, for each secondary remote whose fetch failed.
+    /// Remote to git's message, for each remote other than the current branch's whose
+    /// fetch failed.
     var secondaryFetchFailures: [String: String] = [:]
 }
 
@@ -187,8 +188,7 @@ struct BranchPickerState {
     }
 
     /// Both buttons at once, so a view configures them from one reading of the snapshot.
-    /// Held back by the same fetches that `WindowState.sync` refuses under, so an enabled
-    /// button is one the window will admit.
+    /// Uses the same fetch check as `WindowState.sync`, so an enabled button always runs.
     var syncButtons: (pull: PickerButtonState, push: PickerButtonState) {
         let target = SyncPolicy.target(
             readStatus: snapshot.readStatus, headState: snapshot.headState, branches: snapshot.branches)

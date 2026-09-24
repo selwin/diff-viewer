@@ -1,8 +1,7 @@
 import Foundation
 
-/// The commands that talk to a remote: listing, fetch, pull, push, publish, and
-/// fast-forwarding a branch that is not checked out. Split from
-/// `GitClient.swift` to keep that file under the length lint.
+/// Remote commands: listing, fetch, pull, push, publish, fast-forward, and reading which
+/// remote each branch tracks. Split from `GitClient.swift` to keep it under the length lint.
 extension GitClient {
     /// Uses the hook environment and disables git's terminal credential prompts. Final:
     /// no override may turn prompting back on, since nobody is there to answer.
@@ -141,8 +140,8 @@ extension GitClient {
             throw ProcessError.failed(
                 command: "git fetch", status: 128, stderr: "'\(remote)' is not a remote name")
         }
-        // The first step force-writes `localRef`; anywhere else, such as a local upstream
-        // in `refs/heads/`, it could overwrite the reader's own branch.
+        // The first fetch force-writes `localRef`; outside `refs/remotes/` that could
+        // overwrite a local branch.
         guard localRef.hasPrefix("refs/remotes/") else {
             throw ProcessError.failed(
                 command: "git fetch", status: 128, stderr: "'\(localRef)' is not a remote-tracking ref")
@@ -209,10 +208,9 @@ extension GitClient {
         return Self.parseUpstreamRemotes(result.stdoutString)
     }
 
-    /// Parses `git config -z --get-regexp` records, `key\nvalue\0`, keeping branches with
-    /// both `.remote` and `.merge`: a remote alone tracks nothing. The name is what lies
-    /// between `branch.` and the variable, so a dotted branch name survives; git
-    /// lowercases only the section and variable, never the branch name.
+    /// Parses `key\nvalue\0` records, keeping branches with both `.remote` and `.merge`
+    /// (a remote alone tracks nothing). The branch name is everything between `branch.`
+    /// and the variable, so dots and case survive.
     static func parseUpstreamRemotes(_ output: String) -> [String: String] {
         var remotes: [String: String] = [:]
         var merging: Set<String> = []

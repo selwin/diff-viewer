@@ -480,9 +480,8 @@ struct WindowStateRemoteTests {
         localBranch("feature", upstream: upstream("fork/feature", remote: "fork")),
     ]
 
-    /// True once the primary has published `status` and no fetch is left in flight. The
-    /// other remotes start in the same turn as that status, so both reads are made
-    /// together: a remote started by mistake cannot slip between them.
+    /// True once `fetchStatus` is `status` and no remote is being fetched. Both are checked
+    /// in one read because the other remotes start in the same turn `status` is published.
     private func settled(_ state: WindowState, at status: FetchStatus) async -> Bool {
         await eventually { @MainActor in state.fetchStatus == status && state.fetchingRemotes.isEmpty }
     }
@@ -530,7 +529,7 @@ struct WindowStateRemoteTests {
         #expect(state.fetchingRemotes == ["fork"])
         state.isBranchPickerPresented = false
 
-        // origin's cooldown has run out, so its fetch shows the reopening got past it.
+        // Past origin's cooldown, so a second origin fetch proves the reopening ran.
         h.clock += WindowState.fetchCooldown + 1
         state.isBranchPickerPresented = true
         #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })

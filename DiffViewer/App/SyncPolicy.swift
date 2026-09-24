@@ -56,9 +56,8 @@ enum SyncPolicy {
         }
     }
 
-    /// Whether a fetch holds the counts `target` is drawn from: remote discovery might
-    /// still resolve to its remote, and a fetch of that remote is still moving them.
-    /// Fetches of other remotes leave it alone.
+    /// Whether a fetch may still move `target`'s counts: remote discovery (it may pick
+    /// that remote) or a fetch of its remote. Other remotes' fetches don't count.
     static func isFetching(target: SyncTarget?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
         if fetchStatus == .fetching(remote: nil) { return true }
         guard let target else { return false }
