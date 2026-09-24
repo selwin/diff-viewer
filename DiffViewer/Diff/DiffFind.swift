@@ -7,11 +7,10 @@ struct FindMatch: Equatable, Sendable {
     let utf16Range: Range<Int>
 }
 
-/// What a search was run against. Selection and reveal require an exact key match; fills
-/// may survive projection changes within the same content.
+/// What a search was run against; one search answers both sides. Selection and reveal
+/// require an exact key match; fills may survive projection changes within the same content.
 struct FindKey: Equatable, Sendable {
     let query: String
-    let side: DocumentSide
     /// The changeset's loadID or the file document's id. Rows are append-only under one
     /// id, so a result's fills stay meaningful across appended revisions.
     let contentID: UUID
@@ -20,7 +19,7 @@ struct FindKey: Equatable, Sendable {
     let projectionID: UUID
 
     /// Same document and same projection: what selection and reveals require. Says
-    /// nothing about query, side, or whether the bar is open.
+    /// nothing about query or whether the bar is open.
     func matchesProjection(contentID: UUID, projectionID: UUID) -> Bool {
         self.contentID == contentID && self.projectionID == projectionID
     }
@@ -34,32 +33,44 @@ struct DisplayedDocument: Sendable {
     let projectionID: UUID
 }
 
-struct FindResults: Sendable {
-    let id = UUID()
-    let key: FindKey
+/// One side's matches.
+struct SideMatches: Sendable {
     /// Display order.
     let matches: [FindMatch]
     /// What the pane draws from.
     let rangesByRow: [Int: [Range<Int>]]
 }
 
-/// Validated for the panes: results whose query, side and content id are the live ones.
-/// The projection id may lag; the container keeps such fills until the replacement search
-/// completes and applies the selection only once the projection matches. Equality is by
-/// results id and index: results are immutable snapshots, so the arrays need no comparing.
-struct FindPresentation: Equatable {
-    let results: FindResults
-    let currentIndex: Int?
+struct FindResults: Sendable {
+    let id = UUID()
+    let key: FindKey
+    let old: SideMatches
+    let new: SideMatches
 
-    static func == (a: Self, b: Self) -> Bool {
-        a.results.id == b.results.id && a.currentIndex == b.currentIndex
+    func side(_ side: DocumentSide) -> SideMatches {
+        side == .old ? old : new
     }
 }
 
-/// One-shot: bring this match into view. Carries the key it was stepped under.
+/// Validated for the panes: results whose query and content id are the live ones, shown on
+/// the searched `side`. The projection id may lag; the container keeps such fills until the
+/// replacement search completes and applies the selection only once the projection matches.
+/// Equality skips the arrays: results are immutable snapshots, so their id stands for them.
+struct FindPresentation: Equatable {
+    let results: FindResults
+    let currentIndex: Int?
+    let side: DocumentSide
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.results.id == b.results.id && a.currentIndex == b.currentIndex && a.side == b.side
+    }
+}
+
+/// One-shot: bring this match into view. Carries the key and side it was stepped under.
 struct FindReveal: Equatable, Sendable {
     let id = UUID()
     let key: FindKey
+    let side: DocumentSide
     let match: FindMatch
 }
 
@@ -103,18 +114,25 @@ enum DiffFinder {
         return matches
     }
 
-    /// The whole unit of background work: matches plus their grouping by row, so nothing
-    /// is built on the main actor after the worker returns. The results carry `key`
-    /// unchecked, so the caller must pass the snapshot the key's ids were taken from.
+    /// The whole unit of background work: both sides' matches plus their grouping by row,
+    /// so nothing is built on the main actor after the worker returns. The results carry
+    /// `key` unchecked, so the caller must pass the snapshot the key's ids were taken from.
     static func results(for key: FindKey, in displayed: DisplayedDocument) throws -> FindResults {
-        let matches = try matches(
-            for: key.query, in: displayed.document, side: key.side, displayRows: displayed.displayRows)
+        FindResults(
+            key: key, old: try sideMatches(for: key.query, in: displayed, side: .old),
+            new: try sideMatches(for: key.query, in: displayed, side: .new))
+    }
+
+    private static func sideMatches(for query: String, in displayed: DisplayedDocument, side: DocumentSide)
+        throws -> SideMatches
+    {
+        let matches = try matches(for: query, in: displayed.document, side: side, displayRows: displayed.displayRows)
         var rangesByRow: [Int: [Range<Int>]] = [:]
         for (index, match) in matches.enumerated() {
             if index % 4096 == 4095 { try Task.checkCancellation() }
             rangesByRow[match.documentRow, default: []].append(match.utf16Range)
         }
-        return FindResults(key: key, matches: matches, rangesByRow: rangesByRow)
+        return SideMatches(matches: matches, rangesByRow: rangesByRow)
     }
 
     /// Wraps from the last match to the first (ChangeNavigator clamps instead).

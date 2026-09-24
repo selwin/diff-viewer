@@ -135,6 +135,73 @@ branches with no upstream, and branches whose upstream still exists don't.
 
 ---
 
+### K. Failed commit alert: copy button and subtitle (requested 2026-09-24)
+
+**Goal.** When a pre-commit hook fails, the reader can copy its whole output in one
+click, to paste into a terminal, an issue, or a chat. Today `ErrorAlert` shows a long
+message in a selectable scroll view, so copying takes select-all and ⌘C, and a short
+message sits in the alert's informative text, which can't be selected at all.
+
+**Design.**
+- A small square glass copy button (`doc.on.doc`) pinned to the top-right corner of
+  the output scroller, not a button beside OK. It rests at low opacity and sharpens when
+  the pointer enters the scroller: the GitHub/Xcode code-block idiom with vibrancy
+  (`NSGlassEffectView`) and no extra chrome.
+- It stays put while the output scrolls. An exclusion path on the text container keeps
+  the first lines wrapping short of it, so no text sits under the button.
+- Clicking it puts the whole trimmed message on the pasteboard and leaves the alert
+  open, with brief "Copied" feedback. OK stays the default button.
+- Open question: a short message has no scroller to pin the button to. Either always
+  show the output in the scroller, or keep a plain Copy button for that case.
+- It lives in `ErrorAlert`, so every git error (commit, stage, discard, sync) gets it.
+
+**Title and subtitle.** Title the alert "Commit Failed" rather than "Error". Today the
+summary is the output's first line, which for a pre-commit run is its harmless
+"Unstaged files detected" warning. Git never says in its output that a hook failed, so
+guessing from the output text isn't reliable. Take the facts from git's trace2 event log:
+- Run `git commit` with `GIT_TRACE2_EVENT` pointing at a temp file (JSON lines, a
+  documented and versioned format). Checked against git 2.54 on 2026-09-24.
+- A failed hook shows up as a `child_start` event with `"child_class":"hook"` and a
+  `hook_name`, then a `child_exit` event with its `code`. This works for any hook manager.
+  Git's own failures (gpg signing, identity, index lock) show up as `error` events with a
+  `msg`.
+- Read only the top-level `git commit`'s events. Git run from inside a hook writes to the
+  same file, and a child's `sid` extends its parent's with `/`.
+- Subtitle: "The pre-commit hook exited with status 3." when a hook failed; otherwise
+  git's first `error` message; otherwise none. When a hook failed and the pre-commit
+  framework's result lines (`<name>....Failed` followed by `- hook id:`) are present,
+  add the failed hook names ("SwiftLint failed."). Never counts like "1 error": those
+  would come from each tool's own output.
+
+**Tests.** `ErrorAlert.layout`; the subtitle from trace2 event logs for a failed hook,
+git's own error, a hook whose own git call errors (ignored), and neither (no subtitle);
+hook names from pre-commit's `Failed` lines. UI, checked by screenshot.
+
+---
+
+### L. Tab indicator when a repository has changes (requested 2026-09-24)
+
+**Goal.** With several repositories open as tabs, you can see from the tab bar which
+ones have diffs to read without switching to each. Sublime Merge does this, and it's
+what makes tabs useful while a coding agent works in another repo.
+
+**Design.**
+- A small dot in the tab's `NSWindowTab.accessoryView` while the working tree has
+  changes (the sidebar's file list is non-empty). It goes away once the repository is
+  clean. It could carry the changed-file count if the dot alone proves too vague.
+- Background tabs are occluded windows, and a hidden window stops its watcher today
+  (`WindowState.isVisible`), so its file list goes stale. The indicator needs hidden
+  windows to keep a status-only watch (status, no diff or highlight work) so the dot
+  is current.
+- Open question: whether the dot also marks changes since the tab was last key, and
+  clears when you view them, as Sublime Merge's unread dot does.
+- This absorbs the "Tab change indicator" item from the Next list.
+
+**Tests.** None; UI, checked by screenshot. A status-only refresh path for hidden
+windows, if one is added, gets tests for when it runs.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -160,10 +227,6 @@ Roughly in priority order.
 - **Churn, remaining pieces.** Section headers become `Unstaged (7) +340 −120`, and a
   counts-by-kind line (`5 modified, 2 added, 1 deleted`) somewhere unobtrusive. The
   per-file counts, the All changes total, and the changeset header total have shipped.
-- **Tab change indicator.** When a watcher fires in a non-key window, mark its tab (a
-  dot in the title, or an `NSWindowTab.accessoryView` badge with the changed-file
-  count) and clear it when the tab becomes key. This is the Sublime Merge behaviour
-  that makes tabs useful while a coding agent works in another repo.
 - **Commit picker search.** A search field between the pinned row and the list,
   matching subject, hash prefix and body (needs `%b` in the log format), highlighted
   subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when

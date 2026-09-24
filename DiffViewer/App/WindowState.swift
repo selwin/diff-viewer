@@ -1460,7 +1460,7 @@ extension WindowState {
     /// push away, so a push waits for its remote's fetch instead and `runSync` re-checks.
     private func sync(_ operation: SyncOperation, branch: String) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch else { return }
-        let isCurrent = headState == .named(branch)
+        var isCurrent = headState == .named(branch)
         guard
             let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
             SyncPolicy.allows(operation, on: target, isCurrent: isCurrent),
@@ -1470,6 +1470,7 @@ extension WindowState {
         // Before the first suspension: the admission guard. It also stops the picker
         // starting a fetch while the operation waits or runs.
         activeSync = ActiveSync(branch: branch, operation: operation)
+        var requested = target.destination
         if operation == .push, let fetch = session.remoteFetches[target.destination.remote] {
             // Off the write chain, so a slow fetch doesn't hold up local writes. The task
             // ends once the post-fetch branch read has published.
@@ -1478,9 +1479,18 @@ extension WindowState {
                 activeSync = nil
                 return
             }
+            isCurrent = headState == .named(branch)
+            guard
+                let refreshed = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
+                SyncPolicy.allows(operation, on: refreshed, isCurrent: isCurrent)
+            else {
+                activeSync = nil
+                return
+            }
+            requested = refreshed.destination
         }
         await enqueueWrite(session: session) { [weak self] in
-            await self?.runSync(operation, requested: target.destination, wasCurrent: isCurrent, session: session)
+            await self?.runSync(operation, requested: requested, wasCurrent: isCurrent, session: session)
         }
     }
 

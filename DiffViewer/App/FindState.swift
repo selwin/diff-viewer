@@ -1,8 +1,16 @@
 import Foundation
 import Observation
 
+/// What the bar's status text shows. `index` is zero-based.
+enum FindStatus: Equatable {
+    case empty
+    case noResults
+    case position(index: Int, of: Int)
+    case count(Int)
+}
+
 /// One window's find bar: the query, the side searched, the latest results, and which
-/// match is current.
+/// match is current. One search answers both sides, so switching side never re-searches.
 ///
 /// Results, the current selection, and the selection intent are separate. A search never
 /// decides what to select when it starts; it resolves the intent that is live when it
@@ -24,12 +32,12 @@ final class FindState {
         /// anchor to restore on a later expansion, with `currentIndex` nil meanwhile.
         case keep(occurrence: FindMatch, index: Int)
         /// The reader clicked or selected in a pane. Nothing automatic touches the selection
-        /// until the next step, query, picker change, or reopening of the bar.
+        /// until the next step, query, side change, or reopening of the bar.
         case none
     }
 
     /// Long enough to coalesce typing, short enough to feel immediate.
-    static let debounce = Duration.milliseconds(150)
+    static let debounce = Duration.milliseconds(80)
 
     private(set) var isPresented = false
     /// Kept on dismiss, so reopening searches for the same text.
@@ -44,8 +52,6 @@ final class FindState {
     private(set) var side: DocumentSide = .new
     private(set) var results: FindResults?
     private(set) var currentIndex: Int?
-    /// The pane the reader last clicked in; the bar opens searching that side.
-    private(set) var lastInteractedSide: DocumentSide = .new
     /// Bumped whenever the bar's field should take focus.
     private(set) var focusRequest = 0
     private(set) var reveal: FindReveal?
@@ -64,7 +70,7 @@ final class FindState {
     @ObservationIgnored private var generation = 0
     /// Kept across dismiss, so reopening with an unchanged query searches without the
     /// typing debounce.
-    @ObservationIgnored private var lastScheduledQueryAndSide: (query: String, side: DocumentSide)?
+    @ObservationIgnored private var lastScheduledQuery: String?
     @ObservationIgnored private let search: Search
 
     init(search: @escaping Search = FindState.searchInBackground) {
@@ -77,8 +83,7 @@ final class FindState {
     var liveKey: FindKey? {
         guard !query.isEmpty, let displayedIdentity else { return nil }
         return FindKey(
-            query: query, side: side, contentID: displayedIdentity.contentID,
-            projectionID: displayedIdentity.projectionID)
+            query: query, contentID: displayedIdentity.contentID, projectionID: displayedIdentity.projectionID)
     }
 
     /// The results answer exactly what is shown and asked now.
@@ -87,49 +92,62 @@ final class FindState {
         return results.key == liveKey
     }
 
-    var canStep: Bool { isCurrent && results?.matches.isEmpty == false }
+    var canStep: Bool { isCurrent && results?.side(side).matches.isEmpty == false }
 
     var currentMatch: FindMatch? {
-        guard isCurrent, let results, let currentIndex, results.matches.indices.contains(currentIndex) else {
-            return nil
-        }
-        return results.matches[currentIndex]
+        guard isCurrent, let matches = results?.side(side).matches, let currentIndex,
+            matches.indices.contains(currentIndex)
+        else { return nil }
+        return matches[currentIndex]
+    }
+
+    /// Results for what is asked now, possibly from an older projection; nil for another
+    /// query or content. Counts and fills use these, so they hold steady across a refold.
+    private var lastKnownResults: FindResults? {
+        guard let results, let liveKey, results.key.query == liveKey.query,
+            results.key.contentID == liveKey.contentID
+        else { return nil }
+        return results
     }
 
     /// Fills for the panes. The projection id may lag, so fills survive a fold change until
-    /// the replacement arrives; a different query, side or content hides them at once.
+    /// the replacement arrives; a different query or content hides them at once.
     var presentation: FindPresentation? {
-        guard let results, let liveKey, results.key.query == liveKey.query, results.key.side == liveKey.side,
-            results.key.contentID == liveKey.contentID
-        else { return nil }
-        let index = currentIndex.flatMap { results.matches.indices.contains($0) ? $0 : nil }
-        return FindPresentation(results: results, currentIndex: index)
+        guard let results = lastKnownResults else { return nil }
+        let index = currentIndex.flatMap { results.side(side).matches.indices.contains($0) ? $0 : nil }
+        return FindPresentation(results: results, currentIndex: index, side: side)
     }
 
-    /// The pending reveal, only while it was stepped under the live key.
+    /// The pending reveal, only while it was stepped under the live key and side.
     var activeReveal: FindReveal? {
-        guard let reveal, reveal.key == liveKey else { return nil }
+        guard let reveal, reveal.key == liveKey, reveal.side == side else { return nil }
         return reveal
     }
 
-    var counterText: String {
-        guard !query.isEmpty, isCurrent, let results else { return "" }
-        let count = results.matches.count
-        if count == 0 { return "Not found" }
-        if currentMatch != nil, let currentIndex {
-            return "\(currentIndex + 1) of \(count)"
-        }
-        return count == 1 ? "1 match" : "\(count) matches"
+    /// The last known match count on `documentSide`; nil before any result for the live
+    /// query and content has arrived.
+    func displayCount(for documentSide: DocumentSide) -> Int? {
+        lastKnownResults?.side(documentSide).matches.count
+    }
+
+    /// Follows the searched side's count. A lagging projection shows the count alone: a
+    /// refold can expose matches, so neither a position nor "No results" is claimed yet.
+    var status: FindStatus {
+        guard !query.isEmpty, let count = displayCount(for: side) else { return .empty }
+        guard isCurrent else { return .count(count) }
+        if count == 0 { return .noResults }
+        if currentMatch != nil, let currentIndex { return .position(index: currentIndex, of: count) }
+        return .count(count)
     }
 
     // MARK: Inputs
 
-    func present() {
+    func present(side newSide: DocumentSide) {
         focusRequest += 1
         guard !isPresented else { return }
         isPresented = true
         paneFocusRequest = nil
-        side = lastInteractedSide
+        side = newSide
         intent = .firstMatch
         schedule()
     }
@@ -145,25 +163,22 @@ final class FindState {
         paneFocusRequest = PaneFocusRequest(side: side)
     }
 
-    /// The side picker.
+    /// The scope control. The results already hold both sides, so this only selects; results
+    /// for another projection leave the intent to the pending search's publication.
     func selectSide(_ newSide: DocumentSide) {
         guard newSide != side else { return }
         side = newSide
+        currentIndex = nil
         reveal = nil
         intent = .firstMatch
-        schedule()
+        if isCurrent, let results { resolveIntent(with: results) }
     }
 
-    /// A click or selection in a pane: the reader has taken over the selection.
-    func notePaneInteraction(_ paneSide: DocumentSide) {
-        lastInteractedSide = paneSide
+    /// A click or selection in a pane: the reader has taken over the selection. The side stays.
+    func notePaneInteraction() {
         currentIndex = nil
         reveal = nil
         intent = .none
-        if isPresented, side != paneSide {
-            side = paneSide
-            schedule()
-        }
     }
 
     /// What the panes now show.
@@ -198,14 +213,15 @@ final class FindState {
         intent = .firstMatch
     }
 
+    /// Steps within the searched side only; it never switches sides.
     func next() {
         guard canStep, let results else { return }
-        step(to: DiffFinder.next(after: currentIndex, count: results.matches.count))
+        step(to: DiffFinder.next(after: currentIndex, count: results.side(side).matches.count))
     }
 
     func previous() {
         guard canStep, let results else { return }
-        step(to: DiffFinder.previous(before: currentIndex, count: results.matches.count))
+        step(to: DiffFinder.previous(before: currentIndex, count: results.side(side).matches.count))
     }
 
     /// Where the viewport is, so a fresh query lands on the first match in view.
@@ -220,11 +236,11 @@ final class FindState {
     // MARK: Searching
 
     private func step(to index: Int?) {
-        guard let results, let index, results.matches.indices.contains(index) else { return }
-        let match = results.matches[index]
+        guard let results, let index, results.side(side).matches.indices.contains(index) else { return }
+        let match = results.side(side).matches[index]
         currentIndex = index
         intent = .keep(occurrence: match, index: index)
-        reveal = FindReveal(key: results.key, match: match)
+        reveal = FindReveal(key: results.key, side: side, match: match)
     }
 
     private func cancel() {
@@ -233,7 +249,7 @@ final class FindState {
         generation += 1
     }
 
-    /// The one place a search starts. A changed query or side waits out the debounce; a
+    /// The one place a search starts. A changed query waits out the debounce; a
     /// document update searches at once, and by restarting the task also cuts short a
     /// pending debounce, which is harmless because the intent decides the selection.
     private func schedule() {
@@ -243,8 +259,8 @@ final class FindState {
             currentIndex = nil
             return
         }
-        let shouldDebounce = lastScheduledQueryAndSide.map { $0.query != key.query || $0.side != key.side } ?? true
-        lastScheduledQueryAndSide = (key.query, key.side)
+        let shouldDebounce = lastScheduledQuery != key.query
+        lastScheduledQuery = key.query
         let gen = generation
         let search = search
         task = Task { [weak self] in
@@ -259,7 +275,12 @@ final class FindState {
     private func publish(_ found: FindResults, generation gen: Int) {
         guard gen == generation, found.key == liveKey else { return }
         results = found
-        let matches = found.matches
+        resolveIntent(with: found)
+    }
+
+    /// Applies the live intent to the searched side of current results.
+    private func resolveIntent(with found: FindResults) {
+        let matches = found.side(side).matches
         switch intent {
         case .firstMatch:
             let top = visibleRows.flatMap { $0.contentID == found.key.contentID ? $0.rows.lowerBound : nil } ?? 0
@@ -269,7 +290,7 @@ final class FindState {
                 return
             }
             currentIndex = index
-            reveal = FindReveal(key: found.key, match: matches[index])
+            reveal = FindReveal(key: found.key, side: side, match: matches[index])
             intent = .keep(occurrence: matches[index], index: index)
         case let .keep(occurrence, index):
             // No reveal: the reader is already looking at it, or it is folded away.

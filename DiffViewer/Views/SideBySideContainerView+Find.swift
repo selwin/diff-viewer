@@ -9,26 +9,35 @@ extension SideBySideContainerView {
         else {
             leftPane.findMatches = [:]
             rightPane.findMatches = [:]
-            appliedResultsID = nil
+            appliedFindFills = nil
             return
         }
         let results = presentation.results
-        let side = results.key.side
+        let side = presentation.side
         let other: DocumentSide = side == .old ? .new : .old
-        if results.id != appliedResultsID {
-            pane(for: side).findMatches = results.rangesByRow
+        let matches = results.side(side)
+        // A switch leaves no stale match selected on the old side; the reader's own is kept.
+        if let owned = findOwnedSelection, owned.side != side {
+            if pane(for: owned.side).selection == owned.selection { pane(for: owned.side).selection = nil }
+            findOwnedSelection = nil
+        }
+        // A side switch keeps the results id, so the side is part of what was applied.
+        if appliedFindFills?.resultsID != results.id || appliedFindFills?.side != side {
+            pane(for: side).findMatches = matches.rangesByRow
             pane(for: other).findMatches = [:]
-            appliedResultsID = results.id
+            appliedFindFills = (results.id, side)
         }
         guard results.key.matchesProjection(contentID: contentID, projectionID: projectionID),
-            let index = presentation.currentIndex, results.matches.indices.contains(index)
+            let index = presentation.currentIndex, matches.matches.indices.contains(index)
         else { return }
-        let match = results.matches[index]
+        let match = matches.matches[index]
         // Set directly, so neither pane reports an interaction.
-        pane(for: side).selection = PaneSelection(
+        let selection = PaneSelection(
             anchor: TextPosition(row: match.documentRow, offset: match.utf16Range.lowerBound),
             head: TextPosition(row: match.documentRow, offset: match.utf16Range.upperBound))
+        pane(for: side).selection = selection
         pane(for: other).selection = nil
+        findOwnedSelection = (side, selection)
     }
 
     /// Scrolls both panes to the match's row, then only the match's pane horizontally.
@@ -39,8 +48,8 @@ extension SideBySideContainerView {
         layoutSubtreeIfNeeded()
         let match = reveal.match
         scroll(toRow: match.documentRow)
-        let target = pane(for: reveal.key.side)
-        let targetScroll = scrollView(for: reveal.key.side)
+        let target = pane(for: reveal.side)
+        let targetScroll = scrollView(for: reveal.side)
         guard let span = target.horizontalBounds(ofRow: match.documentRow, range: match.utf16Range) else { return }
         let clip = targetScroll.contentView.bounds
         // The gutter is drawn over the left edge of the clip, so text starts after it.

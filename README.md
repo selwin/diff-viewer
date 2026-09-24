@@ -1,60 +1,138 @@
 # DiffViewer
 
-A native macOS 26 app for viewing git diffs side by side.
+**The git diff viewer a Mac deserves.** Native, fast, and built for one job: reading a
+diff.
 
-- **Commit picker** at the top of the sidebar: show the working tree, as always, or pick a
-  commit from the branch's history and see what it changed against its first parent.
-- **Title bar pickers** next to the repository name: a branch picker that switches to
-  another local branch (`git switch --no-guess`; git's refusal shows as an alert), and a
-  second face on the commit picker.
+DiffViewer is a macOS 26 app that shows a repository's changes side by side, with
+structural token highlights from [difftastic](https://difftastic.wilfred.me.uk) and full
+syntax colouring from tree-sitter. It is a viewer first. It never edits a file's text
+or resolves conflicts, and its git actions are only the ones a reader needs right after
+reading a diff: stage, discard, commit, switch branch, push. It aims to be the best diff
+viewer on the platform.
+
+DiffViewer is fully vibe coded: every line was written by AI coding agents, directed and
+reviewed by a human.
+
+## The goal
+
+Build a diff viewer with Apple Design Award–level craft: an app that feels like Apple
+could have shipped it, that is instant on a 20,000-line file, and that disappears so the
+code is all you see.
+
+The bar is set by Kaleidoscope, JuxtaCode, Sublime Merge and GitHub's pull request reviewing
+experience. We want this to be speedy when reviewing large diffs.
+
+## What it does today
+
+**Reading**
 - **All changes**, selected by default: every changed file's hunks stacked in one
-  side-by-side scroll, each under a header with its kind badge, name, `+12 −4` and
-  language. Line numbers restart per file and ⌘↓ / ⌘↑ walk changes across files.
-- **Syntax-aware diffs** via a bundled [difftastic](https://difftastic.wilfred.me.uk) (`difft`)
-  binary: token-level highlights that understand the language's structure.
-- **Hide whitespace** toggle (⇧⌘W), like GitHub's diff viewer.
-- **Per-file line counts** in the sidebar (`+12 −4`, or "binary"), from `git diff --numstat`
-  (with `-w` when Hide whitespace is on — it means exactly git's `-w`: ASCII whitespace only).
-- **Collapse unchanged lines** (⇧⌘U, on by default): only changed hunks plus 5 lines of
-  context are shown; each hidden run is one separator with expand-up / expand-down
-  controls (20 lines at a time), click the text to reveal the run, ⌥-click to reveal the
-  whole file. The hidden `collapseContextLines` default overrides the context size.
-- **Full syntax highlighting** of both sides with tree-sitter (Swift, Python, JS, TS/TSX,
-  JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby, YAML, TOML, Java, Kotlin, PHP, Markdown).
-- **Sidebar context menu**: right-click a file to stage it, unstage it, discard its changes,
-  restore it after a delete, or move an untracked file to the Trash, plus Reveal in Finder,
-  Open in Default Editor, and Copy Path. Discard and Delete ask first; "Don't ask again"
-  turns the question off and View › Confirm Destructive File Actions turns it back on.
-  Whole files only: the app never edits file contents.
-- **Multi-selection**: ⌘-click, ⇧-click, or ⌘A to select several files; the detail pane
-  shows them as one changeset, and the context menu acts on all of them in one git
-  command with one confirmation ("Stage 3 Files", "Discard Changes to 3 Files…", "Copy 3
-  Paths"). Only the actions every selected row allows are offered, so a mixed staged and
-  unstaged selection gets the read-only items.
-- **Commit** from the box at the bottom of the sidebar (⌘↩): records the index with the
-  message you type, prefilled the way `git commit` would prefill an editor (an in-progress
-  merge, a squash, or `commit.template`). Commit stays disabled with nothing staged, a blank
-  message, unresolved conflicts, or a template left as it was. Hooks run with your login
-  shell's PATH, so a pre-commit hook finds Homebrew tools even from a Finder launch.
-- **Fast**: custom AppKit renderer draws only visible rows; a 20k-line file scrolls smoothly.
-- Unstaged / staged file list, live refresh when the repo changes, next/previous change
-  (⌘↓ / ⌘↑), change overview strip, font size (⌘+ / ⌘- / ⌘0), light and dark mode.
+  side-by-side scroll, each under a header with its kind badge, name, `+12 −4`, and
+  language. Files stream in as their diffs finish ("Loading 7 of 12…"). Line numbers
+  restart per file, and text selection and ⌘C span the whole changeset.
+- **Structural highlights** from a bundled `difft`, and **full tree-sitter colouring** of
+  both sides (Swift, Python, JS, TS/TSX, JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby,
+  YAML, TOML, Java, Kotlin, PHP, Markdown).
+- **Collapse unchanged lines** (⇧⌘U, on by default): changed hunks plus 5 lines of
+  context. Each hidden run is one separator that expands 20 lines at a time; ⌥-click
+  reveals the whole file.
+- **Hide whitespace** (⇧⌘W), meaning exactly git's `-w`.
+- **Find** (⌘F) with ⌘G / ⇧⌘G to step, and a side scope (⌥⌘← / ⌥⌘→) that shows the
+  match count on each side.
+- **Change navigation** with ⌘↓ / ⌘↑, across files in All changes, plus a change
+  overview strip.
+- **Image diffs** side by side, and an SVG preview.
+- Font size (⌘+ / ⌘- / ⌘0), light and dark mode.
+
+**Around the diff**
+- **Sidebar** of unstaged and staged files, refreshed live as the repository changes,
+  with per-file `+12 −4` counts from `git diff --numstat`.
+- **Context menu** on one or many files (⌘-click, ⇧-click, ⌘A): stage, unstage, discard,
+  restore a delete, or move an untracked file to the Trash, plus Reveal in Finder, Open in
+  Default Editor, and Copy Path. A selection runs as one git command with one
+  confirmation; destructive actions ask first.
+- **Commit picker** (⌘K): see what any commit on the branch changed against its first
+  parent. A commit's diffs never change, so nothing reloads until HEAD moves.
+- **Branch picker** (⌘B) in the title bar: switch local branches. A row offers Push or
+  Pull when the branch is ahead of or behind its upstream, and Publish when it tracks
+  nothing.
+- **Commit** (⌘Return): records the index with your message, prefilled the way
+  `git commit` would. ⌘G drafts a message with Apple's on-device model. Hooks run with
+  your login shell's PATH, so a pre-commit hook finds Homebrew tools even from a Finder
+  launch.
+- **One window per repository**, as native tabs. ⌘T opens a tab that adopts the next
+  repository you open; the open set is restored on the next launch.
+
+## Where it stands
+
+| Capability | Kaleidoscope | Sublime Merge | JuxtaCode | DiffViewer |
+|---|---|---|---|---|
+| Structural (AST-aware) highlights | no | no | no | **yes** |
+| All files in one scroll | no | yes | no | **yes** |
+| Per-file +/- in sidebar | no | no | no | **yes** |
+| Find in diff | yes | no | no | **yes** |
+| Collapse unchanged | yes | yes | no | **yes** |
+| Stage / unstage from file list | no | yes | no | **yes** (whole file) |
+| Image diff | no | yes | no | **yes** (no onion-skin yet) |
+| Jump to line | yes | no | no | not yet |
+| Wrap long lines | yes | yes | no | not yet |
+| Sidebar filter / folder outline | yes | partial | yes | not yet |
+| Rename / move detection | yes | yes | yes | not yet |
+
+Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, JuxtaCode
+1.4).
+
+## Roadmap
+
+`TODO.md` holds the full list with designs and competitor research. In short:
+
+**Requested**
+- In-progress operation in the branch name (`main (rebasing)`).
+- Keyboard staging: Stage ⌘S, Unstage ⇧⌘S, Discard ⌘⌫, with the selection walking to the
+  next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G, ⌘Return.
+- A Find button in the toolbar.
+- Copy a hash or branch name from the pickers; copy a failed hook's output in one click.
+
+**Next**
+- A "Change 3 of 41" strip with previous/next controls.
+- Jump to line (⌘L), a pane context menu, and the remaining selection conventions.
+- Rename and move detection, shown as `old → new`.
+- Sidebar filtering and a folder outline.
+- Wrap long lines, with per-row heights that keep both panes aligned.
+- A change indicator on tabs whose repository changed in the background.
+- Commit picker search; amend and other commit follow-ups; timeouts on remote git calls.
+- Faster highlighting for very large files.
+
+**Later**
+- Onion-skin and swipe image diffs; image previews inside All changes.
+- Twin Focus (hover a token to highlight its counterpart) and connector lines between
+  panes.
+- Themes, a font picker, show invisibles, and a per-file language override.
+- Moved-code detection, which none of the competitors offer.
+- A CLI and `git difftool` integration.
+
+## Not doing
+
+- **Inline or unified layout.** Side by side only.
+- **Ref-range compare, folder compare, blame, file history, merge conflict resolution.**
+  These are git-client features, not viewer features. Browsing a branch's commits is in
+  scope and has shipped.
+- **Hunk-level staging or discarding.** Nothing finer than a file.
+- **Editable diffs, regex text filters, a command palette.** A viewer shows what git sees;
+  menus with shortcuts are enough.
 
 ## Build
 
-Requires Xcode 26 and [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+Requires Xcode 26 and [xcodegen](https://github.com/yonaskolb/XcodeGen)
+(`brew install xcodegen`).
 
 ```bash
 make run      # generate the project, fetch difft, build, launch
 make test     # run the unit tests
 make open     # open the generated Xcode project
-make lint     # SwiftLint (brew install swiftlint), same rules as CI
+make lint     # SwiftLint, same rules as CI
 make format   # rewrite sources with swift-format; `make format-check` only reports
 make hooks    # install the git hooks; `make hooks-all` runs them over every file
 ```
-
-CI runs the same three checks as separate workflows under `.github/workflows/`: SwiftLint and
-swift-format on Linux, and `xcodebuild test` on a macOS 26 runner.
 
 After cloning, install the development tools and the git hooks once:
 
@@ -63,86 +141,57 @@ brew install pre-commit swiftlint
 make hooks
 ```
 
-Committing then runs text hygiene, swift-format and SwiftLint over the staged files, with the
-same configuration as the Format and Lint workflows; `make hooks-all` checks the whole
-repository. swift-format rewrites the file and stops the commit, so re-stage and commit again.
+- The Xcode project is generated from `project.yml` and is git-ignored; adding a source
+  file needs no project edit.
+- `make` points `DEVELOPER_DIR` at `/Applications/Xcode.app`, so it works even when
+  `xcode-select` is set to the Command Line Tools.
+- `difft` is copied from Homebrew if installed, otherwise downloaded from the difftastic
+  release, into `DiffViewer/Resources/bin/` (git-ignored) and bundled into
+  `Contents/MacOS`.
+- Grammar versions in `project.yml` are pinned: newer python, javascript, css, and yaml
+  releases break scanner compilation under Xcode.
+- CI runs SwiftLint and swift-format on Linux and `xcodebuild test` on a macOS 26 runner.
+  The pre-commit hook runs the same checks; when swift-format rewrites a file, re-stage and
+  commit again.
 
-`make` points `DEVELOPER_DIR` at `/Applications/Xcode.app` so it works even when
-`xcode-select` is set to the Command Line Tools.
+## Architecture
 
-The `difft` binary is copied from Homebrew if installed, otherwise downloaded from the
-difftastic GitHub release, into `DiffViewer/Resources/bin/` (git-ignored).
+| Layer | Directory | Contents |
+|-------|-----------|----------|
+| App shell | `DiffViewer/App` | `Preferences`, `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, prefetch, session persistence), `DiffLoader`, `ChangesetAssembler`, `FileAction`, commit message generation |
+| Git | `DiffViewer/Git` | CLI wrapper over `/usr/bin/git`, status / numstat / log parsers, FSEvents watcher |
+| Diff engine | `DiffViewer/Diff` | Myers line diff, difft JSON runner, `DiffAligner` (rows and whitespace mode), `DiffEngine`, changeset builder and projection |
+| Highlighting | `DiffViewer/Highlighting` | Grammar registry, tree-sitter highlighter, `TokenStyle` theme |
+| Views | `DiffViewer/Views` | SwiftUI chrome, the AppKit `DiffPaneView` renderer, `SideBySideContainerView`, overview strip |
+| Tests | `DiffViewerTests` | Swift Testing suites for every non-UI layer |
 
-The title bar's branch and commit icons are [Octicons](https://primer.style/octicons) by
-GitHub, MIT licensed (`DiffViewer/Assets.xcassets/Octicons-LICENSE`).
+**Data flow.** Open request → `WindowCoordinator` → `WindowState` → file list. A selection
+goes to `DiffLoader` → `DiffEngine` (git sources) → difft and `LineDiff` → `DiffAligner` →
+`DiffDocument` rows → two `DiffPaneView`s. Highlighting arrives later as `DocumentStyles`.
+With All changes selected, a `ChangesetAssembler` diffs and highlights files in sidebar
+order on three workers and publishes a growing `ChangesetDocument` that the panes append
+in place. Only visible windows load diffs, and only the key window is prefetched.
 
-## Use
+**Testing.** Tests cover logic: alignment, diff correctness, parsing, index math. UI is
+verified by screenshots: `scripts/screenshot.sh` captures the real window and
+`scripts/snapshot.sh` renders from inside the app. Debug builds accept `DIFFVIEWER_*`
+environment variables for scripted screenshots, tabs, restoration, and latency checks (see
+`DebugLaunchOptions`). Scripted runs use their own defaults suite and never touch a
+running DiffViewer.
 
-Open a repository with ⌘O, drag a folder onto the window, or `open -a DiffViewer <repo>`.
-Each repository gets its own window, and windows are tabs of one window by default:
-⌘T opens an empty tab that adopts the next repository you open, ⇧⌘] / ⇧⌘[ cycle tabs,
-and the Window menu's Move Tab to New Window and Merge All Windows detach and regroup
-them. Opening a repository that is already open focuses its tab. On quit the set of open
-repositories and the active one are saved and restored on the next launch; launching by
-opening a folder from Finder shows that repository instead of the saved set.
+## Known limitations
 
-The picker above the file list chooses what the sidebar and the diffs are comparing.
-**Working Tree** is the default and behaves exactly as before: unstaged and staged
-sections, refreshed live as the repository changes. Picking a commit instead shows the
-files that commit changed, compared against its first parent — the root commit against the
-empty tree, and a merge against the branch it was merged onto, which is the same thing
-`git log --first-parent` shows. Commits merged in from side branches are therefore not
-listed individually. The list holds 50 commits at a time, with Load More below it, and
-follows the branch you check out. A commit's diffs cannot change, so nothing about that
-view reloads until HEAD moves.
+- Highlighting a 20k-line Swift file takes about 2.8 s per side in Debug builds. Both
+  sides run in parallel and never block scrolling.
+- In All changes, separators cannot be expanded in place and file headers do not stick
+  while scrolling. The changeset is rebuilt whenever the list changes.
+- Highlighting that has started runs to completion even if its window closes, and
+  foreground difft runs are not bounded.
+- Repository windows always prefer tabs, whatever the system tab preference says.
+- Separator controls have no keyboard shortcut yet.
 
-The branch picker in the title bar names the branch HEAD is on, or reads
-`Detached <sha>` on a detached HEAD, and follows a checkout made in the terminal. Choosing
-another local branch switches to it. While a switch runs, Commit and the actions that
-modify repository files are disabled; Reveal, Open, and Copy Path stay available.
+## Credits
 
-**All changes**, the first row of the sidebar, is selected whenever a list arrives. It
-shows every file in the list in sidebar order, streaming in as each diff finishes
-("Loading 7 of 12…" in the header). Hunks are shown with fixed context and their
-separators cannot be expanded there; click a file in the sidebar to read it in full.
-A file over 1 MB of source, or past the 200th, shows a one-line notice instead and is
-still readable from the sidebar. Text selection and ⌘C span the whole changeset.
-
-## Layout
-
-| Directory | Contents |
-|-----------|----------|
-| `DiffViewer/App` | App entry, `Preferences` (app-wide settings), `WindowState` (one repository per window), `WindowCoordinator` (routing, key and visibility tracking, session persistence), `DiffLoader`, `ChangesetAssembler` (streams All changes) |
-| `DiffViewer/Git` | `git` CLI wrapper, status / numstat / name-status / log parsers, commit refs, FSEvents watcher |
-| `DiffViewer/Diff` | Myers line diff, difft JSON runner, row aligner, engine, changeset builder and projection |
-| `DiffViewer/Highlighting` | tree-sitter grammar registry, highlighter, token theme |
-| `DiffViewer/Views` | SwiftUI shell plus the AppKit pane renderer and overview strip |
-| `DiffViewerTests` | Swift Testing suites for the non-UI layers |
-
-Debug builds accept `DIFFVIEWER_SELECT`, `DIFFVIEWER_SCOPE`, `DIFFVIEWER_NEXT`,
-`DIFFVIEWER_FOLD`, `DIFFVIEWER_APPEARANCE`, and `DIFFVIEWER_SNAPSHOT` environment
-variables for scripted screenshots, and `DIFFVIEWER_OPEN`, `DIFFVIEWER_TAB_STEPS`, and
-`DIFFVIEWER_DUMP_WINDOWS` for scripted checks of tabs, restoration, and diff latency (see
-`scripts/` and `DebugLaunchOptions`).
-
-## Known limitations / next steps
-
-- Highlighting a 20k-line Swift file takes ~2.8 s per side in Debug builds (tree-sitter
-  query predicates are regex-heavy); both sides run in parallel and never block scrolling.
-  Possible follow-ups: cache compiled predicates, or highlight visible rows first.
-- Separator controls are exposed to VoiceOver as buttons but have no keyboard shortcut yet.
-- All changes is rebuilt from scratch every time it is selected or the list changes;
-  its file headers do not stick to the top while scrolling, and its hunks cannot be
-  expanded in place. See `TODO.md` item 3 for the follow-ups.
-- Tabs are the policy, not the system preference: repository windows always prefer
-  tabbing, whatever System Settings > Desktop & Dock > "Prefer tabs when opening
-  documents" says. Honouring the system tab preference is a follow-up.
-- Highlighting runs in detached tasks the loader cannot stop: a hidden or closed window
-  starts no new highlight, but one already computing runs to completion. Bounded
-  highlighting concurrency with cooperative cancellation is a follow-up.
-- Foreground difft runs are unbounded: several visible windows reloading at once, or
-  rapid selection changes, can overlap difft processes (background prefetch runs share
-  three slots). A foreground difft scheduler is a follow-up.
-- Not yet built: `git difftool` CLI integration, ref-range compare, folder compare. The
-  commit picker browses one branch's first-parent history; comparing two arbitrary commits
-  is not in scope.
+Structural diffs by [difftastic](https://difftastic.wilfred.me.uk). The title bar's branch
+and commit icons are [Octicons](https://primer.style/octicons) by GitHub, MIT licensed
+(`DiffViewer/Assets.xcassets/Octicons-LICENSE`).

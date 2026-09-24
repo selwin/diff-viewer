@@ -77,11 +77,12 @@ struct ChangesetDetailView: View {
                 collapseUnchanged: preferences.collapseUnchanged,
                 foldOptions: preferences.foldOptions,
                 onTopVisibleSectionChange: { topVisibleSection = $0 },
+                findScope: windowState.paneFindScope,
                 findPresentation: windowState.find.presentation,
                 findReveal: windowState.find.activeReveal,
                 paneFocusRequest: windowState.find.paneFocusRequest,
                 onDisplayedDocumentChange: { windowState.reportDisplayed($0) },
-                onPaneInteraction: { windowState.find.notePaneInteraction($0) },
+                onPaneInteraction: { _ in windowState.find.notePaneInteraction() },
                 onVisibleRowsChange: { windowState.find.noteVisibleRows($0, contentID: $1) },
                 onPaneFocusApplied: { windowState.find.acknowledgePaneFocus(id: $0) }
             )
