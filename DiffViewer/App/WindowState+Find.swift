@@ -22,9 +22,27 @@ extension WindowState {
         }
     }
 
+    /// Opens on the persisted side.
     func showFindBar() {
         guard isFindAvailable else { return }
-        find.present()
+        find.present(side: preferences.findSide)
+    }
+
+    /// Persisted, so the next opening in any window searches the same side.
+    func selectFindSide(_ side: DocumentSide) {
+        preferences.findSide = side
+        find.selectSide(side)
+    }
+
+    /// The commit sheet owns the keyboard while it is up.
+    var canSelectFindSide: Bool { find.isPresented && isFindAvailable && !isCommitSheetPresented }
+
+    var findSideLabels: FindSideLabels { FindSideLabels.make(scope: scope, headState: headState) }
+
+    /// Nil while the bar is closed, so the panes drop their headers and dimming.
+    var paneFindScope: PaneFindScope? {
+        guard find.isPresented, isFindAvailable else { return nil }
+        return PaneFindScope(labels: findSideLabels, searchedSide: find.side)
     }
 
     /// Drops deferred reports from a container on its way out, which still describe the

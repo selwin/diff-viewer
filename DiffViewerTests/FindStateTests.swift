@@ -84,7 +84,7 @@ struct FindStateTests {
     private func open(fooAt rows: Set<Int>, count: Int = 8) -> (FindState, SearchGate, DisplayedDocument) {
         let (find, gate) = makeFind()
         let doc = displayed((0..<count).map { rows.contains($0) ? "foo \($0)" : "bar \($0)" }, content: content)
-        find.present()
+        find.present(side: .new)
         find.update(displayed: doc)
         return (find, gate, doc)
     }
@@ -118,7 +118,7 @@ struct FindStateTests {
         let (find, gate, _) = open(fooAt: [])
         find.query = "foo"
         await complete(find, gate)
-        #expect(find.results?.matches.isEmpty == true)
+        #expect(find.results?.new.matches.isEmpty == true)
         #expect(find.currentIndex == nil)
         #expect(find.reveal == nil)
 
@@ -198,9 +198,10 @@ struct FindStateTests {
         #expect(find.currentIndex == nil)
         #expect(find.presentation != nil)
         #expect(find.presentation?.currentIndex == nil)
-        #expect(find.counterText == "Not found")
+        #expect(find.status == .noResults)
 
         find.update(displayed: displayed(doc.document.newLines, content: content))
+        #expect(find.status == .count(0), "a stale zero may be about to change; not claimed as no results")
         await complete(find, gate)
         #expect(find.currentIndex == 1)
         #expect(find.currentMatch?.documentRow == 2)
@@ -213,55 +214,123 @@ struct FindStateTests {
         let (find, gate, _) = open(fooAt: [1, 3])
         find.query = "foo"
         await waitForSearch(gate, count: 1)
-        find.notePaneInteraction(.new)
+        find.notePaneInteraction()
         gate.release()
         #expect(await eventually { await find.isCurrent })
         #expect(find.currentIndex == nil)
         #expect(find.reveal == nil)
-        #expect(find.counterText == "2 matches")
+        #expect(find.status == .count(2))
     }
 
     @Test func pickerRevealsButPaneClickDoesNot() async {
         let (find, gate) = makeFind()
-        find.present()
+        find.present(side: .new)
         find.update(
             displayed: displayed(["x", "foo c", "y"], old: ["foo a", "x", "foo b"], content: content))
         find.query = "foo"
         await complete(find, gate)
-        #expect(find.activeReveal?.key.side == .new)
+        #expect(find.activeReveal?.side == .new)
+        let searched = find.task
 
         find.selectSide(.old)
         #expect(find.side == .old)
-        #expect(find.presentation == nil)
-        #expect(find.reveal == nil)
-        await complete(find, gate)
+        #expect(find.task == searched, "switching side never searches")
         #expect(find.currentIndex == 0)
-        #expect(find.activeReveal?.key.side == .old)
+        #expect(find.presentation?.side == .old)
+        #expect(find.activeReveal?.side == .old)
         #expect(find.activeReveal?.match.documentRow == 0)
 
-        find.notePaneInteraction(.new)
-        #expect(find.side == .new)
-        await complete(find, gate)
-        #expect(find.results?.key.side == .new)
+        find.notePaneInteraction()
+        #expect(find.side == .old, "a pane click never changes the side")
+        #expect(find.task == searched)
         #expect(find.currentIndex == nil)
         #expect(find.reveal == nil)
+        #expect(find.status == .count(2))
+        #expect(gate.calls.count == 1)
     }
 
-    @Test func steppingWaitsForTheNewSidesResults() async {
+    @Test func sideSwitchDuringARefoldWaitsForTheNewProjection() async {
         let (find, gate) = makeFind()
-        find.present()
-        find.update(displayed: displayed(["foo", "foo"], old: ["foo", "bar"], content: content))
+        find.present(side: .new)
+        let lines = (new: ["foo", "bar", "bar"], old: ["bar", "foo", "foo"])
+        find.update(displayed: displayed(lines.new, old: lines.old, content: content))
+        find.query = "foo"
+        await complete(find, gate)
+
+        find.update(displayed: displayed(lines.new, old: lines.old, content: content, shown: [1, 2]))
+        find.selectSide(.old)
+        #expect(!find.canStep)
+        find.next()
+        #expect(find.currentIndex == nil)
+        #expect(find.activeReveal == nil)
+        #expect(find.status == .count(2), "the last known count, never a position")
+        #expect(find.presentation?.side == .old, "fills survive until the replacement arrives")
+
+        await complete(find, gate)
+        #expect(find.canStep)
+        #expect(find.currentIndex == 0)
+        #expect(find.activeReveal?.side == .old)
+        #expect(find.activeReveal?.match.documentRow == 1)
+    }
+
+    @Test func sideSwitchLandsOnTheFirstMatchInView() async {
+        let (find, gate) = makeFind()
+        find.present(side: .new)
+        let old = (0..<8).map { [1, 5].contains($0) ? "foo \($0)" : "bar \($0)" }
+        find.update(displayed: displayed((0..<8).map { $0 == 0 ? "foo" : "bar" }, old: old, content: content))
+        find.noteVisibleRows(3..<8, contentID: content)
         find.query = "foo"
         await complete(find, gate)
 
         find.selectSide(.old)
-        #expect(!find.canStep)
-        find.next()
-        #expect(find.reveal == nil)
-        #expect(find.currentIndex == 0)
+        #expect(gate.calls.count == 1)
+        #expect(find.currentMatch?.documentRow == 5)
+        #expect(find.activeReveal?.match.documentRow == 5)
+        #expect(find.status == .position(index: 1, of: 2))
+    }
+
+    @Test func onePublicationCountsBothSides() async {
+        let (find, gate) = makeFind()
+        find.present(side: .new)
+        find.update(displayed: displayed(["x", "foo", "y"], old: ["foo", "foo", "x"], content: content))
+        find.query = "foo"
+        #expect(find.displayCount(for: .old) == nil)
         await complete(find, gate)
-        #expect(find.canStep)
-        #expect(find.activeReveal?.key.side == .old)
+        #expect(gate.calls.count == 1)
+        #expect(find.displayCount(for: .old) == 2)
+        #expect(find.displayCount(for: .new) == 1)
+        #expect(find.status == .position(index: 0, of: 1))
+    }
+
+    @Test func noMatchesOnTheSearchedSideKeepsTheSide() async {
+        let (find, gate) = makeFind()
+        find.present(side: .new)
+        find.update(displayed: displayed(["x", "y"], old: ["foo", "foo"], content: content))
+        find.query = "foo"
+        await complete(find, gate)
+        #expect(find.status == .noResults)
+        #expect(find.displayCount(for: .old) == 2)
+        #expect(!find.canStep)
+
+        find.next()
+        #expect(find.side == .new)
+        #expect(find.currentIndex == nil)
+        #expect(find.reveal == nil)
+    }
+
+    @Test func presentOpensOnTheGivenSide() async {
+        let (find, gate) = makeFind()
+        find.present(side: .old)
+        find.update(displayed: displayed(["x", "foo"], old: ["foo", "x"], content: content))
+        find.query = "foo"
+        await complete(find, gate)
+        #expect(find.side == .old)
+        #expect(find.activeReveal?.side == .old)
+        #expect(find.activeReveal?.match.documentRow == 0)
+
+        find.dismiss()
+        find.present(side: .new)
+        #expect(find.side == .new)
     }
 
     @Test func changingTheQueryHidesTheStepsReveal() async {
@@ -284,11 +353,11 @@ struct FindStateTests {
         find.query = "foo"
         await complete(find, gate)
         #expect(find.canStep)
-        #expect(find.counterText == "1 of 2")
+        #expect(find.status == .position(index: 0, of: 2))
 
         find.update(displayed: displayed(doc.document.newLines, content: content))
         #expect(!find.canStep)
-        #expect(find.counterText.isEmpty)
+        #expect(find.status == .count(2), "a stale projection shows the count, never a position")
         #expect(find.presentation != nil, "fills survive until the replacement arrives")
         await complete(find, gate)
         #expect(find.canStep)
@@ -301,8 +370,8 @@ struct FindStateTests {
         let first = find.reveal?.id
 
         find.dismiss()
-        find.notePaneInteraction(.new)
-        find.present()
+        find.notePaneInteraction()
+        find.present(side: .new)
         await complete(find, gate)
         #expect(find.currentIndex == 0)
         #expect(find.reveal != nil)
@@ -311,7 +380,7 @@ struct FindStateTests {
         let focus = find.focusRequest
         let calls = gate.calls.count
         let reveal = find.reveal?.id
-        find.present()
+        find.present(side: .new)
         #expect(find.focusRequest == focus + 1)
         #expect(gate.calls.count == calls)
         #expect(find.reveal?.id == reveal)
@@ -397,7 +466,7 @@ struct FindStateTests {
         #expect(find.paneFocusRequest == nil)
 
         find.dismiss()
-        find.present()
+        find.present(side: .new)
         #expect(find.paneFocusRequest == nil)
 
         find.dismiss()

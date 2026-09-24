@@ -181,6 +181,14 @@ struct RepositoryCommands: Commands {
                 Button("Find Previous") { windowState?.find.previous() }
                     .keyboardShortcut("g", modifiers: [.command, .shift])
                     .disabled(!(windowState?.canStepFind ?? false))
+                Divider()
+                // Menu key equivalents fire before the field editor, so these work while typing.
+                Button("Search Left Side") { windowState?.selectFindSide(.old) }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                    .disabled(!(windowState?.canSelectFindSide ?? false))
+                Button("Search Right Side") { windowState?.selectFindSide(.new) }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                    .disabled(!(windowState?.canSelectFindSide ?? false))
             }
         }
         CommandGroup(after: .toolbar) {

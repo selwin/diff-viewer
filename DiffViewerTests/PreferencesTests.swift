@@ -58,6 +58,19 @@ struct PreferencesTests {
         #expect(!Preferences(defaults: defaults).showsSVGPreview)
     }
 
+    @Test func findSideDefaultsToNewAndRoundTripsAsLeftRight() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+        #expect(preferences.findSide == .new)
+        preferences.findSide = .old
+        #expect(defaults.string(forKey: "findScope") == "left")
+        #expect(Preferences(defaults: defaults).findSide == .old)
+        preferences.findSide = .new
+        #expect(defaults.string(forKey: "findScope") == "right")
+        #expect(Preferences(defaults: defaults).findSide == .new)
+    }
+
     @Test func clampsStoredFontSize() {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

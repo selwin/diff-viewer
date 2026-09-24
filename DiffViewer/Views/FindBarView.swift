@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The strip under the header while find is open: query, side, counter, and steps.
+/// The strip under the header while find is open: query, side, status, and steps.
 struct FindBarView: View {
+    @Environment(WindowState.self) private var windowState
     @Bindable var find: FindState
     @FocusState private var isFieldFocused: Bool
 
@@ -10,21 +11,24 @@ struct FindBarView: View {
             TextField("Find", text: $find.query)
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.small)
-                .frame(maxWidth: 320)
+                .frame(minWidth: 120, maxWidth: 320)
                 .focused($isFieldFocused)
                 .onSubmit { find.next() }
-            Picker("Search in:", selection: Binding(get: { find.side }, set: { find.selectSide($0) })) {
-                Text("Before").tag(DocumentSide.old)
-                Text("After").tag(DocumentSide.new)
+            // Once the field is at its minimum, the segments shorten their names before the row overflows.
+            ViewThatFits(in: .horizontal) {
+                ForEach(Self.segmentWidths, id: \.self) { scopeControl(maximumSegmentWidth: $0) }
             }
-            .pickerStyle(.menu)
-            .controlSize(.small)
-            .fixedSize()
-            Text(find.counterText)
+            // Served before the field, which only keeps its minimum; otherwise the stack splits
+            // the spare width and the narrowest variant wins.
+            .layoutPriority(1)
+            Text(statusText)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(
+                    find.status == .noResults ? AnyShapeStyle(Color(nsColor: .systemRed)) : AnyShapeStyle(.secondary)
+                )
                 .monospacedDigit()
                 .lineLimit(1)
+                .fixedSize()
             Button {
                 find.previous()
             } label: {
@@ -42,7 +46,7 @@ struct FindBarView: View {
             .buttonStyle(.borderless)
             .accessibilityLabel("Next match")
             .disabled(!find.canStep)
-            Spacer()
+            Spacer(minLength: 0)
             Button("Done") { find.dismiss() }
                 .controlSize(.small)
                 .keyboardShortcut(.cancelAction)
@@ -52,5 +56,25 @@ struct FindBarView: View {
         .background(.bar)
         .onAppear { isFieldFocused = true }
         .onChange(of: find.focusRequest) { isFieldFocused = true }
+    }
+
+    private static let segmentWidths: [CGFloat] = [180, 110, 72]
+
+    private func scopeControl(maximumSegmentWidth: CGFloat) -> some View {
+        FindScopeControl(
+            labels: windowState.findSideLabels, side: find.side, oldCount: find.displayCount(for: .old),
+            newCount: find.displayCount(for: .new), hasQuery: !find.query.isEmpty,
+            onSelect: { windowState.selectFindSide($0) }, maximumSegmentWidth: maximumSegmentWidth
+        )
+        .fixedSize()
+    }
+
+    private var statusText: String {
+        switch find.status {
+        case .empty: ""
+        case .noResults: "No results"
+        case let .position(index, count): "\(index + 1) of \(count)"
+        case let .count(count): count == 1 ? "1 match" : "\(count) matches"
+        }
     }
 }

@@ -64,14 +64,19 @@ struct DiffFinderTests {
         #expect(try find("", in: equalDocument(["anything"])).isEmpty)
     }
 
-    @Test func resultsGroupRangesByRow() throws {
-        let doc = equalDocument(["x", "ab ab", "ab"])
-        let key = FindKey(query: "ab", side: .new, contentID: UUID(), projectionID: UUID())
+    @Test func resultsGroupRangesByRowForBothSides() throws {
+        let doc = document(
+            old: ["ab", "ab ab", "x"], new: ["x", "ab ab", "ab"],
+            rows: (0..<3).map { DiffRow.equal(old: $0, new: $0) })
+        let key = FindKey(query: "ab", contentID: UUID(), projectionID: UUID())
         let displayed = DisplayedDocument(
             document: doc, displayRows: identity(doc), contentID: key.contentID, projectionID: key.projectionID)
         let results = try DiffFinder.results(for: key, in: displayed)
-        #expect(results.matches.count == 3)
-        #expect(results.rangesByRow == [1: [0..<2, 3..<5], 2: [0..<2]])
+        #expect(results.new.matches.count == 3)
+        #expect(results.new.rangesByRow == [1: [0..<2, 3..<5], 2: [0..<2]])
+        #expect(results.old.matches.map(\.documentRow) == [0, 1, 1])
+        #expect(results.old.rangesByRow == [0: [0..<2], 1: [0..<2, 3..<5]])
+        #expect(results.side(.old).rangesByRow == results.old.rangesByRow)
     }
 
     // MARK: Stepping
@@ -153,7 +158,7 @@ struct DiffFinderTests {
     @Test func projectionMatchRequiresSameContentAndProjection() {
         let content = UUID()
         let projection = UUID()
-        let key = FindKey(query: "q", side: .old, contentID: content, projectionID: projection)
+        let key = FindKey(query: "q", contentID: content, projectionID: projection)
         #expect(key.matchesProjection(contentID: content, projectionID: projection))
         #expect(!key.matchesProjection(contentID: UUID(), projectionID: projection))
         #expect(!key.matchesProjection(contentID: content, projectionID: UUID()))

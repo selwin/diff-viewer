@@ -114,6 +114,24 @@ screenshot.
 
 ---
 
+### J. Copy a failed commit's error (requested 2026-09-24)
+
+**Goal.** When a pre-commit hook fails, the reader can copy its whole output in one
+click, to paste into a terminal, an issue, or a chat. Today `ErrorAlert` shows a long
+message in a selectable scroll view, so copying takes select-all and ⌘C, and a short
+message sits in the alert's informative text, which can't be selected at all.
+
+**Design.**
+- A "Copy" button on the error alert, next to OK, that puts the whole trimmed message
+  on the pasteboard and leaves the alert open. The same message goes to the
+  pasteboard whether the alert shows it whole or as a summary plus a scroller.
+- Brief "Copied" feedback on the button. OK stays the default button.
+- It lives in `ErrorAlert`, so every git error (commit, stage, discard, sync) gets it.
+
+**Tests.** None beyond `ErrorAlert.layout`; UI, checked by screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.

@@ -42,6 +42,12 @@ final class Preferences {
         didSet { defaults.set(fontSize, forKey: Keys.fontSize) }
     }
 
+    /// The side find searches. Stored as "left"/"right", which read the same whatever
+    /// the sides are called.
+    var findSide: DocumentSide {
+        didSet { defaults.set(findSide == .old ? "left" : "right", forKey: Keys.findScope) }
+    }
+
     /// Most recently opened first.
     private(set) var recentRepositoryRoots: [RepositoryRoot] {
         didSet { defaults.set(recentRepositoryRoots.map(\.path), forKey: Keys.recentRepos) }
@@ -64,6 +70,7 @@ final class Preferences {
         static let showsSVGPreview = "showsSVGPreview"
         static let collapseContextLines = "collapseContextLines"
         static let confirmDestructiveFileActions = "confirmDestructiveFileActions"
+        static let findScope = "findScope"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -77,6 +84,7 @@ final class Preferences {
         showsSVGPreview = defaults.object(forKey: Keys.showsSVGPreview) as? Bool ?? true
         confirmDestructiveFileActions =
             defaults.object(forKey: Keys.confirmDestructiveFileActions) as? Bool ?? true
+        findSide = defaults.string(forKey: Keys.findScope) == "left" ? .old : .new
         foldOptions = FoldOptions.validated(contextLines: defaults.object(forKey: Keys.collapseContextLines) as? Int)
     }
 
