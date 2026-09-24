@@ -148,12 +148,18 @@ private struct FileRow: View {
                 Text(file.fileName)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if !file.directory.isEmpty {
-                    Text(file.directory)
+                if let originalPath = file.originalPath {
+                    // The arrow sits outside the truncated text so a long old path keeps it.
+                    HStack(spacing: 3) {
+                        Text("←")
+                        caption(originalPath)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else if !file.directory.isEmpty {
+                    caption(file.directory)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
                 }
             }
             Spacer(minLength: 8)
@@ -161,5 +167,10 @@ private struct FileRow: View {
         }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
+    }
+
+    /// Truncated at the head so the file name at the end stays visible.
+    private func caption(_ text: String) -> some View {
+        Text(text).lineLimit(1).truncationMode(.head)
     }
 }

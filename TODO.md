@@ -28,7 +28,7 @@ Where DiffViewer stands versus the bar:
 | Browse a previous commit's diffs | yes (changesets) | yes (graph) | yes (tabs) | **yes** (picker) |
 | Sidebar filter (name / ext / kind) | yes | partial | yes | **no** |
 | Folder outline in sidebar | yes | no (long-requested) | no | **no** |
-| Rename / move detection | yes | yes | yes | **no** (`--no-renames`) |
+| Rename / move detection | yes | yes | yes | **yes** (exact) |
 | Image diff | no | yes | no (top request) | **yes** (side by side, no onion-skin) |
 | Text selection / copy from panes | yes | yes | yes | **yes** |
 
@@ -202,6 +202,34 @@ windows, if one is added, gets tests for when it runs.
 
 ---
 
+### M. Redesign how renames and file paths look (requested 2026-09-24)
+
+**Goal.** Make moved and renamed files, and file paths in general, read clearly in the
+sidebar, the single-file view and the All changes view, and make the three consistent.
+
+**Today.**
+- A rename has an `R` badge, which is git's status letter (`Kind.rawValue`). A different
+  glyph needs a display property on `Kind`, because the parser matches on the raw value.
+- Sidebar: the new file name, with `← old/dir/OldName.swift` as the caption. The caption
+  truncates at the head, so the old name stays visible.
+- Single-file header: `NewName.swift ← old/dir/OldName.swift`, a copy button, and the new
+  directory at the right edge.
+- All changes section header: the same layout in monospace, but the old path truncates at
+  the tail, so a long old path loses its file name (`← src/Deep/Nested/Directo…`).
+- The sidebar never shows a rename's new directory, because the old path replaces it.
+  Both headers put the new directory at the far right, away from the name, so a move
+  between folders reads as two separate facts rather than one change of path.
+
+**To decide.**
+- How a move between folders differs from a rename in place: show only the part that
+  changed, or old and new paths in full.
+- One truncation rule for every path.
+- Whether the badge stays `R` or says "moved" when only the directory changed.
+
+**Tests.** None; UI, checked by screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -246,10 +274,16 @@ Roughly in priority order.
   git for as long as it runs. An SSH connection or a credential helper that hangs keeps
   the picker's spinner going; only `GIT_TERMINAL_PROMPT=0` guards against a prompt
   today. Give them a timeout that stops git and reports it.
-- **Rename and move detection.** Status currently runs with `--no-renames`. Switch to
-  `--find-renames` and show `old → new` in the sidebar and header (already supported by
-  `ChangedFile.originalPath`); diff the renamed pair instead of showing a delete plus an
-  add. Sublime Merge and Kaleidoscope both show moves.
+- **Undo Move.** For an unstaged move: restore the old path and move the new file to the
+  Trash.
+- **Highlight a rename's old side by its own name.** `DiffEngine.Sources` carries only
+  the new file name, so a rename that shows edits colours its old side with the new
+  extension's grammar. That happens today for an intent-to-add move (`.R`) under a clean
+  filter, where the raw old and new text can differ.
+- **Similarity-based rename detection.** Deliberately not done: git runs with
+  `--find-renames=100%`, so only content-identical renames are paired. Git compares
+  content after clean filters; the app's own pairing of an unstaged `mv` compares raw
+  bytes. A renamed and edited file still shows as a delete plus an add.
 - **Sidebar filtering.** Live filename filter field, filter by extension, filter by
   change kind (toggle the badge icons, as Kaleidoscope does). Sublime Merge users have
   asked for this since 2018.
