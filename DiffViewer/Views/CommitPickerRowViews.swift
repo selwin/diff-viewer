@@ -106,16 +106,27 @@ final class CurrentPillView: NSView {
 
 /// One row's face, shared by the commit picker's cells and pinned Working Tree row and
 /// by the branch picker's cells: gutter labels on the left, the subject, an optional
-/// CURRENT pill, and trailing text.
-/// The pill and trailing text are centred on the subject's capitals. As a table cell it
-/// stays an accessibility cell; a press, or the named accessibility action, activates
-/// the row.
+/// CURRENT pill, trailing text, and an optional accessory.
+/// The pill, trailing text and accessory are centred on the subject's capitals. As a
+/// table cell it stays an accessibility cell; a press, or the named accessibility action,
+/// activates the row, and the accessory's own actions are offered beside it.
 final class ScopeRowContentView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("ScopeRowContentView")
 
     /// Set by the table's owner; nil inside the pinned row, which presses as a whole,
     /// and on rows that cannot be activated.
     var onActivate: (() -> Void)?
+
+    /// A view at the right edge, before the trailing text; the commit picker never sets
+    /// one. Takes the space it needs only while it shows.
+    var accessory: NSView? {
+        didSet {
+            guard accessory !== oldValue else { return }
+            oldValue?.removeFromSuperview()
+            if let accessory { addSubview(accessory) }
+            needsLayout = true
+        }
+    }
 
     enum TrailingStyle {
         /// A commit's hash: monospaced, tertiary.
@@ -166,12 +177,15 @@ final class ScopeRowContentView: NSTableCellView {
     }
 
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
-        guard onActivate != nil else { return nil }
-        return [
-            NSAccessibilityCustomAction(name: accessibilityActionName) { [weak self] in
-                self?.accessibilityPerformPress() ?? false
-            }
-        ]
+        var actions: [NSAccessibilityCustomAction] = []
+        if onActivate != nil {
+            actions.append(
+                NSAccessibilityCustomAction(name: accessibilityActionName) { [weak self] in
+                    self?.accessibilityPerformPress() ?? false
+                })
+        }
+        actions += accessory?.accessibilityCustomActions() ?? []
+        return actions.isEmpty ? nil : actions
     }
 
     func configure(_ content: Content) {
@@ -205,6 +219,13 @@ final class ScopeRowContentView: NSTableCellView {
             x: subjectX, y: ((bounds.height - subjectHeight) / 2).rounded(), width: 0, height: subjectHeight)
         let centerY = CommitPickerMetrics.capCenterY(of: subject)
         var rightEdge = content.maxX - CommitPickerMetrics.textInset
+        if let accessory, !accessory.isHidden {
+            let size = accessory.intrinsicContentSize
+            accessory.frame = backingAlignedRect(
+                NSRect(x: rightEdge - size.width, y: centerY - size.height / 2, width: size.width, height: size.height),
+                options: CommitPickerMetrics.pixelAlignment)
+            rightEdge = accessory.frame.minX - 8
+        }
         if trailing.stringValue.isEmpty {
             trailing.frame = .zero
         } else {

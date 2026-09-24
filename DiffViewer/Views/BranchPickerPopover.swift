@@ -17,8 +17,8 @@ struct BranchPickerPopover: View {
                 windowState.isBranchPickerPresented = false
             },
             onDismiss: { windowState.isBranchPickerPresented = false },
-            onPull: { Task { await windowState.pull() } },
-            onPush: { Task { await windowState.push() } }
+            onPull: { name in Task { await windowState.pull(branch: name) } },
+            onPush: { name in Task { await windowState.push(branch: name) } }
         )
         .frame(width: 560, height: 520)
     }
@@ -30,8 +30,8 @@ struct BranchPickerListView: NSViewRepresentable {
     let grouping: CommitDayGrouping
     let onActivate: (String) -> Void
     let onDismiss: () -> Void
-    let onPull: () -> Void
-    let onPush: () -> Void
+    let onPull: (String) -> Void
+    let onPush: (String) -> Void
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
         let view = BranchPickerContainerView(state: BranchPickerState(snapshot: snapshot, grouping: grouping))

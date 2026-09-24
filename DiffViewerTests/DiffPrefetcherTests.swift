@@ -75,6 +75,9 @@ struct TaggedClient: RepoClient {
     func fetch(remote: String) async throws {}
     func pull() async throws {}
     func push(branch: String, to remote: String, remoteRef: String) async throws {}
+    func publish(branch: String, to remote: String) async throws {}
+    func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws {}
+    func configuredUpstreamRemotes() async throws -> [String: String] { [:] }
 }
 
 @MainActor

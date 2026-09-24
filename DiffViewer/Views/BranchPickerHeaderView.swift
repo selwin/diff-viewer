@@ -1,8 +1,8 @@
 import AppKit
 
 /// The branch picker's header: where HEAD is, with the CURRENT pill when it is on a
-/// branch, a detail line for how far that branch is from its upstream, and the Pull and
-/// Push buttons for closing that gap.
+/// branch, a detail line for how far that branch is from its upstream, and a spinner
+/// while the picker fetches. Pull and Push live on the rows.
 final class BranchPickerHeaderView: NSVisualEffectView {
     private static let topPadding: CGFloat = 13
     private static let sidePadding: CGFloat = 16
@@ -15,49 +15,18 @@ final class BranchPickerHeaderView: NSVisualEffectView {
     private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private let hairline = HairlineView(frame: .zero)
     private let fetchSpinner = NSProgressIndicator(frame: .zero)
-    private let pullButton = NSButton(title: "Pull", target: nil, action: nil)
-    private let pushButton = NSButton(title: "Push", target: nil, action: nil)
-    private let pullSpinner = NSProgressIndicator(frame: .zero)
-    private let pushSpinner = NSProgressIndicator(frame: .zero)
-    /// Measured once with the title in place, so a running button keeps its width while
-    /// its title is blank.
-    private var pullSize = NSSize.zero
-    private var pushSize = NSSize.zero
-
-    var onPull: () -> Void = {}
-    var onPush: () -> Void = {}
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
         material = .headerView
         blendingMode = .withinWindow
-        configure(fetchSpinner)
-        for (button, indicator) in [(pullButton, pullSpinner), (pushButton, pushSpinner)] {
-            button.bezelStyle = .rounded
-            button.controlSize = .small
-            button.sizeToFit()
-            // No key equivalent is set: Return belongs to the highlighted branch row.
-            configure(indicator)
-            indicator.frame.size = NSSize(width: 16, height: 16)
-            button.addSubview(indicator)
-        }
-        pullSize = pullButton.frame.size
-        pushSize = pushButton.frame.size
-        pullButton.bezelColor = .controlAccentColor
-        pullButton.target = self
-        pullButton.action = #selector(pullClicked)
-        pushButton.target = self
-        pushButton.action = #selector(pushClicked)
-        for view in [title, pill, detail, hairline, fetchSpinner, pushButton, pullButton] { addSubview(view) }
+        fetchSpinner.style = .spinning
+        fetchSpinner.controlSize = .small
+        fetchSpinner.isDisplayedWhenStopped = false
+        fetchSpinner.sizeToFit()
+        for view in [title, pill, detail, hairline, fetchSpinner] { addSubview(view) }
         pill.isHidden = true
-    }
-
-    private func configure(_ indicator: NSProgressIndicator) {
-        indicator.style = .spinning
-        indicator.controlSize = .small
-        indicator.isDisplayedWhenStopped = false
-        indicator.sizeToFit()
     }
 
     @available(*, unavailable)
@@ -65,12 +34,7 @@ final class BranchPickerHeaderView: NSVisualEffectView {
 
     override var isFlipped: Bool { true }
 
-    @objc private func pullClicked() { onPull() }
-    @objc private func pushClicked() { onPush() }
-
-    func configure(
-        _ text: BranchPickerHeaderText, pull pullState: PickerButtonState, push pushState: PickerButtonState
-    ) {
+    func configure(_ text: BranchPickerHeaderText) {
         title.stringValue = text.title
         pill.isHidden = !text.showsCurrentPill
         detail.stringValue = text.detail
@@ -80,27 +44,7 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         } else {
             fetchSpinner.stopAnimation(nil)
         }
-        apply(pullState, to: pullButton, indicator: pullSpinner, title: "Pull")
-        apply(pushState, to: pushButton, indicator: pushSpinner, title: "Push")
         needsLayout = true
-    }
-
-    /// A running button keeps its place and its width, and says so to VoiceOver: the
-    /// spinner replaces the title rather than the button.
-    private func apply(
-        _ state: PickerButtonState, to button: NSButton, indicator: NSProgressIndicator, title: String
-    ) {
-        button.isHidden = state == .hidden
-        button.title = state == .running ? "" : title
-        button.isEnabled = state == .enabled
-        button.toolTip = if case let .disabled(reason) = state { reason } else { nil }
-        button.setAccessibilityLabel(state == .running ? "\(title), in progress" : title)
-        if state == .running {
-            indicator.startAnimation(nil)
-        } else {
-            indicator.stopAnimation(nil)
-        }
-        indicator.isHidden = state != .running
     }
 
     /// Two text lines, padding, and the hairline; constant so counts arriving later do
@@ -125,32 +69,15 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         // Everything on the trailing edge is measured first; the title takes what is left.
         var trailing = maxX
         if !fetchSpinner.isHidden { trailing -= spinnerSize.width + Self.controlGap }
-        if !pullButton.isHidden { trailing -= pullSize.width + Self.controlGap }
-        if !pushButton.isHidden { trailing -= pushSize.width + Self.controlGap }
         let titleWidth = min(titleSize.width, trailing - Self.sidePadding - pillWidth)
         title.frame = NSRect(
             x: Self.sidePadding, y: Self.topPadding, width: max(titleWidth, 0), height: titleSize.height)
 
         let centerY = CommitPickerMetrics.capCenterY(of: title)
-        var x = maxX
         if !fetchSpinner.isHidden {
-            x -= spinnerSize.width
             fetchSpinner.frame = NSRect(
-                x: x, y: centerY - spinnerSize.height / 2, width: spinnerSize.width, height: spinnerSize.height)
-            x -= Self.controlGap
-        }
-        // Pull sits closest to the fetch spinner, Push to its left, so the two keep their order
-        // whichever of them is showing.
-        for (button, size) in [(pullButton, pullSize), (pushButton, pushSize)] where !button.isHidden {
-            x -= size.width
-            button.frame = NSRect(x: x, y: centerY - size.height / 2, width: size.width, height: size.height)
-            x -= Self.controlGap
-        }
-        for (button, indicator) in [(pullButton, pullSpinner), (pushButton, pushSpinner)] where !indicator.isHidden {
-            indicator.frame = NSRect(
-                x: (button.bounds.width - indicator.frame.width) / 2,
-                y: (button.bounds.height - indicator.frame.height) / 2,
-                width: indicator.frame.width, height: indicator.frame.height)
+                x: maxX - spinnerSize.width, y: centerY - spinnerSize.height / 2, width: spinnerSize.width,
+                height: spinnerSize.height)
         }
 
         if !pill.isHidden {

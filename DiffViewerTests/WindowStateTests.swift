@@ -58,9 +58,17 @@ actor StubRepoClient: RepoClient {
     private(set) var pullCalls = 0
     /// Every push asked for, in order, whether or not it succeeded.
     private(set) var pushCalls: [(branch: String, remote: String, remoteRef: String)] = []
+    /// Every publish asked for, in order, whether or not it succeeded.
+    private(set) var publishCalls: [(branch: String, remote: String)] = []
+    /// Every fast-forward asked for, in order, whether or not it succeeded.
+    private(set) var fastForwardCalls: [(branch: String, remote: String, remoteRef: String, localRef: String)] = []
+    private var stubbedUpstreamRemotes: [String: String] = [:]
     private var failsFetch = false
     private var holdsFetch = false
     private var heldFetch: [CheckedContinuation<Void, Never>] = []
+    /// Per-remote holds and failures, on top of the switches above.
+    private var heldFetchRemotes: Set<String> = []
+    private var failingFetchRemotes: Set<String> = []
     private var failsRemoteNames = false
     private var holdsRemoteNames = false
     private var heldRemoteNames: [CheckedContinuation<Void, Never>] = []
@@ -70,6 +78,12 @@ actor StubRepoClient: RepoClient {
     private var failsPush = false
     private var holdsPush = false
     private var heldPush: [CheckedContinuation<Void, Never>] = []
+    private var failsPublish = false
+    private var holdsPublish = false
+    private var heldPublish: [CheckedContinuation<Void, Never>] = []
+    private var failsFastForward = false
+    private var holdsFastForward = false
+    private var heldFastForward: [CheckedContinuation<Void, Never>] = []
     private var failsSwitchBranch = false
     private var holdsSwitchBranch = false
     private var heldSwitchBranch: [CheckedContinuation<Void, Never>] = []
@@ -354,8 +368,15 @@ actor StubRepoClient: RepoClient {
     func set(remoteNames names: [String]) { stubbedRemoteNames = names }
     /// Makes `fetch` throw, after recording the call.
     func fail(fetch on: Bool) { failsFetch = on }
+    /// Makes `fetch` of one remote throw.
+    func fail(fetch on: Bool, remote: String) {
+        if on { failingFetchRemotes.insert(remote) } else { failingFetchRemotes.remove(remote) }
+    }
     func fail(pull on: Bool) { failsPull = on }
     func fail(push on: Bool) { failsPush = on }
+    func fail(publish on: Bool) { failsPublish = on }
+    func fail(fastForward on: Bool) { failsFastForward = on }
+    func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
 
     /// Makes `remoteNames` throw, after recording the call.
     func fail(remoteNames on: Bool) { failsRemoteNames = on }
@@ -369,6 +390,10 @@ actor StubRepoClient: RepoClient {
     }
     /// Suspends `fetch` after it records the call.
     func holdFetch(_ on: Bool) { holdsFetch = on }
+    /// Suspends `fetch` of one remote; `releaseFetch` lets it go.
+    func holdFetch(_ on: Bool, remote: String) {
+        if on { heldFetchRemotes.insert(remote) } else { heldFetchRemotes.remove(remote) }
+    }
     var heldFetchCount: Int { heldFetch.count }
     func releaseFetch() {
         let waiting = heldFetch
@@ -390,10 +415,12 @@ actor StubRepoClient: RepoClient {
 
     func fetch(remote: String) async throws {
         fetchCalls.append(remote)
-        if holdsFetch {
+        if holdsFetch || heldFetchRemotes.contains(remote) {
             await withCheckedContinuation { heldFetch.append($0) }
         }
-        if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
+        if failsFetch || failingFetchRemotes.contains(remote) {
+            throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed")
+        }
     }
 
     /// Suspends `pull` after it records the call.
@@ -412,6 +439,22 @@ actor StubRepoClient: RepoClient {
         heldPush = []
         for continuation in waiting { continuation.resume() }
     }
+    /// Suspends `publish` after it records the call.
+    func holdPublish(_ on: Bool) { holdsPublish = on }
+    var heldPublishCount: Int { heldPublish.count }
+    func releasePublish() {
+        let waiting = heldPublish
+        heldPublish = []
+        for continuation in waiting { continuation.resume() }
+    }
+    /// Suspends `fastForward` after it records the call.
+    func holdFastForward(_ on: Bool) { holdsFastForward = on }
+    var heldFastForwardCount: Int { heldFastForward.count }
+    func releaseFastForward() {
+        let waiting = heldFastForward
+        heldFastForward = []
+        for continuation in waiting { continuation.resume() }
+    }
 
     func pull() async throws {
         pullCalls += 1
@@ -428,6 +471,26 @@ actor StubRepoClient: RepoClient {
         }
         if failsPush { throw ProcessError.failed(command: "git push", status: 1, stderr: "push failed") }
     }
+
+    func publish(branch: String, to remote: String) async throws {
+        publishCalls.append((branch: branch, remote: remote))
+        if holdsPublish {
+            await withCheckedContinuation { heldPublish.append($0) }
+        }
+        if failsPublish { throw ProcessError.failed(command: "git push", status: 1, stderr: "publish failed") }
+    }
+
+    func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws {
+        fastForwardCalls.append((branch: branch, remote: remote, remoteRef: remoteRef, localRef: localRef))
+        if holdsFastForward {
+            await withCheckedContinuation { heldFastForward.append($0) }
+        }
+        if failsFastForward {
+            throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fast-forward failed")
+        }
+    }
+
+    func configuredUpstreamRemotes() async throws -> [String: String] { stubbedUpstreamRemotes }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
         historyCalls += 1

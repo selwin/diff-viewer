@@ -28,8 +28,16 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
     var fetchStatus: FetchStatus = .idle
-    /// The pull or push in flight, or nil when neither is running.
-    var activeSyncOperation: SyncOperation?
+    /// The pull or push in flight and its branch, or nil when neither is running.
+    var activeSync: ActiveSync?
+    /// Every remote being fetched, the current branch's included.
+    var fetchingRemotes: Set<String> = []
+    var remotes: [String] = []
+    /// Branch name to its configured upstream remote, including upstreams git can't map.
+    var configuredUpstreamRemotes: [String: String] = [:]
+    /// Remote to git's message, for each remote other than the current branch's whose
+    /// fetch failed.
+    var secondaryFetchFailures: [String: String] = [:]
 }
 
 struct BranchPickerRow: Equatable {
@@ -90,6 +98,13 @@ struct BranchPickerHeaderText: Equatable {
     }
 }
 
+/// What the table must do after a snapshot. Row buttons change apart from the rows, so a
+/// busy state coming and going restyles buttons without reloading any row.
+struct BranchPickerChange: Equatable {
+    var rows: PickerTableChange
+    var buttonsChanged: Bool
+}
+
 /// The branch picker's model: the rows, the highlight, and what the table must do after
 /// each snapshot. Picker behavior independent of AppKit.
 ///
@@ -144,20 +159,29 @@ struct BranchPickerState {
     }
 
     /// A failed read keeps the last list up, and saying the counts may be stale outranks
-    /// any fetch news: the numbers on screen are what the reader is judging.
+    /// any fetch news: the numbers on screen are what the reader is judging. Failures
+    /// come before success, the header's remote before the others.
     var footer: BranchPickerFooter {
         if !rows.isEmpty, snapshot.readStatus == .failed {
             return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
         }
-        switch snapshot.fetchStatus {
-        case let .fetched(remote, at):
-            return .text("Fetched \(remote) \(Self.fetchedTime(at))", tooltip: nil)
-        case let .failed(remote, message):
+        if case let .failed(remote, message) = snapshot.fetchStatus {
             let text = remote.map { "Couldn't fetch \($0)" } ?? "Couldn't load remotes"
             return .text(text, tooltip: message)
-        case .idle, .fetching, .noFetchTarget:
-            return .none
         }
+        let failures = snapshot.secondaryFetchFailures.sorted { $0.key < $1.key }
+        if let only = failures.first, failures.count == 1 {
+            return .text("Couldn't fetch \(only.key)", tooltip: only.value)
+        }
+        if !failures.isEmpty {
+            let names = failures.map(\.key).joined(separator: ", ")
+            let messages = failures.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
+            return .text("Couldn't fetch \(names)", tooltip: messages)
+        }
+        if case let .fetched(remote, at) = snapshot.fetchStatus {
+            return .text("Fetched \(remote) \(Self.fetchedTime(at))", tooltip: nil)
+        }
+        return .none
     }
 
     /// Wall-clock time rather than "just now", which would go stale while the popover
@@ -170,13 +194,18 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// Both buttons at once, so a view configures them from one reading of the snapshot.
-    var syncButtons: (pull: PickerButtonState, push: PickerButtonState) {
-        let isFetching = if case .fetching = snapshot.fetchStatus { true } else { false }
-        return SyncPolicy.buttons(
-            target: SyncPolicy.target(
-                readStatus: snapshot.readStatus, headState: snapshot.headState, branches: snapshot.branches),
-            active: snapshot.activeSyncOperation, isSwitching: snapshot.isSwitchingBranch, isFetching: isFetching)
+    /// A row's Pull and Push, or nil past the end. Uses the same fetch check as
+    /// `WindowState.sync`, so an enabled button always runs.
+    func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
+        guard rows.indices.contains(row) else { return nil }
+        return Self.syncButtons(for: rows[row], snapshot: snapshot)
+    }
+
+    private static func syncButtons(for row: BranchPickerRow, snapshot: BranchPickerSnapshot) -> RowSyncButtons {
+        SyncPolicy.rowButtons(
+            branch: row.branch, isCurrent: row.isCurrent, readStatus: snapshot.readStatus,
+            active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch,
+            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes)
     }
 
     func branchName(forTableRow row: Int) -> String? {
@@ -193,13 +222,21 @@ struct BranchPickerState {
     // MARK: Snapshots
 
     /// Takes a new snapshot and reports what the table must do. Header, footer and the
-    /// empty state are re-read after every call; only the rows are reported.
-    mutating func apply(_ new: BranchPickerSnapshot) -> PickerTableChange {
-        guard new != snapshot else { return .none }
+    /// empty state are re-read after every call; only the rows and buttons are reported.
+    mutating func apply(_ new: BranchPickerSnapshot) -> BranchPickerChange {
+        guard new != snapshot else { return BranchPickerChange(rows: .none, buttonsChanged: false) }
         let old = snapshot
+        let oldButtons = rows.map { Self.syncButtons(for: $0, snapshot: old) }
         snapshot = new
-        // A read status, a fetch status or a sync in flight moves no row. A switch flag does change whether a
-        // row can activate, which its cell holds, so every row is refreshed in place.
+        let rowChange = applyRows(new, old: old)
+        let buttonsChanged = rows.map { Self.syncButtons(for: $0, snapshot: new) } != oldButtons
+        return BranchPickerChange(rows: rowChange, buttonsChanged: buttonsChanged)
+    }
+
+    private mutating func applyRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
+        // A read status, fetch news, the remotes or a sync in flight moves no row. A switch
+        // flag does change whether a row can activate, which its cell holds, so every row
+        // is refreshed in place.
         guard new.branches != old.branches || new.headState != old.headState else {
             return new.isSwitchingBranch != old.isSwitchingBranch
                 ? .incremental(inserted: nil, refreshed: IndexSet(rows.indices))

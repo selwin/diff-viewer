@@ -9,15 +9,15 @@ enum LocalBranchParseError: Error, LocalizedError {
         case let .unreadableDate(field):
             "git for-each-ref returned an unreadable date: \(field)"
         case let .malformedRecord(line):
-            "git for-each-ref returned a record without six fields: \(line)"
+            "git for-each-ref returned a record without seven fields: \(line)"
         }
     }
 }
 
 /// Parses `git for-each-ref` written with the field layout in `GitClient.localBranches`:
-/// one branch per line, six NUL-separated fields — ref name, upstream short name,
-/// upstream track, upstream remote name, upstream remote ref, committer date. The
-/// upstream fields may be empty; the committer date must parse.
+/// one branch per line, seven NUL-separated fields — ref name, upstream short name,
+/// upstream track, upstream remote name, upstream remote ref, committer date, upstream
+/// full ref. The upstream fields may be empty; the committer date must parse.
 enum LocalBranchParser {
     static func parse(_ output: String) throws -> [LocalBranch] {
         let dates = ISO8601DateFormatter()
@@ -27,7 +27,7 @@ enum LocalBranchParser {
         // inside a name.
         return try output.split(separator: "\n").map { line in
             let fields = line.components(separatedBy: "\0")
-            guard fields.count == 6 else { throw LocalBranchParseError.malformedRecord(String(line)) }
+            guard fields.count == 7 else { throw LocalBranchParseError.malformedRecord(String(line)) }
 
             let shortName = fields[1]
             let date = fields[5]
@@ -43,6 +43,7 @@ enum LocalBranchParser {
                         shortName: shortName,
                         remote: fields[3],
                         remoteRef: fields[4],
+                        localRef: fields[6],
                         tracking: UpstreamTracking.parse(fields[2])),
                 tipCommittedAt: tipCommittedAt)
         }

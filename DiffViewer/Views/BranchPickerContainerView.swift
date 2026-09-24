@@ -9,8 +9,8 @@ final class BranchPickerContainerView: NSView {
 
     var onActivate: (String) -> Void = { _ in }
     var onDismiss: () -> Void = {}
-    var onPull: () -> Void = {}
-    var onPush: () -> Void = {}
+    var onPull: (String) -> Void = { _ in }
+    var onPush: (String) -> Void = { _ in }
 
     let header = BranchPickerHeaderView(frame: .zero)
     let gutter = CommitPickerGutterView(frame: .zero)
@@ -32,16 +32,6 @@ final class BranchPickerContainerView: NSView {
         super.init(frame: .zero)
         clipsToBounds = true
         configureTable()
-        // The popover stays up during an operation, and the table keeps the keyboard:
-        // a button click must not leave focus on a button that is about to disable.
-        header.onPull = { [weak self] in
-            self?.onPull()
-            self?.returnFocusToTable()
-        }
-        header.onPush = { [weak self] in
-            self?.onPush()
-            self?.returnFocusToTable()
-        }
         for view in [gutter, header, scrollView, footer, emptyState] { addSubview(view) }
         renderChrome()
     }
@@ -65,6 +55,9 @@ final class BranchPickerContainerView: NSView {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.handler = self
+        tableView.onHoverChange = { [weak self] previous, current in
+            self?.updateSyncButtons(rows: [previous, current].compactMap { $0 })
+        }
         scrollView.documentView = tableView
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
@@ -87,7 +80,8 @@ final class BranchPickerContainerView: NSView {
         guard snapshot != state.snapshot else { return }
         // A reload can move or drop the table's selection; none of that is the reader's.
         isApplyingSelection = true
-        switch state.apply(snapshot) {
+        let change = state.apply(snapshot)
+        switch change.rows {
         case .none:
             break
         case let .incremental(inserted, refreshed):
@@ -102,6 +96,11 @@ final class BranchPickerContainerView: NSView {
             tableView.reloadData()
         }
         isApplyingSelection = false
+        // Reloaded cells configured their buttons already; the others are restyled here.
+        if change.buttonsChanged {
+            let visible = tableView.rows(in: tableView.visibleRect)
+            updateSyncButtons(rows: visible.lowerBound..<visible.upperBound)
+        }
         syncSelection()
         renderChrome()
         // Rows that arrive after the first layout get the initial reveal here: layout
@@ -110,21 +109,23 @@ final class BranchPickerContainerView: NSView {
         tableView.refreshHover()
     }
 
-    /// Moves the table's selection to the highlight without scrolling.
+    /// Moves the table's selection to the highlight without scrolling. The row buttons
+    /// follow the highlight.
     func syncSelection() {
         let wasApplying = isApplyingSelection
         isApplyingSelection = true
         defer { isApplyingSelection = wasApplying }
+        let previous = tableView.selectedRow
         if let row = state.highlightedTableRow {
             tableView.selectRowIndexes([row], byExtendingSelection: false)
         } else {
             tableView.deselectAll(nil)
         }
+        updateSyncButtons(rows: [previous, state.highlightedTableRow].compactMap { $0 })
     }
 
     private func renderChrome() {
-        let buttons = state.syncButtons
-        header.configure(state.headerText, pull: buttons.pull, push: buttons.push)
+        header.configure(state.headerText)
         switch state.footer {
         case .none:
             footer.configure(text: "", tooltip: nil, isLoading: false, showsRetry: false)
@@ -145,7 +146,44 @@ final class BranchPickerContainerView: NSView {
     // MARK: Highlight
 
     func highlight(tableRow row: Int) {
+        let previous = state.highlightedTableRow
         state.highlight(tableRow: row)
+        updateSyncButtons(rows: [previous, row].compactMap { $0 })
+    }
+
+    // MARK: Row buttons
+
+    /// Sets `cell`'s buttons from the current snapshot. They show on the hovered and the
+    /// highlighted row, and wherever one runs.
+    func configureSyncButtons(of cell: ScopeRowContentView, row: Int) {
+        guard let buttons = state.syncButtons(forTableRow: row), let name = state.branchName(forTableRow: row) else {
+            cell.accessory = nil
+            return
+        }
+        let view = cell.accessory as? BranchRowSyncButtons ?? BranchRowSyncButtons(frame: .zero)
+        // The popover stays up during an operation, and the table keeps the keyboard: a
+        // click must not leave focus on a button that is about to disable.
+        view.configure(
+            buttons, isRevealed: row == tableView.hoveredRow || row == state.highlightedTableRow, branch: name,
+            onPull: { [weak self] name in
+                self?.onPull(name)
+                self?.returnFocusToTable()
+            },
+            onPush: { [weak self] name in
+                self?.onPush(name)
+                self?.returnFocusToTable()
+            })
+        cell.accessory = view
+        cell.needsLayout = true
+    }
+
+    /// Re-configures the buttons of whichever of `rows` have a cell on screen.
+    private func updateSyncButtons(rows: some Sequence<Int>) {
+        for row in rows where row >= 0 && row < tableView.numberOfRows {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ScopeRowContentView
+            else { continue }
+            configureSyncButtons(of: cell, row: row)
+        }
     }
 
     /// After a keyboard move: the selection follows, and the highlight is scrolled into view.

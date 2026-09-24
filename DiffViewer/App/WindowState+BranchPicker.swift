@@ -12,6 +12,7 @@ extension WindowState {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: branchReadStatus,
             isSwitchingBranch: isSwitchingBranch, fetchStatus: fetchStatus,
-            activeSyncOperation: activeSyncOperation)
+            activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
+            configuredUpstreamRemotes: configuredUpstreamRemotes, secondaryFetchFailures: secondaryFetchFailures)
     }
 }

@@ -8,6 +8,9 @@ struct BranchUpstream: Sendable, Equatable {
     let remote: String
     /// The ref as it exists on the remote: `refs/heads/main`. A push names it explicitly.
     let remoteRef: String
+    /// The local ref the counts compare against: `refs/remotes/origin/main`. A
+    /// fast-forward of a branch that is not checked out fetches into it by name.
+    let localRef: String
     let tracking: UpstreamTracking
 }
 

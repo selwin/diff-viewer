@@ -79,4 +79,15 @@ protocol RepoClient: Sendable {
     func pull() async throws
     /// Sends `branch` to `remoteRef` on `remote`, fast-forward only.
     func push(branch: String, to remote: String, remoteRef: String) async throws
+    /// Pushes `branch` to `remote` under the same name and sets it as the upstream. Never
+    /// forces, so a diverged remote branch rejects it.
+    func publish(branch: String, to remote: String) async throws
+    /// Moves a branch that is not checked out to the tip of `remoteRef` on `remote`,
+    /// fast-forward only, through its upstream ref `localRef` (a non-symbolic ref under
+    /// `refs/remotes/`). Git refuses a diverged branch or one checked out in any worktree.
+    func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws
+    /// The remote of each branch with both `branch.<name>.remote` and `.merge` set, keyed
+    /// by branch name. Covers branches whose upstream the fetch mapping misses, which
+    /// `localBranches` reports as having none.
+    func configuredUpstreamRemotes() async throws -> [String: String]
 }

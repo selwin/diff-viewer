@@ -13,12 +13,11 @@ struct FindBarView: View {
                 .frame(maxWidth: 320)
                 .focused($isFieldFocused)
                 .onSubmit { find.next() }
-            Picker("Side", selection: Binding(get: { find.side }, set: { find.selectSide($0) })) {
-                Text("Old").tag(DocumentSide.old)
-                Text("New").tag(DocumentSide.new)
+            Picker("Search in:", selection: Binding(get: { find.side }, set: { find.selectSide($0) })) {
+                Text("Before").tag(DocumentSide.old)
+                Text("After").tag(DocumentSide.new)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            .pickerStyle(.menu)
             .controlSize(.small)
             .fixedSize()
             Text(find.counterText)
