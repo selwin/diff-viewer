@@ -55,40 +55,6 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 
 ---
 
-### F. Push and pull branches from the branch picker (requested 2026-09-23)
-
-**Goal.** Every local branch in the branch picker gets Push and Pull buttons. A branch
-with no upstream is published with `git push --set-upstream <remote> <branch>`, so a
-branch made for a change can go up for review without leaving the app.
-
-**Design.**
-- Each branch row shows push / pull buttons, visible on hover or selection so the list
-  stays quiet. None of them switches the working tree to that branch.
-- Push: `git push <remote> <branch>` works on any local branch, checked out or not.
-  With no upstream (`git rev-parse --abbrev-ref <branch>@{u}` fails), push with
-  `--set-upstream`, and relabel the button "Publish". Never force-push.
-- Pull, current branch: `git pull --ff-only`, so it never creates a merge or starts a
-  rebase. If it can't fast-forward, show git's message.
-- Pull, other branches: `git fetch <remote> <branch>:<branch>` fast-forwards a branch
-  that isn't checked out without touching the working tree. git refuses a
-  non-fast-forward, and we surface that. Disabled when the branch has no upstream.
-- Remote: the branch's upstream remote when set. Otherwise `origin` when it exists,
-  otherwise the only remote. With several remotes and no `origin`, ask. No remote means
-  no buttons.
-- Ahead/behind counts from item C, per row, tell the reader which button matters.
-- Run off the main thread with a timeout (credential helpers and SSH prompts can hang),
-  show progress on the row, and surface git's stderr on failure. A pull on the current
-  branch refreshes the diff through the existing watcher.
-- Scope: push and pull are not in CLAUDE.md's list of allowed actions; add them there
-  ("push a local branch to its remote; fast-forward a local branch from it") when this
-  lands.
-
-**Tests.** Remote choice from a branch's upstream and a list of remotes; detecting "no
-upstream" from git's output; choosing the pull command for the current branch versus
-any other branch.
-
----
-
 ### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. Commit…
@@ -192,6 +158,10 @@ Roughly in priority order.
   identity check via `git var GIT_AUTHOR_IDENT` before enabling the button; timeouts on
   git calls (a hanging gpg pinentry); undo last commit; and watching a linked
   worktree's git dir (HEAD, the index and merge metadata there are missed today).
+- **Timeout on remote git calls.** Fetch, pull, push, publish and fast-forward wait on
+  git for as long as it runs. An SSH connection or a credential helper that hangs keeps
+  the picker's spinner going; only `GIT_TERMINAL_PROMPT=0` guards against a prompt
+  today. Give them a timeout that stops git and reports it.
 - **Rename and move detection.** Status currently runs with `--no-renames`. Switch to
   `--find-renames` and show `old → new` in the sidebar and header (already supported by
   `ChangedFile.originalPath`); diff the renamed pair instead of showing a delete plus an

@@ -1,9 +1,10 @@
 import AppKit
 
-/// A branch row's Pull and Push buttons, Push on the left. A running button keeps its
-/// place and its width: the spinner replaces the title rather than the button. The
-/// callbacks carry the branch these were configured for, never a row index, so a
-/// recycled cell cannot act on another row.
+/// A branch row's Pull and Push buttons, Push on the left, where Publish takes Push's
+/// place on a branch that tracks nothing. A running button keeps its place and its
+/// width: the spinner replaces the title rather than the button. The callbacks carry the
+/// branch these were configured for, never a row index, so a recycled cell cannot act on
+/// another row.
 final class BranchRowSyncButtons: NSView {
     private static let gap: CGFloat = 6
 
@@ -18,6 +19,7 @@ final class BranchRowSyncButtons: NSView {
     private var states = RowSyncButtons.hidden
     private var onPull: () -> Void = {}
     private var onPush: () -> Void = {}
+    private var onPublish: (String) -> Void = { _ in }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -48,17 +50,47 @@ final class BranchRowSyncButtons: NSView {
     override var isFlipped: Bool { true }
 
     @objc private func pullClicked() { onPull() }
-    @objc private func pushClicked() { onPush() }
+    @objc private func pushClicked() {
+        switch states.publish {
+        case nil: onPush()
+        case let .remote(remote): onPublish(remote)
+        case let .menu(items): showPublishMenu(items)
+        }
+    }
 
+    /// Drops down from the button. A remote being fetched is listed, disabled.
+    private func showPublishMenu(_ items: [PublishMenuItem]) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        // Bound now: a refresh can reconfigure this reused view for another branch while
+        // the menu is open.
+        let publish = onPublish
+        for item in items {
+            let entry = NSMenuItem(title: item.remote, action: #selector(publishRemoteChosen), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = PublishChoice { publish(item.remote) }
+            entry.isEnabled = item.isEnabled
+            menu.addItem(entry)
+        }
+        let below = NSPoint(x: 0, y: pushButton.isFlipped ? pushButton.bounds.maxY + 2 : -2)
+        menu.popUp(positioning: nil, at: below, in: pushButton)
+    }
+
+    @objc private func publishRemoteChosen(_ sender: NSMenuItem) {
+        (sender.representedObject as? PublishChoice)?.run()
+    }
+
+    // swiftlint:disable function_parameter_count
     /// Shows the buttons while `isRevealed` or while one of them runs, and hides the view
-    /// when neither has anything to show.
+    /// when neither has anything to show. `onPublish` takes the branch, then the remote.
     func configure(
         _ buttons: RowSyncButtons, isRevealed: Bool, branch: String, onPull: @escaping (String) -> Void,
-        onPush: @escaping (String) -> Void
+        onPush: @escaping (String) -> Void, onPublish: @escaping (String, String) -> Void
     ) {
         states = buttons
         self.onPull = { onPull(branch) }
         self.onPush = { onPush(branch) }
+        self.onPublish = { onPublish(branch, $0) }
         pullSize = apply(buttons.pull, to: pullButton, indicator: pullSpinner, title: "Pull")
         pushSize = apply(buttons.push, to: pushButton, indicator: pushSpinner, title: buttons.pushTitle)
         let isRunning = buttons.pull == .running || buttons.push == .running
@@ -66,6 +98,7 @@ final class BranchRowSyncButtons: NSView {
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
+    // swiftlint:enable function_parameter_count
 
     /// Returns the button's size with its title in place.
     private func apply(
@@ -111,22 +144,43 @@ final class BranchRowSyncButtons: NSView {
     // MARK: Accessibility
 
     /// The enabled buttons as actions, so the row offers them whether or not they show.
+    /// A menu's remotes become one action each, since VoiceOver can't open the menu.
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
         var actions: [NSAccessibilityCustomAction] = []
         if states.pull == .enabled {
-            actions.append(
-                NSAccessibilityCustomAction(name: "Pull") { [weak self] in
-                    self?.onPull()
-                    return self != nil
-                })
+            actions.append(action("Pull") { $0.onPull() })
         }
         if states.push == .enabled {
-            actions.append(
-                NSAccessibilityCustomAction(name: states.pushTitle) { [weak self] in
-                    self?.onPush()
-                    return self != nil
-                })
+            switch states.publish {
+            case nil:
+                actions.append(action(states.pushTitle) { $0.onPush() })
+            case let .remote(remote):
+                actions.append(action("Publish") { $0.onPublish(remote) })
+            case let .menu(items):
+                for item in items where item.isEnabled {
+                    actions.append(action("Publish to \(item.remote)") { $0.onPublish(item.remote) })
+                }
+            }
         }
         return actions
+    }
+
+    private func action(
+        _ name: String, _ perform: @escaping @MainActor (BranchRowSyncButtons) -> Void
+    ) -> NSAccessibilityCustomAction {
+        NSAccessibilityCustomAction(name: name) { [weak self] in
+            guard let self else { return false }
+            perform(self)
+            return true
+        }
+    }
+}
+
+/// A Publish menu item's action, bound to its branch and remote when the menu is built.
+private final class PublishChoice {
+    let run: () -> Void
+
+    init(_ run: @escaping () -> Void) {
+        self.run = run
     }
 }

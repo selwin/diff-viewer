@@ -1431,6 +1431,24 @@ extension WindowState {
         await sync(.push, branch: branch)
     }
 
+    /// Pushes `branch`, which tracks nothing, to the same name on `remote` and makes that
+    /// its upstream. Admitted on the same terms as a pull or push, and on the same chain.
+    func publish(branch: String, to remote: String) async {
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
+            fetchStatus != .fetching(remote: nil), !fetchingRemotes.contains(remote)
+        else { return }
+        let request = PublishRequest(branch: branch, remote: remote)
+        guard
+            SyncPolicy.canPublish(
+                request, branches: branches, remotes: remotes, configuredRemote: configuredUpstreamRemotes[branch])
+        else { return }
+        // Before the first suspension: the admission guard.
+        activeSync = ActiveSync(branch: branch, operation: .publish)
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runPublish(request, session: session)
+        }
+    }
+
     /// Admits one operation at a time, and only one the counts on screen allow. Runs on
     /// the write chain, which serializes sync operations with the local writes, so
     /// revalidation and execution both see the branch state the reader acted on.
@@ -1510,6 +1528,9 @@ extension WindowState {
             case .push:
                 try await session.client.push(
                     branch: requested.branch, to: requested.remote, remoteRef: requested.remoteRef)
+            case .publish:
+                // `allows` refuses it above; a publish runs through `runPublish`.
+                return
             }
         } catch { failure = error }
         guard session === self.session, !isClosed else { return }
@@ -1527,6 +1548,72 @@ extension WindowState {
         // and no commit on screen: only the counts move.
         await awaitBranchRead(session: session)
         guard session === self.session, !isClosed, let failure else { return }
+        // After the refresh, so the news survives it.
+        errorMessage = failure.localizedDescription
+    }
+
+    /// Revalidates against the repository, publishes, and re-reads the branches and the
+    /// configured upstreams, which the publish writes. The reservation is released on
+    /// every exit.
+    private func runPublish(_ request: PublishRequest, session: RepoSession) async {
+        defer { activeSync = nil }
+        guard session === self.session, !isClosed else { return }
+
+        // Read directly, as `runSync` does: the branch may have gained an upstream, or its
+        // remote gone, while this waited its turn.
+        let list: [LocalBranch]
+        let remotes: [String]
+        let configured: [String: String]
+        do {
+            list = try await session.client.localBranches()
+            guard session === self.session, !isClosed else { return }
+            remotes = try await session.client.remoteNames()
+            guard session === self.session, !isClosed else { return }
+            configured = try await session.client.configuredUpstreamRemotes()
+        } catch {
+            guard session === self.session, !isClosed else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard session === self.session, !isClosed else { return }
+
+        let configuredRemote = configured[request.branch]
+        guard
+            SyncPolicy.canPublish(request, branches: list, remotes: remotes, configuredRemote: configuredRemote)
+        else {
+            // Stored after the branch read, so the row never pairs new config with old branches.
+            await awaitBranchRead(session: session)
+            guard session === self.session, !isClosed else { return }
+            self.remotes = remotes
+            configuredUpstreamRemotes = configured
+            if let branch = list.first(where: { $0.name == request.branch }),
+                let hidden = SyncPolicy.hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote)
+            {
+                errorMessage = "\(request.branch) tracks \(hidden), but fetch settings don't fetch it"
+            } else {
+                errorMessage = "Branch or upstream changed before the publish could start"
+            }
+            return
+        }
+
+        var failure: (any Error)?
+        do { try await session.client.publish(branch: request.branch, to: request.remote) } catch { failure = error }
+        guard session === self.session, !isClosed else { return }
+
+        // Re-read after either outcome, as after a push. A failed config read keeps the
+        // previous value, as the picker's own read does.
+        let fresh = try? await session.client.configuredUpstreamRemotes()
+        guard session === self.session, !isClosed else { return }
+        await awaitBranchRead(session: session)
+        guard session === self.session, !isClosed else { return }
+        if let fresh {
+            configuredUpstreamRemotes = fresh
+        } else if failure == nil {
+            // A successful publish wrote this config. Under a narrow fetch mapping the branch
+            // reads back as tracking nothing, and without it the row would offer Publish again.
+            configuredUpstreamRemotes[request.branch] = request.remote
+        }
+        guard let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
     }

@@ -77,11 +77,12 @@ struct SyncPolicyTests {
     private func buttons(
         _ branch: LocalBranch, isCurrent: Bool = true, readStatus: BranchReadStatus = .loaded,
         active: ActiveSync? = nil, isSwitching: Bool = false, isDiscovering: Bool = false,
-        fetchingRemotes: Set<String> = []
+        fetchingRemotes: Set<String> = [], remotes: [String] = [], configuredRemote: String? = nil
     ) -> RowSyncButtons {
         SyncPolicy.rowButtons(
             branch: branch, isCurrent: isCurrent, readStatus: readStatus, active: active, isSwitching: isSwitching,
-            isDiscovering: isDiscovering, fetchingRemotes: fetchingRemotes)
+            isDiscovering: isDiscovering, fetchingRemotes: fetchingRemotes, remotes: remotes,
+            configuredRemote: configuredRemote)
     }
 
     private func buttons(ahead: Int, behind: Int, isCurrent: Bool = true) -> RowSyncButtons {
@@ -159,5 +160,103 @@ struct SyncPolicyTests {
             buttons(tracked(ahead: 0, behind: 1), isCurrent: false, active: pulling)
                 == RowSyncButtons(pull: .disabled(reason: "Pulling feature…"), push: .hidden))
         #expect(buttons(tracked(ahead: 0, behind: 0), active: elsewhere) == .hidden, "nothing to disable")
+    }
+
+    // MARK: Publish
+
+    @Test func publishGoesToOriginThenTheOnlyRemoteElseAsks() {
+        #expect(SyncPolicy.publishRemote(remotes: []) == PublishRemote.none)
+        #expect(SyncPolicy.publishRemote(remotes: ["origin"]) == .remote("origin"))
+        #expect(SyncPolicy.publishRemote(remotes: ["fork", "origin"]) == .remote("origin"))
+        #expect(SyncPolicy.publishRemote(remotes: ["fork"]) == .remote("fork"))
+        #expect(SyncPolicy.publishRemote(remotes: ["fork", "upstream"]) == .ask(["fork", "upstream"]))
+    }
+
+    private let untracked = localBranch("feature")
+
+    private func publish(_ push: PickerButtonState, _ action: PublishAction? = nil) -> RowSyncButtons {
+        RowSyncButtons(pull: .hidden, push: push, pushTitle: "Publish", publish: action)
+    }
+
+    @Test func aBranchThatTracksNothingOffersPublish() {
+        for isCurrent in [true, false] {
+            #expect(
+                buttons(untracked, isCurrent: isCurrent, remotes: ["fork", "origin"])
+                    == publish(.enabled, .remote("origin")))
+        }
+        #expect(
+            buttons(untracked, remotes: ["fork", "upstream"])
+                == publish(
+                    .enabled,
+                    .menu([
+                        PublishMenuItem(remote: "fork", isEnabled: true),
+                        PublishMenuItem(remote: "upstream", isEnabled: true),
+                    ])))
+    }
+
+    @Test func publishIsHiddenWithNoRemoteOrNoRead() {
+        #expect(buttons(untracked) == .hidden, "no remotes")
+        #expect(buttons(untracked, readStatus: .failed, remotes: ["origin"]) == .hidden)
+        #expect(buttons(untracked, readStatus: .unread, remotes: ["origin"]) == .hidden)
+        let gone = localBranch("feature", upstream: upstream("origin/feature", tracking: .gone))
+        #expect(buttons(gone, remotes: ["origin"]) == .hidden, "a gone upstream is still an upstream")
+    }
+
+    @Test func publishIsDisabledWhenFetchSettingsHideTheUpstream() {
+        #expect(
+            buttons(untracked, remotes: ["origin", "fork"], configuredRemote: "fork")
+                == publish(.disabled(reason: "Tracks fork, but fetch settings don't fetch it")))
+        // A branch whose upstream reads normally ignores its config.
+        #expect(buttons(tracked(ahead: 0, behind: 0), remotes: ["origin"], configuredRemote: "origin") == .hidden)
+    }
+
+    @Test func publishWaitsOnDiscoveryAndOnItsRemotesFetch() {
+        let fetching = PickerButtonState.disabled(reason: "Fetching…")
+        #expect(buttons(untracked, isDiscovering: true, remotes: ["origin"]) == publish(fetching))
+        #expect(buttons(untracked, fetchingRemotes: ["origin"], remotes: ["origin"]) == publish(fetching))
+        #expect(
+            buttons(untracked, fetchingRemotes: ["fork"], remotes: ["origin", "fork"])
+                == publish(.enabled, .remote("origin")), "another remote's fetch")
+        #expect(
+            buttons(untracked, isDiscovering: true, remotes: ["fork", "upstream"]) == publish(fetching),
+            "discovery may change the list")
+        // A menu stays up, and only the remote being fetched waits.
+        #expect(
+            buttons(untracked, fetchingRemotes: ["fork"], remotes: ["fork", "upstream"])
+                == publish(
+                    .enabled,
+                    .menu([
+                        PublishMenuItem(remote: "fork", isEnabled: false),
+                        PublishMenuItem(remote: "upstream", isEnabled: true),
+                    ])))
+    }
+
+    @Test func aPublishRunsOnItsRowAndHoldsTheOthers() {
+        let publishing = ActiveSync(branch: "feature", operation: .publish)
+        #expect(buttons(untracked, active: publishing, remotes: ["origin"]) == publish(.running))
+        // The publish landed and the branch now tracks origin/feature.
+        let published = tracked(ahead: 0, behind: 0, name: "feature")
+        #expect(buttons(published, active: publishing, remotes: ["origin"]) == publish(.running))
+        #expect(
+            buttons(tracked(ahead: 1, behind: 0), active: publishing)
+                == RowSyncButtons(pull: .hidden, push: .disabled(reason: "Publishing feature…")))
+        let pushing = ActiveSync(branch: "main", operation: .push)
+        #expect(
+            buttons(untracked, active: pushing, remotes: ["origin"]) == publish(.disabled(reason: "Pushing main…")))
+        #expect(
+            buttons(untracked, isSwitching: true, remotes: ["origin"])
+                == publish(.disabled(reason: "Switching branch…")))
+    }
+
+    @Test func aPublishRequestNeedsAnUntrackedBranchAndItsRemote() {
+        let request = PublishRequest(branch: "feature", remote: "origin")
+        func can(_ branches: [LocalBranch], remotes: [String] = ["origin"], configured: String? = nil) -> Bool {
+            SyncPolicy.canPublish(request, branches: branches, remotes: remotes, configuredRemote: configured)
+        }
+        #expect(can([untracked]))
+        #expect(!can([tracked(ahead: 0, behind: 0, name: "feature")]), "gained an upstream")
+        #expect(!can([localBranch("main")]), "deleted")
+        #expect(!can([untracked], configured: "origin"), "hidden config")
+        #expect(!can([untracked], remotes: ["fork"]), "lost its remote")
     }
 }

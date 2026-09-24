@@ -1074,3 +1074,135 @@ struct WindowStateSyncTests {
         #expect(state.errorMessage == nil)
     }
 }
+
+/// Publishing a branch that tracks nothing from its row.
+@MainActor
+struct WindowStatePublishTests {
+    private let main = localBranch("main", upstream: upstream("origin/main"))
+    private let feature = localBranch("feature")
+
+    private func adopt(_ h: Harness, _ state: WindowState, branches: [LocalBranch], remotes: [String]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let repo = h.repo("A", files: [changedFile("a.swift")])
+        await repo.client.set(localBranches: branches)
+        await repo.client.set(remoteNames: remotes)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await state.branchReadStatus == .loaded })
+        return repo
+    }
+
+    /// Opens the picker, which reads the remotes Publish chooses from, and waits for its
+    /// fetches to finish.
+    private func openPicker(_ state: WindowState, remotes: [String]) async {
+        state.isBranchPickerPresented = true
+        #expect(
+            await eventually { @MainActor in
+                let fetching = if case .fetching = state.fetchStatus { true } else { false }
+                return state.remotes == remotes && !fetching && state.fetchingRemotes.isEmpty
+            })
+    }
+
+    @Test func aPublishSendsTheBranchToTheChosenRemote() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [localBranch("main"), feature], remotes: ["fork", "upstream"])
+        await openPicker(state, remotes: ["fork", "upstream"])
+        let readsBefore = await repo.client.localBranchesCalls
+
+        await state.publish(branch: "feature", to: "upstream")
+        let calls = await repo.client.publishCalls
+        #expect(calls.map(\.branch) == ["feature"])
+        #expect(calls.map(\.remote) == ["upstream"])
+        #expect(await repo.client.localBranchesCalls > readsBefore, "the branches are re-read")
+        #expect(state.activeSync == nil)
+        #expect(state.errorMessage == nil)
+    }
+
+    /// Under a narrow fetch mapping the published branch reads back as tracking nothing;
+    /// the config the publish wrote is what keeps its row from offering Publish again.
+    @Test func aPublishRemembersItsUpstreamWhenTheConfigRereadFails() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature], remotes: ["origin"])
+        await openPicker(state, remotes: ["origin"])
+        await repo.client.holdPublish(true)
+
+        let publishing = Task { await state.publish(branch: "feature", to: "origin") }
+        #expect(await eventually { await repo.client.heldPublishCount == 1 })
+        await repo.client.fail(configuredUpstreamRemotes: true)
+        await repo.client.holdPublish(false)
+        await repo.client.releasePublish()
+        await publishing.value
+
+        #expect(state.configuredUpstreamRemotes["feature"] == "origin")
+        #expect(state.errorMessage == nil)
+        #expect(state.activeSync == nil)
+    }
+
+    @Test func aPublishIsCancelledWhenTheBranchGainedAnUpstream() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature], remotes: ["origin"])
+        await openPicker(state, remotes: ["origin"])
+        // What the repository says by the time the publish takes its turn.
+        let published = localBranch("feature", upstream: upstream("origin/feature"))
+        await repo.client.set(localBranches: [main, published])
+
+        await state.publish(branch: "feature", to: "origin")
+        #expect(await repo.client.publishCalls.isEmpty)
+        #expect(state.errorMessage == "Branch or upstream changed before the publish could start")
+        #expect(state.branches.contains(published), "the branches were re-read")
+        #expect(state.activeSync == nil)
+    }
+
+    @Test func aPublishIsCancelledWhenFetchSettingsHideAnUpstream() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature], remotes: ["origin"])
+        await openPicker(state, remotes: ["origin"])
+        await repo.client.set(configuredUpstreamRemotes: ["main": "origin", "feature": "origin"])
+
+        await state.publish(branch: "feature", to: "origin")
+        #expect(await repo.client.publishCalls.isEmpty)
+        #expect(state.errorMessage == "feature tracks origin, but fetch settings don't fetch it")
+        #expect(state.configuredUpstreamRemotes["feature"] == "origin", "the row can say so now")
+        #expect(state.activeSync == nil)
+    }
+
+    @Test func aPublishWaitsOnItsRemotesFetch() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature], remotes: ["origin"])
+        await repo.client.holdFetch(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+
+        await state.publish(branch: "feature", to: "origin")
+        #expect(await repo.client.publishCalls.isEmpty)
+        #expect(state.activeSync == nil)
+
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+        await openPicker(state, remotes: ["origin"])
+        await state.publish(branch: "feature", to: "origin")
+        #expect(await repo.client.publishCalls.map(\.remote) == ["origin"])
+    }
+
+    @Test func aPublishIsAdmittedWhileAnotherRemoteIsFetched() async {
+        let h = Harness()
+        let state = h.makeState()
+        let onFork = localBranch("main", upstream: upstream("fork/main", remote: "fork"))
+        let repo = await adopt(h, state, branches: [onFork, feature], remotes: ["origin", "fork"])
+        await repo.client.holdFetch(true, remote: "fork")
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(state.fetchingRemotes == ["fork"])
+
+        await state.publish(branch: "feature", to: "origin")
+        #expect(await repo.client.publishCalls.map(\.remote) == ["origin"])
+
+        await repo.client.holdFetch(false, remote: "fork")
+        await repo.client.releaseFetch()
+    }
+}

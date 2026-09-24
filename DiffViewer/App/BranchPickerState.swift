@@ -48,8 +48,13 @@ struct BranchPickerRow: Equatable {
     /// What follows the name: the upstream's state, or empty when there is nothing to say.
     let trailingText: String
 
-    static func trailingText(for branch: LocalBranch) -> String {
-        guard let upstream = branch.upstream else { return "no upstream" }
+    /// `configuredRemote` tells a branch that tracks nothing from one whose upstream the
+    /// fetch settings hide.
+    static func trailingText(for branch: LocalBranch, configuredRemote: String?) -> String {
+        guard let upstream = branch.upstream else {
+            return SyncPolicy.hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote) == nil
+                ? "no upstream" : "upstream not fetched"
+        }
         return upstream.tracking.summary ?? ""
     }
 }
@@ -89,7 +94,11 @@ struct BranchPickerHeaderText: Equatable {
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
             let detail = snapshot.branches.first { $0.name == name }.map { branch in
-                guard let upstream = branch.upstream else { return "no upstream" }
+                // Worded as the row is, so a hidden upstream reads the same in both places.
+                guard let upstream = branch.upstream else {
+                    return BranchPickerRow.trailingText(
+                        for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
+                }
                 return upstream.tracking.summary ?? "up to date"
             }
             return BranchPickerHeaderText(
@@ -133,7 +142,8 @@ struct BranchPickerState {
         return zip(sorted, labels).map { branch, label in
             BranchPickerRow(
                 branch: branch, dayLabel: label, isCurrent: snapshot.headState == .named(branch.name),
-                trailingText: BranchPickerRow.trailingText(for: branch))
+                trailingText: BranchPickerRow.trailingText(
+                    for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]))
         }
     }
 
@@ -194,8 +204,8 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// A row's Pull and Push, or nil past the end. Uses the same fetch check as
-    /// `WindowState.sync`, so an enabled button always runs.
+    /// A row's Pull and Push, or Publish, or nil past the end. Uses the same fetch check
+    /// as `WindowState`'s admission, so an enabled button always runs.
     func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
         guard rows.indices.contains(row) else { return nil }
         return Self.syncButtons(for: rows[row], snapshot: snapshot)
@@ -205,7 +215,8 @@ struct BranchPickerState {
         SyncPolicy.rowButtons(
             branch: row.branch, isCurrent: row.isCurrent, readStatus: snapshot.readStatus,
             active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch,
-            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes)
+            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes,
+            remotes: snapshot.remotes, configuredRemote: snapshot.configuredUpstreamRemotes[row.branch.name])
     }
 
     func branchName(forTableRow row: Int) -> String? {
@@ -236,8 +247,11 @@ struct BranchPickerState {
     private mutating func applyRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
         // A read status, fetch news, the remotes or a sync in flight moves no row. A switch
         // flag does change whether a row can activate, which its cell holds, so every row
-        // is refreshed in place.
-        guard new.branches != old.branches || new.headState != old.headState else {
+        // is refreshed in place. Configured upstreams change a row's trailing text.
+        guard
+            new.branches != old.branches || new.headState != old.headState
+                || new.configuredUpstreamRemotes != old.configuredUpstreamRemotes
+        else {
             return new.isSwitchingBranch != old.isSwitchingBranch
                 ? .incremental(inserted: nil, refreshed: IndexSet(rows.indices))
                 : .none

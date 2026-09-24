@@ -16,13 +16,13 @@ struct BranchPickerStateTests {
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle,
-        activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [],
-        secondaryFetchFailures: [String: String] = [:]
+        activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = [],
+        configuredUpstreamRemotes: [String: String] = [:], secondaryFetchFailures: [String: String] = [:]
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
-            fetchStatus: fetchStatus, activeSync: activeSync, fetchingRemotes: fetchingRemotes,
-            secondaryFetchFailures: secondaryFetchFailures)
+            fetchStatus: fetchStatus, activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
+            configuredUpstreamRemotes: configuredUpstreamRemotes, secondaryFetchFailures: secondaryFetchFailures)
     }
 
     private func state(_ snapshot: BranchPickerSnapshot) -> BranchPickerState {
@@ -186,6 +186,12 @@ struct BranchPickerStateTests {
             ),
             (named([localBranch("main")]), header("main", pill: true, detail: "no upstream")),
             (
+                BranchPickerSnapshot(
+                    headState: .named("main"), branches: [localBranch("main")], readStatus: .loaded,
+                    isSwitchingBranch: false, configuredUpstreamRemotes: ["main": "origin"]),
+                header("main", pill: true, detail: "upstream not fetched")
+            ),
+            (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .gone))]),
                 header("main", pill: true, detail: "upstream gone")
             ),
@@ -341,6 +347,28 @@ struct BranchPickerStateTests {
         #expect(
             picker.apply(snapshot(branches: [behind, feature], fetchingRemotes: ["fork"]))
                 == BranchPickerChange(rows: .none, buttonsChanged: false), "no row tracks fork")
+    }
+
+    /// A branch whose upstream the fetch settings hide reads as tracking nothing, and
+    /// config read on a later opening restyles its row in place.
+    @Test func hiddenUpstreamConfigChangesTheRowAndDisablesPublish() {
+        var picker = state(snapshot(branches: [main, feature], remotes: ["origin"]))
+        #expect(picker.rows.map(\.trailingText) == ["no upstream", "no upstream"])
+        #expect(
+            picker.syncButtons(forTableRow: 1)
+                == RowSyncButtons(pull: .hidden, push: .enabled, pushTitle: "Publish", publish: .remote("origin")))
+
+        let hidden = snapshot(
+            branches: [main, feature], remotes: ["origin"], configuredUpstreamRemotes: ["feature": "origin"])
+        #expect(
+            picker.apply(hidden)
+                == BranchPickerChange(rows: .incremental(inserted: nil, refreshed: [1]), buttonsChanged: true))
+        #expect(picker.rows.map(\.trailingText) == ["no upstream", "upstream not fetched"])
+        #expect(
+            picker.syncButtons(forTableRow: 1)
+                == RowSyncButtons(
+                    pull: .hidden, push: .disabled(reason: "Tracks origin, but fetch settings don't fetch it"),
+                    pushTitle: "Publish"))
     }
 
     @Test func theEmptyStateFollowsTheReadStatus() {
