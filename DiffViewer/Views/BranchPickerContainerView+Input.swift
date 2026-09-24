@@ -18,6 +18,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
                 gutterTitle: entry.dayLabel?.title, gutterSubtitle: entry.dayLabel?.subtitle,
                 subject: entry.branch.name, showsCurrentPill: entry.isCurrent, trailing: entry.trailingText,
                 trailingStyle: .secondary, accessibilityActionName: "Switch to branch"))
+        configureSyncButtons(of: cell, row: row)
         // No callback on a row that cannot be switched to: the action must not be offered.
         guard state.canActivate(tableRow: row) else {
             cell.onActivate = nil

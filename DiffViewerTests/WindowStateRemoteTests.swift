@@ -641,7 +641,7 @@ struct WindowStateRemoteTests {
     }
 }
 
-/// Pulling and pushing the current branch from the branch picker.
+/// Pulling and pushing branches from the branch picker's rows.
 @MainActor
 struct WindowStateSyncTests {
     /// A branch tracking `origin/main`, `behind` commits behind and `ahead` ahead.
@@ -675,9 +675,9 @@ struct WindowStateSyncTests {
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.heldFetchCount == 1 })
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
 
         await repo.client.holdFetch(false)
         await repo.client.releaseFetch()
@@ -691,9 +691,9 @@ struct WindowStateSyncTests {
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0, "discovery may yet resolve to origin")
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
 
         await repo.client.holdRemoteNames(false)
         await repo.client.releaseRemoteNames()
@@ -710,7 +710,7 @@ struct WindowStateSyncTests {
         #expect(await eventually { await repo.client.heldFetchCount == 1 })
         #expect(state.fetchingRemotes == ["fork"])
 
-        await state.push()
+        await state.push(branch: "main")
         #expect(await repo.client.pushCalls.map(\.remote) == ["origin"])
 
         await repo.client.holdFetch(false, remote: "fork")
@@ -725,9 +725,9 @@ struct WindowStateSyncTests {
         let switching = Task { await state.switchBranch(to: "feature") }
         #expect(await eventually { await repo.client.heldSwitchBranchCount == 1 })
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
 
         await repo.client.holdSwitchBranch(false)
         await repo.client.releaseSwitchBranch()
@@ -744,8 +744,10 @@ struct WindowStateSyncTests {
 
         let action = Task { await state.perform(.stage, on: [changedFile("a.swift")]) }
         #expect(await eventually { await repo.client.heldActionCount == 1 })
-        let pulling = Task { await state.pull() }
-        #expect(await eventually { await state.activeSyncOperation == .pull }, "reserved while it queues")
+        let pulling = Task { await state.pull(branch: "main") }
+        #expect(
+            await eventually { await state.activeSync == ActiveSync(branch: "main", operation: .pull) },
+            "reserved while it queues")
         #expect(await repo.client.pullCalls == 0, "the write ahead of it still holds the repository")
 
         await repo.client.holdActions(false)
@@ -753,7 +755,41 @@ struct WindowStateSyncTests {
         await action.value
         await pulling.value
         #expect(await repo.client.pullCalls == 1)
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
+    }
+
+    /// One operation at a time across the picker, whichever row it was started on.
+    @Test func anOperationOnOneBranchRefusesAnotherBranchs() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 1, behind: 0)))
+        let repo = await adopt(h, state, branches: main() + [feature])
+        await repo.client.holdPull(true)
+        let pulling = Task { await state.pull(branch: "main") }
+        #expect(await eventually { await repo.client.heldPullCount == 1 })
+
+        await state.push(branch: "feature")
+        #expect(await repo.client.pushCalls.isEmpty)
+        #expect(state.activeSync == ActiveSync(branch: "main", operation: .pull))
+
+        await repo.client.holdPull(false)
+        await repo.client.releasePull()
+        await pulling.value
+    }
+
+    /// A branch that isn't checked out can only fast-forward.
+    @Test func aDivergedBranchThatIsNotCheckedOutIsNotPulled() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 1, behind: 2)))
+        let repo = await adopt(h, state, branches: main() + [feature])
+
+        await state.pull(branch: "feature")
+        #expect(await repo.client.fastForwardCalls.isEmpty)
+        #expect(await repo.client.pullCalls == 0)
+        #expect(state.activeSync == nil)
     }
 
     // MARK: Revalidation
@@ -765,10 +801,10 @@ struct WindowStateSyncTests {
         // What the repository says by the time the pull takes its turn.
         await repo.client.set(localBranches: main(remote: "fork"))
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
         #expect(state.errorMessage == "Branch or upstream changed before the pull could start")
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
         #expect(state.currentBranch?.upstream?.remote == "fork", "the branches were re-read")
     }
 
@@ -778,9 +814,26 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
         await repo.client.set(headState: .detached(sha: objectID("x")))
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
         #expect(state.errorMessage == "Branch or upstream changed before the pull could start")
+    }
+
+    /// Checked-out status picks `git pull` or a fast-forward, so HEAD arriving on the
+    /// branch between the click and its turn cancels the fast-forward.
+    @Test func aPullSkipsWhenHeadMovedOntoTheBranch() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 2)))
+        let repo = await adopt(h, state, branches: main() + [feature])
+        await repo.client.set(headState: .named("feature"))
+
+        await state.pull(branch: "feature")
+        #expect(await repo.client.fastForwardCalls.isEmpty)
+        #expect(await repo.client.pullCalls == 0)
+        #expect(state.errorMessage == "Branch or upstream changed before the pull could start")
+        #expect(state.activeSync == nil)
     }
 
     @Test func aPushSkipsWhenTheUpstreamWasRemoved() async {
@@ -789,7 +842,7 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0))
         await repo.client.set(localBranches: [localBranch("main")])
 
-        await state.push()
+        await state.push(branch: "main")
         #expect(await repo.client.pushCalls.isEmpty)
         #expect(state.errorMessage == "Branch or upstream changed before the push could start")
     }
@@ -800,7 +853,7 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main(behind: 2))
         await repo.client.set(localBranches: main(behind: 3))
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 1)
         #expect(state.errorMessage == nil)
     }
@@ -813,11 +866,11 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main(behind: 2))
         await repo.client.set(localBranches: main(behind: 0))
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
         #expect(state.errorMessage == nil)
         #expect(state.currentBranch?.upstream?.tracking == .counts(ahead: 0, behind: 0), "the branches were re-read")
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
     }
 
     @Test func aThrowingRevalidationReleasesTheReservation() async {
@@ -826,10 +879,10 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
         await repo.client.fail(headState: true)
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 0)
         #expect(state.errorMessage != nil)
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
     }
 
     // MARK: Running
@@ -842,11 +895,11 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
         await repo.client.fail(pull: true)
 
-        await state.pull()
+        await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 1)
         #expect(h.published.contains { $0.cause == .pull })
         #expect(state.errorMessage != nil)
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
     }
 
     @Test func aPushSendsTheTrackedRefAndRereadsTheCountsOnly() async {
@@ -856,15 +909,80 @@ struct WindowStateSyncTests {
         let publishedBefore = h.published.count
         let readsBefore = await repo.client.localBranchesCalls
 
-        await state.push()
+        await state.push(branch: "main")
         let pushes = await repo.client.pushCalls
         #expect(pushes.map(\.branch) == ["main"])
         #expect(pushes.map(\.remote) == ["origin"])
         #expect(pushes.map(\.remoteRef) == ["refs/heads/main"])
         #expect(h.published.count == publishedBefore, "a push changes no file")
         #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are re-read")
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
         #expect(state.errorMessage == nil)
+    }
+
+    @Test func aPullOnTheCurrentBranchRunsGitPull() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: main())
+
+        await state.pull(branch: "main")
+        #expect(await repo.client.pullCalls == 1)
+        #expect(await repo.client.fastForwardCalls.isEmpty)
+        #expect(h.published.contains { $0.cause == .pull })
+    }
+
+    @Test func aPullOnAnotherBranchFastForwardsItsRefOnly() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature",
+            upstream: upstream(
+                "fork/feature", remote: "fork", localRef: "refs/remotes/mirror/feature",
+                tracking: .counts(ahead: 0, behind: 2)))
+        let repo = await adopt(h, state, branches: main() + [feature])
+        let publishedBefore = h.published.count
+        let readsBefore = await repo.client.localBranchesCalls
+
+        await state.pull(branch: "feature")
+        #expect(await repo.client.pullCalls == 0)
+        let calls = await repo.client.fastForwardCalls
+        #expect(calls.map(\.branch) == ["feature"])
+        #expect(calls.map(\.remote) == ["fork"])
+        #expect(calls.map(\.remoteRef) == ["refs/heads/feature"])
+        #expect(calls.map(\.localRef) == ["refs/remotes/mirror/feature"])
+        #expect(h.published.count == publishedBefore, "no file changed")
+        #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are re-read")
+        #expect(state.activeSync == nil)
+        #expect(state.errorMessage == nil)
+    }
+
+    @Test func aFailedFastForwardIsReported() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 1)))
+        let repo = await adopt(h, state, branches: main() + [feature])
+        await repo.client.fail(fastForward: true)
+
+        await state.pull(branch: "feature")
+        #expect(await repo.client.fastForwardCalls.count == 1)
+        #expect(state.errorMessage != nil)
+        #expect(state.activeSync == nil)
+    }
+
+    @Test func aPushSendsTheBranchItWasAskedFor() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch(
+            "feature", upstream: upstream("fork/topic", remote: "fork", tracking: .counts(ahead: 3, behind: 0)))
+        let repo = await adopt(h, state, branches: main(behind: 0) + [feature])
+
+        await state.push(branch: "feature")
+        let pushes = await repo.client.pushCalls
+        #expect(pushes.map(\.branch) == ["feature"])
+        #expect(pushes.map(\.remote) == ["fork"])
+        #expect(pushes.map(\.remoteRef) == ["refs/heads/topic"])
+        #expect(state.activeSync == nil)
     }
 
     /// The buttons keep their running state until the counts they will be drawn from
@@ -875,7 +993,7 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
 
         await repo.client.holdLocalBranches(true)
-        let pulling = Task { await state.pull() }
+        let pulling = Task { await state.pull(branch: "main") }
         #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 }, "the revalidation read")
         await repo.client.releaseFirstLocalBranches()
         #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 }, "the post-pull read")
@@ -886,13 +1004,14 @@ struct WindowStateSyncTests {
         #expect(await eventually { await repo.client.heldLocalBranchesCount == 2 })
         await repo.client.releaseFirstLocalBranches()
         #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(state.activeSyncOperation == .pull, "still running until a read publishes")
+        #expect(
+            state.activeSync == ActiveSync(branch: "main", operation: .pull), "still running until a read publishes")
         #expect(await repo.client.localBranchesCalls == readsBefore + 1, "no extra read is started")
 
         await repo.client.holdLocalBranches(false)
         await repo.client.releaseLocalBranches()
         await pulling.value
-        #expect(state.activeSyncOperation == nil)
+        #expect(state.activeSync == nil)
         #expect(await repo.client.pullCalls == 1)
     }
 
@@ -903,7 +1022,7 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
         await repo.client.holdPull(true)
 
-        let pulling = Task { await state.pull() }
+        let pulling = Task { await state.pull(branch: "main") }
         #expect(await eventually { await repo.client.heldPullCount == 1 })
         state.isBranchPickerPresented = true
         await state.fetchForBranchPicker()
@@ -924,8 +1043,8 @@ struct WindowStateSyncTests {
 
         let action = Task { await state.perform(.stage, on: [changedFile("a.swift")]) }
         #expect(await eventually { await repo.client.heldActionCount == 1 })
-        let pulling = Task { await state.pull() }
-        #expect(await eventually { await state.activeSyncOperation == .pull })
+        let pulling = Task { await state.pull(branch: "main") }
+        #expect(await eventually { await state.activeSync == ActiveSync(branch: "main", operation: .pull) })
         let publishedBefore = h.published.count
         state.close()
 
@@ -943,7 +1062,7 @@ struct WindowStateSyncTests {
         let repo = await adopt(h, state, branches: main())
         await repo.client.holdPull(true)
 
-        let pulling = Task { await state.pull() }
+        let pulling = Task { await state.pull(branch: "main") }
         #expect(await eventually { await repo.client.heldPullCount == 1 })
         let publishedBefore = h.published.count
         state.close()

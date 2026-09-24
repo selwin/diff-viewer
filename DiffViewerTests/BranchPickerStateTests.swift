@@ -16,12 +16,12 @@ struct BranchPickerStateTests {
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle,
-        activeSyncOperation: SyncOperation? = nil, fetchingRemotes: Set<String> = [],
+        activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [],
         secondaryFetchFailures: [String: String] = [:]
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
-            fetchStatus: fetchStatus, activeSyncOperation: activeSyncOperation, fetchingRemotes: fetchingRemotes,
+            fetchStatus: fetchStatus, activeSync: activeSync, fetchingRemotes: fetchingRemotes,
             secondaryFetchFailures: secondaryFetchFailures)
     }
 
@@ -105,13 +105,13 @@ struct BranchPickerStateTests {
     @Test func anUnchangedSnapshotChangesNothing() {
         let taken = snapshot(branches: [main, feature])
         var picker = state(taken)
-        #expect(picker.apply(taken) == PickerTableChange.none)
+        #expect(picker.apply(taken).rows == PickerTableChange.none)
     }
 
     @Test func aReadStatusChangeLeavesTheRowsAlone() {
         var picker = state(snapshot(branches: [main, feature]))
         let rows = picker.rows
-        #expect(picker.apply(snapshot(branches: [main, feature], readStatus: .failed)) == PickerTableChange.none)
+        #expect(picker.apply(snapshot(branches: [main, feature], readStatus: .failed)).rows == PickerTableChange.none)
         #expect(picker.rows == rows)
     }
 
@@ -121,7 +121,7 @@ struct BranchPickerStateTests {
         var picker = state(snapshot(branches: [main, feature], isSwitchingBranch: true))
         let rows = picker.rows
         #expect(
-            picker.apply(snapshot(branches: [main, feature]))
+            picker.apply(snapshot(branches: [main, feature])).rows
                 == .incremental(inserted: nil, refreshed: IndexSet(integersIn: 0..<2)))
         #expect(picker.rows == rows)
         #expect(!picker.snapshot.isSwitchingBranch)
@@ -137,7 +137,7 @@ struct BranchPickerStateTests {
             name: "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 3)),
             tipCommittedAt: feature.tipCommittedAt)
         #expect(
-            picker.apply(snapshot(branches: [main, tracked]))
+            picker.apply(snapshot(branches: [main, tracked])).rows
                 == .incremental(inserted: nil, refreshed: IndexSet(integer: 1)))
         #expect(picker.rows[1].trailingText == "3 behind")
         #expect(picker.highlightedBranch == "feature")
@@ -146,7 +146,7 @@ struct BranchPickerStateTests {
     @Test func aReorderReloadsEverything() {
         var picker = state(snapshot(branches: [main, feature]))
         let movedMain = LocalBranch(name: "main", upstream: nil, tipCommittedAt: Self.now - 100_000)
-        #expect(picker.apply(snapshot(branches: [movedMain, feature])) == PickerTableChange.reloadAll)
+        #expect(picker.apply(snapshot(branches: [movedMain, feature])).rows == PickerTableChange.reloadAll)
         #expect(picker.rows.map(\.branch.name) == ["feature", "main"])
     }
 
@@ -155,10 +155,10 @@ struct BranchPickerStateTests {
         picker.moveToLast()
         #expect(picker.highlightedBranch == "old")
 
-        #expect(picker.apply(snapshot(branches: [main, feature])) == PickerTableChange.reloadAll)
+        #expect(picker.apply(snapshot(branches: [main, feature])).rows == PickerTableChange.reloadAll)
         #expect(picker.highlightedBranch == "main", "the current branch")
 
-        #expect(picker.apply(snapshot(headState: .named("gone"), branches: [feature, old])) == .reloadAll)
+        #expect(picker.apply(snapshot(headState: .named("gone"), branches: [feature, old])).rows == .reloadAll)
         #expect(picker.highlightedBranch == "feature", "the first row when nothing is current")
     }
 
@@ -288,44 +288,59 @@ struct BranchPickerStateTests {
         var picker = state(snapshot(branches: [main, feature]))
         let rows = picker.rows
         #expect(
-            picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil)))
+            picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil))).rows
                 == PickerTableChange.none)
         #expect(
             picker.apply(
                 snapshot(
-                    branches: [main, feature], fetchingRemotes: ["fork"], secondaryFetchFailures: ["fork": "down"]))
-                == PickerTableChange.none)
+                    branches: [main, feature], fetchingRemotes: ["fork"], secondaryFetchFailures: ["fork": "down"])
+            ).rows == PickerTableChange.none)
         #expect(picker.rows == rows)
         #expect(picker.footer == .text("Couldn't fetch fork", tooltip: "down"), "the footer still follows")
     }
 
     // MARK: Sync buttons
 
-    @Test func theButtonsFollowTheSnapshot() {
-        let behind = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)))
-        #expect(state(snapshot(branches: [behind])).syncButtons == (.enabled, .hidden))
-        // A fetch of the upstream's remote holds the counts the buttons would move, and so
-        // does discovery, which may yet resolve to it; another remote's fetch does not.
-        let fetching = snapshot(
-            branches: [behind], fetchStatus: .fetching(remote: "origin"), fetchingRemotes: ["origin"])
-        #expect(state(fetching).syncButtons == (.disabled(reason: "Fetching…"), .hidden))
-        let discovering = snapshot(branches: [behind], fetchStatus: .fetching(remote: nil))
-        #expect(state(discovering).syncButtons == (.disabled(reason: "Fetching…"), .hidden))
-        let elsewhere = snapshot(
-            branches: [behind], fetchStatus: .fetched(remote: "origin", at: Self.now), fetchingRemotes: ["fork"])
-        #expect(state(elsewhere).syncButtons == (.enabled, .hidden))
-        let pulling = snapshot(branches: [behind], activeSyncOperation: .pull)
-        #expect(state(pulling).syncButtons == (.running, .hidden), "nothing to push, so nothing greys out")
-        #expect(state(snapshot(branches: [main])).syncButtons == (.hidden, .hidden), "no upstream")
+    @Test func eachRowsButtonsFollowTheSnapshot() {
+        let behind = localBranch(
+            "main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)),
+            tipCommittedAt: Self.now)
+        let ahead = localBranch(
+            "feature", upstream: upstream("fork/feature", remote: "fork", tracking: .counts(ahead: 1, behind: 0)),
+            tipCommittedAt: Self.now - 3600)
+        let picker = state(snapshot(branches: [behind, ahead, old]))
+        #expect(picker.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .enabled, push: .hidden))
+        #expect(picker.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .enabled))
+        #expect(picker.syncButtons(forTableRow: 2) == .hidden, "no upstream")
+        #expect(picker.syncButtons(forTableRow: 3) == nil)
+        // A fetch of a row's remote holds the counts its buttons would move; another
+        // remote's fetch does not.
+        let fetching = state(snapshot(branches: [behind, ahead], fetchingRemotes: ["fork"]))
+        #expect(fetching.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .enabled, push: .hidden))
+        #expect(
+            fetching.syncButtons(forTableRow: 1) == RowSyncButtons(pull: .hidden, push: .disabled(reason: "Fetching…")))
+        let discovering = state(snapshot(branches: [behind, ahead], fetchStatus: .fetching(remote: nil)))
+        #expect(
+            discovering.syncButtons(forTableRow: 0)
+                == RowSyncButtons(pull: .disabled(reason: "Fetching…"), push: .hidden))
     }
 
-    @Test func aSyncOperationChangeLeavesTheRowsAlone() {
-        var picker = state(snapshot(branches: [main, feature]))
+    @Test func aSyncChangeReportsButtonsWithoutARowChange() {
+        let behind = localBranch(
+            "main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)),
+            tipCommittedAt: Self.now)
+        var picker = state(snapshot(branches: [behind, feature]))
         let rows = picker.rows
-        #expect(
-            picker.apply(snapshot(branches: [main, feature], activeSyncOperation: .push)) == PickerTableChange.none)
+        let pulling = snapshot(branches: [behind, feature], activeSync: ActiveSync(branch: "main", operation: .pull))
+        #expect(picker.apply(pulling) == BranchPickerChange(rows: .none, buttonsChanged: true))
         #expect(picker.rows == rows)
-        #expect(picker.syncButtons == (.hidden, .running), "the operation in flight outranks the missing target")
+        #expect(picker.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .running, push: .hidden))
+        #expect(
+            picker.apply(snapshot(branches: [behind, feature], fetchStatus: .fetched(remote: "origin", at: Self.now)))
+                == BranchPickerChange(rows: .none, buttonsChanged: true), "the pull finished")
+        #expect(
+            picker.apply(snapshot(branches: [behind, feature], fetchingRemotes: ["fork"]))
+                == BranchPickerChange(rows: .none, buttonsChanged: false), "no row tracks fork")
     }
 
     @Test func theEmptyStateFollowsTheReadStatus() {

@@ -28,8 +28,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
     var fetchStatus: FetchStatus = .idle
-    /// The pull or push in flight, or nil when neither is running.
-    var activeSyncOperation: SyncOperation?
+    /// The pull or push in flight and its branch, or nil when neither is running.
+    var activeSync: ActiveSync?
     /// Every remote being fetched, the current branch's included.
     var fetchingRemotes: Set<String> = []
     var remotes: [String] = []
@@ -96,6 +96,13 @@ struct BranchPickerHeaderText: Equatable {
                 title: name, showsCurrentPill: true, detail: detail ?? "", showsSpinner: spinner)
         }
     }
+}
+
+/// What the table must do after a snapshot. Row buttons change apart from the rows, so a
+/// busy state coming and going restyles buttons without reloading any row.
+struct BranchPickerChange: Equatable {
+    var rows: PickerTableChange
+    var buttonsChanged: Bool
 }
 
 /// The branch picker's model: the rows, the highlight, and what the table must do after
@@ -187,16 +194,18 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// Both buttons at once, so a view configures them from one reading of the snapshot.
-    /// Uses the same fetch check as `WindowState.sync`, so an enabled button always runs.
-    var syncButtons: (pull: PickerButtonState, push: PickerButtonState) {
-        let target = SyncPolicy.target(
-            readStatus: snapshot.readStatus, headState: snapshot.headState, branches: snapshot.branches)
-        let isFetching = SyncPolicy.isFetching(
-            target: target, fetchStatus: snapshot.fetchStatus, fetchingRemotes: snapshot.fetchingRemotes)
-        return SyncPolicy.buttons(
-            target: target, active: snapshot.activeSyncOperation, isSwitching: snapshot.isSwitchingBranch,
-            isFetching: isFetching)
+    /// A row's Pull and Push, or nil past the end. Uses the same fetch check as
+    /// `WindowState.sync`, so an enabled button always runs.
+    func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
+        guard rows.indices.contains(row) else { return nil }
+        return Self.syncButtons(for: rows[row], snapshot: snapshot)
+    }
+
+    private static func syncButtons(for row: BranchPickerRow, snapshot: BranchPickerSnapshot) -> RowSyncButtons {
+        SyncPolicy.rowButtons(
+            branch: row.branch, isCurrent: row.isCurrent, readStatus: snapshot.readStatus,
+            active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch,
+            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes)
     }
 
     func branchName(forTableRow row: Int) -> String? {
@@ -213,11 +222,18 @@ struct BranchPickerState {
     // MARK: Snapshots
 
     /// Takes a new snapshot and reports what the table must do. Header, footer and the
-    /// empty state are re-read after every call; only the rows are reported.
-    mutating func apply(_ new: BranchPickerSnapshot) -> PickerTableChange {
-        guard new != snapshot else { return .none }
+    /// empty state are re-read after every call; only the rows and buttons are reported.
+    mutating func apply(_ new: BranchPickerSnapshot) -> BranchPickerChange {
+        guard new != snapshot else { return BranchPickerChange(rows: .none, buttonsChanged: false) }
         let old = snapshot
+        let oldButtons = rows.map { Self.syncButtons(for: $0, snapshot: old) }
         snapshot = new
+        let rowChange = applyRows(new, old: old)
+        let buttonsChanged = rows.map { Self.syncButtons(for: $0, snapshot: new) } != oldButtons
+        return BranchPickerChange(rows: rowChange, buttonsChanged: buttonsChanged)
+    }
+
+    private mutating func applyRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
         // A read status, fetch news, the remotes or a sync in flight moves no row. A switch
         // flag does change whether a row can activate, which its cell holds, so every row
         // is refreshed in place.

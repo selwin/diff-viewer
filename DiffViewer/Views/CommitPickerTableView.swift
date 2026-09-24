@@ -15,9 +15,12 @@ protocol PickerTableHandler: AnyObject {
 /// The picker's table: unmodified navigation keys go to the handler, everything else
 /// (type-select included) to AppKit. A click on a row activates it on release, so a
 /// drag off the row cancels; clicks in the gutter, which belongs to the day labels, and
-/// below the rows are swallowed. Tracks the hovered row.
+/// below the rows are swallowed, and so are clicks on a row's accessory, whose buttons
+/// take their own. Tracks the hovered row.
 final class CommitPickerTableView: NSTableView {
     weak var handler: (any PickerTableHandler)?
+    /// Called with the previously hovered row and the new one whenever the hover moves.
+    var onHoverChange: ((_ previous: Int?, _ current: Int?) -> Void)?
 
     private var trackingArea: NSTrackingArea?
     private(set) var hoveredRow: Int?
@@ -46,7 +49,9 @@ final class CommitPickerTableView: NSTableView {
 
     // Never `super`, so AppKit does not move the selection under the activation.
     override func mouseDown(with event: NSEvent) {
-        pressedRow = contentRow(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        // A disabled button, or the gap between two, passes the press up to here.
+        pressedRow = isOnAccessory(point) ? nil : contentRow(at: point)
     }
 
     /// Drops a press in flight: after a reload the same index can name another row.
@@ -56,7 +61,9 @@ final class CommitPickerTableView: NSTableView {
 
     override func mouseUp(with event: NSEvent) {
         defer { pressedRow = nil }
-        guard let pressedRow, contentRow(at: convert(event.locationInWindow, from: nil)) == pressedRow else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        // A release over the row's buttons cancels, as it would over any other control.
+        guard let pressedRow, !isOnAccessory(point), contentRow(at: point) == pressedRow else { return }
         handler?.activate(tableRow: pressedRow)
     }
 
@@ -91,6 +98,15 @@ final class CommitPickerTableView: NSTableView {
         setHoveredRow(visibleRect.contains(point) ? contentRow(at: point) : nil)
     }
 
+    private func isOnAccessory(_ point: NSPoint) -> Bool {
+        let row = row(at: point)
+        guard row >= 0,
+            let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ScopeRowContentView,
+            let accessory = cell.accessory, !accessory.isHidden
+        else { return false }
+        return accessory.bounds.contains(accessory.convert(point, from: self))
+    }
+
     /// The row under `point`, or nil in the gutter or below the rows.
     private func contentRow(at point: NSPoint) -> Int? {
         guard point.x >= CommitPickerMetrics.gutterWidth else { return nil }
@@ -106,5 +122,6 @@ final class CommitPickerTableView: NSTableView {
         for index in [previous, row].compactMap({ $0 }) where index < numberOfRows {
             (rowView(atRow: index, makeIfNecessary: false) as? CommitPickerTableRowView)?.isHovered = index == row
         }
+        onHoverChange?(previous, row)
     }
 }

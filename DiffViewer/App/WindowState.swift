@@ -191,8 +191,8 @@ final class WindowState {
     /// Remote to git's message, for each remote other than the current branch's whose
     /// fetch failed. Reset when the picker opens; a remote's entry clears when it succeeds.
     private(set) var secondaryFetchFailures: [String: String] = [:]
-    /// The pull or push queued or running, or nil when neither is.
-    private(set) var activeSyncOperation: SyncOperation?
+    /// The pull or push queued or running, and its branch, or nil when neither is.
+    private(set) var activeSync: ActiveSync?
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -1259,7 +1259,7 @@ extension WindowState {
         // presentation's task runs.
         guard let session, !isClosed, isBranchPickerPresented else { return nil }
         // A pull or push is about to move the same counts; let it publish them.
-        guard activeSyncOperation == nil else { return nil }
+        guard activeSync == nil else { return nil }
         if case .fetching = fetchStatus {
             // Join the running opening; it reads the remotes again for this one when it ends.
             session.remoteRediscoveryRequested = true
@@ -1351,7 +1351,7 @@ extension WindowState {
     /// holds back only its own rows. All of them start before the first suspension, so
     /// the guard below applies to each.
     private func fetchSecondaryRemotes(excluding covered: Set<String>, session: RepoSession) async {
-        guard session === self.session, !isClosed, isBranchPickerPresented, activeSyncOperation == nil else { return }
+        guard session === self.session, !isClosed, isBranchPickerPresented, activeSync == nil else { return }
         let generation = session.pickerOpeningGeneration
         let tracked = Set(branches.compactMap { $0.upstream?.remote })
         let wanted = tracked.intersection(remotes).subtracting(covered).filter { remote in
@@ -1417,41 +1417,45 @@ extension WindowState {
 
 // MARK: - Pull and push
 
-/// Moving commits between the current branch and its upstream, from the branch picker.
-/// Same file as the class so `activeSyncOperation` stays `private(set)`.
+/// Moving commits between a local branch and its upstream, from the branch picker's rows.
+/// Same file as the class so `activeSync` stays `private(set)`.
 extension WindowState {
-    /// Brings the current branch up to date with its upstream.
-    func pull() async {
-        await sync(.pull)
+    /// Brings `branch` up to date with its upstream without switching to it: `git pull`
+    /// when it is checked out, otherwise a fast-forward of its ref.
+    func pull(branch: String) async {
+        await sync(.pull, branch: branch)
     }
 
-    /// Sends the current branch to its upstream, fast-forward only.
-    func push() async {
-        await sync(.push)
+    /// Sends `branch` to its upstream, fast-forward only.
+    func push(branch: String) async {
+        await sync(.push, branch: branch)
     }
 
     /// Admits one operation at a time, and only one the counts on screen allow. Runs on
     /// the write chain, which serializes sync operations with the local writes, so
     /// revalidation and execution both see the branch state the reader acted on.
-    private func sync(_ operation: SyncOperation) async {
-        guard let session, !isClosed, activeSyncOperation == nil, !isSwitchingBranch else { return }
+    private func sync(_ operation: SyncOperation, branch: String) async {
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch else { return }
+        let isCurrent = headState == .named(branch)
         guard
-            let target = SyncPolicy.target(
-                readStatus: branchReadStatus, headState: headState, branches: branches),
-            SyncPolicy.allows(operation, on: target),
+            let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
+            SyncPolicy.allows(operation, on: target, isCurrent: isCurrent),
             !SyncPolicy.isFetching(target: target, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
-        activeSyncOperation = operation  // before the first suspension: the admission guard
+        // Before the first suspension: the admission guard.
+        activeSync = ActiveSync(branch: branch, operation: operation)
         await enqueueWrite(session: session) { [weak self] in
-            await self?.runSync(operation, requested: target.destination, session: session)
+            await self?.runSync(operation, requested: target.destination, wasCurrent: isCurrent, session: session)
         }
     }
 
     /// Revalidates against the repository, runs git, and re-reads what the operation could
     /// have changed. The reservation is released on every exit, so a skipped operation
     /// leaves the buttons live again.
-    private func runSync(_ operation: SyncOperation, requested: SyncDestination, session: RepoSession) async {
-        defer { activeSyncOperation = nil }
+    private func runSync(
+        _ operation: SyncOperation, requested: SyncDestination, wasCurrent: Bool, session: RepoSession
+    ) async {
+        defer { activeSync = nil }
         guard session === self.session, !isClosed else { return }
 
         // The write ahead of this one may have moved HEAD or retargeted the upstream, so
@@ -1471,8 +1475,11 @@ extension WindowState {
         }
         guard session === self.session, !isClosed else { return }
 
-        let fresh = SyncPolicy.target(readStatus: .loaded, headState: state, branches: list)
-        guard let fresh, fresh.destination == requested else {
+        // Checked-out status decides between `git pull` and a fast-forward, so HEAD moving
+        // onto or off the branch counts as a change too.
+        let isCurrent = state == .named(requested.branch)
+        let fresh = SyncPolicy.target(branch: requested.branch, readStatus: .loaded, branches: list)
+        guard let fresh, fresh.destination == requested, isCurrent == wasCurrent else {
             // Somewhere else entirely now: say so, because the reader asked for this.
             // Every re-read here waits for a published one: the buttons stay in their
             // running state until the counts they will be drawn from have landed.
@@ -1485,8 +1492,8 @@ extension WindowState {
             return
         }
         // The same destination with nothing left to do — someone else pulled, or the
-        // counts were stale. The refreshed header says so; an alert would only repeat it.
-        guard SyncPolicy.allows(operation, on: fresh) else {
+        // counts were stale. The refreshed row says so; an alert would only repeat it.
+        guard SyncPolicy.allows(operation, on: fresh, isCurrent: isCurrent) else {
             await awaitBranchRead(session: session)
             return
         }
@@ -1494,8 +1501,12 @@ extension WindowState {
         var failure: (any Error)?
         do {
             switch operation {
-            case .pull:
+            case .pull where isCurrent:
                 try await session.client.pull()
+            case .pull:
+                try await session.client.fastForward(
+                    branch: requested.branch, remote: requested.remote, remoteRef: requested.remoteRef,
+                    localRef: requested.localRef)
             case .push:
                 try await session.client.push(
                     branch: requested.branch, to: requested.remote, remoteRef: requested.remoteRef)
@@ -1503,8 +1514,7 @@ extension WindowState {
         } catch { failure = error }
         guard session === self.session, !isClosed else { return }
 
-        switch operation {
-        case .pull:
+        if operation == .pull, isCurrent {
             // Either outcome re-reads: a failed pull can leave conflicts, a merge in
             // progress, or an autostash put back. A commit's files cannot have changed,
             // so commit scope skips the re-read, as a branch switch does.
@@ -1512,11 +1522,10 @@ extension WindowState {
             guard session === self.session, !isClosed else { return }
             await reloadHistoryIfHeadMoved(session: session)
             guard session === self.session, !isClosed else { return }
-            await awaitBranchRead(session: session)
-        case .push:
-            // A push changes no file and no commit of ours: only the counts move.
-            await awaitBranchRead(session: session)
         }
+        // A push, or a fast-forward of a branch that isn't checked out, changes no file
+        // and no commit on screen: only the counts move.
+        await awaitBranchRead(session: session)
         guard session === self.session, !isClosed, let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription

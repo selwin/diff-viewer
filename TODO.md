@@ -127,6 +127,27 @@ know the shortcut never see it. Add a visible way in.
 
 ---
 
+### I. Copy from the commit and branch pickers (requested 2026-09-24)
+
+**Goal.** Hovering over a commit or branch row offers a way to copy it, so a hash or
+branch name can go into a terminal, review, or chat without retyping. Neither picker
+has any copy today.
+
+**Design.**
+- On hover (and keyboard highlight), a small copy button appears on the row. In the
+  commit picker it copies the full hash; in the branch picker it copies the branch name.
+  It sits in the row's accessory slot next to the branch sync buttons, and a click never
+  activates the row.
+- A right-click menu offers the same, plus Copy Short Hash and Copy Subject for commits.
+- ⌘C copies the highlighted row's hash or name.
+- Brief "Copied" feedback on the button; an accessibility custom action ("Copy hash",
+  "Copy branch name").
+
+**Tests.** None beyond what the pasteboard string is for each row kind; UI, checked by
+screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
