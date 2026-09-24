@@ -135,7 +135,7 @@ branches with no upstream, and branches whose upstream still exists don't.
 
 ---
 
-### K. Copy a failed commit's error (requested 2026-09-24)
+### K. Failed commit alert: copy button and subtitle (requested 2026-09-24)
 
 **Goal.** When a pre-commit hook fails, the reader can copy its whole output in one
 click, to paste into a terminal, an issue, or a chat. Today `ErrorAlert` shows a long
@@ -155,7 +155,27 @@ message sits in the alert's informative text, which can't be selected at all.
   show the output in the scroller, or keep a plain Copy button for that case.
 - It lives in `ErrorAlert`, so every git error (commit, stage, discard, sync) gets it.
 
-**Tests.** None beyond `ErrorAlert.layout`; UI, checked by screenshot.
+**Title and subtitle.** Title the alert "Commit Failed" rather than "Error". Today the
+summary is the output's first line, which for a pre-commit run is its harmless
+"Unstaged files detected" warning. Git never says in its output that a hook failed, so
+guessing from the output text isn't reliable. Take the facts from git's trace2 event log:
+- Run `git commit` with `GIT_TRACE2_EVENT` pointing at a temp file (JSON lines, a
+  documented and versioned format). Checked against git 2.54 on 2026-09-24.
+- A failed hook shows up as a `child_start` event with `"child_class":"hook"` and a
+  `hook_name`, then a `child_exit` event with its `code`. This works for any hook manager.
+  Git's own failures (gpg signing, identity, index lock) show up as `error` events with a
+  `msg`.
+- Read only the top-level `git commit`'s events. Git run from inside a hook writes to the
+  same file, and a child's `sid` extends its parent's with `/`.
+- Subtitle: "The pre-commit hook exited with status 3." when a hook failed; otherwise
+  git's first `error` message; otherwise none. When a hook failed and the pre-commit
+  framework's result lines (`<name>....Failed` followed by `- hook id:`) are present,
+  add the failed hook names ("SwiftLint failed."). Never counts like "1 error": those
+  would come from each tool's own output.
+
+**Tests.** `ErrorAlert.layout`; the subtitle from trace2 event logs for a failed hook,
+git's own error, a hook whose own git call errors (ignored), and neither (no subtitle);
+hook names from pre-commit's `Failed` lines. UI, checked by screenshot.
 
 ---
 
