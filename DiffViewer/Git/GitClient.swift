@@ -58,20 +58,23 @@ struct GitClient: RepoClient {
     }
 
     func status() async throws -> [ChangedFile] {
+        // Exact renames only, and explicit so a user's `status.renames=false` cannot turn
+        // detection off.
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"],
+            arguments: ["status", "--porcelain=v2", "-z", "--untracked-files=all", "--find-renames=100%"],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
         // The parser cannot stat; the worktree half of an unstaged fingerprint is filled
         // in here, still off the main actor.
-        return GitStatusParser.parse(result.stdout)
+        let files = GitStatusParser.parse(result.stdout)
             .map { file in
                 guard file.area == .unstaged, let fingerprint = file.fingerprint else { return file }
                 let worktree = DiffInputFingerprint.worktree(at: repoRoot.appendingPathComponent(file.path))
                 return file.with(fingerprint: fingerprint.with(worktree: worktree))
             }
+        return await pairingExactMoves(in: files)
             .sorted { ($0.area.sortOrder, $0.path) < ($1.area.sortOrder, $1.path) }
     }
 
@@ -218,7 +221,7 @@ struct GitClient: RepoClient {
         let result = try await ProcessRunner.check(
             Self.executable,
             arguments: ["diff-tree"] + Self.commitComparisonFlags(commit)
-                + ["-r", "-z", "--name-status", "--no-renames"] + Self.commitOperands(commit),
+                + ["-r", "-z", "--name-status", "--find-renames=100%"] + Self.commitOperands(commit),
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
@@ -232,15 +235,17 @@ struct GitClient: RepoClient {
         // Flags first, operands last: a commit's operands end in `--`, after which git
         // reads every argument as a pathspec, so a trailing `-w` would be silently taken
         // as a file name and the command would report no changes at all.
+        // Rename detection matches `status()` and `changedFiles(in:)`, so a rename's
+        // counts are keyed by its new path, the path its row carries.
         var flags: [String]
         var operands: [String] = []
         switch area {
         case .unstaged:
-            flags = ["diff", "--numstat", "-z", "--no-renames"]
+            flags = ["diff", "--numstat", "-z", "--find-renames=100%"]
         case .staged:
-            flags = ["diff", "--cached", "--numstat", "-z", "--no-renames"]
+            flags = ["diff", "--cached", "--numstat", "-z", "--find-renames=100%"]
         case let .commit(ref):
-            flags = ["diff-tree"] + Self.commitComparisonFlags(ref) + ["-r", "--numstat", "-z", "--no-renames"]
+            flags = ["diff-tree"] + Self.commitComparisonFlags(ref) + ["-r", "--numstat", "-z", "--find-renames=100%"]
             operands = Self.commitOperands(ref)
         }
         if ignoreWhitespace { flags.append("-w") }
@@ -403,8 +408,7 @@ struct GitClient: RepoClient {
         return result.stdoutString
     }
 
-    /// Sizes every spec in one `git cat-file --batch-check`. The specs go in through a
-    /// temporary file, which avoids coordinating a concurrent stdin writer.
+    /// Sizes every spec in one `git cat-file --batch-check`.
     func objectSizes(of specs: [String]) async throws -> [Int64?] {
         if specs.isEmpty { return [] }
         // The batch is line-framed: an LF inside a spec shifts every later answer, and git
@@ -412,28 +416,35 @@ struct GitClient: RepoClient {
         guard !specs.contains(where: Self.breaksLineFraming) else {
             throw ProcessError.failed(command: "git cat-file", status: 128, stderr: "spec cannot be sent on one line")
         }
+        // One line per spec: a size, or `<spec> missing`.
+        return try await batch(["cat-file", "--batch-check=%(objectsize)"], lines: specs).map { Int64($0) }
+    }
+
+    /// Runs a git command that answers each stdin line with one output line, and returns
+    /// the answers in order. Stdin comes from a temporary file, which avoids coordinating a
+    /// concurrent writer.
+    func batch(_ arguments: [String], lines: [String]) async throws -> [Substring] {
         let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DiffViewer-cat-file-\(UUID().uuidString)")
-        try (specs.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+            .appendingPathComponent("DiffViewer-\(arguments[0])-\(UUID().uuidString)")
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
 
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["cat-file", "--batch-check=%(objectsize)"],
+            arguments: arguments,
             currentDirectory: repoRoot,
             environment: callEnvironment,
             standardInput: file
         )
-        // One line per spec: a size, or `<spec> missing`. The trailing newline ends the
-        // last line rather than starting another.
-        var lines = result.stdoutString.split(separator: "\n", omittingEmptySubsequences: false)
-        if lines.last == "" { lines.removeLast() }
-        guard lines.count == specs.count else {
+        // The trailing newline ends the last answer rather than starting another.
+        var answers = result.stdoutString.split(separator: "\n", omittingEmptySubsequences: false)
+        if answers.last == "" { answers.removeLast() }
+        guard answers.count == lines.count else {
             throw ProcessError.failed(
-                command: "git cat-file", status: 0,
-                stderr: "expected \(specs.count) answers, got \(lines.count)")
+                command: "git \(arguments[0])", status: 0,
+                stderr: "expected \(lines.count) answers, got \(answers.count)")
         }
-        return lines.map { Int64($0) }
+        return answers
     }
 
     /// Whether one `cat-file --batch-check` line cannot carry `spec`. Checked on bytes:

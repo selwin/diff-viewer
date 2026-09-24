@@ -4,8 +4,7 @@ import Foundation
 ///
 /// Each record is a status field followed by a path field: `M\0path\0A\0path\0`. A
 /// rename or copy status carries a similarity score and is followed by *two* paths,
-/// old then new; `--no-renames` means those should not appear, but they are handled so
-/// a caller that turns rename detection on does not misread every following record.
+/// old then new.
 /// Malformed records are skipped, matching `GitStatusParser` and `GitNumstatParser`.
 enum GitNameStatusParser {
     static func parse(_ data: Data, area: ChangedFile.Area) -> [ChangedFile] {

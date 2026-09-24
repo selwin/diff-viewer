@@ -52,7 +52,8 @@ enum FileAction: CaseIterable, Sendable {
             case .modified, .typeChanged, .deleted: [.stage, .discard]
             case .untracked: [.stage, .trash]
             // `.unmerged` gets Stage (as "Mark Resolved") but no Discard: throwing away
-            // a conflict resolution is not a one-click action. `.added`, `.renamed` and
+            // a conflict resolution is not a one-click action. `.renamed` appears unstaged
+            // for an intent-to-add move; undoing a move is not Discard. `.added` and
             // `.copied` cannot appear unstaged, but the switch stays total.
             case .unmerged, .added, .renamed, .copied: [.stage]
             }

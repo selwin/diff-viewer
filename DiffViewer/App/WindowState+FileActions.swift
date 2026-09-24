@@ -19,10 +19,11 @@ extension WindowState {
         // A cheap first pass against the list the reader is looking at: a context menu
         // built before the last refresh can name a file that is no longer there — staged
         // by someone else, or discarded a moment ago — and those are dropped without
-        // starting a process. Kind is part of the match because `ChangedFile.id` is only
-        // area and path: a deleted file recreated as a modified one keeps its id while
-        // "Restore File" quietly becomes an unconfirmed discard. Writes are checked again
-        // against a fresh status read in `runWrite`, which is the decision that counts.
+        // starting a process. Kind and original path are part of the match because
+        // `ChangedFile.id` is only area and path: a deleted file recreated as a modified
+        // one keeps its id while "Restore File" quietly becomes an unconfirmed discard, and
+        // a rename from another source would unstage the wrong old path. Writes are checked
+        // again against a fresh status read in `runWrite`, which is the decision that counts.
         guard let session, !isClosed else { return }
         let validatedFiles = Self.validatedFiles(requestedFiles, against: files)
         guard !validatedFiles.isEmpty else { return }
@@ -35,11 +36,15 @@ extension WindowState {
         }
     }
 
-    /// The requested files that `list` still holds with the same kind, in the order they
-    /// were requested. One dictionary rather than a scan of `list` per requested file.
+    /// The requested files that `list` still holds with the same kind and original path,
+    /// in the order they were requested. One dictionary rather than a scan of `list` per
+    /// requested file.
     private static func validatedFiles(_ requested: [ChangedFile], against list: [ChangedFile]) -> [ChangedFile] {
-        let kinds = Dictionary(list.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first })
-        return requested.filter { kinds[$0.id] == $0.kind }
+        let current = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return requested.filter { file in
+            guard let match = current[file.id] else { return false }
+            return match.kind == file.kind && match.originalPath == file.originalPath
+        }
     }
 
     /// Serializes repository writes; each operation validates its own inputs.
@@ -82,9 +87,9 @@ extension WindowState {
             return
         }
         guard session === self.session, !isClosed else { return }
-        // Revalidate identity and kind before writing; the menu may be stale. A row that
-        // came back with another kind is a different action than the one clicked, so it
-        // drops out of the batch and the rest of it still runs.
+        // Revalidate identity, kind and original path before writing; the menu may be
+        // stale. A row that came back with another kind is a different action than the one
+        // clicked, so it drops out of the batch and the rest of it still runs.
         let validated = Self.validatedFiles(files, against: current)
         guard !validated.isEmpty else { return }
 
@@ -97,7 +102,9 @@ extension WindowState {
             guard selection.contains(.file(file.id)) else { return nil }
             return PendingSelection(path: file.path, area: file.area, row: rowIndex[file.id])
         }
-        let paths = validated.map(\.path)
+        // Discard and Trash are never offered on a rename, so they keep one path per row.
+        let paths =
+            action == .stage || action == .unstage ? Self.writePaths(of: validated) : validated.map(\.path)
 
         // Held rather than reported at once: the refresh below has to run either way, and
         // it must not be the thing that clears this message.
@@ -185,5 +192,18 @@ extension WindowState {
     static func uniquePaths(of files: [ChangedFile]) -> [String] {
         var seen: Set<String> = []
         return files.map(\.path).filter { seen.insert($0).inserted }
+    }
+
+    /// The paths Stage and Unstage pass to git: a rename is two index entries, and
+    /// writing only the new one would leave the old path's deletion behind. A copy's
+    /// source is left out because it may have a row of its own. Duplicates are dropped,
+    /// keeping the first.
+    static func writePaths(of files: [ChangedFile]) -> [String] {
+        var seen: Set<String> = []
+        return files.flatMap { file -> [String] in
+            if file.kind == .renamed, let original = file.originalPath { return [original, file.path] }
+            return [file.path]
+        }
+        .filter { seen.insert($0).inserted }
     }
 }

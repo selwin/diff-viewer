@@ -77,6 +77,17 @@ struct DiffEngineSourcesTests {
         #expect(sources.newExists)
     }
 
+    /// An intent-to-add move: the index still holds the old path, the worktree the new one.
+    @Test func anUnstagedRenameReadsTheIndexAtTheOldPath() async throws {
+        let client = StubRepoClient(files: [])
+        let renamed = ChangedFile(
+            path: "src/new.swift", originalPath: "src/old.swift", kind: .renamed, area: .unstaged, fingerprint: nil)
+        let sources = try await DiffEngine.sources(for: renamed, client: client)
+        #expect(await client.readPaths == ["src/old.swift", "src/new.swift"])
+        #expect(sources.old == Data("old src/old.swift".utf8))
+        #expect(sources.new == Data("new src/new.swift".utf8))
+    }
+
     @Test func anUntrackedFileHasNoOldSide() async throws {
         let client = StubRepoClient(files: [])
         let sources = try await DiffEngine.sources(for: changedFile("src/a.swift", kind: .untracked), client: client)

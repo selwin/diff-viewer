@@ -120,6 +120,9 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     var lineStats: LineStats?
     /// What the diff reads for this file, or nil for a commit, whose content cannot change.
     var fingerprint: DiffInputFingerprint?
+    /// The index entry's mode, such as `100644` or `120000`. Set only on an unstaged
+    /// deletion, where `ExactMovePairing` needs it: a symlink's blob is its target path.
+    var indexMode: String?
 
     var id: String { "\(area.identity):\(path)" }
 

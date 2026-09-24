@@ -4,8 +4,8 @@ import Foundation
 /// can describe it. A heuristic: equal fingerprints are assumed unchanged; `.unknown`
 /// anywhere means revalidate.
 ///
-/// The fields follow the engine's reads per area. Unstaged: the index blob and the
-/// worktree file. Staged: the HEAD blob and the index blob. Untracked: the worktree file
+/// The fields follow the engine's reads per area. Unstaged: the index blob (at the old
+/// path for a rename) and the worktree file. Staged: the HEAD blob and the index blob. Untracked: the worktree file
 /// alone. Unmerged: the engine reads HEAD, which status does not report, so `old` is
 /// `.unknown`. Commit-scope files get no fingerprint at all; their content cannot change.
 struct DiffInputFingerprint: Hashable, Sendable {

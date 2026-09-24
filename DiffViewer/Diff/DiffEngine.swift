@@ -32,7 +32,8 @@ enum DiffEngine {
                 old = try await client.headContents(of: file.path)
                 new = try await client.worktreeContents(of: file.path)
             default:
-                old = try await client.indexContents(of: file.path)
+                // An unstaged rename's index entry is still at the old path.
+                old = try await client.indexContents(of: file.originalPath ?? file.path)
                 new = file.kind == .deleted ? nil : try await client.worktreeContents(of: file.path)
             }
         case .staged:
