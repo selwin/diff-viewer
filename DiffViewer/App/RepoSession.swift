@@ -50,6 +50,9 @@ final class RepoSession {
     /// When each remote was last fetched successfully, so reopening the branch picker
     /// does not fetch again straight away.
     var lastSuccessfulFetchAtByRemote: [String: Date] = [:]
+    /// The fetch running for each remote, so a second caller joins it instead of starting
+    /// another.
+    var remoteFetches: [String: Task<Result<Date, any Error>, Never>] = [:]
     /// Bumped every time a HEAD + branch read publishes, loaded or failed. A caller that
     /// needs a published read can tell one that landed meanwhile from none at all.
     var branchReadGeneration = 0

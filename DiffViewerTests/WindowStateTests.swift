@@ -66,6 +66,9 @@ actor StubRepoClient: RepoClient {
     private var failsFetch = false
     private var holdsFetch = false
     private var heldFetch: [CheckedContinuation<Void, Never>] = []
+    /// Remotes whose `fetch` suspends or throws whatever the switches above say.
+    private var heldFetchRemotes: Set<String> = []
+    private var failingFetchRemotes: Set<String> = []
     private var failsRemoteNames = false
     private var holdsRemoteNames = false
     private var heldRemoteNames: [CheckedContinuation<Void, Never>] = []
@@ -365,6 +368,10 @@ actor StubRepoClient: RepoClient {
     func set(remoteNames names: [String]) { stubbedRemoteNames = names }
     /// Makes `fetch` throw, after recording the call.
     func fail(fetch on: Bool) { failsFetch = on }
+    /// Makes `fetch` of one remote throw.
+    func fail(fetch on: Bool, remote: String) {
+        if on { failingFetchRemotes.insert(remote) } else { failingFetchRemotes.remove(remote) }
+    }
     func fail(pull on: Bool) { failsPull = on }
     func fail(push on: Bool) { failsPush = on }
     func fail(publish on: Bool) { failsPublish = on }
@@ -383,6 +390,10 @@ actor StubRepoClient: RepoClient {
     }
     /// Suspends `fetch` after it records the call.
     func holdFetch(_ on: Bool) { holdsFetch = on }
+    /// Suspends `fetch` of one remote; `releaseFetch` lets it go.
+    func holdFetch(_ on: Bool, remote: String) {
+        if on { heldFetchRemotes.insert(remote) } else { heldFetchRemotes.remove(remote) }
+    }
     var heldFetchCount: Int { heldFetch.count }
     func releaseFetch() {
         let waiting = heldFetch
@@ -404,10 +415,12 @@ actor StubRepoClient: RepoClient {
 
     func fetch(remote: String) async throws {
         fetchCalls.append(remote)
-        if holdsFetch {
+        if holdsFetch || heldFetchRemotes.contains(remote) {
             await withCheckedContinuation { heldFetch.append($0) }
         }
-        if failsFetch { throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed") }
+        if failsFetch || failingFetchRemotes.contains(remote) {
+            throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fetch failed")
+        }
     }
 
     /// Suspends `pull` after it records the call.

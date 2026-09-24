@@ -471,6 +471,93 @@ struct WindowStateRemoteTests {
         #expect(state.fetchStatus == .fetching(remote: "origin"), "a closed window publishes nothing")
         #expect(await repo.client.fetchCalls == ["origin"])
     }
+
+    // MARK: Other remotes
+
+    /// `main` tracks origin and `feature` tracks fork.
+    private let twoRemotes = [
+        localBranch("main", upstream: upstream("origin/main")),
+        localBranch("feature", upstream: upstream("fork/feature", remote: "fork")),
+    ]
+
+    /// True once the primary has published `status` and no fetch is left in flight. The
+    /// other remotes start in the same turn as that status, so both reads are made
+    /// together: a remote started by mistake cannot slip between them.
+    private func settled(_ state: WindowState, at status: FetchStatus) async -> Bool {
+        await eventually { @MainActor in state.fetchStatus == status && state.fetchingRemotes.isEmpty }
+    }
+
+    @Test func everyRemoteAListedBranchTracksIsFetched() async {
+        let h = Harness()
+        let state = h.makeState()
+        let branches = twoRemotes + [localBranch("old", upstream: upstream("gone/old", remote: "gone"))]
+        let repo = await adopt(h, state, branches: branches, remotes: ["origin", "fork"])
+
+        state.isBranchPickerPresented = true
+        #expect(await settled(state, at: .fetched(remote: "origin", at: h.clock)))
+        #expect(await repo.client.fetchCalls == ["origin", "fork"], "the header's remote first, never a missing one")
+        #expect(state.secondaryFetchFailures.isEmpty)
+    }
+
+    @Test func anotherRemoteWithinItsCooldownIsNotFetchedAgain() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
+        await repo.client.fail(fetch: true, remote: "origin")
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] })
+        #expect(await eventually { await state.fetchingRemotes.isEmpty })
+        state.isBranchPickerPresented = false
+
+        // origin failed, so it has no cooldown and is fetched again.
+        await repo.client.fail(fetch: false, remote: "origin")
+        h.clock += 10
+        state.isBranchPickerPresented = true
+        #expect(await settled(state, at: .fetched(remote: "origin", at: h.clock)))
+        #expect(await repo.client.fetchCalls == ["origin", "fork", "origin"], "fork is still fresh")
+    }
+
+    @Test func reopeningJoinsAnotherRemotesFetchInsteadOfRepeatingIt() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
+        await repo.client.holdFetch(true, remote: "fork")
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(state.fetchStatus == .fetched(remote: "origin", at: h.clock), "a slow remote holds back only itself")
+        #expect(state.fetchingRemotes == ["fork"])
+        state.isBranchPickerPresented = false
+
+        // origin's cooldown has run out, so its fetch shows the reopening got past it.
+        h.clock += WindowState.fetchCooldown + 1
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })
+        await repo.client.holdFetch(false, remote: "fork")
+        await repo.client.releaseFetch()
+        #expect(await eventually { await state.fetchingRemotes.isEmpty })
+        #expect(await repo.client.fetchCalls == ["origin", "fork", "origin"], "fork was fetched once")
+    }
+
+    @Test func anotherRemotesFailureIsReportedUntilItSucceeds() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
+        await repo.client.fail(fetch: true, remote: "fork")
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await state.secondaryFetchFailures["fork"] != nil })
+        #expect(state.fetchStatus == .fetched(remote: "origin", at: h.clock))
+        #expect(state.errorMessage == nil, "footer news, never an alert")
+        state.isBranchPickerPresented = false
+
+        await repo.client.fail(fetch: false, remote: "fork")
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork", "fork"] }, "no cooldown")
+        #expect(await eventually { await state.fetchingRemotes.isEmpty })
+        #expect(state.secondaryFetchFailures.isEmpty)
+    }
 }
 
 /// Pulling and pushing the current branch from the branch picker.
@@ -512,6 +599,40 @@ struct WindowStateSyncTests {
         #expect(state.activeSyncOperation == nil)
 
         await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+    }
+
+    @Test func aPullIsRefusedWhileTheRemotesAreDiscovered() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: main())
+        await repo.client.holdRemoteNames(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
+
+        await state.pull()
+        #expect(await repo.client.pullCalls == 0, "discovery may yet resolve to origin")
+        #expect(state.activeSyncOperation == nil)
+
+        await repo.client.holdRemoteNames(false)
+        await repo.client.releaseRemoteNames()
+    }
+
+    @Test func aPushIsAdmittedWhileAnotherRemoteIsFetched() async {
+        let h = Harness()
+        let state = h.makeState()
+        let feature = localBranch("feature", upstream: upstream("fork/feature", remote: "fork"))
+        let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0) + [feature])
+        await repo.client.set(remoteNames: ["origin", "fork"])
+        await repo.client.holdFetch(true, remote: "fork")
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(state.fetchingRemotes == ["fork"])
+
+        await state.push()
+        #expect(await repo.client.pushCalls.map(\.remote) == ["origin"])
+
+        await repo.client.holdFetch(false, remote: "fork")
         await repo.client.releaseFetch()
     }
 

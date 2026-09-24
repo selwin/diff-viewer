@@ -56,6 +56,15 @@ enum SyncPolicy {
         }
     }
 
+    /// Whether a fetch holds the counts `target` is drawn from: remote discovery might
+    /// still resolve to its remote, and a fetch of that remote is still moving them.
+    /// Fetches of other remotes leave it alone.
+    static func isFetching(target: SyncTarget?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
+        if fetchStatus == .fetching(remote: nil) { return true }
+        guard let target else { return false }
+        return fetchingRemotes.contains(target.destination.remote)
+    }
+
     /// The two buttons' states. The operation in flight decides first, so the button the
     /// reader clicked keeps its spinner even while the refresh behind it moves the counts
     /// or takes the target away. The other button keeps the visibility the counts give

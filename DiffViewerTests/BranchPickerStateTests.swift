@@ -16,11 +16,13 @@ struct BranchPickerStateTests {
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle,
-        activeSyncOperation: SyncOperation? = nil
+        activeSyncOperation: SyncOperation? = nil, fetchingRemotes: Set<String> = [],
+        secondaryFetchFailures: [String: String] = [:]
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
-            fetchStatus: fetchStatus, activeSyncOperation: activeSyncOperation)
+            fetchStatus: fetchStatus, activeSyncOperation: activeSyncOperation, fetchingRemotes: fetchingRemotes,
+            secondaryFetchFailures: secondaryFetchFailures)
     }
 
     private func state(_ snapshot: BranchPickerSnapshot) -> BranchPickerState {
@@ -248,6 +250,32 @@ struct BranchPickerStateTests {
                 == BranchPickerFooter.none)
     }
 
+    @Test func theFooterReportsAnotherRemotesFailure() {
+        let time = BranchPickerState.fetchedTime(Self.now)
+        let fork = ["fork": "host down"]
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: .noFetchTarget, secondaryFetchFailures: fork)).footer
+                == .text("Couldn't fetch fork", tooltip: "host down"))
+        let fetched = FetchStatus.fetched(remote: "origin", at: Self.now)
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: fork)).footer
+                == .text("Couldn't fetch fork", tooltip: "host down"))
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: [:])).footer
+                == .text("Fetched origin \(time)", tooltip: nil))
+        let two = ["upstream": "timed out", "fork": "host down"]
+        #expect(
+            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: two)).footer
+                == .text("Couldn't fetch fork, upstream", tooltip: "fork: host down\nupstream: timed out"))
+    }
+
+    @Test func theHeadersRemoteFailureOutranksAnotherRemotes() {
+        let taken = snapshot(
+            branches: [main], fetchStatus: .failed(remote: "origin", message: "refused"),
+            secondaryFetchFailures: ["fork": "host down"])
+        #expect(state(taken).footer == .text("Couldn't fetch origin", tooltip: "refused"))
+    }
+
     /// The counts on screen are what the reader is judging, so their staleness outranks
     /// news about the fetch.
     @Test func aStaleReadOutranksTheFetch() {
@@ -256,13 +284,19 @@ struct BranchPickerStateTests {
         #expect(state(taken).footer == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
     }
 
-    @Test func aFetchStatusChangeLeavesTheRowsAlone() {
+    @Test func fetchNewsLeavesTheRowsAlone() {
         var picker = state(snapshot(branches: [main, feature]))
         let rows = picker.rows
         #expect(
             picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil)))
                 == PickerTableChange.none)
+        #expect(
+            picker.apply(
+                snapshot(
+                    branches: [main, feature], fetchingRemotes: ["fork"], secondaryFetchFailures: ["fork": "down"]))
+                == PickerTableChange.none)
         #expect(picker.rows == rows)
+        #expect(picker.footer == .text("Couldn't fetch fork", tooltip: "down"), "the footer still follows")
     }
 
     // MARK: Sync buttons
@@ -270,9 +304,16 @@ struct BranchPickerStateTests {
     @Test func theButtonsFollowTheSnapshot() {
         let behind = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)))
         #expect(state(snapshot(branches: [behind])).syncButtons == (.enabled, .hidden))
-        // The fetch behind the picker holds the same counts the buttons would move.
-        let fetching = snapshot(branches: [behind], fetchStatus: .fetching(remote: "origin"))
+        // A fetch of the upstream's remote holds the counts the buttons would move, and so
+        // does discovery, which may yet resolve to it; another remote's fetch does not.
+        let fetching = snapshot(
+            branches: [behind], fetchStatus: .fetching(remote: "origin"), fetchingRemotes: ["origin"])
         #expect(state(fetching).syncButtons == (.disabled(reason: "Fetching…"), .hidden))
+        let discovering = snapshot(branches: [behind], fetchStatus: .fetching(remote: nil))
+        #expect(state(discovering).syncButtons == (.disabled(reason: "Fetching…"), .hidden))
+        let elsewhere = snapshot(
+            branches: [behind], fetchStatus: .fetched(remote: "origin", at: Self.now), fetchingRemotes: ["fork"])
+        #expect(state(elsewhere).syncButtons == (.enabled, .hidden))
         let pulling = snapshot(branches: [behind], activeSyncOperation: .pull)
         #expect(state(pulling).syncButtons == (.running, .hidden), "nothing to push, so nothing greys out")
         #expect(state(snapshot(branches: [main])).syncButtons == (.hidden, .hidden), "no upstream")
