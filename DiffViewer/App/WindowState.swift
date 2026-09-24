@@ -466,10 +466,7 @@ final class WindowState {
             let lastOutcome = session.lineStats.lastOutcome
             let published = newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) }
             if published != files { files = published }
-            // One set for the whole selection rather than a scan of the list per row:
-            // All changes is not a file and always survives.
-            let liveIDs = Set(newFiles.map(\.id))
-            let surviving = storedSelection.filter { $0.fileID.map(liveIDs.contains) ?? true }
+            let surviving = SidebarReselection.surviving(storedSelection, before: before, in: newFiles)
             applySelection(
                 SidebarReselection.selection(after: pending, surviving: surviving, in: sidebarRows),
                 from: keyBefore)

@@ -9,8 +9,8 @@ struct NumstatEntry: Hashable, Sendable {
 /// Parses `git diff --numstat -z` output.
 ///
 /// A normal record is `added\tdeleted\tpath\0`, a binary record is `-\t-\tpath\0`, and a
-/// rename (only when rename detection is on) is `added\tdeleted\t\0old\0new\0`: the path
-/// field is empty and the following two NUL-separated fields are the old and new paths.
+/// rename is `added\tdeleted\t\0old\0new\0`: the path field is empty and the following
+/// two NUL-separated fields are the old and new paths.
 /// Malformed records are skipped, never thrown, and parsing continues with the next one.
 enum GitNumstatParser {
     static func parse(_ data: Data) -> [NumstatEntry] {

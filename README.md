@@ -76,7 +76,7 @@ experience. We want this to be speedy when reviewing large diffs.
 | Jump to line | yes | no | no | not yet |
 | Wrap long lines | yes | yes | no | not yet |
 | Sidebar filter / folder outline | yes | partial | yes | not yet |
-| Rename / move detection | yes | yes | yes | not yet |
+| Rename / move detection | yes | yes | yes | **yes** (exact) |
 
 Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, JuxtaCode
 1.4).
@@ -95,7 +95,6 @@ Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, Jux
 **Next**
 - A "Change 3 of 41" strip with previous/next controls.
 - Jump to line (⌘L), a pane context menu, and the remaining selection conventions.
-- Rename and move detection, shown as `old → new`.
 - Sidebar filtering and a folder outline.
 - Wrap long lines, with per-row heights that keep both panes aligned.
 - A change indicator on tabs whose repository changed in the background.

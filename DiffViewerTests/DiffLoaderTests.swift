@@ -360,7 +360,7 @@ struct DiffLoaderTests {
     /// format of its own name.
     @Test func aPNGRenamedToSVGPreviews() async throws {
         let client = StubRepoClient(files: [])
-        await client.set(index: try imageData(width: 7, height: 5), for: "icon.svg")
+        await client.set(index: try imageData(width: 7, height: 5), for: "a.png")
         await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
         let loader = DiffLoader(cache: plainDifftCache())
         let renamed = ChangedFile(

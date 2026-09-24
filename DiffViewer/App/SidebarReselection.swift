@@ -31,6 +31,32 @@ enum SidebarReselection {
         return [.file(row)]
     }
 
+    /// The part of `selection` a refresh keeps: rows still in `rows`, plus each vanished
+    /// row moved onto the rename from its path in the same area. Without the move, a
+    /// selected deletion that status now pairs with an untracked file would drop out.
+    /// All changes is not a file and always survives.
+    static func surviving(
+        _ selection: Set<DiffSelection>, before: [ChangedFile.ID: ChangedFile], in rows: [ChangedFile]
+    ) -> Set<DiffSelection> {
+        let liveIDs = Set(rows.map(\.id))
+        var renamedFrom: [RenameSource: ChangedFile.ID] = [:]
+        for row in rows where row.kind == .renamed {
+            guard let original = row.originalPath else { continue }
+            renamedFrom[RenameSource(area: row.area, path: original)] = row.id
+        }
+        return Set(
+            selection.compactMap { item in
+                guard let id = item.fileID, !liveIDs.contains(id) else { return item }
+                guard let old = before[id] else { return nil }
+                return renamedFrom[RenameSource(area: old.area, path: old.path)].map(DiffSelection.file)
+            })
+    }
+
+    private struct RenameSource: Hashable {
+        let area: ChangedFile.Area
+        let path: String
+    }
+
     /// The row carrying `previous`'s path, or nil when the path is gone from `rows`.
     ///
     /// The path wins wherever it still exists; the area it came from is preferred, then

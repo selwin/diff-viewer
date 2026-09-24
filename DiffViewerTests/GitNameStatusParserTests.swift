@@ -37,8 +37,7 @@ struct GitNameStatusParserTests {
         #expect(files.map(\.kind) == [.modified, .typeChanged])
     }
 
-    /// `--no-renames` should keep these out, but a rename carries two paths and would
-    /// otherwise shift every record after it.
+    /// A rename carries two paths; reading only one would shift every record after it.
     @Test func renameConsumesBothPaths() {
         let files = GitNameStatusParser.parse(
             data(["R100", "old.swift", "new.swift", "M", "after.swift"]), area: .commit(commit))

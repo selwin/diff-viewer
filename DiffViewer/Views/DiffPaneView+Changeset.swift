@@ -174,7 +174,7 @@ extension DiffPaneView {
         fillGutter(rowRect, color: nil, context: context)
 
         let attributed = NSAttributedString(
-            string: Self.noticeText(for: model.sections[index].outcome),
+            string: Self.noticeText(for: model.sections[index].outcome, kind: model.sections[index].file.kind),
             attributes: [.font: font, .foregroundColor: DiffTheme.noticeText])
         let textX = rowRect.minX + gutterWidth + textInset
         guard
@@ -186,12 +186,12 @@ extension DiffPaneView {
     }
 
     /// Precondition: a `.text` section has rows and so never produces a notice row.
-    static func noticeText(for outcome: FileOutcome) -> String {
+    static func noticeText(for outcome: FileOutcome, kind: ChangedFile.Kind) -> String {
         switch outcome {
         case .text: preconditionFailure("a .text section is drawn as rows, not as a notice")
         case .noVisibleChanges: "No visible differences"
         case .binary: "Binary file"
-        case .identical: "No differences"
+        case .identical: kind == .renamed ? "Renamed without changes" : "No differences"
         case .tooLarge: "Too large to show here"
         case .notShown: "Not shown here, select it in the sidebar"
         case let .failed(message): message

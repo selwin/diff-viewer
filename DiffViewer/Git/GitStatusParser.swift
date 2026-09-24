@@ -19,17 +19,13 @@ enum GitStatusParser {
             case "1":
                 let parts = record.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: false)
                 guard parts.count == 9 else { continue }
-                files += entries(
-                    xy: String(parts[1]), head: String(parts[6]), index: String(parts[7]),
-                    path: String(parts[8]), originalPath: nil)
+                files += entries(parts, path: String(parts[8]), originalPath: nil)
             case "2":
                 let parts = record.split(separator: " ", maxSplits: 9, omittingEmptySubsequences: false)
                 guard parts.count == 10, index < fields.count else { continue }
                 let originalPath = fields[index]
                 index += 1
-                files += entries(
-                    xy: String(parts[1]), head: String(parts[6]), index: String(parts[7]),
-                    path: String(parts[9]), originalPath: originalPath)
+                files += entries(parts, path: String(parts[9]), originalPath: originalPath)
             case "u":
                 let parts = record.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: false)
                 guard parts.count == 11 else { continue }
@@ -55,9 +51,13 @@ enum GitStatusParser {
         return files
     }
 
-    private static func entries(
-        xy: String, head: String, index: String, path: String, originalPath: String?
-    ) -> [ChangedFile] {
+    /// `parts` is a "1" or "2" record split on spaces; both begin
+    /// `<type> <XY> <sub> <mH> <mI> <mW> <hH> <hI>`.
+    private static func entries(_ parts: [Substring], path: String, originalPath: String?) -> [ChangedFile] {
+        let xy = parts[1]
+        let indexMode = String(parts[4])
+        let head = String(parts[6])
+        let index = String(parts[7])
         var result: [ChangedFile] = []
         let chars = Array(xy)
         guard chars.count == 2 else { return result }
@@ -69,11 +69,15 @@ enum GitStatusParser {
                     path: path, originalPath: originalPath, kind: kind, area: .staged, fingerprint: fingerprint))
         }
         if let kind = ChangedFile.Kind(rawValue: chars[1]), chars[1] != "." {
-            // A staged rename with further worktree edits: the worktree change is to the new path.
+            // Only an unstaged rename (an intent-to-add move) keeps the original path. After
+            // a staged rename (`RM`, `RD`) the worktree change is to the new path alone.
+            let unstagedOriginal = kind == .renamed ? originalPath : nil
             let fingerprint = DiffInputFingerprint(
-                old: blob(index), new: .notApplicable, worktree: .unknown, kind: kind, originalPath: nil)
+                old: blob(index), new: .notApplicable, worktree: .unknown, kind: kind, originalPath: unstagedOriginal)
             result.append(
-                ChangedFile(path: path, originalPath: nil, kind: kind, area: .unstaged, fingerprint: fingerprint))
+                ChangedFile(
+                    path: path, originalPath: unstagedOriginal, kind: kind, area: .unstaged, fingerprint: fingerprint,
+                    indexMode: kind == .deleted ? indexMode : nil))
         }
         return result
     }

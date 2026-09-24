@@ -128,7 +128,7 @@ import Testing
         let files = try await repo.client.changedFiles(in: try await repo.ref(merge))
         #expect(!files.isEmpty, "a merge is not an empty changeset")
 
-        let expected = try await repo.git(["diff", "--name-only", "--no-renames", "\(merge)^1", merge])
+        let expected = try await repo.git(["diff", "--name-only", "--find-renames=100%", "\(merge)^1", merge])
             .split(separator: "\n").map(String.init).sorted()
         #expect(files.map(\.path) == expected)
         #expect(files.contains { $0.path == "side.txt" && $0.kind == .added })
@@ -161,6 +161,186 @@ import Testing
         #expect(files.map(\.kind) == [.deleted, .modified, .added])
     }
 
+    // MARK: Renames
+
+    /// A repository with one committed three-line file, `a.txt`.
+    private func renameRepo() async throws -> Repo {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\ntwo\nthree\n")
+        try await repo.commit("Root commit")
+        return repo
+    }
+
+    /// The flag is explicit, so the user's own config cannot turn detection off.
+    @Test func aStagedMoveIsOneRenameEvenWithRenamesConfiguredOff() async throws {
+        let repo = try await renameRepo()
+        try await repo.git(["config", "status.renames", "false"])
+        try await repo.git(["mv", "a.txt", "b.txt"])
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["b.txt"])
+        #expect(files.first?.kind == .renamed)
+        #expect(files.first?.originalPath == "a.txt")
+        #expect(files.first?.area == .staged)
+    }
+
+    /// Only identical content is a rename; an edited move is a deletion and an addition.
+    @Test func aMoveWithAnEditIsADeleteAndAnAdd() async throws {
+        let repo = try await renameRepo()
+        try await repo.git(["mv", "a.txt", "b.txt"])
+        try repo.write("b.txt", "one\ntwo\nthree\nfour\n")
+        try await repo.git(["add", "b.txt"])
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["a.txt", "b.txt"])
+        #expect(files.map(\.kind) == [.deleted, .added])
+        #expect(files.allSatisfy { $0.area == .staged && $0.originalPath == nil })
+    }
+
+    /// Same lines, same size, different order: still not a rename.
+    @Test func aMoveWithSwappedLinesIsADeleteAndAnAdd() async throws {
+        let repo = try await renameRepo()
+        try repo.delete("a.txt")
+        try repo.write("b.txt", "two\none\nthree\n")
+        try await repo.git(["add", "-A"])
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.kind) == [.deleted, .added])
+        #expect(files.allSatisfy { $0.area == .staged })
+    }
+
+    /// Staging an intent-to-add move writes both paths and leaves one staged rename.
+    @Test func stagingAnUnstagedMoveStagesTheRename() async throws {
+        let repo = try await renameRepo()
+        try FileManager.default.moveItem(
+            at: repo.url.appendingPathComponent("a.txt"), to: repo.url.appendingPathComponent("b.txt"))
+        try await repo.git(["add", "-N", "b.txt"])
+        let unstaged = try await repo.client.status()
+        #expect(unstaged.map(\.kind) == [.renamed])
+        #expect(unstaged.first?.area == .unstaged)
+        #expect(unstaged.first?.originalPath == "a.txt")
+
+        try await repo.client.perform(.stage, on: ["a.txt", "b.txt"])
+
+        let staged = try await repo.client.status()
+        #expect(staged.map(\.kind) == [.renamed])
+        #expect(staged.first?.area == .staged)
+    }
+
+    // MARK: Unstaged moves
+
+    private func move(_ from: String, to: String, in repo: Repo) throws {
+        let destination = repo.url.appendingPathComponent(to)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: repo.url.appendingPathComponent(from), to: destination)
+    }
+
+    @Test func aPlainMoveIsOneUnstagedRename() async throws {
+        let repo = try await renameRepo()
+        try move("a.txt", to: "b.txt", in: repo)
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["b.txt"])
+        #expect(files.first?.kind == .renamed)
+        #expect(files.first?.originalPath == "a.txt")
+        #expect(files.first?.area == .unstaged)
+    }
+
+    /// Pairing hashes without `-w`, so it must leave no trace in the repository. The
+    /// fixture's own `git status` takes optional locks and may rewrite the index's stat
+    /// cache, so one runs first to settle it; the client's reads run without them.
+    @Test func pairingWritesNothingToTheRepository() async throws {
+        let repo = try await renameRepo()
+        try move("a.txt", to: "b.txt", in: repo)
+        try await repo.git(["status"])
+        let index = repo.url.appendingPathComponent(".git/index")
+        let indexBefore = try Data(contentsOf: index)
+        let objectsBefore = try await repo.git(["count-objects", "-v"])
+
+        let files = try await repo.client.status()
+
+        #expect(files.map(\.kind) == [.renamed])
+        #expect(try Data(contentsOf: index) == indexBefore)
+        #expect(try await repo.git(["count-objects", "-v"]) == objectsBefore)
+    }
+
+    /// The same size, so the file is hashed, but different bytes.
+    @Test func aMoveWithASameSizeEditStaysADeletionAndAnUntrackedFile() async throws {
+        let repo = try await renameRepo()
+        try repo.delete("a.txt")
+        try repo.write("b.txt", "one\ntwo\nthreE\n")
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["a.txt", "b.txt"])
+        #expect(files.map(\.kind) == [.deleted, .untracked])
+    }
+
+    /// A leading `"` would make `hash-object --stdin-paths` unquote the line.
+    @Test func pathsWithSpacesBracketsAndALeadingQuotePair() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("a b[1].txt", "one\n")
+        try await repo.commit("Root commit")
+        try move("a b[1].txt", to: "\"c d[2].txt", in: repo)
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["\"c d[2].txt"])
+        #expect(files.first?.kind == .renamed)
+        #expect(files.first?.originalPath == "a b[1].txt")
+    }
+
+    /// A symlink's blob is its target path, so a new file holding that path has the same id,
+    /// yet git calls it a deletion and an addition even once both are staged.
+    @Test func aDeletedSymlinkDoesNotPairWithAFileHoldingItsTarget() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try repo.write("target.txt", "x\n")
+        try FileManager.default.createSymbolicLink(
+            atPath: repo.url.appendingPathComponent("a").path, withDestinationPath: "target.txt")
+        try await repo.commit("Root commit")
+        try repo.delete("a")
+        try repo.write("b", "target.txt")
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["a", "b"])
+        #expect(files.map(\.kind) == [.deleted, .untracked])
+    }
+
+    /// With the clean filter applied, `new.txt` would hash to `old.txt`'s blob and pair,
+    /// yet the diff reads raw bytes and would show `x` against `y`.
+    @Test func aCleanFilterCannotMakeDifferentBytesPair() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try await repo.git(["config", "filter.swap.clean", "/usr/bin/tr x y"])
+        try repo.write(".gitattributes", "*.txt filter=swap\n")
+        try repo.write("old.txt", "y\n")
+        try await repo.commit("Root commit")
+        try repo.delete("old.txt")
+        try repo.write("new.txt", "x\n")
+
+        let files = try await repo.client.status()
+        #expect(files.map(\.path) == ["new.txt", "old.txt"])
+        #expect(files.map(\.kind) == [.untracked, .deleted])
+    }
+
+    /// The commit list and its line counts agree on the new path, so the row gets its churn.
+    @Test func aCommittedRenameIsOneRowKeyedByItsNewPath() async throws {
+        let repo = try await renameRepo()
+        try await repo.git(["mv", "a.txt", "b.txt"])
+        let sha = try await repo.commit("Move")
+        let ref = try await repo.ref(sha)
+
+        let files = try await repo.client.changedFiles(in: ref)
+        #expect(files.map(\.path) == ["b.txt"])
+        #expect(files.first?.kind == .renamed)
+        #expect(files.first?.originalPath == "a.txt")
+
+        let entries = try await repo.client.numstat(area: .commit(ref), ignoreWhitespace: false)
+        #expect(entries == [NumstatEntry(path: "b.txt", stats: .counted(added: 0, deleted: 0))])
+    }
+
     // MARK: Line counts
 
     /// Compared against an explicit first-parent diff. `git show --numstat` prints
@@ -171,7 +351,7 @@ import Testing
         #expect(!entries.isEmpty)
 
         let expected = try await repo.git(
-            ["diff", "--numstat", "--no-renames", "\(merge)^1", merge, "--"])
+            ["diff", "--numstat", "--find-renames=100%", "\(merge)^1", merge, "--"])
         let rows =
             expected
             .split(separator: "\n")

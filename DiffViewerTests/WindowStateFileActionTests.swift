@@ -526,6 +526,104 @@ struct WindowStateFileActionTests {
         #expect(WindowState.uniquePaths(of: []).isEmpty)
     }
 
+    // MARK: Renames
+
+    private func rename(_ path: String, from original: String, area: ChangedFile.Area = .staged) -> ChangedFile {
+        ChangedFile(path: path, originalPath: original, kind: .renamed, area: area, fingerprint: nil)
+    }
+
+    @Test func aRenameWritesItsOldPathThenItsNewOne() {
+        #expect(WindowState.writePaths(of: [rename("b.swift", from: "a.swift")]) == ["a.swift", "b.swift"])
+    }
+
+    /// A copy's source is untouched by the copy and may have a row of its own.
+    @Test func aCopyWritesOnlyItsOwnPath() {
+        let copy = ChangedFile(
+            path: "b.swift", originalPath: "a.swift", kind: .copied, area: .staged, fingerprint: nil)
+        #expect(WindowState.writePaths(of: [copy]) == ["b.swift"])
+    }
+
+    @Test func writePathsDropsDuplicatesKeepingTheFirst() {
+        let rows = [
+            changedFile("a.swift", area: .staged), rename("b.swift", from: "a.swift"), changedFile("b.swift"),
+        ]
+        #expect(WindowState.writePaths(of: rows) == ["a.swift", "b.swift"])
+    }
+
+    @Test func unstagingARenamePassesBothPaths() async {
+        let h = Harness()
+        let state = h.makeState()
+        let renamed = rename("b.swift", from: "a.swift")
+        let repo = await h.adopt(state, "A", files: [renamed])
+        await repo.client.set(filesAfterWrite: [])
+
+        await state.perform(.unstage, on: [renamed])
+
+        #expect(await repo.client.performed.map(\.paths) == [["a.swift", "b.swift"]])
+    }
+
+    /// The id is area and path only, so a rename from another source keeps it. Unstaging
+    /// the stale row would pass the wrong old path.
+    @Test func aRenameFromAnotherSourceIsNotWritten() async {
+        let h = Harness()
+        let state = h.makeState()
+        let stale = rename("b.swift", from: "a.swift")
+        let repo = await h.adopt(state, "A", files: [stale])
+        await repo.client.set(files: [rename("b.swift", from: "c.swift")])
+
+        await state.perform(.unstage, on: [stale])
+
+        #expect(await repo.client.performed.isEmpty)
+    }
+
+    /// Against real git: unstaging only the new path would leave the old one's deletion
+    /// staged.
+    @Test func unstagingAGitMoveClearsTheIndex() async throws {
+        let repo = try GitCommandTests.Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try await repo.git(["mv", "a.txt", "b.txt"])
+
+        let h = Harness()
+        let state = h.makeState()
+        let before = h.published.count
+        #expect(state.adopt(root: RepositoryRoot(path: repo.url.path), client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        let renamed = try #require(state.files.first { $0.kind == .renamed })
+
+        await state.perform(.unstage, on: [renamed])
+
+        #expect(try await repo.git(["diff", "--cached", "--name-only"]).isEmpty)
+        #expect(state.errorMessage == nil)
+    }
+
+    /// A plain `mv` pairs into an unstaged rename whose old path is gone from disk and
+    /// whose new path is untracked; staging it must record both halves.
+    @Test func stagingAPairedMoveStagesTheRename() async throws {
+        let repo = try GitCommandTests.Repo()
+        try await repo.initialize()
+        try repo.write("a.txt", "one\n")
+        try await repo.commit("Root commit")
+        try FileManager.default.moveItem(
+            at: repo.url.appendingPathComponent("a.txt"), to: repo.url.appendingPathComponent("b.txt"))
+
+        let h = Harness()
+        let state = h.makeState()
+        let before = h.published.count
+        #expect(state.adopt(root: RepositoryRoot(path: repo.url.path), client: repo.client))
+        #expect(await eventually { await h.published.count > before })
+        let paired = try #require(state.files.first { $0.kind == .renamed && $0.area == .unstaged })
+
+        await state.perform(.stage, on: [paired])
+
+        #expect(state.errorMessage == nil)
+        let files = try await repo.client.status()
+        #expect(files.map(\.kind) == [.renamed])
+        #expect(files.first?.area == .staged)
+        #expect(files.first?.originalPath == "a.txt")
+    }
+
     @Test func anEmptyBatchPerformsNothingAndPublishesNothing() async {
         let h = Harness()
         let state = h.makeState()

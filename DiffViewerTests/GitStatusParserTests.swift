@@ -97,6 +97,18 @@ struct GitStatusParserTests {
         #expect(deleted.first?.fingerprint?.new == .absent)
     }
 
+    /// Move pairing needs the deleted entry's mode to tell a symlink from a file; the
+    /// staged side of the record and other kinds carry none.
+    @Test func anUnstagedDeletionKeepsItsIndexMode() {
+        let files = GitStatusParser.parse(
+            data([
+                "1 MD N... 100644 120000 000000 abc def link",
+                "1 .M N... 100644 100644 100644 abc def file.txt",
+            ]))
+        #expect(files.map(\.indexMode) == [nil, "120000", nil])
+        #expect(files.map(\.kind) == [.modified, .deleted, .modified])
+    }
+
     /// A rename's fingerprint names the original path: the engine reads HEAD at that path.
     @Test func aRenameRecordFingerprintsWithTheOriginalPath() {
         let files = GitStatusParser.parse(
@@ -108,6 +120,30 @@ struct GitStatusParserTests {
         // The worktree edit is to the new path alone.
         #expect(files[1].fingerprint?.originalPath == nil)
         #expect(files[1].fingerprint?.old == .object("def"))
+    }
+
+    /// An intent-to-add move is an unstaged rename: the engine reads the index at the old
+    /// path, so the row and its fingerprint both keep it.
+    @Test func anUnstagedRenameKeepsItsOriginalPath() {
+        let files = GitStatusParser.parse(
+            data(["2 .R N... 100644 100644 100644 abc abc R100 new/name.txt", "old/name.txt"]))
+        let fingerprint = DiffInputFingerprint(
+            old: .object("abc"), new: .notApplicable, worktree: .unknown, kind: .renamed,
+            originalPath: "old/name.txt")
+        #expect(
+            files == [
+                ChangedFile(
+                    path: "new/name.txt", originalPath: "old/name.txt", kind: .renamed, area: .unstaged,
+                    fingerprint: fingerprint)
+            ])
+    }
+
+    @Test func aStagedRenameWithWorktreeEditsSplitsIntoARenameAndAnEdit() {
+        let files = GitStatusParser.parse(
+            data(["2 RM N... 100644 100644 100644 abc abc R100 new/name.txt", "old/name.txt"]))
+        #expect(files.map(\.area) == [.staged, .unstaged])
+        #expect(files.map(\.kind) == [.renamed, .modified])
+        #expect(files.map(\.originalPath) == ["old/name.txt", nil])
     }
 
     /// A "u" record reports the conflict stages, not HEAD, which is what the engine reads.

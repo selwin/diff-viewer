@@ -115,4 +115,36 @@ struct SidebarReselectionTests {
         let rows = [changedFile("x.swift")]
         #expect(SidebarReselection.selection(after: [pending("gone.swift")], surviving: [], in: rows).isEmpty)
     }
+
+    // MARK: Surviving a refresh
+
+    private func unstagedRename(_ path: String, from original: String) -> ChangedFile {
+        ChangedFile(path: path, originalPath: original, kind: .renamed, area: .unstaged, fingerprint: nil)
+    }
+
+    private func byID(_ files: [ChangedFile]) -> [ChangedFile.ID: ChangedFile] {
+        Dictionary(uniqueKeysWithValues: files.map { ($0.id, $0) })
+    }
+
+    @Test func aSelectedDeletionFollowsTheRenameThatAbsorbedIt() {
+        let old = changedFile("a.swift", kind: .deleted)
+        let rows = [unstagedRename("b.swift", from: "a.swift")]
+        let result = SidebarReselection.surviving([.file(old.id)], before: byID([old]), in: rows)
+        #expect(result == [.file(rows[0].id)])
+    }
+
+    @Test func aVanishedRowDoesNotFollowARenameInAnotherArea() {
+        let old = changedFile("a.swift", area: .staged, kind: .deleted)
+        let rows = [unstagedRename("b.swift", from: "a.swift")]
+        #expect(SidebarReselection.surviving([.file(old.id)], before: byID([old]), in: rows).isEmpty)
+    }
+
+    @Test func survivorsStayAndAnUnrelatedVanishedRowIsDropped() {
+        let kept = changedFile("keep.swift")
+        let gone = changedFile("gone.swift", kind: .deleted)
+        let rows = [kept, unstagedRename("b.swift", from: "a.swift")]
+        let result = SidebarReselection.surviving(
+            [.allChanges, .file(kept.id), .file(gone.id)], before: byID([kept, gone]), in: rows)
+        #expect(result == [.allChanges, .file(kept.id)])
+    }
 }
