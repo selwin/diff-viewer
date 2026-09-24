@@ -1250,16 +1250,28 @@ extension WindowState {
     /// holds the remotes this opening already tried, so the follow-up cannot bounce between
     /// two of them. Returns the remotes it covered, or nil when the opening stopped and the
     /// other remotes should be skipped.
+    ///
+    /// A reopening while this runs makes it start over once it releases the reservation, so
+    /// the remotes are read again; the cooldown spares a second fetch of a remote that just
+    /// succeeded.
     private func fetchPrimaryRemote(attempted: Set<String>) async -> Set<String>? {
         // Re-checked here because the flag may already be false again by the time the
         // presentation's task runs.
         guard let session, !isClosed, isBranchPickerPresented else { return nil }
         // A pull or push is about to move the same counts; let it publish them.
         guard activeSyncOperation == nil else { return nil }
-        if case .fetching = fetchStatus { return nil }
+        if case .fetching = fetchStatus {
+            // Join the running opening; it reads the remotes again for this one when it ends.
+            session.remoteRediscoveryRequested = true
+            return nil
+        }
         let previous = fetchStatus
         fetchStatus = .fetching(remote: nil)  // before the first suspension: the reservation
-        if attempted.isEmpty { secondaryFetchFailures = [:] }
+        if attempted.isEmpty {
+            secondaryFetchFailures = [:]
+            session.pickerOpeningGeneration += 1
+            session.remoteRediscoveryRequested = false
+        }
 
         func isSessionCurrentAndOpen() -> Bool { session === self.session && !isClosed }
         /// Releases the reservation, publishing nothing for a window that has moved on.
@@ -1267,14 +1279,19 @@ extension WindowState {
             guard isSessionCurrentAndOpen() else { return }
             fetchStatus = status
         }
+        /// Releases the reservation; a reopening that arrived meanwhile gets a fresh start.
+        func release(_ status: FetchStatus, covering covered: Set<String>?) async -> Set<String>? {
+            finish(status)
+            guard isSessionCurrentAndOpen(), session.remoteRediscoveryRequested else { return covered }
+            return await fetchPrimaryRemote(attempted: [])
+        }
 
         // A fetch never blocks a retry of the local read, and a retry that works carries
         // on to the fetch below whatever the previous attempt ended as.
         if branchReadStatus != .loaded {
             await awaitBranchRead(session: session)
             guard isSessionCurrentAndOpen(), isBranchPickerPresented, branchReadStatus == .loaded else {
-                finish(previous)
-                return nil
+                return await release(previous, covering: nil)
             }
         }
 
@@ -1282,37 +1299,31 @@ extension WindowState {
         do {
             remotes = try await session.client.remoteNames()
             guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-                finish(previous)
-                return nil
+                return await release(previous, covering: nil)
             }
         } catch {
             guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-                finish(previous)
-                return nil
+                return await release(previous, covering: nil)
             }
-            finish(.failed(remote: nil, message: error.localizedDescription))
-            return nil
+            return await release(.failed(remote: nil, message: error.localizedDescription), covering: nil)
         }
         // A failed read keeps the previous value; the fetch doesn't depend on it.
         let configured = try? await session.client.configuredUpstreamRemotes()
         guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-            finish(previous)
-            return nil
+            return await release(previous, covering: nil)
         }
         self.remotes = remotes
         if let configured { configuredUpstreamRemotes = configured }
 
         guard let remote = Self.resolveFetchRemote(headState: headState, branches: branches, remotes: remotes) else {
-            finish(.noFetchTarget)
-            return attempted
+            return await release(.noFetchTarget, covering: attempted)
         }
         let covered = attempted.union([remote])
         // The footer describes the remote that was wanted, so a fresh one reports its own
         // last fetch rather than whatever the previous attempt left behind. Nothing
         // follows a cooldown hit: the branches it resolved from are the ones just read.
         if let at = session.lastSuccessfulFetchAtByRemote[remote], now().timeIntervalSince(at) < Self.fetchCooldown {
-            finish(.fetched(remote: remote, at: at))
-            return covered
+            return await release(.fetched(remote: remote, at: at), covering: covered)
         }
 
         fetchStatus = .fetching(remote: remote)
@@ -1322,6 +1333,8 @@ extension WindowState {
         case let .success(at): finish(.fetched(remote: remote, at: at))
         case let .failure(error): finish(.failed(remote: remote, message: error.localizedDescription))
         }
+        // A fresh opening resolves the current remote itself, so it replaces the follow-up.
+        if session.remoteRediscoveryRequested { return await fetchPrimaryRemote(attempted: []) }
 
         // The refreshed branches may point the current branch at another remote — a switch
         // during the fetch, say. Fetch that one too, whether this attempt succeeded or
@@ -1339,6 +1352,7 @@ extension WindowState {
     /// the guard below applies to each.
     private func fetchSecondaryRemotes(excluding covered: Set<String>, session: RepoSession) async {
         guard session === self.session, !isClosed, isBranchPickerPresented, activeSyncOperation == nil else { return }
+        let generation = session.pickerOpeningGeneration
         let tracked = Set(branches.compactMap { $0.upstream?.remote })
         let wanted = tracked.intersection(remotes).subtracting(covered).filter { remote in
             guard let at = session.lastSuccessfulFetchAtByRemote[remote] else { return true }
@@ -1349,14 +1363,19 @@ extension WindowState {
             for fetch in fetches {
                 group.addTask {
                     let result = await fetch.task.value
-                    await self.recordSecondaryFetch(remote: fetch.remote, result: result, session: session)
+                    await self.recordSecondaryFetch(
+                        remote: fetch.remote, result: result, session: session, generation: generation)
                 }
             }
         }
     }
 
-    private func recordSecondaryFetch(remote: String, result: Result<Date, any Error>, session: RepoSession) {
-        guard session === self.session, !isClosed else { return }
+    /// Records the outcome in the footer, unless a later opening has taken it over: the
+    /// remote may no longer be tracked, and one still tracked joins the fetch to record it.
+    private func recordSecondaryFetch(
+        remote: String, result: Result<Date, any Error>, session: RepoSession, generation: Int
+    ) {
+        guard session === self.session, !isClosed, session.pickerOpeningGeneration == generation else { return }
         switch result {
         case .success: secondaryFetchFailures[remote] = nil
         case let .failure(error): secondaryFetchFailures[remote] = error.localizedDescription

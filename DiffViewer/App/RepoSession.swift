@@ -53,6 +53,12 @@ final class RepoSession {
     /// The fetch running for each remote, so a second caller joins it instead of starting
     /// another.
     var remoteFetches: [String: Task<Result<Date, any Error>, Never>] = [:]
+    /// Bumped each time a branch-picker opening starts, so a fetch outcome from an earlier
+    /// opening stays out of a later one's footer.
+    var pickerOpeningGeneration = 0
+    /// Set by an opening that found an earlier one still fetching. The earlier one reads the
+    /// remotes again when it ends, since they may have changed while the picker was closed.
+    var remoteRediscoveryRequested = false
     /// Bumped every time a HEAD + branch read publishes, loaded or failed. A caller that
     /// needs a published read can tell one that landed meanwhile from none at all.
     var branchReadGeneration = 0
