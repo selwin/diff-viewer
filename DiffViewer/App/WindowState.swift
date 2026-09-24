@@ -1325,6 +1325,9 @@ extension WindowState {
         if let at = session.lastSuccessfulFetchAtByRemote[remote], now().timeIntervalSince(at) < Self.fetchCooldown {
             return await release(.fetched(remote: remote, at: at), covering: covered)
         }
+        // A push admitted during discovery is about to move the same counts; let it
+        // publish them. The footer keeps what it said before this opening.
+        guard activeSync == nil else { return await release(previous, covering: nil) }
 
         fetchStatus = .fetching(remote: remote)
         let result = await startFetch(remote: remote, session: session).value
@@ -1452,16 +1455,30 @@ extension WindowState {
     /// Admits one operation at a time, and only one the counts on screen allow. Runs on
     /// the write chain, which serializes sync operations with the local writes, so
     /// revalidation and execution both see the branch state the reader acted on.
+    ///
+    /// A pull is refused while a fetch may still move its counts. A fetch can only take a
+    /// push away, so a push waits for its remote's fetch instead and `runSync` re-checks.
     private func sync(_ operation: SyncOperation, branch: String) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch else { return }
         let isCurrent = headState == .named(branch)
         guard
             let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
             SyncPolicy.allows(operation, on: target, isCurrent: isCurrent),
-            !SyncPolicy.isFetching(target: target, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
+            operation != .pull
+                || !SyncPolicy.isFetching(target: target, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
-        // Before the first suspension: the admission guard.
+        // Before the first suspension: the admission guard. It also stops the picker
+        // starting a fetch while the operation waits or runs.
         activeSync = ActiveSync(branch: branch, operation: operation)
+        if operation == .push, let fetch = session.remoteFetches[target.destination.remote] {
+            // Off the write chain, so a slow fetch doesn't hold up local writes. The task
+            // ends once the post-fetch branch read has published.
+            _ = await fetch.value
+            guard session === self.session, !isClosed else {
+                activeSync = nil
+                return
+            }
+        }
         await enqueueWrite(session: session) { [weak self] in
             await self?.runSync(operation, requested: target.destination, wasCurrent: isCurrent, session: session)
         }
