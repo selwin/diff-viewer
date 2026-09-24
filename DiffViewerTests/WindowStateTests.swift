@@ -63,6 +63,7 @@ actor StubRepoClient: RepoClient {
     /// Every fast-forward asked for, in order, whether or not it succeeded.
     private(set) var fastForwardCalls: [(branch: String, remote: String, remoteRef: String, localRef: String)] = []
     private var stubbedUpstreamRemotes: [String: String] = [:]
+    private var failsConfiguredUpstreamRemotes = false
     private var failsFetch = false
     private var holdsFetch = false
     private var heldFetch: [CheckedContinuation<Void, Never>] = []
@@ -377,6 +378,7 @@ actor StubRepoClient: RepoClient {
     func fail(publish on: Bool) { failsPublish = on }
     func fail(fastForward on: Bool) { failsFastForward = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
+    func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
     /// Makes `remoteNames` throw, after recording the call.
     func fail(remoteNames on: Bool) { failsRemoteNames = on }
@@ -490,7 +492,12 @@ actor StubRepoClient: RepoClient {
         }
     }
 
-    func configuredUpstreamRemotes() async throws -> [String: String] { stubbedUpstreamRemotes }
+    func configuredUpstreamRemotes() async throws -> [String: String] {
+        if failsConfiguredUpstreamRemotes {
+            throw ProcessError.failed(command: "git config", status: 2, stderr: "config failed")
+        }
+        return stubbedUpstreamRemotes
+    }
 
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
         historyCalls += 1

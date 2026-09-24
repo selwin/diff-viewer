@@ -11,6 +11,8 @@ final class BranchPickerContainerView: NSView {
     var onDismiss: () -> Void = {}
     var onPull: (String) -> Void = { _ in }
     var onPush: (String) -> Void = { _ in }
+    /// Takes the branch, then the remote to publish it to.
+    var onPublish: (String, String) -> Void = { _, _ in }
 
     let header = BranchPickerHeaderView(frame: .zero)
     let gutter = CommitPickerGutterView(frame: .zero)
@@ -171,6 +173,10 @@ final class BranchPickerContainerView: NSView {
             },
             onPush: { [weak self] name in
                 self?.onPush(name)
+                self?.returnFocusToTable()
+            },
+            onPublish: { [weak self] name, remote in
+                self?.onPublish(name, remote)
                 self?.returnFocusToTable()
             })
         cell.accessory = view
