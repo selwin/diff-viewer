@@ -4,9 +4,13 @@ import Foundation
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_DEFAULTS_SUITE=<domain>` keeps preferences and the saved session in that
 ///   `UserDefaults` suite, so scripted runs leave an Xcode-run instance's state alone.
-/// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
+/// - `DIFFVIEWER_SELECT=<changed file id>[,...]` selects those sidebar entries after launch
 ///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`);
 ///   `all` selects All changes.
+/// - `DIFFVIEWER_WINDOW_SIZE=<w>x<h>` resizes the window's content, then
+///   `DIFFVIEWER_SIDEBAR_SCROLL=<points>|bottom` scrolls the file list, and
+///   `DIFFVIEWER_FOCUS_LIST=1` makes it first responder, all after the selection, so the
+///   selection popover can be screenshotted.
 /// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
 ///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
 ///   commit's sidebar and diffs can be screenshotted.
@@ -144,8 +148,11 @@ enum DebugLaunchOptions {
                     await selectScope(scopeSha, in: windowState)
                 }
                 if !selection.isEmpty {
-                    windowState.selection = selection == "all" ? [.allChanges] : [.file(selection)]
+                    windowState.selection =
+                        selection == "all"
+                        ? [.allChanges] : Set(selection.split(separator: ",").map { .file(String($0)) })
                 }
+                await arrangeSidebar(env: env, window: window)
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
@@ -537,6 +544,37 @@ extension DebugLaunchOptions {
         guard finished else { return "search for \(query) did not finish" }
         try? await Task.sleep(for: .milliseconds(100))
         return nil
+    }
+}
+
+extension DebugLaunchOptions {
+    /// Applies `DIFFVIEWER_WINDOW_SIZE`, `DIFFVIEWER_SIDEBAR_SCROLL` and
+    /// `DIFFVIEWER_FOCUS_LIST`, in that order.
+    @MainActor
+    fileprivate static func arrangeSidebar(env: [String: String], window: NSWindow) async {
+        let size = (env["DIFFVIEWER_WINDOW_SIZE"] ?? "").split(separator: "x").compactMap { Double($0) }
+        let scroll = env["DIFFVIEWER_SIDEBAR_SCROLL"] ?? ""
+        let focus = env["DIFFVIEWER_FOCUS_LIST"] == "1"
+        guard size.count == 2 || !scroll.isEmpty || focus else { return }
+        try? await Task.sleep(for: .seconds(1))
+        if size.count == 2 {
+            window.setContentSize(NSSize(width: size[0], height: size[1]))
+        }
+        // The sidebar is the only table in the window that is not inside a popover.
+        guard let table = window.contentView?.descendant(NSTableView.self) else {
+            print("### DIFFVIEWER_SIDEBAR: no file list found")
+            return
+        }
+        if !scroll.isEmpty, let clip = table.enclosingScrollView?.contentView {
+            let bottom = table.frame.height - clip.bounds.height + clip.contentInsets.bottom
+            let y = scroll == "bottom" ? bottom : (Double(scroll) ?? 0) - clip.contentInsets.top
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+            table.enclosingScrollView?.reflectScrolledClipView(clip)
+        }
+        if focus {
+            window.makeFirstResponder(table)
+        }
+        try? await Task.sleep(for: .seconds(0.5))
     }
 }
 

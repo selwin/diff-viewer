@@ -57,20 +57,18 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 
 ### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
-**Goal.** Stage the files just read and commit them without touching the mouse. Commit…
-already has ⌘Return, and inside the sheet ⌘G generates a message and ⌘Return commits;
-staging is only reachable from the sidebar context menu.
+**Goal.** Stage the files just read and commit them without touching the mouse. The
+Changes menu (Stage ⌘S, Unstage ⇧⌘S, Discard Changes… ⌘⌫, Move to Trash…) and the
+selection popover have landed; what remains is below.
 
 **Design.**
-- File menu items acting on the sidebar selection (one file or several): Stage ⌘S,
-  Unstage ⌘⇧S, Discard ⌘⌫, and Stage All / Unstage All ⌥⌘S / ⌥⌘⇧S. Each is disabled
-  when it doesn't apply, using the same rules as the context menu (`FileAction`), and
-  runs through `FileActionRunner` so Discard still confirms.
+- Stage All / Unstage All, ⌥⌘S / ⌥⇧⌘S, in the Changes menu. Disabled when they don't
+  apply and run through `FileActionRunner`, like the other items.
 - After staging or unstaging, keep the sidebar selection on the next file in the
-  section the file left, so repeated ⌘S walks down the Unstaged list. With All changes
-  selected, ⌘S stages the file whose section is at the top of the scroll.
+  section the file left, so repeated ⌘S walks down the Unstaged list and the popover
+  walks with it. With All changes selected, ⌘S stages the file whose section is at the
+  top of the scroll.
 - The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
-- This absorbs the "File menu mirror for the sidebar actions" item from the Next list.
 
 **Tests.** Which file becomes selected after staging or unstaging (middle, last, and
 only file in a section); which file ⌘S targets in All changes from a scroll position.
@@ -230,37 +228,6 @@ sidebar, the single-file view and the All changes view, and make the three consi
 
 ---
 
-### N. Stage and unstage buttons for the sidebar selection (requested 2026-09-25)
-
-**Goal.** Selecting files in the sidebar shows Stage or Unstage right away, so the most
-common action after reading a diff is one click instead of a trip through the context
-menu.
-
-**Design: a side popover** (mockup "2b", 2026-09-25).
-- A glass panel opens just past the sidebar's trailing edge, level with the first
-  selected row, with its arrow pointing at that row. The file list stays fully visible;
-  the panel covers only the left pane's gutter.
-- Content, top to bottom: a caption naming the selection ("2 files selected", or the
-  file name for one file); the primary action as the highlighted row ("Stage 2" or
-  "Unstage 2", with a `+`/`−` glyph and ⌘S / ⌘⇧S); then the secondary actions, with
-  Discard Changes… in red and ⌘⌫. There's room for full labels and shortcuts.
-- Actions come from the context menu's rules (`FileAction`) and run through
-  `FileActionRunner`, so Discard still confirms. A mixed selection splits the way the
-  context menu does: each write runs on the files it applies to.
-- It never takes keyboard focus: arrow keys keep moving the sidebar selection, and the
-  panel follows the new first selected row. Return is not claimed by it.
-- It hides when the selection is empty, is All changes, or has no action that applies,
-  and on Escape or a click elsewhere.
-- Pairs with G: the shortcuts it shows are G's File menu items, and after an action
-  the selection moves the way ⌘S would, so the panel walks down the list with it.
-- To decide: whether it opens on every selection or only after a pause (so fast arrow
-  key scrolling doesn't flash it); whether a single-file selection shows it at all.
-
-**Tests.** Which button shows for a selection (unstaged only, staged only, mixed,
-untracked, conflicted), unless `FileAction`'s tests already cover it.
-
----
-
 ### O. Manual fetch in the branch picker (requested 2026-09-25)
 
 **Goal.** Right after merging a PR on GitHub, the picker sometimes doesn't show that the
@@ -292,10 +259,11 @@ Roughly in priority order.
   Remaining: the context menu (Copy, Copy Path, Copy Line Number, Reveal in Finder, Open
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
-- **Sidebar action follow-ups.** The File menu shortcuts are item G under "Requested".
-  Still open: Stage All / Unstage All buttons on the section headers; one-step discard of a staged change (`git restore --staged
-  --worktree`); and `NSWorkspace.recycle` instead of the
-  `FileManager.trashItem` loop so a batch trash is one Finder undo.
+- **Sidebar action follow-ups.** Stage All / Unstage All and next-file selection are
+  item G under "Requested". Still open: Stage All / Unstage All buttons on the section
+  headers; one-step discard of a staged change (`git restore --staged --worktree`); and
+  `NSWorkspace.recycle` instead of the `FileManager.trashItem` loop so a batch trash is
+  one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
   the overview strip; click-to-expand context inside the changeset (separators are
   inert today); tooltips for truncated header paths and notice text; section-aware
