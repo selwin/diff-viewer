@@ -1,21 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// The Commit Failed alert's subtitle: a caption saying the model is at work, then its
+/// The Commit Failed alert's subtitle: placeholder bars while the model works, then its
 /// summary in a fixed two-line slot, so nothing moves when the text arrives.
 struct FailureSummaryView: View {
     let model: FailureSummaryModel
-    /// Measured by the alert to size this view, so the text drawn here must use them too.
+    /// Measured by the alert to size this view, so the text drawn here must use it too.
     let font: NSFont
-    let captionFont: NSFont
-    /// Decided once: a model that starts at its fallback never shows the caption, and the
-    /// alert's height must not change after it opens.
-    let showsCaption: Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
 
-    private static let captionSpacing: CGFloat = 4
     private static let fade = Animation.easeInOut(duration: 0.2)
     private static let sweepReveal = Animation.easeOut(duration: 0.6)
     /// One shimmer cycle: a sweep across the slot, then a rest with the highlight off it.
@@ -28,58 +23,24 @@ struct FailureSummaryView: View {
     private static let bandShare: CGFloat = 0.5
     private static let secondBarShare: CGFloat = 0.58
 
-    init(model: FailureSummaryModel, font: NSFont, captionFont: NSFont) {
-        self.model = model
-        self.font = font
-        self.captionFont = captionFont
-        showsCaption = model.state == .loading
-    }
-
     private var lineHeight: CGFloat {
         NSLayoutManager().defaultLineHeight(for: font)
     }
 
-    private var captionHeight: CGFloat {
-        ceil(NSLayoutManager().defaultLineHeight(for: captionFont))
-    }
-
-    /// Always two lines, so a one-line summary leaves its spare line as spacing.
-    private var slotHeight: CGFloat {
+    /// Always two lines, so a one-line summary leaves its spare line as spacing. The whole
+    /// view's height, for the alert's fixed frame.
+    var height: CGFloat {
         ceil(lineHeight * 2)
     }
 
-    /// The whole view's height, for the alert's fixed frame.
-    var height: CGFloat {
-        slotHeight + (showsCaption ? captionHeight + Self.captionSpacing : 0)
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: Self.captionSpacing) {
-            if showsCaption {
-                caption
+        slot
+            .onChange(of: model.state) { _, state in
+                if case let .ready(text) = state {
+                    AccessibilityNotification.Announcement(text).post()
+                }
             }
-            slot
-        }
-        .animation(Self.fade, value: model.state)
-        .onChange(of: model.state) { _, state in
-            if case let .ready(text) = state {
-                AccessibilityNotification.Announcement(text).post()
-            }
-        }
-        .task { await model.run() }
-    }
-
-    private var caption: some View {
-        let text = isReady ? "Summarized" : "Summarizing…"
-        return Text("\(Image(systemName: "sparkles")) \(text)")
-            .font(Font(captionFont))
-            .foregroundStyle(.secondary)
-            // Swaps at once: a cross-fade overlaps two strings of different lengths.
-            .contentTransition(.identity)
-            .accessibilityLabel(isReady ? "Summary generated" : "Summarizing")
-            // The row stays when the fallback shows, so the text below does not move.
-            .opacity(isFallback ? 0 : 1)
-            .frame(height: captionHeight, alignment: .leading)
+            .task { await model.run() }
     }
 
     private var slot: some View {
@@ -90,25 +51,34 @@ struct FailureSummaryView: View {
                 // Motion the bars fade out as the text fades in, so the slot never goes blank.
                 placeholder.transition(reduceMotion ? .opacity : .identity)
             case let .ready(text):
-                summaryText(text).transition(reduceMotion ? .opacity : SweepReveal.transition)
+                summaryText(text, isSummary: true)
+                    .transition(reduceMotion ? .opacity : SweepReveal.transition)
             case let .fallback(text):
-                summaryText(text).transition(.opacity)
+                summaryText(text, isSummary: false).transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: slotHeight, alignment: .topLeading)
+        .frame(height: height, alignment: .topLeading)
         // Keeps the reveal's blur inside the slot.
         .clipped()
         .animation(isReady && !reduceMotion ? Self.sweepReveal : Self.fade, value: model.state)
     }
 
     /// Laid out across the whole slot, so the reveal's sweep spans it as the shimmer does.
-    private func summaryText(_ text: String) -> some View {
-        Text(text)
+    /// The model's summary ends in a quiet sparkle, so it reads apart from the fallback,
+    /// which quotes the output. At full size the symbol is taller than a line of text, and
+    /// the slot, exactly two lines tall, would then only fit one. A no-break space keeps it
+    /// from wrapping onto a line of its own.
+    private func summaryText(_ text: String, isSummary: Bool) -> some View {
+        let sparkle = Text("\u{00A0}\(Image(systemName: "sparkles"))")
+            .font(Font(NSFont.systemFont(ofSize: font.pointSize * 0.8)))
+            .foregroundStyle(.secondary)
+        return (isSummary ? Text(text) + sparkle : Text(text))
             .font(Font(font))
             .lineLimit(2)
             .truncationMode(.tail)
-            .help(text)
+            .help(isSummary ? "\(text)\n\nSummarized on device" : text)
+            .accessibilityLabel(isSummary ? "\(text) Summarized on device." : text)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -174,10 +144,6 @@ struct FailureSummaryView: View {
 
     private var isReady: Bool {
         if case .ready = model.state { true } else { false }
-    }
-
-    private var isFallback: Bool {
-        if case .fallback = model.state { true } else { false }
     }
 }
 

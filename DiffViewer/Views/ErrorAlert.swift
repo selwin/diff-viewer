@@ -79,10 +79,7 @@ enum ErrorAlert {
     private static func commitFailureView(
         _ output: String, summary: FailureSummaryModel
     ) -> NSHostingView<CommitFailureAccessory> {
-        let summaryView = FailureSummaryView(
-            model: summary,
-            font: .systemFont(ofSize: NSFont.systemFontSize),
-            captionFont: .systemFont(ofSize: NSFont.smallSystemFontSize))
+        let summaryView = FailureSummaryView(model: summary, font: .systemFont(ofSize: NSFont.systemFontSize))
         let accessory = CommitFailureAccessory(summary: summaryView, output: output)
         let view = NSHostingView(rootView: accessory)
         view.sizingOptions = []
