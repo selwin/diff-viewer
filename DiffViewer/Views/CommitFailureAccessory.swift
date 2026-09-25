@@ -1,30 +1,41 @@
 import AppKit
 import SwiftUI
 
-/// The body of the Commit Failed alert: a sentence that names the failure, then the whole
-/// output with a copy button in its corner.
+/// The body of the Commit Failed alert: its title, a sentence that names the failure, then
+/// the whole output with a copy button in its corner.
+///
+/// The title is drawn here rather than by NSAlert, which leaves more room under its own
+/// title than a message needs; here the three share one left edge and chosen gaps.
 struct CommitFailureAccessory: View {
     let summary: FailureSummaryView
     let output: String
-    /// Where the alert's title text starts, so the summary and the box line up under it.
-    /// Set once the alert has laid out.
-    var leadingInset: CGFloat = 0
 
-    private static let spacing: CGFloat = 8
+    /// NSAlert's own title font.
+    private static let titleFont = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+    /// NSAlert's gap between its title and its message.
+    private static let titleSpacing: CGFloat = 10
+    private static let boxSpacing: CGFloat = 12
     /// The copy button's corner, kept clear of the output's text so the first lines
     /// wrap around it instead of running underneath.
     private static let buttonClearance = NSSize(width: 34, height: 30)
 
-    /// The whole view's height, for the alert's fixed frame.
+    /// The whole view's height, for the alert's fixed frame. A summary shorter than its
+    /// two lines leaves the difference to the output box.
     var height: CGFloat {
-        summary.height + Self.spacing + ErrorAlert.detailSize.height
+        ceil(NSLayoutManager().defaultLineHeight(for: Self.titleFont)) + Self.titleSpacing + summary.height
+            + Self.boxSpacing + ErrorAlert.detailSize.height
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Self.spacing) {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Commit Failed")
+                .font(Font(Self.titleFont))
+                .accessibilityAddTraits(.isHeader)
+                .padding(.bottom, Self.titleSpacing)
             summary
+                .padding(.bottom, Self.boxSpacing)
             OutputView(text: output, buttonClearance: Self.buttonClearance)
-                .frame(height: ErrorAlert.detailSize.height)
+                .frame(maxHeight: .infinity)
                 .overlay(alignment: .topTrailing) {
                     CopyButton(label: "Copy Output", action: copyOutput)
                         .padding(2)
@@ -32,7 +43,6 @@ struct CommitFailureAccessory: View {
                         .padding(5)
                 }
         }
-        .padding(.leading, leadingInset)
     }
 
     private func copyOutput() {

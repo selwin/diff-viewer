@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The Commit Failed alert's subtitle: placeholder bars while the model works, then its
-/// summary in a fixed two-line slot, so nothing moves when the text arrives.
+/// The Commit Failed alert's subtitle: two placeholder bars while the model works, then
+/// its summary, one or two lines tall; the output box below takes whatever it leaves.
 struct FailureSummaryView: View {
     let model: FailureSummaryModel
     /// Measured by the alert to size this view, so the text drawn here must use it too.
@@ -27,8 +27,7 @@ struct FailureSummaryView: View {
         NSLayoutManager().defaultLineHeight(for: font)
     }
 
-    /// Always two lines, so a one-line summary leaves its spare line as spacing. The whole
-    /// view's height, for the alert's fixed frame.
+    /// The most this view takes: two lines, the placeholder's height and a summary's limit.
     var height: CGFloat {
         ceil(lineHeight * 2)
     }
@@ -49,7 +48,9 @@ struct FailureSummaryView: View {
             case .loading:
                 // Removed at once where the reveal picks up the shimmer's sweep; with Reduce
                 // Motion the bars fade out as the text fades in, so the slot never goes blank.
-                placeholder.transition(reduceMotion ? .opacity : .identity)
+                placeholder
+                    .frame(height: height)
+                    .transition(reduceMotion ? .opacity : .identity)
             case let .ready(text):
                 summaryText(text, isSummary: true)
                     .transition(reduceMotion ? .opacity : SweepReveal.transition)
@@ -58,7 +59,6 @@ struct FailureSummaryView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: height, alignment: .topLeading)
         // Keeps the reveal's blur inside the slot.
         .clipped()
         .animation(isReady && !reduceMotion ? Self.sweepReveal : Self.fade, value: model.state)
@@ -66,9 +66,9 @@ struct FailureSummaryView: View {
 
     /// Laid out across the whole slot, so the reveal's sweep spans it as the shimmer does.
     /// The model's summary ends in a quiet sparkle, so it reads apart from the fallback,
-    /// which quotes the output. At full size the symbol is taller than a line of text, and
-    /// the slot, exactly two lines tall, would then only fit one. A no-break space keeps it
-    /// from wrapping onto a line of its own.
+    /// which quotes the output. At full size the symbol is taller than a line of text and
+    /// would push its line apart from the other. A no-break space keeps it from wrapping
+    /// onto a line of its own.
     private func summaryText(_ text: String, isSummary: Bool) -> some View {
         let sparkle = Text("\u{00A0}\(Image(systemName: "sparkles"))")
             .font(Font(NSFont.systemFont(ofSize: font.pointSize * 0.8)))
@@ -79,7 +79,8 @@ struct FailureSummaryView: View {
             .truncationMode(.tail)
             .help(isSummary ? "\(text)\n\nSummarized on device" : text)
             .accessibilityLabel(isSummary ? "\(text) Summarized on device." : text)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     /// Two bars where the two lines of text will be, lit by one gradient across both.

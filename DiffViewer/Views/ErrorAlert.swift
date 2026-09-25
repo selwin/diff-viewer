@@ -55,15 +55,14 @@ enum ErrorAlert {
                 alert.accessoryView = detailView(detail)
             }
         case .commitFailure:
-            alert.messageText = "Commit Failed"
+            // The accessory draws the title; see `CommitFailureAccessory`.
+            alert.messageText = ""
             alert.informativeText = ""
             let output = message.trimmingCharacters(in: .whitespacesAndNewlines)
             let model = FailureSummaryModel(output: output, summarizer: FoundationModelsCommitFailureSummarizer())
             summaryModel = model
             let accessory = commitFailureView(output, summary: model)
             alert.accessoryView = accessory
-            alert.layout()
-            accessory.rootView.leadingInset = titleTextInset(of: alert, from: accessory)
         }
         if let window {
             _ = await alert.beginSheetModal(for: window)
@@ -85,16 +84,6 @@ enum ErrorAlert {
         view.sizingOptions = []
         view.frame = NSRect(x: 0, y: 0, width: detailSize.width, height: accessory.height)
         return view
-    }
-
-    /// How far right of the accessory the laid-out title's text starts; zero if the title
-    /// is not found. A label draws its text 2 pt inside its frame.
-    private static func titleTextInset(of alert: NSAlert, from accessory: NSView) -> CGFloat {
-        let title = alert.window.contentView?.subviews
-            .compactMap { $0 as? NSTextField }
-            .first { $0.stringValue == alert.messageText }
-        guard let title else { return 0 }
-        return max(0, title.convert(title.bounds, to: accessory).minX + 2)
     }
 
     /// The scroller's size in both alerts.
