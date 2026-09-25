@@ -83,40 +83,80 @@ struct FileActionTests {
 
     // MARK: The menu for a selection
 
-    /// The batch menu offers what every row offers, so two rows of the same shape keep
-    /// their whole menu and a mixed selection loses the writes the two halves disagree on.
-    @Test func aSelectionsMenuIsTheIntersectionOfItsRows() {
-        let readOnly: [FileAction] = [.revealInFinder, .openInEditor, .copyPath]
-        let modified = changedFile("a.txt", kind: .modified)
-        let otherModified = changedFile("b.txt", kind: .modified)
-        let untracked = changedFile("c.txt", kind: .untracked)
-        let staged = changedFile("d.txt", area: .staged, kind: .modified)
-        #expect(menu([modified, otherModified]) == [.stage, .discard] + readOnly)
-        // Untracked offers Trash where modified offers Discard; only Stage is common.
-        #expect(menu([modified, untracked]) == [.stage] + readOnly)
-        // Stage and Unstage mean opposite things across the two areas, so neither is offered.
-        #expect(menu([modified, staged]) == readOnly)
-        #expect(FileAction.menu(for: [], existsOnDisk: { _ in true }) == [])
+    @Test func unstagedFilesAllGetTheirWrites() {
+        let a = changedFile("a.txt", kind: .modified)
+        let b = changedFile("b.txt", kind: .modified)
+        #expect(
+            FileAction.writeGroups(for: [a, b]) == [
+                .init(action: .stage, files: [a, b]),
+                .init(action: .discard, files: [a, b]),
+            ])
     }
 
-    /// One row missing from disk drops Reveal and Open for the whole batch: the menu
-    /// promises the same thing for every row in it.
+    @Test func stagedFilesOnlyUnstage() {
+        let a = changedFile("a.txt", area: .staged, kind: .modified)
+        let b = changedFile("b.txt", area: .staged, kind: .added)
+        #expect(FileAction.writeGroups(for: [a, b]) == [.init(action: .unstage, files: [a, b])])
+    }
+
+    /// Each write runs on the rows it means something to, so a mixed selection can stage
+    /// one half and unstage the other. Groups follow `allCases`; files keep sidebar order.
+    @Test func aMixedSelectionSplitsItsWrites() {
+        let staged = changedFile("a.txt", area: .staged, kind: .modified)
+        let first = changedFile("b.txt", kind: .modified)
+        let second = changedFile("c.txt", kind: .modified)
+        let groups = FileAction.writeGroups(for: [first, staged, second])
+        #expect(
+            groups == [
+                .init(action: .stage, files: [first, second]),
+                .init(action: .unstage, files: [staged]),
+                .init(action: .discard, files: [first, second]),
+            ])
+        #expect(
+            groups.map { $0.action.title(for: $0.files) }
+                == ["Stage 2 Files", "Unstage", "Discard Changes to 2 Files…"])
+    }
+
+    @Test func untrackedAndModifiedSplitDiscardAndTrash() {
+        let modified = changedFile("a.txt", kind: .modified)
+        let untracked = changedFile("b.txt", kind: .untracked)
+        #expect(
+            FileAction.writeGroups(for: [modified, untracked]) == [
+                .init(action: .stage, files: [modified, untracked]),
+                .init(action: .discard, files: [modified]),
+                .init(action: .trash, files: [untracked]),
+            ])
+    }
+
+    /// Discarding a conflict resolution is not a one-click action, even in a batch.
+    @Test func aConflictOffersOnlyStage() {
+        let conflicted = changedFile("a.txt", kind: .unmerged)
+        #expect(FileAction.writeGroups(for: [conflicted]) == [.init(action: .stage, files: [conflicted])])
+    }
+
+    @Test func commitScopeOffersNoWriteGroups() {
+        let files = [
+            changedFile("a.txt", area: Self.commit, kind: .modified),
+            changedFile("b.txt", area: Self.commit, kind: .deleted),
+        ]
+        #expect(FileAction.writeGroups(for: files) == [])
+    }
+
+    /// Non-write items act on the whole selection, so one row missing from disk drops
+    /// Reveal and Open for the batch.
     @Test func oneMissingFileDropsRevealAndOpenForTheBatch() {
         let present = changedFile("a.txt", kind: .modified)
         let missing = changedFile("b.txt", kind: .modified)
-        let menu = FileAction.menu(for: [present, missing], existsOnDisk: { $0.path == "a.txt" })
-        #expect(menu == [.stage, .discard, .copyPath])
+        let items = FileAction.harmless(for: [present, missing], existsOnDisk: { $0.path == "a.txt" })
+        #expect(items == [.copyPath])
     }
 
-    /// The divider depends on it, exactly as for one row.
-    @Test func aSelectionsWritesComeFirst() {
-        let files = [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .modified)]
-        let menu = FileAction.menu(for: files, existsOnDisk: { _ in true })
-        #expect(menu.prefix { $0.isRepositoryWrite }.count == menu.filter(\.isRepositoryWrite).count)
-    }
-
-    private func menu(_ files: [ChangedFile]) -> [FileAction] {
-        FileAction.menu(for: files, existsOnDisk: { _ in true })
+    @Test func aMixedSelectionKeepsEveryHarmlessItem() {
+        let files = [changedFile("a.txt", kind: .modified), changedFile("b.txt", area: .staged)]
+        #expect(
+            FileAction.harmless(for: files, existsOnDisk: { _ in true })
+                == [.revealInFinder, .openInEditor, .copyPath])
+        #expect(FileAction.harmless(for: [], existsOnDisk: { _ in true }) == [])
     }
 
     // MARK: Titles
@@ -168,6 +208,25 @@ struct FileActionTests {
         #expect(FileAction.discard.title(for: [file]) == "Restore File")
         #expect(FileAction.trash.title(for: [changedFile("a.txt")]) == "Delete File…")
         #expect(FileAction.copyPath.title(for: [file]) == "Copy Path")
+    }
+
+    @Test func compactTitlesMatchTheTable() {
+        let one = [changedFile("a.txt", kind: .modified)]
+        let two = [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .modified)]
+        let oneDeleted = [changedFile("a.txt", kind: .deleted)]
+        let twoDeleted = [changedFile("a.txt", kind: .deleted), changedFile("b.txt", kind: .deleted)]
+        #expect(FileAction.stage.compactTitle(for: one) == "Stage")
+        #expect(FileAction.stage.compactTitle(for: two) == "Stage 2")
+        #expect(FileAction.unstage.compactTitle(for: one) == "Unstage")
+        #expect(FileAction.unstage.compactTitle(for: two) == "Unstage 2")
+        #expect(FileAction.discard.compactTitle(for: one) == "Discard Changes…")
+        #expect(FileAction.discard.compactTitle(for: two) == "Discard Changes…")
+        // One file with edits is enough to make it a discard.
+        #expect(FileAction.discard.compactTitle(for: [oneDeleted[0], one[0]]) == "Discard Changes…")
+        #expect(FileAction.discard.compactTitle(for: oneDeleted) == "Restore")
+        #expect(FileAction.discard.compactTitle(for: twoDeleted) == "Restore 2")
+        #expect(FileAction.trash.compactTitle(for: one) == "Move to Trash…")
+        #expect(FileAction.trash.compactTitle(for: two) == "Move to Trash…")
     }
 
     // MARK: Destructiveness and git commands

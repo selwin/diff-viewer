@@ -245,8 +245,8 @@ menu.
   "Unstage 2", with a `+`/`−` glyph and ⌘S / ⌘⇧S); then the secondary actions, with
   Discard Changes… in red and ⌘⌫. There's room for full labels and shortcuts.
 - Actions come from the context menu's rules (`FileAction`) and run through
-  `FileActionRunner`, so Discard still confirms. A mixed selection follows the context
-  menu's rule until the "split menu" follow-up under Next changes it.
+  `FileActionRunner`, so Discard still confirms. A mixed selection splits the way the
+  context menu does: each write runs on the files it applies to.
 - It never takes keyboard focus: arrow keys keep moving the sidebar selection, and the
   panel follows the new first selected row. Return is not claimed by it.
 - It hides when the selection is empty, is All changes, or has no action that applies,
@@ -258,6 +258,25 @@ menu.
 
 **Tests.** Which button shows for a selection (unstaged only, staged only, mixed,
 untracked, conflicted), unless `FileAction`'s tests already cover it.
+
+---
+
+### O. Manual fetch in the branch picker (requested 2026-09-25)
+
+**Goal.** Right after merging a PR on GitHub, the picker sometimes doesn't show that the
+remote tracking branch has new commits. Opening the picker fetches automatically, but
+within `WindowState.fetchCooldown` (60 s) of the last successful fetch it shows that
+fetch's result instead of running another, so the merge isn't seen yet. A Fetch button
+lets the reader ask for fresh counts.
+
+**Design.**
+- A fetch button (`arrow.clockwise`) in the picker, next to the "fetched …" time. It
+  skips the cooldown and fetches the current branch's remote and the other remotes, the
+  same way the automatic fetch does.
+- While a fetch runs it shows the existing spinner and is disabled; a failure shows the
+  way an automatic fetch failure does.
+
+**Tests.** A manual fetch runs within the cooldown, where an automatic one doesn't.
 
 ---
 
@@ -275,8 +294,7 @@ Roughly in priority order.
   dimming when the window is not key, autoscroll while the mouse is held still).
 - **Sidebar action follow-ups.** The File menu shortcuts are item G under "Requested".
   Still open: Stage All / Unstage All buttons on the section headers; one-step discard of a staged change (`git restore --staged
-  --worktree`); a split menu for a mixed selection ("Stage 2 Files" + "Unstage 1 File")
-  if the intersection rule proves too strict; and `NSWorkspace.recycle` instead of the
+  --worktree`); and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
   the overview strip; click-to-expand context inside the changeset (separators are

@@ -90,7 +90,8 @@ struct SidebarView: View {
     }
 
     /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
-    /// for twenty, since the items a selection offers are the items every row in it offers.
+    /// for twenty. Write actions use the eligible subset of selected files; non-write
+    /// actions must apply to every selected file.
     /// Right-clicking a row outside the selection still acts on that row alone — the list
     /// hands over just that id — and a header, blank space, or the All changes row names no
     /// file at all, which has nothing to act on.
@@ -104,16 +105,15 @@ struct SidebarView: View {
             // true only at the moment the menu is built, and one stat per row per
             // right-click is cheap, where keeping it on `ChangedFile` would mean statting
             // every row on every refresh to hold an answer that goes stale anyway.
-            let actions = FileAction.menu(for: files) { file in
+            let harmless = FileAction.harmless(for: files) { file in
                 windowState.repositoryRoot.map {
                     FileManager.default.fileExists(atPath: $0.url.appendingPathComponent(file.path).path)
                 } ?? false
             }
-            let writes = actions.filter(\.isRepositoryWrite)
-            let harmless = actions.filter { !$0.isRepositoryWrite }
+            let writes = FileAction.writeGroups(for: files)
             // A switch in progress refuses writes anyway; greying them out says so first.
-            ForEach(writes, id: \.self) { action in
-                Button(action.title(for: files)) { run(action, on: files) }
+            ForEach(writes, id: \.action) { group in
+                Button(group.action.title(for: group.files)) { run(group.action, on: group.files) }
                     .disabled(windowState.isSwitchingBranch)
             }
             // Separate what changes the repository from what only looks at the files.
