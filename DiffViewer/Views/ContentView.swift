@@ -136,9 +136,10 @@ struct ContentView: View {
     private func presentErrorIfNeeded() {
         guard !isPresentingError, let message = windowState.errorMessage else { return }
         isPresentingError = true
+        let style: ErrorAlert.Style = windowState.errorIsCommitFailure ? .commitFailure : .generic
         let window = services.windows[windowState.id]
         Task {
-            await ErrorAlert.present(message, in: window)
+            await ErrorAlert.present(message, in: window, style: style)
             isPresentingError = false
             if windowState.errorMessage == message { windowState.errorMessage = nil }
             presentErrorIfNeeded()

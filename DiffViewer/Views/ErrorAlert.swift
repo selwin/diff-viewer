@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Shows a git error, however long it is.
 ///
@@ -31,17 +32,34 @@ enum ErrorAlert {
         return (summary, trimmed)
     }
 
+    enum Style {
+        case generic
+        /// Names the failing line up front and always shows the full output, since a
+        /// hook's first line is rarely the one that matters.
+        case commitFailure
+    }
+
     /// Presents `message` as a sheet on `window` (app-modal when nil) and returns when
     /// the reader dismisses it.
-    static func present(_ message: String, in window: NSWindow?) async {
-        let (summary, detail) = layout(for: message)
+    static func present(_ message: String, in window: NSWindow?, style: Style = .generic) async {
         let alert = NSAlert()
-        alert.messageText = "Error"
-        alert.informativeText = summary
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
-        if let detail {
-            alert.accessoryView = detailView(detail)
+        switch style {
+        case .generic:
+            let (summary, detail) = layout(for: message)
+            alert.messageText = "Error"
+            alert.informativeText = summary
+            if let detail {
+                alert.accessoryView = detailView(detail)
+            }
+        case .commitFailure:
+            alert.messageText = "Commit Failed"
+            alert.informativeText = ""
+            let accessory = commitFailureView(message)
+            alert.accessoryView = accessory
+            alert.layout()
+            accessory.rootView.leadingInset = titleTextInset(of: alert, from: accessory)
         }
         if let window {
             _ = await alert.beginSheetModal(for: window)
@@ -50,9 +68,36 @@ enum ErrorAlert {
         }
     }
 
+    /// Sized once from the subtitle font's real line height, so larger text still fits;
+    /// with no sizing options the hosting view never asks the alert to relayout.
+    private static func commitFailureView(_ message: String) -> NSHostingView<CommitFailureAccessory> {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let accessory = CommitFailureAccessory(
+            subtitle: CommitFailurePrompt.fallback(for: message),
+            output: message.trimmingCharacters(in: .whitespacesAndNewlines),
+            subtitleFont: font)
+        let view = NSHostingView(rootView: accessory)
+        view.sizingOptions = []
+        view.frame = NSRect(x: 0, y: 0, width: detailSize.width, height: accessory.height)
+        return view
+    }
+
+    /// How far right of the accessory the laid-out title's text starts; zero if the title
+    /// is not found. A label draws its text 2 pt inside its frame.
+    private static func titleTextInset(of alert: NSAlert, from accessory: NSView) -> CGFloat {
+        let title = alert.window.contentView?.subviews
+            .compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == alert.messageText }
+        guard let title else { return 0 }
+        return max(0, title.convert(title.bounds, to: accessory).minX + 2)
+    }
+
+    /// The scroller's size in both alerts.
+    static let detailSize = NSSize(width: 520, height: 240)
+
     /// A fixed-size scroller holding the whole message, wrapped and selectable.
-    private static func detailView(_ detail: String) -> NSView {
-        let scrollView = DetailScrollView(frame: NSRect(x: 0, y: 0, width: 520, height: 240))
+    static func detailView(_ detail: String) -> DetailScrollView {
+        let scrollView = DetailScrollView(frame: NSRect(origin: .zero, size: detailSize))
         scrollView.clipsToBounds = true
         scrollView.borderType = .bezelBorder
         scrollView.hasVerticalScroller = true
@@ -75,7 +120,21 @@ enum ErrorAlert {
 /// The alert leaves its accessory scrolled partway down once the sheet is up, so the
 /// reset to the first line waits for the view to attach and one more turn of the run
 /// loop, after the alert's own layout.
-private final class DetailScrollView: NSScrollView {
+final class DetailScrollView: NSScrollView {
+    /// A corner kept clear of text for a button drawn over it. Reapplied on every tile,
+    /// since the exclusion is measured from the text container's current width.
+    var topTrailingExclusion: NSSize = .zero {
+        didSet { tile() }
+    }
+
+    override func tile() {
+        super.tile()
+        let size = topTrailingExclusion
+        guard size != .zero, let container = (documentView as? NSTextView)?.textContainer else { return }
+        let corner = NSRect(x: container.size.width - size.width, y: 0, width: size.width, height: size.height)
+        container.exclusionPaths = [NSBezierPath(rect: corner)]
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else { return }

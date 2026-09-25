@@ -142,6 +142,22 @@ struct WindowStateCommitTests {
         #expect(state.commitMessage == message, "a failed message counts as the reader's own")
     }
 
+    /// A rejected commit gets its own alert, and only for as long as its message is the
+    /// one on show: a later error from anything else takes the generic one.
+    @Test func failingCommitIsFlaggedUntilAnotherErrorReplacesIt() async throws {
+        let (_, state, client, _) = try await settled()
+        #expect(!state.errorIsCommitFailure)
+        await client.fail(commit: true)
+        state.commitMessage = message
+        await state.commit()
+        #expect(state.errorIsCommitFailure)
+
+        await client.fail(actions: true)
+        await state.perform(.stage, on: [filesStaged[1]])
+        #expect(state.errorMessage?.contains("index.lock exists") == true)
+        #expect(!state.errorIsCommitFailure)
+    }
+
     /// The gap the restore exists for: a refresh landed while git ran and emptied the
     /// untouched draft, so without it a rejected commit would lose the message.
     @Test func defaultsChangeDuringFailingCommitDoesNotLoseTheMessage() async throws {
