@@ -27,12 +27,18 @@ final class WindowState {
     private(set) var isLoading = false
     private(set) var isClosed = false
     var errorMessage: String? {
-        didSet { errorRaisedByRefresh = false }
+        didSet {
+            errorRaisedByRefresh = false
+            errorIsCommitFailure = false
+        }
     }
     /// True only while `errorMessage` holds a refresh's own error; a later successful
     /// refresh clears just that. Every assignment above clears it, so only the refresh
     /// failure branch, which sets it afterwards, can turn it on.
     private var errorRaisedByRefresh = false
+    /// True while `errorMessage` holds a failed commit's output, so the alert can lead with
+    /// the failing line. Cleared the same way; only a failed commit sets it afterwards.
+    private(set) var errorIsCommitFailure = false
     /// Bumped by every user write to `selection`, so a file action can tell whether the
     /// reader changed it while git ran. Writable only here; the action extension reads it.
     private(set) var selectionRevision = 0
@@ -539,6 +545,54 @@ final class WindowState {
         return document.sections.contains { if case .failed = $0.outcome { return true } else { return false } }
     }
 
+    // MARK: - Diff
+
+    /// A setting that changes diff content changed. The diff reloads at once (or is
+    /// marked stale while hidden); the line counts depend on Hide Whitespace too, so
+    /// a refresh follows to recompute them.
+    func diffSettingsChanged() {
+        reloadDiff()
+        guard let session else { return }
+        Task { await refresh(session: session, cause: .settings) }
+    }
+
+    /// Loads the selection's diff when visible; when hidden, records that a load
+    /// is owed so nothing runs for a window nobody can see.
+    private func reloadDiff() {
+        guard !isClosed else { return }
+        guard isVisible else {
+            diffStale = true
+            return
+        }
+        diffStale = false
+        switch detailSelection {
+        case .allChanges:
+            loadChangeset(sidebarRows)
+        case .files:
+            loadChangeset(selectedFiles)
+        case .file, .nothing:
+            // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
+            // either way the loader is told to show nothing, which also cancels its work.
+            changesetRequest = nil
+            diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
+        }
+    }
+
+    /// Loads `files` as one changeset. A reload of the view already on screen keeps its
+    /// document until the replacement is whole; a new view starts from empty.
+    private func loadChangeset(_ files: [ChangedFile]) {
+        let request = ChangesetRequest(identity: detailIdentity)
+        diffLoader.load(
+            changeset: files, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+            foldOptions: preferences.foldOptions, preserveCurrentContent: request.isReload(of: changesetRequest))
+        changesetRequest = request
+    }
+}
+
+// MARK: - Line stats
+
+/// Reading the per-file line counts the sidebar shows beside each file.
+extension WindowState {
     /// Runs numstat for the request's areas and counts untracked files, then stamps the
     /// counts onto the current `files` by id. Accepted only from the active read: a
     /// superseded token records nothing, whatever refresh is newest by then. Not a
@@ -588,49 +642,6 @@ final class WindowState {
         session.statsTask?.cancel()
         session.statsTask = nil
         _ = session.lineStats.invalidateActive()
-    }
-
-    // MARK: - Diff
-
-    /// A setting that changes diff content changed. The diff reloads at once (or is
-    /// marked stale while hidden); the line counts depend on Hide Whitespace too, so
-    /// a refresh follows to recompute them.
-    func diffSettingsChanged() {
-        reloadDiff()
-        guard let session else { return }
-        Task { await refresh(session: session, cause: .settings) }
-    }
-
-    /// Loads the selection's diff when visible; when hidden, records that a load
-    /// is owed so nothing runs for a window nobody can see.
-    private func reloadDiff() {
-        guard !isClosed else { return }
-        guard isVisible else {
-            diffStale = true
-            return
-        }
-        diffStale = false
-        switch detailSelection {
-        case .allChanges:
-            loadChangeset(sidebarRows)
-        case .files:
-            loadChangeset(selectedFiles)
-        case .file, .nothing:
-            // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
-            // either way the loader is told to show nothing, which also cancels its work.
-            changesetRequest = nil
-            diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
-        }
-    }
-
-    /// Loads `files` as one changeset. A reload of the view already on screen keeps its
-    /// document until the replacement is whole; a new view starts from empty.
-    private func loadChangeset(_ files: [ChangedFile]) {
-        let request = ChangesetRequest(identity: detailIdentity)
-        diffLoader.load(
-            changeset: files, client: session?.client, hideWhitespace: preferences.hideWhitespace,
-            foldOptions: preferences.foldOptions, preserveCurrentContent: request.isReload(of: changesetRequest))
-        changesetRequest = request
     }
 }
 
@@ -1008,6 +1019,7 @@ extension WindowState {
         guard session === self.session, !isClosed, let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+        errorIsCommitFailure = true
     }
 
     /// Starts a defaults read for the refresh being accepted. Its own generation, not the

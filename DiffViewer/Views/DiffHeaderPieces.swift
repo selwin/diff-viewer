@@ -58,7 +58,7 @@ struct FileHeaderView: View {
                         .truncationMode(.middle)
                         .layoutPriority(1)
                 }
-                CopyPathButton(action: copyRelativePath)
+                CopyButton(label: "Copy Relative Path", action: copyRelativePath)
                 if let showsPreview {
                     Picker("View", selection: showsPreview) {
                         Label("Preview", systemImage: "photo").tag(true)
@@ -98,9 +98,11 @@ struct FileHeaderView: View {
     }
 }
 
-/// The header's copy-path glyph: quiet at rest, lit with a soft background on hover,
-/// and a green checkmark for a moment after a click so the copy is seen to happen.
-struct CopyPathButton: View {
+/// A small copy glyph: quiet at rest, lit with a soft background on hover, and a
+/// green checkmark for a moment after a click so the copy is seen to happen. `label`
+/// is its tooltip and accessibility label.
+struct CopyButton: View {
+    let label: String
     let action: () -> Void
     @State private var isHovering = false
     @State private var showsCheckmark = false
@@ -123,8 +125,8 @@ struct CopyPathButton: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.1)) { isHovering = hovering }
         }
-        .help("Copy Relative Path")
-        .accessibilityLabel(showsCheckmark ? "Copied" : "Copy relative path")
+        .help(label)
+        .accessibilityLabel(showsCheckmark ? "Copied" : label)
     }
 
     private var glyphStyle: AnyShapeStyle {
