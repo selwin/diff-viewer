@@ -1,14 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// The body of the Commit Failed alert: the line that names the failure, then the whole
+/// The body of the Commit Failed alert: a sentence that names the failure, then the whole
 /// output with a copy button in its corner.
 struct CommitFailureAccessory: View {
-    let subtitle: String
+    let summary: FailureSummaryView
     let output: String
-    /// Measured by the alert to size this view, so the text drawn here must use it too.
-    let subtitleFont: NSFont
-    /// Where the alert's title text starts, so the subtitle and the box line up under it.
+    /// Where the alert's title text starts, so the summary and the box line up under it.
     /// Set once the alert has laid out.
     var leadingInset: CGFloat = 0
 
@@ -17,25 +15,14 @@ struct CommitFailureAccessory: View {
     /// wrap around it instead of running underneath.
     private static let buttonClearance = NSSize(width: 34, height: 30)
 
-    /// Always two lines, so a one-line subtitle leaves its spare line as spacing.
-    private var subtitleHeight: CGFloat {
-        ceil(NSLayoutManager().defaultLineHeight(for: subtitleFont) * 2)
-    }
-
     /// The whole view's height, for the alert's fixed frame.
     var height: CGFloat {
-        subtitleHeight + Self.spacing + ErrorAlert.detailSize.height
+        summary.height + Self.spacing + ErrorAlert.detailSize.height
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.spacing) {
-            Text(subtitle)
-                .font(Font(subtitleFont))
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .help(subtitle)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .frame(height: subtitleHeight, alignment: .topLeading)
+            summary
             OutputView(text: output, buttonClearance: Self.buttonClearance)
                 .frame(height: ErrorAlert.detailSize.height)
                 .overlay(alignment: .topTrailing) {

@@ -127,4 +127,88 @@ import Testing
         #expect(subtitle == String(line.prefix(159)) + "…")
         #expect(subtitle.count == 160)
     }
+
+    // MARK: Model input
+
+    /// Short output goes to the model whole, cleaned of colors and dot leaders.
+    @Test func inputUnderBudgetIsOnlyCleaned() {
+        let output = "swiftlint.....\u{1B}[41mFailed\u{1B}[m\n\na.swift:1: error: too long"
+        let expected = "swiftlint: Failed\n\na.swift:1: error: too long"
+        #expect(CommitFailurePrompt.input(from: output, budget: 1_000) == expected)
+    }
+
+    /// A long run of noise between two failures cannot push either one out.
+    @Test func earlyAndLateDiagnosticsSurviveNoise() {
+        let noise = (1...500).map { "Compiling module \($0) of 500" }
+        let lines =
+            ["git commit exited with status 1: [WARNING] Unstaged files detected."]
+            + ["Sources/Early.swift:3: error: missing return"] + noise
+            + ["Sources/Late.swift:9: error: line too long"] + noise
+        let input = CommitFailurePrompt.input(from: lines.joined(separator: "\n"), budget: 1_000)
+        #expect(input.count <= 1_000)
+        #expect(input.contains("Sources/Early.swift:3: error: missing return"))
+        #expect(input.contains("Sources/Late.swift:9: error: line too long"))
+        #expect(input.contains("[…]"))
+        // Kept lines stay in output order.
+        let early = input.range(of: "Early.swift")!.lowerBound
+        let late = input.range(of: "Late.swift")!.lowerBound
+        #expect(early < late)
+    }
+
+    /// A final line too long for the budget is clipped, and the lines before it still fit.
+    @Test func overlongLastLineIsClipped() {
+        let lines = ["Running policy checks", "Commit blocked by policy", String(repeating: "x", count: 500)]
+        let input = CommitFailurePrompt.input(from: lines.joined(separator: "\n"), budget: 200)
+        #expect(input == "Running policy checks\nCommit blocked by policy\n" + String(repeating: "x", count: 49) + "…")
+    }
+
+    /// Output that is one huge line still reaches the model as that line's start.
+    @Test func singleHugeLineKeepsItsStart() {
+        let line = "Sources/a.swift:3: error: " + String(repeating: "x", count: 7_000)
+        let input = CommitFailurePrompt.input(from: line, budget: 6_000)
+        #expect(input.hasPrefix("Sources/a.swift:3: error: xxx"))
+        #expect(input.count <= 6_000)
+    }
+
+    /// Past the half-budget cap, the first and the last specific lines are kept, and the
+    /// generic ones lose out to them.
+    @Test func specificEndsBeatGenericLinesAtTheCap() {
+        let specific = (1...30).map { String(format: "Sources/File%02d.swift:%02d: error: rule broken", $0, $0) }
+        // Longer than a specific line, so no generic one fits where a specific one did not.
+        let generic = (1...30).map { "hook \($0) failed with a long complaint about formatting" }
+        var lines: [String] = []
+        for index in specific.indices {
+            lines += [specific[index], "noise", "noise", generic[index], "noise", "noise"]
+        }
+        lines += (1...100).map { "trailing output line \($0) that says nothing useful" }
+        let input = CommitFailurePrompt.input(from: lines.joined(separator: "\n"), budget: 600)
+        #expect(input.count <= 600)
+        #expect(input.contains(specific[0]))
+        #expect(input.contains(specific[29]))
+        #expect(!input.contains("failed with a long complaint"))
+    }
+
+    // MARK: Cleaning the reply
+
+    @Test func cleanedJoinsLinesAndDropsMarkdown() {
+        let reply = "\"**SwiftLint** failed:\n- `a.swift:3` breaks   the line length rule.\""
+        #expect(CommitFailurePrompt.cleaned(reply) == "SwiftLint failed: a.swift:3 breaks the line length rule.")
+    }
+
+    @Test func cleanedClampsAtASentenceEnd() {
+        let reply = "The swiftlint hook failed. " + String(repeating: "More detail follows here. ", count: 10)
+        let cleaned = CommitFailurePrompt.cleaned(reply)
+        #expect(cleaned.count <= 160)
+        #expect(cleaned.hasSuffix("More detail follows here."))
+    }
+
+    /// The dot inside a file name is not a sentence end.
+    @Test func cleanedNeverClipsInsideAFileName() {
+        let words = String(repeating: "word ", count: 25)
+        let noSentence = words + "in DiffViewer/App/FindSideLabels.swift:24 is too long for the line length rule"
+        #expect(CommitFailurePrompt.cleaned(noSentence) == words + "in…")
+
+        let sentence = "SwiftLint failed on FindSideLabels.swift:24. " + words + words
+        #expect(CommitFailurePrompt.cleaned(sentence) == "SwiftLint failed on FindSideLabels.swift:24.")
+    }
 }

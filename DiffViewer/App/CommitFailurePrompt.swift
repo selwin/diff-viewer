@@ -73,6 +73,148 @@ enum CommitFailurePrompt {
         return subtitle.count > subtitleLimit ? String(subtitle.prefix(subtitleLimit - 1)) + "…" : subtitle
     }
 
+    // MARK: On-device summary
+
+    /// System instructions for the on-device summary. About 80 characters fills one line of
+    /// the alert. Files and lines go unmentioned: asked for them "if the output gives them",
+    /// the model invented both for outputs that had none.
+    static let instructions = """
+        You explain why a git commit failed, given the output of git and its hooks. Reply \
+        with one short, plain sentence: which hook or tool failed and why, using only facts \
+        stated in the output. Aim for one line of about 80 characters; never exceed 110. \
+        No markdown, no quotes, no preamble.
+        """
+
+    /// The output as the model sees it: cleaned, and cut to `budget` characters (newlines
+    /// included) when longer. A cut keeps the diagnostics, a line of context around each,
+    /// and then the end of the output, in their original order, with `[…]` for each gap.
+    static func input(from output: String, budget: Int) -> String {
+        let lines = strippingANSI(output)
+            .split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map { collapsingDotLeader(String($0)) }
+        let cleaned = lines.joined(separator: "\n")
+        guard cleaned.count > budget else { return cleaned }
+
+        // Blank lines say nothing, so a cut never spends budget or context on them. A line
+        // is clipped to a quarter of the budget, so even a single huge line leaves its start.
+        let lineLimit = budget / 4
+        var selection = LineSelection(
+            lines: lines.filter { $0.contains { !$0.isWhitespace } }
+                .map { $0.count > lineLimit ? String($0.prefix(lineLimit - 1)) + "…" : $0 })
+        // Capped at half, so one early failure's lines never crowd out a later one.
+        var diagnostics: [Int] = []
+        var seen = Set<String>()
+        for index in diagnosticOrder(selection.lines) {
+            let (isNew, _) = seen.insert(selection.lines[index].trimmingCharacters(in: .whitespaces))
+            if isNew, selection.keep(index, within: budget / 2) { diagnostics.append(index) }
+        }
+        for index in diagnostics.sorted() {
+            for neighbor in [index - 1, index + 1] where selection.lines.indices.contains(neighbor) {
+                _ = selection.keep(neighbor, within: budget)
+            }
+        }
+        // A line too long for what is left is skipped, so shorter ones before it still fit.
+        for index in selection.lines.indices.reversed() {
+            _ = selection.keep(index, within: budget)
+        }
+        return selection.text
+    }
+
+    /// Diagnostic line indices in the order they claim budget: the first and the last
+    /// specific ones, the other specific ones, then the same for generic ones. The ends
+    /// come first because the first failure is usually the cause and the last the summary.
+    private static func diagnosticOrder(_ lines: [String]) -> [Int] {
+        let ranks = lines.map(rank)
+        func endsFirst(_ rank: Rank) -> [Int] {
+            let indices = lines.indices.filter { ranks[$0] == rank }
+            guard let first = indices.first, let last = indices.last, first != last else { return indices }
+            return [first, last] + indices.dropFirst().dropLast()
+        }
+        return endsFirst(.specific) + endsFirst(.generic)
+    }
+
+    /// The lines chosen for a cut input, and what they cost with their gap markers.
+    private struct LineSelection {
+        static let gapMarker = "[…]"
+
+        let lines: [String]
+        private var kept: [Bool]
+        /// Characters of `text`, counting one newline per line and per marker.
+        private var used = Self.gapMarker.count + 1
+
+        init(lines: [String]) {
+            self.lines = lines
+            kept = Array(repeating: false, count: lines.count)
+        }
+
+        /// Keeps line `index` if the text stays within `limit`; true if it is kept now or
+        /// already was. Keeping a line can split a gap in two or close one.
+        mutating func keep(_ index: Int, within limit: Int) -> Bool {
+            if kept[index] { return true }
+            let droppedBefore = index > 0 && !kept[index - 1]
+            let droppedAfter = index < lines.count - 1 && !kept[index + 1]
+            let gapChange = (droppedBefore ? 1 : 0) + (droppedAfter ? 1 : 0) - 1
+            let cost = lines[index].count + 1 + gapChange * (Self.gapMarker.count + 1)
+            guard used + cost <= limit else { return false }
+            used += cost
+            kept[index] = true
+            return true
+        }
+
+        var text: String {
+            var result: [String] = []
+            for index in lines.indices {
+                if kept[index] {
+                    result.append(lines[index])
+                } else if index == 0 || kept[index - 1] {
+                    result.append(Self.gapMarker)
+                }
+            }
+            return result.joined(separator: "\n")
+        }
+    }
+
+    /// The model's reply as one plain line: markdown and wrapping quotes removed, lines
+    /// joined, whitespace collapsed, and clipped to the subtitle's limit.
+    static func cleaned(_ reply: String) -> String {
+        var text = reply.split(whereSeparator: \.isNewline)
+            .map { $0.replacing(markdownLinePrefix, with: "") }
+            .joined(separator: " ")
+            .replacing(markdownEmphasis, with: "")
+            .replacing(#/\s+/#, with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        while let first = text.first, let last = text.last, text.count > 1,
+            quotePairs.contains(where: { $0.open == first && $0.close == last })
+        {
+            text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        return clamped(text)
+    }
+
+    /// Headings, bullets and quote marks at the start of a reply's line.
+    nonisolated(unsafe) private static let markdownLinePrefix = #/^\s*(?:#+|[-*•>]|\d+\.)\s+/#
+    nonisolated(unsafe) private static let markdownEmphasis = #/\*\*|__|`/#
+    private static let quotePairs: [(open: Character, close: Character)] = [
+        ("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’"),
+    ]
+
+    /// `text` within the subtitle limit: through its last sentence end that fits, else cut
+    /// at a word with "…". A sentence ends at `.`, `!` or `?` before whitespace, so the
+    /// dot in `FindSideLabels.swift:24` or `v1.2` never ends one.
+    private static func clamped(_ text: String) -> String {
+        guard text.count > subtitleLimit else { return text }
+        let characters = Array(text)
+        // Longer than the limit, so every candidate has a character after it.
+        let sentenceEnd = (0..<subtitleLimit).last { index in
+            ".!?".contains(characters[index]) && characters[index + 1].isWhitespace
+        }
+        if let sentenceEnd { return String(characters[...sentenceEnd]) }
+        // The ellipsis counts toward the limit.
+        let head = characters[..<(subtitleLimit - 1)]
+        let cut = head.lastIndex(where: \.isWhitespace).map { head[..<$0] } ?? head
+        return String(cut).trimmingCharacters(in: .whitespaces) + "…"
+    }
+
     private static func failureLine(among lines: [String]) -> String? {
         lines.first { rank($0) == .specific } ?? lines.first { rank($0) == .generic }
     }

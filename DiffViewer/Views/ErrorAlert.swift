@@ -45,6 +45,7 @@ enum ErrorAlert {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
+        var summaryModel: FailureSummaryModel?
         switch style {
         case .generic:
             let (summary, detail) = layout(for: message)
@@ -56,7 +57,10 @@ enum ErrorAlert {
         case .commitFailure:
             alert.messageText = "Commit Failed"
             alert.informativeText = ""
-            let accessory = commitFailureView(message)
+            let output = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = FailureSummaryModel(output: output, summarizer: FoundationModelsCommitFailureSummarizer())
+            summaryModel = model
+            let accessory = commitFailureView(output, summary: model)
             alert.accessoryView = accessory
             alert.layout()
             accessory.rootView.leadingInset = titleTextInset(of: alert, from: accessory)
@@ -66,16 +70,20 @@ enum ErrorAlert {
         } else {
             _ = alert.runModal()
         }
+        // The hosting view can outlive the alert briefly; nothing may publish once it is gone.
+        summaryModel?.cancel()
     }
 
-    /// Sized once from the subtitle font's real line height, so larger text still fits;
-    /// with no sizing options the hosting view never asks the alert to relayout.
-    private static func commitFailureView(_ message: String) -> NSHostingView<CommitFailureAccessory> {
-        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-        let accessory = CommitFailureAccessory(
-            subtitle: CommitFailurePrompt.fallback(for: message),
-            output: message.trimmingCharacters(in: .whitespacesAndNewlines),
-            subtitleFont: font)
+    /// Sized once from the fonts' real line heights, so larger text still fits; with no
+    /// sizing options the hosting view never asks the alert to relayout.
+    private static func commitFailureView(
+        _ output: String, summary: FailureSummaryModel
+    ) -> NSHostingView<CommitFailureAccessory> {
+        let summaryView = FailureSummaryView(
+            model: summary,
+            font: .systemFont(ofSize: NSFont.systemFontSize),
+            captionFont: .systemFont(ofSize: NSFont.smallSystemFontSize))
+        let accessory = CommitFailureAccessory(summary: summaryView, output: output)
         let view = NSHostingView(rootView: accessory)
         view.sizingOptions = []
         view.frame = NSRect(x: 0, y: 0, width: detailSize.width, height: accessory.height)
