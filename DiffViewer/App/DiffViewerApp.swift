@@ -71,6 +71,7 @@ struct DiffViewerApp: App {
         .restorationBehavior(.disabled)
         .commands {
             RepositoryCommands(services: services)
+            ChangesCommands(services: services)
         }
     }
 }
@@ -126,6 +127,18 @@ extension FocusedValues {
     var windowState: WindowState? {
         get { self[WindowStateFocusKey.self] }
         set { self[WindowStateFocusKey.self] = newValue }
+    }
+}
+
+struct FileListWindowStateFocusKey: FocusedValueKey {
+    typealias Value = WindowState
+}
+
+extension FocusedValues {
+    /// The window whose file list has focus, for the Changes menu.
+    var fileListWindowState: WindowState? {
+        get { self[FileListWindowStateFocusKey.self] }
+        set { self[FileListWindowStateFocusKey.self] = newValue }
     }
 }
 
@@ -233,5 +246,45 @@ struct RepositoryCommands: Commands {
             Button("Reset Font Size") { preferences.resetFontSize() }
                 .keyboardShortcut("0", modifiers: .command)
         }
+    }
+}
+
+/// The Changes menu: the sidebar's writes on the selected rows, with shortcuts. Scoped to
+/// file-list focus, so ⌘⌫ still deletes text in the find bar and the commit sheet.
+struct ChangesCommands: Commands {
+    let services: AppServices
+    @FocusedValue(\.fileListWindowState) private var windowState
+
+    var body: some Commands {
+        // Built once per menu update rather than once per item: each build scans the selection.
+        let groups = availableGroups
+        CommandMenu("Changes") {
+            button("Stage", for: .stage, in: groups)
+                .keyboardShortcut("s")
+            button("Unstage", for: .unstage, in: groups)
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            button("Discard Changes…", for: .discard, in: groups)
+                .keyboardShortcut(.delete, modifiers: .command)
+            button("Move to Trash…", for: .trash, in: groups)
+        }
+    }
+
+    /// The selection's writes, or none while a branch switch or a confirmation is in progress.
+    private var availableGroups: [FileAction.WriteGroup] {
+        guard let windowState, !windowState.isSwitchingBranch, !windowState.isConfirmingFileAction else {
+            return []
+        }
+        return windowState.selectedWriteGroups
+    }
+
+    /// Disabled when `groups` has nothing for `action`.
+    private func button(_ title: String, for action: FileAction, in groups: [FileAction.WriteGroup]) -> some View {
+        let group = groups.first { $0.action == action }
+        return Button(title) {
+            guard let windowState, let group else { return }
+            let runner = FileActionRunner(windowState: windowState, services: services)
+            Task { await runner.run(group.action, on: group.files) }
+        }
+        .disabled(group == nil)
     }
 }

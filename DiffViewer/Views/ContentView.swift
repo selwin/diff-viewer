@@ -13,12 +13,13 @@ struct ContentView: View {
     /// An error alert is up; a new message waits for it to be dismissed rather than
     /// stacking another sheet on it.
     @State private var isPresentingError = false
+    @FocusState private var isFileListFocused: Bool
 
     var body: some View {
         @Bindable var windowState = windowState
         @Bindable var preferences = preferences
         NavigationSplitView {
-            SidebarView()
+            SidebarView(isFileListFocused: $isFileListFocused)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         } detail: {
             detail

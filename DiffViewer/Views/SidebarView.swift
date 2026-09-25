@@ -3,7 +3,8 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
-    @Environment(Preferences.self) private var preferences
+    /// Owned by `ContentView`, which also needs to know when the list has focus.
+    var isFileListFocused: FocusState<Bool>.Binding
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -61,6 +62,11 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .focused(isFileListFocused)
+        // Only while the list or a row control has focus, so the Changes menu's shortcuts
+        // never fire from the find bar or the commit sheet, where ⌘⌫ edits text.
+        .focusedValue(\.fileListWindowState, windowState)
+        .onExitCommand { windowState.selection = [] }
         // Keyed on the ids, not the files: staging moves a row between sections and should
         // slide, while line counts arriving for the same rows should not start a transaction.
         .animation(.default, value: windowState.files.map(\.id))
@@ -129,11 +135,7 @@ struct SidebarView: View {
     /// The runner confirms first — once for the whole batch — so it needs this window to
     /// hang the sheet on.
     private func run(_ action: FileAction, on files: [ChangedFile]) {
-        let runner = FileActionRunner(
-            windowState: windowState,
-            preferences: preferences,
-            window: services.windows[windowState.id]
-        )
+        let runner = FileActionRunner(windowState: windowState, services: services)
         Task { await runner.run(action, on: files) }
     }
 }

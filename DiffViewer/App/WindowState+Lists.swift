@@ -52,6 +52,16 @@ extension WindowState {
         sidebarRows.filter { selection.contains(.file($0.id)) }
     }
 
+    /// The writes the selected file rows offer, for the Changes menu. Empty while All
+    /// changes is in the selection: it wins the detail pane, so the rows beside it are
+    /// not what the reader is looking at.
+    var selectedWriteGroups: [FileAction.WriteGroup] {
+        switch detailSelection {
+        case .file, .files: FileAction.writeGroups(for: selectedFiles)
+        case .allChanges, .nothing: []
+        }
+    }
+
     /// The selected file's id, or nil unless exactly one file row is selected. Read-only:
     /// every rule about the selection is written on `selection`, which can tell an
     /// explicit "All changes" from "nothing".
