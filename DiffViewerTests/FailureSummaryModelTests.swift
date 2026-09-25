@@ -22,6 +22,16 @@ import os
         #expect(stub.calls == 0)
     }
 
+    /// A silent hook leaves only git's status, which the model would explain with an
+    /// invented cause.
+    @Test func statusOnlyOutputFallsBackWithoutAsking() async {
+        let stub = StubSummarizer(.returns("Unused."))
+        let model = FailureSummaryModel(output: "git commit exited with status 1", summarizer: stub)
+        #expect(model.state == .fallback("git commit exited with status 1."))
+        await model.run()
+        #expect(stub.calls == 0)
+    }
+
     @Test func summaryIsPublished() async {
         let model = FailureSummaryModel(output: output, summarizer: StubSummarizer(.returns("SwiftLint failed.")))
         #expect(model.state == .loading)

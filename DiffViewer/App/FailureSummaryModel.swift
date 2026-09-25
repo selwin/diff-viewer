@@ -24,12 +24,14 @@ final class FailureSummaryModel {
     @ObservationIgnored private var race: SummaryRace?
     @ObservationIgnored private var isCancelled = false
 
-    /// Starts at the fallback when the model is unavailable, so no placeholder ever shows.
+    /// Starts at the fallback when the model is unavailable or git's status is all there is,
+    /// so no placeholder ever shows.
     init(output: String, summarizer: any CommitFailureSummarizer, timeout: Duration = .seconds(6)) {
         self.output = output
         self.summarizer = summarizer
         self.timeout = timeout
-        state = summarizer.isAvailable ? .loading : .fallback(CommitFailurePrompt.fallback(for: output))
+        let summarizes = summarizer.isAvailable && CommitFailurePrompt.hasOutput(output)
+        state = summarizes ? .loading : .fallback(CommitFailurePrompt.fallback(for: output))
     }
 
     func run() async {

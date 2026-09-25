@@ -121,6 +121,12 @@ import Testing
             CommitFailurePrompt.fallback(for: "git commit exited with status 1") == "git commit exited with status 1.")
     }
 
+    @Test func outputPastTheStatusCounts() {
+        #expect(!CommitFailurePrompt.hasOutput("git commit exited with status 1"))
+        #expect(!CommitFailurePrompt.hasOutput("git commit exited with status 1: \n  \n"))
+        #expect(CommitFailurePrompt.hasOutput("git commit exited with status 1: hook failed"))
+    }
+
     @Test func longSubtitleIsClipped() {
         let line = "a.swift:1: error: " + String(repeating: "x", count: 200)
         let subtitle = CommitFailurePrompt.fallback(for: "git commit exited with status 1: \(line)")

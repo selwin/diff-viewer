@@ -55,6 +55,12 @@ enum CommitFailurePrompt {
         return nil
     }
 
+    /// Whether the output says anything past git's exit status. A hook that fails silently
+    /// leaves nothing to summarize, and the model invents a cause when asked anyway.
+    static func hasOutput(_ message: String) -> Bool {
+        !parse(message).lines.isEmpty
+    }
+
     /// The first specific diagnostic, else the first generic one, trimmed.
     static func failureLine(in message: String) -> String? {
         failureLine(among: parse(message).lines)

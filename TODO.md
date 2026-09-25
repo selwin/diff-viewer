@@ -230,6 +230,37 @@ sidebar, the single-file view and the All changes view, and make the three consi
 
 ---
 
+### N. Stage and unstage buttons for the sidebar selection (requested 2026-09-25)
+
+**Goal.** Selecting files in the sidebar shows Stage or Unstage right away, so the most
+common action after reading a diff is one click instead of a trip through the context
+menu.
+
+**Design: a side popover** (mockup "2b", 2026-09-25).
+- A glass panel opens just past the sidebar's trailing edge, level with the first
+  selected row, with its arrow pointing at that row. The file list stays fully visible;
+  the panel covers only the left pane's gutter.
+- Content, top to bottom: a caption naming the selection ("2 files selected", or the
+  file name for one file); the primary action as the highlighted row ("Stage 2" or
+  "Unstage 2", with a `+`/`−` glyph and ⌘S / ⌘⇧S); then the secondary actions, with
+  Discard Changes… in red and ⌘⌫. There's room for full labels and shortcuts.
+- Actions come from the context menu's rules (`FileAction`) and run through
+  `FileActionRunner`, so Discard still confirms. A mixed selection follows the context
+  menu's rule until the "split menu" follow-up under Next changes it.
+- It never takes keyboard focus: arrow keys keep moving the sidebar selection, and the
+  panel follows the new first selected row. Return is not claimed by it.
+- It hides when the selection is empty, is All changes, or has no action that applies,
+  and on Escape or a click elsewhere.
+- Pairs with G: the shortcuts it shows are G's File menu items, and after an action
+  the selection moves the way ⌘S would, so the panel walks down the list with it.
+- To decide: whether it opens on every selection or only after a pause (so fast arrow
+  key scrolling doesn't flash it); whether a single-file selection shows it at all.
+
+**Tests.** Which button shows for a selection (unstaged only, staged only, mixed,
+untracked, conflicted), unless `FileAction`'s tests already cover it.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
