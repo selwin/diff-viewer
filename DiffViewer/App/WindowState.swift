@@ -44,7 +44,7 @@ final class WindowState {
     private(set) var selectionRevision = 0
     private var storedSelection: Set<DiffSelection> = []
 
-    /// The rows highlighted in the sidebar: All changes, any number of files, or nothing.
+    /// The rows highlighted in the sidebar: All changes alone, any number of files, or nothing.
     ///
     /// The setter is the user's path — the List binding, a scope change, the debug hooks,
     /// tests — so it records the intent and drops whatever a file action meant to restore,
@@ -55,7 +55,8 @@ final class WindowState {
         set {
             selectionRevision += 1
             pendingReselection = nil
-            if applySelection(newValue, from: detailIdentity) { reloadDiff() }
+            let normalized = Self.withoutAllChangesBesideFiles(newValue)
+            if applySelection(normalized, from: detailIdentity) { reloadDiff() }
         }
     }
 

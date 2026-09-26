@@ -25,8 +25,8 @@ extension WindowState {
     /// What the detail area shows, derived from the selection set.
     enum DetailSelection: Equatable {
         case nothing
-        /// The set contains All changes; it wins over any file rows also in the set, which
-        /// is routine: ⌘A and a ⇧-click range from the top both include that row.
+        /// The set contains All changes, which is only ever selected alone: the `selection`
+        /// setter drops it from a multi-selection.
         case allChanges
         /// Exactly one file row.
         case file(ChangedFile.ID)
@@ -40,6 +40,14 @@ extension WindowState {
     struct DetailIdentity: Equatable {
         let detail: DetailSelection
         let ids: [ChangedFile.ID]
+    }
+
+    /// `selection` minus All changes when files are in it too. ⌘A and a ⇧-click range from
+    /// the top both take in that row; All changes is a view, not a file, so the files win.
+    static func withoutAllChangesBesideFiles(_ selection: Set<DiffSelection>) -> Set<DiffSelection> {
+        // Anything beside All changes is a file row: the set holds no other kind.
+        guard selection.contains(.allChanges), selection.count > 1 else { return selection }
+        return selection.subtracting([.allChanges])
     }
 
     var detailSelection: DetailSelection {
@@ -64,9 +72,9 @@ extension WindowState {
         sidebarRows.filter { selection.contains(.file($0.id)) }
     }
 
-    /// The writes the selected file rows offer, for the Changes menu. Empty while All
-    /// changes is in the selection: it wins the detail pane, so the rows beside it are
-    /// not what the reader is looking at.
+    /// The file actions that write (stage, unstage, discard, trash) available to the
+    /// selected file rows, for the Changes menu and the popover. Empty for All changes,
+    /// which is a view rather than files and is only ever selected alone.
     var selectedWriteGroups: [FileAction.WriteGroup] {
         switch detailSelection {
         case .file, .files: FileAction.writeGroups(for: selectedFiles)

@@ -55,29 +55,26 @@ struct WindowStateSelectionTests {
         #expect(sections(state) == nil, "a single file is not a changeset")
     }
 
-    // MARK: All changes wins
+    // MARK: All changes is never part of a multi-selection
 
-    @Test func allChangesWinsOverFileRowsAndAddingOneStartsNoLoad() async {
+    @Test func selectAllDropsAllChangesSoTheFilesCanBeStaged() async {
+        let h = Harness()
+        let state = h.makeState()
+        await h.adopt(state, "A", files: files)
+        let unstaged = [files[0], files[1]]
+
+        // What ⌘A in the Changes list writes: the All changes row plus every file row.
+        state.selection = [.allChanges, .file(unstaged[0].id), .file(unstaged[1].id)]
+        #expect(state.selection == [.file(unstaged[0].id), .file(unstaged[1].id)])
+        #expect(state.detailSelection == .files)
+        #expect(state.selectedWriteGroups.contains(.init(action: .stage, files: unstaged)))
+    }
+
+    @Test func aWatcherRefreshRebuildsAllChangesWhenARowDisappears() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: files)
         #expect(state.selection == [.allChanges])
-        await awaitChangeset(files, in: state)
-        let reads = await repo.client.contentReads
-
-        // ⌘A and a ⇧-click range from the top both land here: All changes plus rows.
-        state.selection = [.allChanges, .file(files[0].id)]
-        #expect(state.detailSelection == .allChanges)
-        try? await Task.sleep(for: .milliseconds(50))
-        #expect(await repo.client.contentReads == reads, "the pane shows the same thing, so nothing reloads")
-        #expect(sections(state) == files.map(\.id))
-    }
-
-    @Test func aWatcherRefreshRebuildsAllChangesWhenASelectedRowDisappears() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        state.selection = [.allChanges, .file(files[0].id)]
         await awaitChangeset(files, in: state)
         let reads = await repo.client.contentReads
 
@@ -86,7 +83,7 @@ struct WindowStateSelectionTests {
         h.watcherCallbacks[repo.root]?()
 
         #expect(await eventually { await state.files.map(\.id) == remaining.map(\.id) })
-        #expect(state.selection == [.allChanges], "the row that went away leaves the set; All changes does not")
+        #expect(state.selection == [.allChanges])
         await awaitChangeset(remaining, in: state)
         #expect(await repo.client.contentReads > reads, "a shorter list is a different changeset")
     }

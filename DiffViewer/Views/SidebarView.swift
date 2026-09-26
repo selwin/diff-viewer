@@ -54,7 +54,9 @@ struct SidebarView: View {
         // and keeps the other's, and the arrow keys stay within one list. If AppKit drops
         // the rows its table does not hold on ⌘- or ⇧-click, the fallback is one list at a
         // time: each list's getter filters the selection to its own rows and its setter
-        // replaces the selection with them.
+        // replaces the selection with them. ⌘A selects every row of the focused list and
+        // drops the other list's; the model's setter then drops All changes from a
+        // multi-selection, so ⌘A and a ⇧-click range from the top select only files.
         return List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it

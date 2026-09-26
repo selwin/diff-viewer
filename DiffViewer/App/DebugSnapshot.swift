@@ -25,10 +25,11 @@ import Foundation
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
 ///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
 ///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
-///   popover from outside), or `picker` to toggle the commit picker. It needs no
-///   `DIFFVIEWER_SELECT`, so clicks can make the selection. An inactive app's window
-///   never really becomes key, so clicks take the first-mouse path: one on a view that
-///   refuses first mouse (such as the diff pane) is dropped.
+///   popover from outside), `picker` to toggle the commit picker, or `selectAll`
+///   (⌘A's action, sent to the first responder). It needs no `DIFFVIEWER_SELECT`, so
+///   clicks can make the selection. An inactive app's window never really becomes key,
+///   so clicks take the first-mouse path: one on a view that refuses first mouse (such
+///   as the diff pane) is dropped.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FIND=<query>` opens the find bar with that query after the Next Change
@@ -374,6 +375,13 @@ enum DebugLaunchOptions {
                 continue
             }
             let window = NSApp.keyWindow ?? pickerWindow(of: target) ?? target
+            if key == "selectAll" {
+                // What ⌘A and Edit > Select All send. Aimed at the window's first responder
+                // because a script-launched app is inactive, so a nil target reaches nothing.
+                NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: window.firstResponder, from: nil)
+                try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
             if let mouse = key.split(separator: ":").first, ["click", "dblclick", "winclick"].contains(mouse) {
                 let kind = mouse == "winclick" ? "click" : String(mouse)
                 postMouse(kind, key.dropFirst(mouse.count + 1), in: mouse == "winclick" ? target : window)
@@ -558,39 +566,8 @@ extension DebugLaunchOptions {
     }
 }
 
-extension DebugLaunchOptions {
-    /// Applies `DIFFVIEWER_WINDOW_SIZE`, `DIFFVIEWER_SIDEBAR_SCROLL` and
-    /// `DIFFVIEWER_FOCUS_LIST`, in that order.
-    @MainActor
-    fileprivate static func arrangeSidebar(env: [String: String], window: NSWindow) async {
-        let size = (env["DIFFVIEWER_WINDOW_SIZE"] ?? "").split(separator: "x").compactMap { Double($0) }
-        let scroll = env["DIFFVIEWER_SIDEBAR_SCROLL"] ?? ""
-        let focus = env["DIFFVIEWER_FOCUS_LIST"] == "1"
-        guard size.count == 2 || !scroll.isEmpty || focus else { return }
-        try? await Task.sleep(for: .seconds(1))
-        if size.count == 2 {
-            window.setContentSize(NSSize(width: size[0], height: size[1]))
-        }
-        // The Changes list is the window's first table, ahead of the staging tray's.
-        guard let table = window.contentView?.descendant(NSTableView.self) else {
-            print("### DIFFVIEWER_SIDEBAR: no file list found")
-            return
-        }
-        if !scroll.isEmpty, let clip = table.enclosingScrollView?.contentView {
-            let bottom = table.frame.height - clip.bounds.height + clip.contentInsets.bottom
-            let y = scroll == "bottom" ? bottom : (Double(scroll) ?? 0) - clip.contentInsets.top
-            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
-            table.enclosingScrollView?.reflectScrolledClipView(clip)
-        }
-        if focus {
-            window.makeFirstResponder(table)
-        }
-        try? await Task.sleep(for: .seconds(0.5))
-    }
-}
-
 extension NSView {
-    fileprivate func descendant<T: NSView>(_ type: T.Type) -> T? {
+    func descendant<T: NSView>(_ type: T.Type) -> T? {
         if let match = self as? T { return match }
         for child in subviews { if let match = child.descendant(type) { return match } }
         return nil

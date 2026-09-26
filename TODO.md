@@ -175,25 +175,6 @@ lets the reader ask for fresh counts.
 
 ---
 
-### P. What ⌘A in the sidebar selects (requested 2026-09-26)
-
-**Goal.** Decide what ⌘A means while a file in the sidebar is selected. Today the
-sidebar list's default select-all highlights every row, including the All changes row.
-All changes is a view, not a file, so it probably shouldn't be part of a multi-selection.
-
-**To decide.**
-- Whether ⌘A selects every file (both sections) or only the files in the section the
-  current selection is in.
-- What the diff area shows for the result, and whether bulk actions (stage, unstage,
-  discard, trash) and the selection popover apply to it as they do to a click-built
-  multi-selection.
-- What ⌘A does while All changes itself is selected.
-
-**Tests.** Which rows ⌘A selects from a selection in each section, and that All changes
-is never among them.
-
----
-
 ### Q. Rework the All changes file header (requested 2026-09-26)
 
 **Goal.** The per-file section header in All changes needs a redesign. The
@@ -219,23 +200,6 @@ covers rename and path display.
 - Where the directory and churn go so they read with the name.
 
 **Tests.** None; UI, checked by screenshot.
-
----
-
-### R. Selection popover missing after ⌘A in the sidebar (bug, reported 2026-09-26)
-
-**Goal.** ⌘A in the Changes list selects every file, but the selection popover doesn't
-appear, so the files can't be staged right away. After ⌘A the popover should show and
-offer Stage for all the selected files.
-
-**Likely cause (not yet confirmed).** The list's default select-all also selects the All
-changes row (see P). A selection that includes All changes probably resolves to
-`.allChanges`, and `WindowState.selectedWriteGroups` returns no groups for that, so
-`ContentView.isSelectionPopoverAllowed` hides the popover. Fixing it probably means
-deciding P: ⌘A selects files only, never All changes.
-
-**Tests.** Which rows ⌘A selects, and that the result has write groups (Stage for
-unstaged files).
 
 ---
 
