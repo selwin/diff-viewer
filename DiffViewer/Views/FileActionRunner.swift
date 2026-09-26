@@ -15,20 +15,31 @@ struct FileActionRunner {
     let window: NSWindow?
 
     func run(_ action: FileAction, on files: [ChangedFile]) async {
+        // The reader is still answering a question about the last trigger.
+        guard !windowState.isConfirmingFileAction else { return }
         if action.isDestructive(for: files), preferences.confirmDestructiveFileActions {
-            let alert = Self.confirmation(for: action, on: files)
-            let response: NSApplication.ModalResponse
-            if let window {
-                response = await alert.beginSheetModal(for: window)
-            } else {
-                response = alert.runModal()
-            }
-            guard response == .alertFirstButtonReturn else { return }
-            if alert.suppressionButton?.state == .on {
-                preferences.confirmDestructiveFileActions = false
-            }
+            guard await confirm(action, on: files) else { return }
         }
         await windowState.perform(action, on: files)
+    }
+
+    /// Asks before a destructive action; true when the reader agreed. The flag is held
+    /// only while the alert is up, so every answer, Cancel included, clears it.
+    private func confirm(_ action: FileAction, on files: [ChangedFile]) async -> Bool {
+        windowState.isConfirmingFileAction = true
+        defer { windowState.isConfirmingFileAction = false }
+        let alert = Self.confirmation(for: action, on: files)
+        let response: NSApplication.ModalResponse
+        if let window {
+            response = await alert.beginSheetModal(for: window)
+        } else {
+            response = alert.runModal()
+        }
+        guard response == .alertFirstButtonReturn else { return false }
+        if alert.suppressionButton?.state == .on {
+            preferences.confirmDestructiveFileActions = false
+        }
+        return true
     }
 
     /// The alert for one destructive action, asked once however many rows it covers. All
@@ -64,5 +75,13 @@ struct FileActionRunner {
         alert.showsSuppressionButton = true
         alert.suppressionButton?.title = "Don't ask again"
         return alert
+    }
+}
+
+extension FileActionRunner {
+    /// Hangs the confirmation on `windowState`'s own window, so the sidebar and the
+    /// Changes menu build the runner the same way.
+    init(windowState: WindowState, services: AppServices) {
+        self.init(windowState: windowState, preferences: services.preferences, window: services.windows[windowState.id])
     }
 }

@@ -3,11 +3,15 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
-    @Environment(Preferences.self) private var preferences
+    @Environment(SidebarRowFrames.self) private var rowFrames
+    /// Owned by `ContentView`, which also needs to know when the list has focus.
+    var isFileListFocused: FocusState<Bool>.Binding
 
     var body: some View {
         @Bindable var windowState = windowState
         let staged = windowState.stagedFiles
+        // The selection popover points at this row, so it alone measures its frame.
+        let firstSelectedID = windowState.selectedFiles.first?.id
         List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it
@@ -44,23 +48,38 @@ struct SidebarView: View {
             }
             if !windowState.unstagedFiles.isEmpty {
                 Section("Unstaged (\(windowState.unstagedFiles.count))") {
-                    ForEach(windowState.unstagedFiles) { FileRow(file: $0) }
+                    ForEach(windowState.unstagedFiles) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
                 }
             }
             if !staged.isEmpty {
                 Section("Staged (\(staged.count))") {
                     commitRow
-                    ForEach(staged) { FileRow(file: $0) }
+                    ForEach(staged) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
                 }
             }
             // A commit has one list: its own staging is long settled.
             if !windowState.commitFiles.isEmpty {
                 Section("Changed (\(windowState.commitFiles.count))") {
-                    ForEach(windowState.commitFiles) { FileRow(file: $0) }
+                    ForEach(windowState.commitFiles) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
                 }
             }
         }
         .listStyle(.sidebar)
+        // The proxy's frame already leaves out the toolbar's safe area, so a row scrolled
+        // under the toolbar falls outside it and counts as out of sight.
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: {
+            rowFrames.visibleListFrame = $0
+        }
+        .focused(isFileListFocused)
+        // Only while the list or a row control has focus, so the Changes menu's shortcuts
+        // never fire from the find bar or the commit sheet, where ⌘⌫ edits text.
+        .focusedValue(\.fileListWindowState, windowState)
+        .onExitCommand { windowState.selection = [] }
+        // A row click takes focus back from the diff pane, and a click below the last row
+        // clears the selection as Finder does; the List does neither by itself.
+        .background { SidebarClickMonitor { windowState.selection = [] } }
         // Keyed on the ids, not the files: staging moves a row between sections and should
         // slide, while line counts arriving for the same rows should not start a transaction.
         .animation(.default, value: windowState.files.map(\.id))
@@ -90,7 +109,7 @@ struct SidebarView: View {
     }
 
     /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
-    /// for twenty, since the items a selection offers are the items every row in it offers.
+    /// for twenty. Every item, write or not, must apply to every selected file.
     /// Right-clicking a row outside the selection still acts on that row alone — the list
     /// hands over just that id — and a header, blank space, or the All changes row names no
     /// file at all, which has nothing to act on.
@@ -104,16 +123,15 @@ struct SidebarView: View {
             // true only at the moment the menu is built, and one stat per row per
             // right-click is cheap, where keeping it on `ChangedFile` would mean statting
             // every row on every refresh to hold an answer that goes stale anyway.
-            let actions = FileAction.menu(for: files) { file in
+            let harmless = FileAction.harmless(for: files) { file in
                 windowState.repositoryRoot.map {
                     FileManager.default.fileExists(atPath: $0.url.appendingPathComponent(file.path).path)
                 } ?? false
             }
-            let writes = actions.filter(\.isRepositoryWrite)
-            let harmless = actions.filter { !$0.isRepositoryWrite }
+            let writes = FileAction.writeGroups(for: files)
             // A switch in progress refuses writes anyway; greying them out says so first.
-            ForEach(writes, id: \.self) { action in
-                Button(action.title(for: files)) { run(action, on: files) }
+            ForEach(writes, id: \.action) { group in
+                Button(group.action.title(for: group.files)) { run(group.action, on: group.files) }
                     .disabled(windowState.isSwitchingBranch)
             }
             // Separate what changes the repository from what only looks at the files.
@@ -129,17 +147,19 @@ struct SidebarView: View {
     /// The runner confirms first — once for the whole batch — so it needs this window to
     /// hang the sheet on.
     private func run(_ action: FileAction, on files: [ChangedFile]) {
-        let runner = FileActionRunner(
-            windowState: windowState,
-            preferences: preferences,
-            window: services.windows[windowState.id]
-        )
+        let runner = FileActionRunner(windowState: windowState, services: services)
         Task { await runner.run(action, on: files) }
     }
 }
 
 private struct FileRow: View {
     let file: ChangedFile
+    /// The selection popover points at this row.
+    let isFirstSelected: Bool
+    @Environment(SidebarRowFrames.self) private var rowFrames
+    /// Kept for a row the List hides and shows again in place: its frame has not changed,
+    /// so the geometry callback stays quiet, but hiding it cleared the store.
+    @State private var measuredFrame: CGRect?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -165,8 +185,28 @@ private struct FileRow: View {
             Spacer(minLength: 8)
             ChurnLabel(stats: file.lineStats)
         }
+        // Every other row returns nil, so only the first selected row ever reports.
+        .onGeometryChange(for: CGRect?.self) { proxy in
+            isFirstSelected ? proxy.frame(in: .global) : nil
+        } action: { frame in
+            measuredFrame = frame
+            publishFrame()
+        }
+        .onChange(of: isFirstSelected) { _, isFirst in
+            if !isFirst { rowFrames.clearFirstSelectedRow(ifOwnedBy: file.id) }
+        }
+        .onAppear {
+            rowFrames.rowAppeared(file.id)
+            publishFrame()
+        }
+        .onDisappear { rowFrames.rowDisappeared(file.id) }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
+    }
+
+    private func publishFrame() {
+        guard isFirstSelected, let measuredFrame else { return }
+        rowFrames.firstSelectedRow = SidebarRowFrames.RowFrame(id: file.id, frame: measuredFrame)
     }
 
     /// Truncated at the head so the file name at the end stays visible.

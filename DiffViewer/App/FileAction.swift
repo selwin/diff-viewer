@@ -28,18 +28,34 @@ enum FileAction: CaseIterable, Sendable {
         writes(for: file) + harmless(existsOnDisk: existsOnDisk)
     }
 
-    /// The menu for a whole selection: the items every one of `files` offers.
+    /// One write and the files it runs on.
+    struct WriteGroup: Equatable, Sendable {
+        let action: FileAction
+        let files: [ChangedFile]
+    }
+
+    /// The writes a selection offers: those every one of `files` offers, each running on
+    /// the whole selection, in `allCases` order.
     ///
-    /// Each file's own menu is computed once, so the caller stats each path once, and the
-    /// intersection is filtered back through `allCases` to keep the writes-then-harmless
-    /// order the divider depends on. A mixed staged and unstaged selection therefore
-    /// offers only the harmless items: Stage and Unstage mean opposite things to its two
-    /// halves, and a menu that acted on some rows and not others would be worse than none.
-    static func menu(for files: [ChangedFile], existsOnDisk: (ChangedFile) -> Bool) -> [FileAction] {
+    /// An action that fits only some of the highlighted rows is left out rather than run on
+    /// a subset: Discard beside an untracked file, or Stage beside a staged one, would say
+    /// it acts on rows it would silently skip.
+    static func writeGroups(for files: [ChangedFile]) -> [WriteGroup] {
+        guard !files.isEmpty else { return [] }
+        let writesPerFile = files.map { Set(writes(for: $0)) }
+        return
+            allCases
+            .filter { action in writesPerFile.allSatisfy { $0.contains(action) } }
+            .map { WriteGroup(action: $0, files: files) }
+    }
+
+    /// The non-write items a selection offers: those every one of `files` offers, since
+    /// they act on the whole selection. Each row is statted once.
+    static func harmless(for files: [ChangedFile], existsOnDisk: (ChangedFile) -> Bool) -> [FileAction] {
         guard let first = files.first else { return [] }
-        var shared = Set(menu(for: first, existsOnDisk: existsOnDisk(first)))
+        var shared = Set(harmless(existsOnDisk: existsOnDisk(first)))
         for file in files.dropFirst() {
-            shared.formIntersection(menu(for: file, existsOnDisk: existsOnDisk(file)))
+            shared.formIntersection(harmless(existsOnDisk: existsOnDisk(file)))
         }
         return allCases.filter(shared.contains)
     }
@@ -112,6 +128,21 @@ enum FileAction: CaseIterable, Sendable {
         case .copyPath:
             let paths = Set(files.map(\.path)).count
             return paths == 1 ? "Copy Path" : "Copy \(paths) Paths"
+        }
+    }
+
+    /// The short label for the compact selection popover, which has no room for the
+    /// menu's per-file wording.
+    func compactTitle(for files: [ChangedFile]) -> String {
+        let count = files.count
+        switch self {
+        case .stage: return count == 1 ? "Stage" : "Stage \(count) files"
+        case .unstage: return count == 1 ? "Unstage" : "Unstage \(count) files"
+        case .discard:
+            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes" }
+            return count == 1 ? "Restore" : "Restore \(count) files"
+        case .trash: return "Move to Trash…"
+        case .revealInFinder, .openInEditor, .copyPath: return title(for: files)
         }
     }
 

@@ -173,6 +173,9 @@ final class WindowState {
     private(set) var isCommitting = false
     /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
     var isCommitSheetPresented = false
+    /// A destructive file action is waiting on its confirmation. A second trigger meanwhile
+    /// does nothing, and the Changes menu greys out rather than queue another question.
+    var isConfirmingFileAction = false
     /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
     var isCommitPickerPresented = false
     /// The branch picker popover is up, on the same terms as the commit picker's flag.

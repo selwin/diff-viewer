@@ -4,9 +4,13 @@ import Foundation
 /// Development aids (Debug builds only) so the app can be screenshotted without clicking:
 /// - `DIFFVIEWER_DEFAULTS_SUITE=<domain>` keeps preferences and the saved session in that
 ///   `UserDefaults` suite, so scripted runs leave an Xcode-run instance's state alone.
-/// - `DIFFVIEWER_SELECT=<changed file id>` selects that sidebar entry after launch
+/// - `DIFFVIEWER_SELECT=<changed file id>[,...]` selects those sidebar entries after launch
 ///   (ids look like `unstaged:src/app.swift`, or `commit:<sha>:src/app.swift`);
 ///   `all` selects All changes.
+/// - `DIFFVIEWER_WINDOW_SIZE=<w>x<h>` resizes the window's content, then
+///   `DIFFVIEWER_SIDEBAR_SCROLL=<points>|bottom` scrolls the file list, and
+///   `DIFFVIEWER_FOCUS_LIST=1` makes it first responder, all after the selection, so the
+///   selection popover can be screenshotted.
 /// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
 ///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
 ///   commit's sidebar and diffs can be screenshotted.
@@ -19,8 +23,10 @@ import Foundation
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
 ///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
 ///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
-///   popover from outside), or `picker` to toggle the commit picker. Activation must
-///   come from outside, as for tab steps.
+///   popover from outside), or `picker` to toggle the commit picker. It needs no
+///   `DIFFVIEWER_SELECT`, so clicks can make the selection. An inactive app's window
+///   never really becomes key, so clicks take the first-mouse path: one on a view that
+///   refuses first mouse (such as the diff pane) is dropped.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FIND=<query>` opens the find bar with that query after the Next Change
@@ -91,7 +97,8 @@ enum DebugLaunchOptions {
             let findQuery = env["DIFFVIEWER_FIND"] ?? ""
             let needsWindow =
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
-                || !findQuery.isEmpty
+                || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
+                || env["DIFFVIEWER_FOCUS_LIST"] == "1"
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -144,8 +151,11 @@ enum DebugLaunchOptions {
                     await selectScope(scopeSha, in: windowState)
                 }
                 if !selection.isEmpty {
-                    windowState.selection = selection == "all" ? [.allChanges] : [.file(selection)]
+                    windowState.selection =
+                        selection == "all"
+                        ? [.allChanges] : Set(selection.split(separator: ",").map { .file(String($0)) })
                 }
+                await arrangeSidebar(env: env, window: window)
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
@@ -364,7 +374,8 @@ enum DebugLaunchOptions {
                 continue
             }
             let code = UInt16(key)
-            let characters = code == nil ? key : ""
+            // Escape carries its character, or it never reaches `cancelOperation:`.
+            let characters = code == nil ? key : (code == 53 ? "\u{1b}" : "")
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 guard
                     let event = NSEvent.keyEvent(
@@ -537,6 +548,37 @@ extension DebugLaunchOptions {
         guard finished else { return "search for \(query) did not finish" }
         try? await Task.sleep(for: .milliseconds(100))
         return nil
+    }
+}
+
+extension DebugLaunchOptions {
+    /// Applies `DIFFVIEWER_WINDOW_SIZE`, `DIFFVIEWER_SIDEBAR_SCROLL` and
+    /// `DIFFVIEWER_FOCUS_LIST`, in that order.
+    @MainActor
+    fileprivate static func arrangeSidebar(env: [String: String], window: NSWindow) async {
+        let size = (env["DIFFVIEWER_WINDOW_SIZE"] ?? "").split(separator: "x").compactMap { Double($0) }
+        let scroll = env["DIFFVIEWER_SIDEBAR_SCROLL"] ?? ""
+        let focus = env["DIFFVIEWER_FOCUS_LIST"] == "1"
+        guard size.count == 2 || !scroll.isEmpty || focus else { return }
+        try? await Task.sleep(for: .seconds(1))
+        if size.count == 2 {
+            window.setContentSize(NSSize(width: size[0], height: size[1]))
+        }
+        // The sidebar is the only table in the window that is not inside a popover.
+        guard let table = window.contentView?.descendant(NSTableView.self) else {
+            print("### DIFFVIEWER_SIDEBAR: no file list found")
+            return
+        }
+        if !scroll.isEmpty, let clip = table.enclosingScrollView?.contentView {
+            let bottom = table.frame.height - clip.bounds.height + clip.contentInsets.bottom
+            let y = scroll == "bottom" ? bottom : (Double(scroll) ?? 0) - clip.contentInsets.top
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
+            table.enclosingScrollView?.reflectScrolledClipView(clip)
+        }
+        if focus {
+            window.makeFirstResponder(table)
+        }
+        try? await Task.sleep(for: .seconds(0.5))
     }
 }
 
