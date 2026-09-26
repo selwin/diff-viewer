@@ -8,7 +8,7 @@ re-derived. Re-run the benchmark after any change listed here and update the tab
 
 - **Opening a file is dominated by difft, not by tree-sitter.** Everything is published
   together, so difft plus highlighting both sides, one after the other, is the time to
-  first content.
+  first content, and difft is 66–86% of it.
 - **The pinned difft 0.63.0 cannot parse much of this codebase.** 84 of the repository's
   210 Swift files exceed its parse-error limit, and difft silently falls back to a text
   diff for them: no structural highlights. 0.70.0 falls back on 1 of 210.
@@ -17,7 +17,7 @@ re-derived. Re-run the benchmark after any change listed here and update the tab
   seconds. About 115 ms of every Swift run is fixed: difft compiles tree-sitter-swift's
   highlight query in each process.
 - **Highlighting is not worth replacing.** Inside `Highlighter`, `LinePainter` (paint,
-  runs, sort) is 3% of the time. The avoidable cost is capture-name mapping (24%).
+  runs, sort) is 4% of the time. The avoidable cost is capture-name mapping (26%).
 - **Scrolling is fine with "collapse unchanged" on**, the default. Expanded, a
   5,000-line file never gets a warm shaped-line cache: each pane passes the 4,000-entry
   cap and the whole cache is cleared, so every scroll pass reshapes every line.
@@ -43,9 +43,11 @@ flag read plus a signpost, which is a no-op unless Instruments is recording.
 
 ### Benchmark
 
-`DiffViewerTests/RenderPerfBenchmarks.swift` builds its input from the app's own Swift
-sources, cut to 2,000 and 5,000 lines, with 10 evenly spaced hunks on the new side
-(2 lines edited, 4 inserted, 2 deleted each). It then:
+`DiffViewerTests/RenderPerfBenchmarks.swift` builds its input from whole Swift files of
+the app's own sources, about 2,000 and 5,000 lines (1,969 and 4,975), so both sides
+are valid Swift. The new side has 10 evenly spaced hunks, each at a `let` statement
+inside a body: that line gets a trailing comment, 4 statements are inserted after it,
+and up to 2 nearby blank or comment lines are deleted. It then:
 
 1. runs difft alone, then `DiffEngine.build` end to end with fresh caches, recording
    every stage;
@@ -78,80 +80,98 @@ version and puts the report in the run summary.
   frame times include CPU rasterisation but not compositing.
 - The input is Swift only. Swift's highlight query is unusually expensive to compile
   (see [difft](#difft)), so other languages will look better.
-- The first benchmark run cut files mid-way, which broke the syntax: difft fell back to
-  a text diff and its timings in the tables below measure that fallback. The input is
-  now whole files with valid edits, and the report names the language difft reported
-  (`Text (...)` means it fell back). The highlighting and scrolling numbers do not
-  depend on difft.
+- The report names the language difft reported. `Text (N Swift parse errors …)` means
+  difft gave up on the syntax and ran a text diff. An earlier version of the benchmark
+  cut files mid-way and measured only that fallback.
+- Two runs on different runners differed by up to 2× in per-row drawing cost. Compare
+  numbers from the same run.
 
 ## Results
+
+From [run 36227557285](https://github.com/selwin/diff-viewer/actions/runs/36227557285),
+one job per difft version on the same commit. Medians of 5 runs.
 
 ### Opening a file
 
 For a single file, the document and its styles are published together
 (`DiffLoader.swift`), so nothing is shown until every stage below has finished, one
-after another. Medians of 5 runs, difft 0.63.0 (text fallback, see Caveats).
+after another.
 
-| Stage | 2,000 lines | 5,000 lines |
-|---|---:|---:|
-| **`DiffEngine.build` total** | **837 ms** | **1,049 ms** |
-| difft | 666 ms (80%) | 716 ms (68%) |
-| Highlight, old side then new side | 152 ms (18%) | 337 ms (32%) |
-| Split lines + align | 7 ms | 14 ms |
-| Decode UTF-8 | 0.1 ms | 0.2 ms |
+| Stage | 2,000, difft 0.63.0 | 2,000, difft 0.70.0 | 5,000, difft 0.63.0 | 5,000, difft 0.70.0 |
+|---|---:|---:|---:|---:|
+| difft's language | Text (52 parse errors) | Swift | Text (86 parse errors) | Swift |
+| **`DiffEngine.build` total** | **538 ms** | **979 ms** | **639 ms** | **1,396 ms** |
+| difft (through `DifftCache`) | 442 ms | 842 ms | 419 ms | 1,136 ms |
+| Highlight, old side then new side | 91 ms | 92 ms | 211 ms | 249 ms |
+| Split lines + align | 4 ms | 4 ms | 10 ms | 11 ms |
+| Decode UTF-8 | 0.1 ms | 0.1 ms | 0.2 ms | 0.2 ms |
 
-The first file of a session also pays 211 ms to load the Swift grammar and compile its
-highlight queries.
+difft is 66–86% of the time to first content. 0.63.0 is faster here only because it
+falls back to a text diff; with 0.70.0 the same input gets a structural diff, and this
+input (10 multi-line hunks) is a slow case for it. See [difft](#difft) for one-line
+edits, where 0.70.0 is the faster of the two.
+
+The first file of a session also pays 139–158 ms to load the Swift grammar and compile
+its highlight queries.
 
 ### Highlighting
 
-Both sides together, 5,000 lines (the 2,000-line file splits the same way):
+Both sides together, 5,000 lines, from the 0.63.0 job (the 2,000-line file and the
+other job split the same way):
 
 | Stage | ms | Share |
 |---|---:|---:|
-| Query matching (`cursor.nextMatch`, tree-sitter) | 117 | 34% |
-| Parse (tree-sitter) | 102 | 30% |
-| Capture name → `TokenStyle`, per capture | 83 | 24% |
-| Query predicates (`match.allowed(in:)`) | 14 | 4% |
-| Paint + runs + sort (`LinePainter`) | 11 | 3% |
+| Query matching (`cursor.nextMatch`, tree-sitter) | 73 | 34% |
+| Parse (tree-sitter) | 66 | 31% |
+| Capture name → `TokenStyle`, per capture | 55 | 26% |
+| Query predicates (`match.allowed(in:)`) | 7 | 3% |
+| Paint + runs + sort (`LinePainter`) | 8 | 4% |
 | Join lines | 0.5 | 0% |
 
-72,642 matches and 68,633 painted captures. With the probes off, the old side takes
-the same time as with them on (185 ms against 167 ms, within run-to-run noise).
+72,309 matches and 68,355 painted captures. With the probes off, the old side takes
+102 ms against 106 ms with them on, so the probes cost little.
 
 ### Scrolling
 
-With **collapse unchanged on** (the default), both files show about 175 rows. A cold
-page jump takes 8–13 ms (median), a warm trackpad frame 0.4–0.5 ms. Nothing to fix.
+From the 0.70.0 job; the other job is within noise.
+
+With **collapse unchanged on** (the default), the files show 249–269 rows. A cold page
+jump takes about 8 ms (median), a warm trackpad frame 0.3–0.4 ms. Nothing to fix.
 
 With **the whole file expanded**:
 
 | Pass | 2,000 lines | 5,000 lines |
 |---|---:|---:|
-| Page jumps, cold (median / p95) | 13.5 / 22.4 ms | 11.6 / 20.6 ms |
-| Page jumps, second pass (median / p95 / max) | 4.9 / 9.6 / 12.8 ms | 11.7 / 19.3 / 46.1 ms |
-| Trackpad 40 pt, second pass (median / p95) | 1.4 / 4.0 ms | 3.7 / 7.4 ms |
-| Lines reshaped on the second pass | 0 | 9,928 |
+| Page jumps, cold (median / p95 / max) | 7.0 / 10.6 / 16.1 ms | 7.7 / 12.1 / 42.4 ms |
+| Page jumps, second pass (median / p95 / max) | 3.6 / 4.2 / 4.3 ms | 6.7 / 11.8 / 22.9 ms |
+| Trackpad 40 pt, second pass (median / p95 / max) | 0.8 / 1.9 / 5.2 ms | 2.5 / 4.4 / 13.5 ms |
+| Lines reshaped on the second pass | 0 | 9,879 |
 | Whole-cache evictions per pass | 0 | 2 |
 
-Cost per row on the cold pass:
+At 5,000 lines the second pass costs as much as the first: each pane passes the
+4,000-entry cap in `DiffPaneView.cachedLine`, the whole cache is cleared, and every
+line is shaped again. Trackpad frames are 3× slower than at 2,000 lines for that
+reason alone.
+
+Cost per row on the cold pass, 5,000 lines:
 
 | Stage | µs per row or line |
 |---|---:|
-| Draw the text (`CTLineDraw`) | 20–27 |
-| Shape a line (cache miss) | 19–23 |
-| … build the attributed string and apply styles | 7.5–9.4 |
-| … `CTLineCreateWithAttributedString` | 10–12 |
-| Gutter (fill + cached line-number `CTLine`) | 13–15 |
-| Token highlights | 0.8–1.5 |
+| Draw the text (`CTLineDraw`) | 13.5 |
+| Shape a line (cache miss) | 13.3 |
+| … build the attributed string and apply styles | 4.9 |
+| … `CTLineCreateWithAttributedString` | 7.3 |
+| Gutter (fill + cached line-number `CTLine`) | 8.7 |
+| Token highlights | 0.5 |
 
-When styles arrive after the document, `DiffPaneView.styles` clears the whole shaped-line
-cache and the visible rows are reshaped: 19 ms for the 2,000-line file expanded, about
-one dropped frame.
+When styles arrive after the document, `DiffPaneView.styles` clears the whole
+shaped-line cache and the visible rows are reshaped: 5–10 ms, up to one frame at
+120 Hz.
 
 ## difft
 
-Measured locally on Linux x86_64 (4 cores) with the app's flags and environment
+Measured locally on Linux x86_64 (4 cores), with the Linux builds of the same releases
+and the app's flags and environment
 (`--display json --context 0`, `DFT_UNSTABLE`, `DFT_BYTE_LIMIT`, `DFT_GRAPH_LIMIT`,
 `DFT_PARSE_ERROR_LIMIT`). Medians of 3–5 runs.
 
@@ -192,7 +212,8 @@ The benchmark's valid-Swift inputs with 0.70.0, by kind of change:
 | Same, ~2,000-line input | 1.35 s |
 
 0.63.0 takes 0.47 s and 0.57 s on the last two inputs, but only because it falls back to
-text on them. Lowering `DFT_GRAPH_LIMIT` from the app's 6,000,000 to the default
+text on them. On the macOS runner, the same two inputs take 0.84 s and 1.14 s with
+0.70.0 and 0.44 s and 0.42 s with 0.63.0's fallback (see [Results](#opening-a-file)). Lowering `DFT_GRAPH_LIMIT` from the app's 6,000,000 to the default
 3,000,000 or to 1,000,000 saves 15–30% on the slow inputs and still reports Swift, so
 it is not a real lever.
 
@@ -204,7 +225,7 @@ and 115 ms in Swift with 0.70.0 (345 ms with 0.63.0). Callgrind on the one-line 
 diff puts 99.9% of the instructions in `tree_sitter::Query::new`, called from
 `tree_sitter_parser::from_language`, almost all of it in `ts_query__perform_analysis`:
 difft compiles tree-sitter-swift's highlight query on every run. The app pays the same
-cost once per session (the 211 ms cold grammar load above).
+cost once per session (the cold grammar load above).
 
 Callgrind of 0.70.0 on the ~2,000-line benchmark input (instructions, not wall time):
 
@@ -236,7 +257,7 @@ changed line covers exactly the same bytes. Differences:
 
 In order of value for effort:
 
-1. **Upgrade to 0.70.0.** Set the default in `scripts/fetch-difft.sh`. It restores
+1. **Upgrade to 0.70.0** (#29). Set the default in `scripts/fetch-difft.sh`. It restores
    structural diffs for 40% of this repository's Swift files and makes ordinary edits
    2–3× faster. Large multi-hunk diffs get slower, because they are now diffed
    structurally instead of as text; items 2 and 3 are what keep that off the critical
@@ -286,8 +307,8 @@ they arrive (item 2 above). Its cost is unmeasured.
 
 In order:
 
-1. **Upgrade difft to 0.70.0.** A one-line change that restores structural diffs for
-   40% of this repository's Swift files and speeds up ordinary edits 2–3×.
+1. **Upgrade difft to 0.70.0** (#29). A one-line change that restores structural diffs
+   for 40% of this repository's Swift files and speeds up ordinary edits 2–3×.
 2. **Stop the first frame waiting on difft and on the second side's highlighting.**
    Show the line diff with syntax colours first and apply difft's hints when they
    arrive; highlight concurrently with difft, both sides in parallel for the file in
@@ -299,6 +320,7 @@ In order:
    only the lines whose runs changed when styles arrive.
 4. **Map capture index to `TokenStyle` once per query** instead of splitting the capture
    name for every capture: about a quarter of highlighting time.
-5. **Load grammars at launch in the background** to hide the 211 ms first-file cost.
-6. Leave `LinePainter`, sorting and joining alone (3% combined). Ranged highlight
+5. **Load grammars at launch in the background** to hide the 140–160 ms first-file
+   cost.
+6. Leave `LinePainter`, sorting and joining alone (about 4% combined). Ranged highlight
    queries for collapsed files are not worth it once highlighting overlaps difft.
