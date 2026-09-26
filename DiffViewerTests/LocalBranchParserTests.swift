@@ -14,9 +14,10 @@ struct LocalBranchParserTests {
         remote: String = "origin",
         remoteRef: String = "refs/heads/main",
         date: String = LocalBranchParserTests.date,
-        localRef: String = "refs/remotes/origin/main"
+        localRef: String = "refs/remotes/origin/main",
+        tipSha: String = objectID("tip")
     ) -> String {
-        [ref, shortName, track, remote, remoteRef, date, localRef].joined(separator: "\0")
+        [ref, shortName, track, remote, remoteRef, date, localRef, tipSha].joined(separator: "\0")
     }
 
     @Test func everyUpstreamFieldIsRead() throws {
@@ -24,6 +25,7 @@ struct LocalBranchParserTests {
         #expect(branches.count == 1)
         let branch = try #require(branches.first)
         #expect(branch.name == "main")
+        #expect(branch.tipSha == objectID("tip"))
         #expect(branch.tipCommittedAt == ISO8601DateFormatter().date(from: Self.date))
         let upstream = try #require(branch.upstream)
         #expect(upstream.shortName == "origin/main")
@@ -51,9 +53,13 @@ struct LocalBranchParserTests {
         }
     }
 
-    @Test func aRecordWithoutSevenFieldsThrows() {
+    @Test func aRecordWithoutEightFieldsThrows() {
         #expect(throws: LocalBranchParseError.self) {
             try LocalBranchParser.parse("refs/heads/main\0origin/main\n")
+        }
+        let sevenFields = line().components(separatedBy: "\0").dropLast().joined(separator: "\0")
+        #expect(throws: LocalBranchParseError.self) {
+            try LocalBranchParser.parse(sevenFields + "\n")
         }
     }
 

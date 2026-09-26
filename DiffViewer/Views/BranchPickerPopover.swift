@@ -5,6 +5,8 @@ import SwiftUI
 /// branch checks it out and closes the popover; a click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
+    /// For the window the delete confirmation hangs on.
+    @Environment(AppServices.self) private var services
     /// Read once per presentation so "Today" does not shift while the popover is up.
     @State private var grouping = CommitDayGrouping()
 
@@ -19,7 +21,14 @@ struct BranchPickerPopover: View {
             onDismiss: { windowState.isBranchPickerPresented = false },
             onPull: { name in Task { await windowState.pull(branch: name) } },
             onPush: { name in Task { await windowState.push(branch: name) } },
-            onPublish: { name, remote in Task { await windowState.publish(branch: name, to: remote) } }
+            onPublish: { name, remote in Task { await windowState.publish(branch: name, to: remote) } },
+            onDelete: { branch in
+                Task {
+                    let window = services.windows[windowState.id]
+                    guard await BranchDeleteConfirmation.confirm(branch, window: window) else { return }
+                    await windowState.deleteBranch(branch)
+                }
+            }
         )
         .frame(width: 560, height: 520)
     }
@@ -34,6 +43,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPull: (String) -> Void
     let onPush: (String) -> Void
     let onPublish: (String, String) -> Void
+    let onDelete: (LocalBranch) -> Void
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
         let view = BranchPickerContainerView(state: BranchPickerState(snapshot: snapshot, grouping: grouping))
@@ -56,5 +66,6 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onPull = onPull
         view.onPush = onPush
         view.onPublish = onPublish
+        view.onDelete = onDelete
     }
 }

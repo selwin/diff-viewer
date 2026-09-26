@@ -94,27 +94,6 @@ screenshot.
 
 ---
 
-### J. Delete branches whose upstream is gone (requested 2026-09-24)
-
-**Goal.** Once a PR merges and its remote branch is deleted, the local branch stays in
-the branch picker as "upstream gone" forever; git never removes it. Let the reader clear
-it from the picker instead of dropping to a terminal.
-
-**Design.**
-- A trash button in the row's accessory slot, in place of the sync buttons, only on
-  rows whose upstream is gone and never on the checked-out branch.
-- It confirms first ("Delete branch image-preview?"), then runs `git branch -D`. `-D`
-  rather than `-d` because PRs are squash-merged, so git doesn't see these branches as
-  merged into main.
-- Maybe later: a "Delete N gone branches" action in the picker footer.
-- Deleting a branch is not in the list of allowed actions under "Whole files, never
-  contents" in CLAUDE.md; extend that principle when this lands.
-
-**Tests.** Which rows offer delete: an upstream-gone branch does; the current branch,
-branches with no upstream, and branches whose upstream still exists don't.
-
----
-
 ### K. Copy button on every git error alert (requested 2026-09-24)
 
 **Goal.** The Commit Failed alert has a copy button in the corner of its output. Other
@@ -243,6 +222,23 @@ covers rename and path display.
 
 ---
 
+### R. Selection popover missing after ⌘A in the sidebar (bug, reported 2026-09-26)
+
+**Goal.** ⌘A in the Changes list selects every file, but the selection popover doesn't
+appear, so the files can't be staged right away. After ⌘A the popover should show and
+offer Stage for all the selected files.
+
+**Likely cause (not yet confirmed).** The list's default select-all also selects the All
+changes row (see P). A selection that includes All changes probably resolves to
+`.allChanges`, and `WindowState.selectedWriteGroups` returns no groups for that, so
+`ContentView.isSelectionPopoverAllowed` hides the popover. Fixing it probably means
+deciding P: ⌘A selects files only, never All changes.
+
+**Tests.** Which rows ⌘A selects, and that the result has write groups (Stage for
+unstaged files).
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -350,6 +346,7 @@ Roughly in priority order.
 - **Moved-code detection** (git `--color-moved`-style): dim blocks that were cut from one
   place and pasted elsewhere. None of the three does this; a real differentiator but
   substantial alignment work.
+- **Delete N gone branches** from the branch picker footer, in one action.
 - **CLI and `git difftool` integration.** All three ship a CLI (`ksdiff`, `smerge`,
   `juxta`) and a difftool config. Deferred per the v1 decision; when it comes, a
   `diffviewer <repo>` opener plus a `kaleidoscope://changeset?path=` style URL scheme

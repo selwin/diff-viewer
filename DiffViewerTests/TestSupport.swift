@@ -195,9 +195,10 @@ func commitSummary(
 func localBranch(
     _ name: String,
     upstream: BranchUpstream? = nil,
+    tipSha: String = objectID("tip"),
     tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
 ) -> LocalBranch {
-    LocalBranch(name: name, upstream: upstream, tipCommittedAt: tipCommittedAt)
+    LocalBranch(name: name, upstream: upstream, tipSha: tipSha, tipCommittedAt: tipCommittedAt)
 }
 
 /// `remoteRef` defaults to the branch half of `shortName`: `origin/main` tracks

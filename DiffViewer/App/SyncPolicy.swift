@@ -1,11 +1,13 @@
 import Foundation
 
-/// The ways the picker moves commits between a branch and a remote. A publish pushes a
-/// branch that tracks nothing and makes the remote branch its upstream.
+/// What the picker's row buttons run: moving commits between a branch and a remote, or
+/// deleting a branch whose upstream is gone. A publish pushes a branch that tracks
+/// nothing and makes the remote branch its upstream.
 enum SyncOperation: Equatable, Sendable {
     case pull
     case push
     case publish
+    case delete
 }
 
 /// The operation in flight, and the branch it was started on.
@@ -44,14 +46,15 @@ enum PublishAction: Equatable {
     case menu([PublishMenuItem])
 }
 
-/// One branch row's Pull and Push buttons. Push is titled Publish on a branch that
-/// tracks nothing.
+/// One branch row's Pull and Push buttons, or its Delete. Push is titled Publish on a
+/// branch that tracks nothing; Delete shows alone, on a branch whose upstream is gone.
 struct RowSyncButtons: Equatable {
     var pull: PickerButtonState
     var push: PickerButtonState
     var pushTitle = "Push"
     /// Set only on an enabled Publish.
     var publish: PublishAction?
+    var delete: PickerButtonState = .hidden
 
     static let hidden = RowSyncButtons(pull: .hidden, push: .hidden)
 }
@@ -108,13 +111,20 @@ enum SyncPolicy {
 
     /// A pull needs something to take, and a branch that isn't checked out can only
     /// fast-forward. A push needs something to send and a fast-forward to send it on.
-    /// A branch with a target already tracks something, so it has nothing to publish.
+    /// A branch with a target already tracks something, so it has nothing to publish. A
+    /// delete runs through its own checks.
     static func allows(_ operation: SyncOperation, on target: SyncTarget, isCurrent: Bool) -> Bool {
         switch operation {
         case .pull: target.behind > 0 && (isCurrent || target.ahead == 0)
         case .push: target.ahead > 0 && target.behind == 0
-        case .publish: false
+        case .publish, .delete: false
         }
+    }
+
+    /// A branch whose upstream is gone has nothing left to sync, and the reader may delete
+    /// it, unless it is checked out.
+    static func canDelete(_ branch: LocalBranch, isCurrent: Bool) -> Bool {
+        branch.upstream?.tracking == .gone && !isCurrent
     }
 
     /// origin when there is one, else the only remote; with several and no origin, the
@@ -155,7 +165,8 @@ enum SyncPolicy {
     /// button the reader clicked keeps its spinner even while the refresh behind it moves
     /// the counts or takes the target away. The other button keeps the visibility the
     /// counts give it: a hidden Pull does not surface, greyed, just because a push runs.
-    /// A branch that tracks nothing gets Publish in Push's place. Pull waits out a fetch
+    /// A branch that tracks nothing gets Publish in Push's place, and one whose upstream is
+    /// gone gets Delete, which waits out its remote's fetch. Pull waits out a fetch
     /// that may move its counts. Push doesn't: a fetch can only take it away, and a push
     /// waits for the fetch after the click and re-checks before it runs.
     static func rowButtons(
@@ -171,6 +182,7 @@ enum SyncPolicy {
             case .pull: return RowSyncButtons(pull: .running, push: showsPush ? .disabled(reason: "Pulling…") : .hidden)
             case .push: return RowSyncButtons(pull: showsPull ? .disabled(reason: "Pushing…") : .hidden, push: .running)
             case .publish: return RowSyncButtons(pull: .hidden, push: .running, pushTitle: "Publish")
+            case .delete: return RowSyncButtons(pull: .hidden, push: .hidden, delete: .running)
             }
         }
         // Whatever else is running holds the repository, so a visible button waits it out
@@ -181,6 +193,7 @@ enum SyncPolicy {
                 case .pull: "Pulling \(active.branch)…"
                 case .push: "Pushing \(active.branch)…"
                 case .publish: "Publishing \(active.branch)…"
+                case .delete: "Deleting \(active.branch)…"
                 }
             } else if isSwitching {
                 "Switching branch…"
@@ -192,6 +205,12 @@ enum SyncPolicy {
                 hiddenRemote: hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote),
                 choice: publishRemote(remotes: remotes), busy: busy, isDiscovering: isDiscovering,
                 fetchingRemotes: fetchingRemotes)
+        }
+        if readStatus == .loaded, let upstream = branch.upstream, canDelete(branch, isCurrent: isCurrent) {
+            // A fetch may bring the remote branch back.
+            let waiting = busy ?? (isDiscovering || fetchingRemotes.contains(upstream.remote) ? "Fetching…" : nil)
+            let delete = waiting.map { PickerButtonState.disabled(reason: $0) } ?? .enabled
+            return RowSyncButtons(pull: .hidden, push: .hidden, delete: delete)
         }
         guard let target else { return .hidden }
         let fetchMayMoveCounts = isDiscovering || fetchingRemotes.contains(target.destination.remote)

@@ -28,7 +28,7 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
     var fetchStatus: FetchStatus = .idle
-    /// The pull or push in flight and its branch, or nil when neither is running.
+    /// The pull, push, publish or delete in flight and its branch, or nil when none is running.
     var activeSync: ActiveSync?
     /// Every remote being fetched, the current branch's included.
     var fetchingRemotes: Set<String> = []
@@ -204,9 +204,10 @@ struct BranchPickerState {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// A row's Pull and Push, or Publish, or nil past the end. Uses the same immediate
-    /// fetch checks as `WindowState`'s admission: Pull is admitted exactly as shown, while
-    /// Push may still wait for its remote's fetch and be re-checked afterwards.
+    /// A row's Pull and Push, Publish, or Delete, or nil past the end. Uses the same
+    /// immediate fetch checks as `WindowState`'s admission: Pull and Delete are admitted
+    /// exactly as shown, while Push may still wait for its remote's fetch and be re-checked
+    /// afterwards.
     func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
         guard rows.indices.contains(row) else { return nil }
         return Self.syncButtons(for: rows[row], snapshot: snapshot)
@@ -221,14 +222,20 @@ struct BranchPickerState {
     }
 
     func branchName(forTableRow row: Int) -> String? {
-        rows.indices.contains(row) ? rows[row].branch.name : nil
+        branch(forTableRow: row)?.name
+    }
+
+    /// The branch as the row shows it, which a delete checks against before it runs.
+    func branch(forTableRow row: Int) -> LocalBranch? {
+        rows.indices.contains(row) ? rows[row].branch : nil
     }
 
     /// The current branch is already checked out; activating it would be a no-op switch.
-    /// A switch in flight locks every row until it settles.
+    /// A switch in flight locks every row until it settles, and a branch being deleted
+    /// can't be checked out.
     func canActivate(tableRow row: Int) -> Bool {
-        guard !snapshot.isSwitchingBranch else { return false }
-        return rows.indices.contains(row) && !rows[row].isCurrent
+        guard !snapshot.isSwitchingBranch, rows.indices.contains(row) else { return false }
+        return !rows[row].isCurrent && rows[row].branch.name != Self.deleting(snapshot)
     }
 
     // MARK: Snapshots
@@ -247,15 +254,18 @@ struct BranchPickerState {
 
     private mutating func applyRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
         // A read status, fetch news, the remotes or a sync in flight moves no row. A switch
-        // flag does change whether a row can activate, which its cell holds, so every row
-        // is refreshed in place. Configured upstreams change a row's trailing text.
+        // flag changes whether any row can activate, which its cell holds, so every row is
+        // refreshed in place; a delete starting or ending changes only its own row.
+        // Configured upstreams change a row's trailing text.
         guard
             new.branches != old.branches || new.headState != old.headState
                 || new.configuredUpstreamRemotes != old.configuredUpstreamRemotes
         else {
-            return new.isSwitchingBranch != old.isSwitchingBranch
-                ? .incremental(inserted: nil, refreshed: IndexSet(rows.indices))
-                : .none
+            if new.isSwitchingBranch != old.isSwitchingBranch {
+                return .incremental(inserted: nil, refreshed: IndexSet(rows.indices))
+            }
+            let refreshed = deleteChangedRows(new, old: old)
+            return refreshed.isEmpty ? .none : .incremental(inserted: nil, refreshed: refreshed)
         }
 
         let oldRows = rows
@@ -266,7 +276,7 @@ struct BranchPickerState {
             for (index, pair) in zip(oldRows, rows).enumerated() where pair.0 != pair.1 {
                 refreshed.insert(index)
             }
-            change = .incremental(inserted: nil, refreshed: refreshed)
+            change = .incremental(inserted: nil, refreshed: refreshed.union(deleteChangedRows(new, old: old)))
         } else {
             change = .reloadAll
         }
@@ -276,6 +286,18 @@ struct BranchPickerState {
             highlightedBranch = Self.initialHighlight(rows: rows)
         }
         return change
+    }
+
+    /// The rows of the branches whose delete started or ended between `old` and `new`.
+    private func deleteChangedRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> IndexSet {
+        guard Self.deleting(new) != Self.deleting(old) else { return [] }
+        let names = [Self.deleting(new), Self.deleting(old)].compactMap { $0 }
+        return IndexSet(names.compactMap { name in rows.firstIndex { $0.branch.name == name } })
+    }
+
+    /// The branch being deleted, which no row may activate.
+    private static func deleting(_ snapshot: BranchPickerSnapshot) -> String? {
+        snapshot.activeSync.flatMap { $0.operation == .delete ? $0.branch : nil }
     }
 
     // MARK: Navigation

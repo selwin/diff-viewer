@@ -171,7 +171,7 @@ struct GitClient: RepoClient {
         // shortens `refs/heads/main` only as far as `heads/main` to stay unambiguous.
         // Stripping the prefix ourselves always yields the plain branch name.
         //
-        // The upstream and date fields ride along on the same process; `nobracket` drops
+        // The upstream, date and tip fields ride along on the same process; `nobracket` drops
         // the `[ ]` git would otherwise wrap the counts in. NUL separates the fields,
         // newline the branches.
         let result = try await ProcessRunner.check(
@@ -180,7 +180,7 @@ struct GitClient: RepoClient {
                 "for-each-ref",
                 "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)"
                     + "%00%(upstream:remotename)%00%(upstream:remoteref)%00%(committerdate:iso-strict)"
-                    + "%00%(upstream)",
+                    + "%00%(upstream)%00%(objectname)",
                 "refs/heads/",
             ],
             currentDirectory: repoRoot,
@@ -494,6 +494,26 @@ struct GitClient: RepoClient {
         guard result.status == 0 else {
             throw ProcessError.failed(
                 command: "git switch", status: result.status, stderr: Self.commandDiagnostics(result))
+        }
+    }
+
+    /// Deletes a local branch. `-D`, because a squash-merged branch never reads as merged
+    /// and `-d` would refuse it.
+    func deleteBranch(_ name: String) async throws {
+        // Git itself would read a leading dash as an option.
+        guard !name.hasPrefix("-") else {
+            throw ProcessError.failed(
+                command: "git branch -D", status: 128, stderr: "'\(name)' is not a branch name")
+        }
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["branch", "-D", name],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git branch -D", status: result.status, stderr: Self.commandDiagnostics(result))
         }
     }
 

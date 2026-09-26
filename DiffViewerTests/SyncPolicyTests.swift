@@ -107,7 +107,9 @@ struct SyncPolicyTests {
 
     @Test func noRemoteUpstreamOrNoReadShowsNothing() {
         #expect(buttons(localBranch("main")) == .hidden, "no upstream")
-        #expect(buttons(localBranch("main", upstream: upstream("origin/main", tracking: .gone))) == .hidden)
+        #expect(
+            buttons(localBranch("main", upstream: upstream("origin/main", tracking: .gone)), isCurrent: true)
+                == .hidden, "the checked-out branch can't be deleted")
         let local = upstream("base", remote: ".", localRef: "refs/heads/base", tracking: .counts(ahead: 0, behind: 1))
         #expect(buttons(localBranch("main", upstream: local)) == .hidden)
         let outside = upstream("origin/main", localRef: "refs/heads/main", tracking: .counts(ahead: 2, behind: 0))
@@ -173,6 +175,41 @@ struct SyncPolicyTests {
             buttons(tracked(ahead: 0, behind: 1), isCurrent: false, active: pulling)
                 == RowSyncButtons(pull: .disabled(reason: "Pulling feature…"), push: .hidden))
         #expect(buttons(tracked(ahead: 0, behind: 0), active: elsewhere) == .hidden, "nothing to disable")
+    }
+
+    // MARK: Delete
+
+    private let gone = localBranch("feature", upstream: upstream("origin/feature", tracking: .gone))
+
+    private func delete(_ state: PickerButtonState) -> RowSyncButtons {
+        RowSyncButtons(pull: .hidden, push: .hidden, delete: state)
+    }
+
+    @Test func aGoneBranchThatIsNotCheckedOutOffersDelete() {
+        #expect(buttons(gone, isCurrent: false) == delete(.enabled))
+        #expect(buttons(gone, isCurrent: true) == .hidden)
+        #expect(buttons(gone, isCurrent: false, readStatus: .failed) == .hidden, "stale read")
+        #expect(buttons(localBranch("feature"), isCurrent: false).delete == .hidden, "no upstream")
+        #expect(buttons(tracked(ahead: 0, behind: 0, name: "feature"), isCurrent: false).delete == .hidden)
+    }
+
+    @Test func deleteWaitsOutABusyRepositoryAndItsRemotesFetch() {
+        let pushing = ActiveSync(branch: "main", operation: .push)
+        #expect(buttons(gone, isCurrent: false, active: pushing) == delete(.disabled(reason: "Pushing main…")))
+        #expect(buttons(gone, isCurrent: false, isSwitching: true) == delete(.disabled(reason: "Switching branch…")))
+        let fetching = PickerButtonState.disabled(reason: "Fetching…")
+        #expect(buttons(gone, isCurrent: false, isDiscovering: true) == delete(fetching))
+        #expect(buttons(gone, isCurrent: false, fetchingRemotes: ["origin"]) == delete(fetching))
+        #expect(
+            buttons(gone, isCurrent: false, fetchingRemotes: ["fork"]) == delete(.enabled), "another remote's fetch")
+    }
+
+    @Test func aDeleteRunsOnItsRowAndHoldsTheOthers() {
+        let deleting = ActiveSync(branch: "feature", operation: .delete)
+        #expect(buttons(gone, isCurrent: false, active: deleting) == delete(.running))
+        #expect(
+            buttons(tracked(ahead: 1, behind: 0), active: deleting)
+                == RowSyncButtons(pull: .hidden, push: .disabled(reason: "Deleting feature…")))
     }
 
     // MARK: Publish

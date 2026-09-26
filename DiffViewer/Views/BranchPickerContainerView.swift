@@ -13,6 +13,8 @@ final class BranchPickerContainerView: NSView {
     var onPush: (String) -> Void = { _ in }
     /// Takes the branch, then the remote to publish it to.
     var onPublish: (String, String) -> Void = { _, _ in }
+    /// Takes the branch as its row showed it, which the delete checks before it runs.
+    var onDelete: (LocalBranch) -> Void = { _ in }
 
     let header = BranchPickerHeaderView(frame: .zero)
     let gutter = CommitPickerGutterView(frame: .zero)
@@ -155,10 +157,10 @@ final class BranchPickerContainerView: NSView {
 
     // MARK: Row buttons
 
-    /// Sets `cell`'s buttons from the current snapshot. They show on the hovered and the
-    /// highlighted row, and wherever one runs.
+    /// Sets `cell`'s Pull and Push, Publish, or Delete from the current snapshot. They show
+    /// on the hovered and the highlighted row, and wherever one runs.
     func configureSyncButtons(of cell: ScopeRowContentView, row: Int) {
-        guard let buttons = state.syncButtons(forTableRow: row), let name = state.branchName(forTableRow: row) else {
+        guard let buttons = state.syncButtons(forTableRow: row), let branch = state.branch(forTableRow: row) else {
             cell.accessory = nil
             return
         }
@@ -166,7 +168,7 @@ final class BranchPickerContainerView: NSView {
         // The popover stays up during an operation, and the table keeps the keyboard: a
         // click must not leave focus on a button that is about to disable.
         view.configure(
-            buttons, isRevealed: row == tableView.hoveredRow || row == state.highlightedTableRow, branch: name,
+            buttons, isRevealed: row == tableView.hoveredRow || row == state.highlightedTableRow, branch: branch.name,
             onPull: { [weak self] name in
                 self?.onPull(name)
                 self?.returnFocusToTable()
@@ -177,6 +179,10 @@ final class BranchPickerContainerView: NSView {
             },
             onPublish: { [weak self] name, remote in
                 self?.onPublish(name, remote)
+                self?.returnFocusToTable()
+            },
+            onDelete: { [weak self] in
+                self?.onDelete(branch)
                 self?.returnFocusToTable()
             })
         cell.accessory = view

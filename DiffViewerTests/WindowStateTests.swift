@@ -52,6 +52,9 @@ actor StubRepoClient: RepoClient {
     private(set) var localBranchesCalls = 0
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
+    /// Every branch a delete was asked for, in order, whether or not it succeeded.
+    private(set) var deleteBranchCalls: [String] = []
+    private var failsDeleteBranch = false
     private var stubbedRemoteNames: [String] = ["origin"]
     private(set) var remoteNamesCalls = 0
     private(set) var fetchCalls: [String] = []
@@ -331,6 +334,9 @@ actor StubRepoClient: RepoClient {
         heldSwitchBranch = []
         for continuation in waiting { continuation.resume() }
     }
+    /// Makes `deleteBranch` throw, after recording the call.
+    func fail(deleteBranch on: Bool) { failsDeleteBranch = on }
+
     /// The head state a switch leaves behind, applied whether or not the switch fails.
     func set(headStateAfterSwitch state: HeadState?) { headStateAfterSwitch = state }
     /// The head sha a switch leaves behind, applied whether or not the switch fails.
@@ -362,6 +368,15 @@ actor StubRepoClient: RepoClient {
         if failsSwitchBranch {
             throw ProcessError.failed(command: "git switch", status: 1, stderr: "post-checkout hook failed")
         }
+    }
+
+    /// Removes the branch from the list on success, as git would.
+    func deleteBranch(_ name: String) async throws {
+        deleteBranchCalls.append(name)
+        if failsDeleteBranch {
+            throw ProcessError.failed(command: "git branch -D", status: 1, stderr: "delete failed")
+        }
+        stubbedLocalBranches.removeAll { $0.name == name }
     }
 
     // MARK: Remotes

@@ -17,12 +17,16 @@ struct BranchUpstream: Sendable, Equatable {
 /// A local branch and what git knows about the remote branch it tracks.
 ///
 /// Counts come from the remote-tracking ref, so they are as old as the last fetch. The
-/// app's own fetch never prunes, so it does not detect a deleted upstream branch by
-/// pruning; a tracking ref that is missing for any reason is still reported as gone.
+/// app's fetch prunes when the remote's mappings store only remote-tracking refs, so a
+/// deleted upstream branch reads as gone after the next fetch; a tracking ref missing
+/// for any other reason reads the same.
 struct LocalBranch: Sendable, Equatable {
     let name: String
     /// Nil when the branch tracks nothing.
     let upstream: BranchUpstream?
+    /// The tip commit. A delete checks it, so a branch recreated under the same name at
+    /// another commit is left alone.
+    let tipSha: String
     /// The tip commit's committer date.
     let tipCommittedAt: Date
 }
