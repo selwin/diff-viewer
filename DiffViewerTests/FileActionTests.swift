@@ -99,33 +99,25 @@ struct FileActionTests {
         #expect(FileAction.writeGroups(for: [a, b]) == [.init(action: .unstage, files: [a, b])])
     }
 
-    /// Each write runs on the rows it means something to, so a mixed selection can stage
-    /// one half and unstage the other. Groups follow `allCases`; files keep sidebar order.
-    @Test func aMixedSelectionSplitsItsWrites() {
+    /// Stage and Unstage each fit only half of a mixed selection, so neither is offered.
+    @Test func aMixedSelectionOffersNoWrites() {
         let staged = changedFile("a.txt", area: .staged, kind: .modified)
-        let first = changedFile("b.txt", kind: .modified)
-        let second = changedFile("c.txt", kind: .modified)
-        let groups = FileAction.writeGroups(for: [first, staged, second])
-        #expect(
-            groups == [
-                .init(action: .stage, files: [first, second]),
-                .init(action: .unstage, files: [staged]),
-                .init(action: .discard, files: [first, second]),
-            ])
-        #expect(
-            groups.map { $0.action.title(for: $0.files) }
-                == ["Stage 2 Files", "Unstage", "Discard Changes to 2 Files…"])
+        let unstaged = changedFile("b.txt", kind: .modified)
+        #expect(FileAction.writeGroups(for: [unstaged, staged]) == [])
     }
 
-    @Test func untrackedAndModifiedSplitDiscardAndTrash() {
+    /// Discard fits only the modified file and Trash only the untracked one; Stage fits both.
+    @Test func untrackedAndModifiedShareOnlyStage() {
         let modified = changedFile("a.txt", kind: .modified)
         let untracked = changedFile("b.txt", kind: .untracked)
         #expect(
             FileAction.writeGroups(for: [modified, untracked]) == [
-                .init(action: .stage, files: [modified, untracked]),
-                .init(action: .discard, files: [modified]),
-                .init(action: .trash, files: [untracked]),
+                .init(action: .stage, files: [modified, untracked])
             ])
+    }
+
+    @Test func anEmptySelectionOffersNoWrites() {
+        #expect(FileAction.writeGroups(for: []) == [])
     }
 
     /// Discarding a conflict resolution is not a one-click action, even in a batch.
@@ -219,10 +211,10 @@ struct FileActionTests {
         #expect(FileAction.stage.compactTitle(for: two) == "Stage 2 files")
         #expect(FileAction.unstage.compactTitle(for: one) == "Unstage")
         #expect(FileAction.unstage.compactTitle(for: two) == "Unstage 2 files")
-        #expect(FileAction.discard.compactTitle(for: one) == "Discard Changes…")
-        #expect(FileAction.discard.compactTitle(for: two) == "Discard Changes…")
+        #expect(FileAction.discard.compactTitle(for: one) == "Discard Changes")
+        #expect(FileAction.discard.compactTitle(for: two) == "Discard Changes")
         // One file with edits is enough to make it a discard.
-        #expect(FileAction.discard.compactTitle(for: [oneDeleted[0], one[0]]) == "Discard Changes…")
+        #expect(FileAction.discard.compactTitle(for: [oneDeleted[0], one[0]]) == "Discard Changes")
         #expect(FileAction.discard.compactTitle(for: oneDeleted) == "Restore")
         #expect(FileAction.discard.compactTitle(for: twoDeleted) == "Restore 2 files")
         #expect(FileAction.trash.compactTitle(for: one) == "Move to Trash…")

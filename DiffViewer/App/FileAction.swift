@@ -28,24 +28,25 @@ enum FileAction: CaseIterable, Sendable {
         writes(for: file) + harmless(existsOnDisk: existsOnDisk)
     }
 
-    /// One write and the selected files it applies to.
+    /// One write and the files it runs on.
     struct WriteGroup: Equatable, Sendable {
         let action: FileAction
         let files: [ChangedFile]
     }
 
-    /// The writes a selection offers, each with the files it applies to.
+    /// The writes a selection offers: those every one of `files` offers, each running on
+    /// the whole selection, in `allCases` order.
     ///
-    /// Write actions use the eligible subset of selected files; non-write actions must
-    /// apply to every selected file. A mixed staged and unstaged selection can then both
-    /// stage its unstaged rows and unstage its staged ones, without either write touching
-    /// a row it means nothing to. Groups follow `allCases` and files keep sidebar order.
+    /// An action that fits only some of the highlighted rows is left out rather than run on
+    /// a subset: Discard beside an untracked file, or Stage beside a staged one, would say
+    /// it acts on rows it would silently skip.
     static func writeGroups(for files: [ChangedFile]) -> [WriteGroup] {
-        let writesPerFile = files.map { ($0, writes(for: $0)) }
-        return allCases.compactMap { action in
-            let eligible = writesPerFile.filter { $0.1.contains(action) }.map(\.0)
-            return eligible.isEmpty ? nil : WriteGroup(action: action, files: eligible)
-        }
+        guard !files.isEmpty else { return [] }
+        let writesPerFile = files.map { Set(writes(for: $0)) }
+        return
+            allCases
+            .filter { action in writesPerFile.allSatisfy { $0.contains(action) } }
+            .map { WriteGroup(action: $0, files: files) }
     }
 
     /// The non-write items a selection offers: those every one of `files` offers, since
@@ -138,7 +139,7 @@ enum FileAction: CaseIterable, Sendable {
         case .stage: return count == 1 ? "Stage" : "Stage \(count) files"
         case .unstage: return count == 1 ? "Unstage" : "Unstage \(count) files"
         case .discard:
-            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes…" }
+            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes" }
             return count == 1 ? "Restore" : "Restore \(count) files"
         case .trash: return "Move to Trash…"
         case .revealInFinder, .openInEditor, .copyPath: return title(for: files)

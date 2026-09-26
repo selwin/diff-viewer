@@ -1,12 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// Calls `onBlankClick` when a plain click lands inside the sidebar list but on no row.
+/// Watches clicks inside the sidebar list: any click makes the list first responder, and a
+/// plain click on no row calls `onBlankClick`.
 ///
-/// SwiftUI's sidebar List keeps its selection on such a click and passes no gesture
-/// through, so the window's mouse-downs are watched instead. Placed behind the List, this
-/// view's frame is the List's, which bounds the clicks it looks at.
-struct SidebarBlankClickMonitor: NSViewRepresentable {
+/// Clicking a row of SwiftUI's sidebar List does not take first responder back from an
+/// AppKit view such as the diff pane, so the selection would stay grey and the popover and
+/// the Changes menu would stay off. The List also keeps its selection on a click below the
+/// last row and passes no gesture through, so the window's mouse-downs are watched instead.
+/// Placed behind the List, this view's frame is the List's, which bounds the clicks it
+/// looks at.
+struct SidebarClickMonitor: NSViewRepresentable {
     let onBlankClick: () -> Void
 
     func makeNSView(context: Context) -> MonitorView {
@@ -42,15 +46,18 @@ struct SidebarBlankClickMonitor: NSViewRepresentable {
             }
         }
 
-        /// The event passes on either way, so the List still takes focus from the click.
+        /// The event passes on either way, so the List still handles the click.
         private func inspect(_ event: NSEvent) {
             guard let window, event.window === window,
-                // Not the whole device-independent mask: Caps Lock would count as a modifier.
-                event.modifierFlags.isDisjoint(with: [.command, .shift, .option, .control]),
                 bounds.contains(convert(event.locationInWindow, from: nil)),
                 let hit = window.contentView?.hitTest(event.locationInWindow),
                 let table = sequence(first: hit, next: \.superview).lazy.compactMap(Self.table(at:)).first
             else { return }
+            if window.firstResponder !== table {
+                window.makeFirstResponder(table)
+            }
+            // Not the whole device-independent mask: Caps Lock would count as a modifier.
+            guard event.modifierFlags.isDisjoint(with: [.command, .shift, .option, .control]) else { return }
             if table.row(at: table.convert(event.locationInWindow, from: nil)) == -1 {
                 onBlankClick()
             }

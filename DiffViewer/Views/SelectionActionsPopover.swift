@@ -183,16 +183,15 @@ private struct SelectionActionLabel: View {
     }
 }
 
-/// Stage is the primary action; Discard and Move to Trash are red.
+/// Discard and Move to Trash are red; every row highlights only under the pointer.
 private struct SelectionActionButtonStyle: ButtonStyle {
     enum Role {
-        case primary, plain, destructive
+        case plain, destructive
 
         init(_ action: FileAction) {
             switch action {
-            case .stage: self = .primary
             case .discard, .trash: self = .destructive
-            case .unstage, .revealInFinder, .openInEditor, .copyPath: self = .plain
+            case .stage, .unstage, .revealInFinder, .openInEditor, .copyPath: self = .plain
             }
         }
     }
@@ -220,20 +219,14 @@ private struct SelectionActionButton: View {
 
     private var foreground: Color {
         switch role {
-        case .primary: .white
         case .plain: .primary
         case .destructive: .red
         }
     }
 
     private var background: Color {
-        let highlight = isEnabled && (isHovered || configuration.isPressed)
-        switch role {
-        case .primary:
-            return configuration.isPressed ? Color.accentColor.opacity(0.8) : Color.accentColor
-        case .plain, .destructive:
-            return highlight ? Color.primary.opacity(configuration.isPressed ? 0.14 : 0.08) : .clear
-        }
+        guard isEnabled, isHovered || configuration.isPressed else { return .clear }
+        return Color.primary.opacity(configuration.isPressed ? 0.14 : 0.08)
     }
 }
 

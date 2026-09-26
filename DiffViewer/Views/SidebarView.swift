@@ -77,8 +77,9 @@ struct SidebarView: View {
         // never fire from the find bar or the commit sheet, where ⌘⌫ edits text.
         .focusedValue(\.fileListWindowState, windowState)
         .onExitCommand { windowState.selection = [] }
-        // The List keeps its selection on a click below the last row; Finder clears it.
-        .background { SidebarBlankClickMonitor { windowState.selection = [] } }
+        // A row click takes focus back from the diff pane, and a click below the last row
+        // clears the selection as Finder does; the List does neither by itself.
+        .background { SidebarClickMonitor { windowState.selection = [] } }
         // Keyed on the ids, not the files: staging moves a row between sections and should
         // slide, while line counts arriving for the same rows should not start a transaction.
         .animation(.default, value: windowState.files.map(\.id))
@@ -108,8 +109,7 @@ struct SidebarView: View {
     }
 
     /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
-    /// for twenty. Write actions use the eligible subset of selected files; non-write
-    /// actions must apply to every selected file.
+    /// for twenty. Every item, write or not, must apply to every selected file.
     /// Right-clicking a row outside the selection still acts on that row alone — the list
     /// hands over just that id — and a header, blank space, or the All changes row names no
     /// file at all, which has nothing to act on.

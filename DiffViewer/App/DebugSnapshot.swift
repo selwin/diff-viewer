@@ -23,8 +23,10 @@ import Foundation
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
 ///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
 ///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
-///   popover from outside), or `picker` to toggle the commit picker. Activation must
-///   come from outside, as for tab steps.
+///   popover from outside), or `picker` to toggle the commit picker. It needs no
+///   `DIFFVIEWER_SELECT`, so clicks can make the selection. An inactive app's window
+///   never really becomes key, so clicks take the first-mouse path: one on a view that
+///   refuses first mouse (such as the diff pane) is dropped.
 /// - `DIFFVIEWER_APPEARANCE=dark|light` forces the app appearance.
 /// - `DIFFVIEWER_NEXT=<n>` presses Next Change n times once the diff has loaded.
 /// - `DIFFVIEWER_FIND=<query>` opens the find bar with that query after the Next Change
@@ -95,7 +97,8 @@ enum DebugLaunchOptions {
             let findQuery = env["DIFFVIEWER_FIND"] ?? ""
             let needsWindow =
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
-                || !findQuery.isEmpty
+                || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
+                || env["DIFFVIEWER_FOCUS_LIST"] == "1"
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -371,7 +374,8 @@ enum DebugLaunchOptions {
                 continue
             }
             let code = UInt16(key)
-            let characters = code == nil ? key : ""
+            // Escape carries its character, or it never reaches `cancelOperation:`.
+            let characters = code == nil ? key : (code == 53 ? "\u{1b}" : "")
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 guard
                     let event = NSEvent.keyEvent(
