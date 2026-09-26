@@ -8,17 +8,22 @@ enum Highlighter {
     static let maxBytes = 4_000_000
 
     static func highlight(lines: [String], fileName: String) -> [[StyleRun]]? {
+        PerfProbe.measure("highlight.total") { highlightMeasured(lines: lines, fileName: fileName) }
+    }
+
+    private static func highlightMeasured(lines: [String], fileName: String) -> [[StyleRun]]? {
         guard !lines.isEmpty,
-            let config = LanguageRegistry.configuration(forFileNamed: fileName),
+            let config = PerfProbe.measure(
+                "highlight.config", { LanguageRegistry.configuration(forFileNamed: fileName) }),
             let query = config.queries[.highlights]
         else { return nil }
 
-        let text = lines.joined(separator: "\n")
+        let text = PerfProbe.measure("highlight.join") { lines.joined(separator: "\n") }
         guard text.utf8.count <= maxBytes else { return nil }
 
         let parser = Parser()
         do { try parser.setLanguage(config.language) } catch { return nil }
-        guard let tree = parser.parse(text) else { return nil }
+        guard let tree = PerfProbe.measure("highlight.parse", { parser.parse(text) }) else { return nil }
 
         // Collect captures as UTF-16 ranges, then paint in tree-sitter precedence order:
         // earlier start first, wider ranges before nested ones (so inner captures win),
@@ -26,34 +31,67 @@ enum Highlighter {
         // later one, as in tree-sitter-highlight).
         let laterPatternWins = LanguageRegistry.spec(forFileNamed: fileName)?.precedence != .earlierPatternWins
         var captures: [(start: Int, end: Int, pattern: Int, style: TokenStyle)] = []
+        // The query loop is split into tree-sitter matching, predicate checks and capture
+        // mapping. Timestamps are only read while a recorder runs.
+        let timing = PerfProbe.isRecording
+        var matchNs: UInt64 = 0
+        var predicateNs: UInt64 = 0
+        var captureNs: UInt64 = 0
+        var matchCount = 0
+        var captureCount = 0
+        let queryStart = timing ? PerfProbe.now() : 0
         let cursor = query.execute(in: tree)
         let context = Predicate.Context(string: text)
+        var t0 = timing ? PerfProbe.now() : 0
         while let match = cursor.nextMatch() {
-            guard match.allowed(in: context) else { continue }
-            for capture in match.captures {
-                guard let name = capture.name,
-                    let style = TokenStyle.paintStyle(forCaptureName: name)
-                else { continue }
-                let range = capture.range
-                guard range.length > 0 else { continue }
-                captures.append((range.location, range.location + range.length, match.patternIndex, style))
+            let t1 = timing ? PerfProbe.now() : 0
+            matchNs &+= t1 &- t0
+            matchCount += 1
+            let allowed = match.allowed(in: context)
+            let t2 = timing ? PerfProbe.now() : 0
+            predicateNs &+= t2 &- t1
+            if allowed {
+                for capture in match.captures {
+                    captureCount += 1
+                    guard let name = capture.name,
+                        let style = TokenStyle.paintStyle(forCaptureName: name)
+                    else { continue }
+                    let range = capture.range
+                    guard range.length > 0 else { continue }
+                    captures.append((range.location, range.location + range.length, match.patternIndex, style))
+                }
             }
+            t0 = timing ? PerfProbe.now() : 0
+            captureNs &+= t0 &- t2
+        }
+        if timing {
+            matchNs &+= PerfProbe.now() &- t0
+            PerfProbe.record("highlight.query", nanoseconds: PerfProbe.now() - queryStart)
+            PerfProbe.record("highlight.query.nextMatch", nanoseconds: matchNs, count: matchCount)
+            PerfProbe.record("highlight.query.predicates", nanoseconds: predicateNs, count: matchCount)
+            PerfProbe.record("highlight.query.captureMapping", nanoseconds: captureNs, count: captureCount)
+            PerfProbe.count("highlight.paintedCaptures", captures.count)
         }
         guard !captures.isEmpty else { return Array(repeating: [], count: lines.count) }
-        captures.sort {
-            if $0.start != $1.start { return $0.start < $1.start }
-            if $0.end != $1.end { return $0.end > $1.end }
-            return laterPatternWins ? $0.pattern > $1.pattern : $0.pattern < $1.pattern
+        PerfProbe.measure("highlight.sort") {
+            captures.sort {
+                if $0.start != $1.start { return $0.start < $1.start }
+                if $0.end != $1.end { return $0.end > $1.end }
+                return laterPatternWins ? $0.pattern > $1.pattern : $0.pattern < $1.pattern
+            }
         }
 
-        var painter = LinePainter(lines: lines)
-        var lastRange = (-1, -1)
-        for capture in captures {
-            if (capture.start, capture.end) == lastRange { continue }
-            lastRange = (capture.start, capture.end)
-            painter.paint(start: capture.start, end: capture.end, style: capture.style)
+        let painter = PerfProbe.measure("highlight.paint") {
+            var painter = LinePainter(lines: lines)
+            var lastRange = (-1, -1)
+            for capture in captures {
+                if (capture.start, capture.end) == lastRange { continue }
+                lastRange = (capture.start, capture.end)
+                painter.paint(start: capture.start, end: capture.end, style: capture.style)
+            }
+            return painter
         }
-        return painter.runs()
+        return PerfProbe.measure("highlight.runs") { painter.runs() }
     }
 
     /// Per-line style buffers addressed by document-wide UTF-16 offsets.
