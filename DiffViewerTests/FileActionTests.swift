@@ -211,10 +211,10 @@ struct FileActionTests {
         #expect(FileAction.stage.compactTitle(for: two) == "Stage 2 files")
         #expect(FileAction.unstage.compactTitle(for: one) == "Unstage")
         #expect(FileAction.unstage.compactTitle(for: two) == "Unstage 2 files")
-        #expect(FileAction.discard.compactTitle(for: one) == "Discard Changes")
-        #expect(FileAction.discard.compactTitle(for: two) == "Discard Changes")
+        #expect(FileAction.discard.compactTitle(for: one) == "Discard Changes…")
+        #expect(FileAction.discard.compactTitle(for: two) == "Discard Changes…")
         // One file with edits is enough to make it a discard.
-        #expect(FileAction.discard.compactTitle(for: [oneDeleted[0], one[0]]) == "Discard Changes")
+        #expect(FileAction.discard.compactTitle(for: [oneDeleted[0], one[0]]) == "Discard Changes…")
         #expect(FileAction.discard.compactTitle(for: oneDeleted) == "Restore")
         #expect(FileAction.discard.compactTitle(for: twoDeleted) == "Restore 2 files")
         #expect(FileAction.trash.compactTitle(for: one) == "Move to Trash…")

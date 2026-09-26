@@ -17,6 +17,16 @@ extension WindowState {
         var row: Int?
     }
 
+    /// What the next refresh that publishes a list should select.
+    enum PendingReselection: Equatable, Sendable {
+        /// Find these rows again by path: a discard, a trash, or a branch switch.
+        case paths([PendingSelection])
+        /// Select the row that took the place of the one at `sourceIndex` among `sourceArea`'s rows.
+        /// Stage and unstage move rows to the other list, and the reader works down the
+        /// list they left rather than following the rows.
+        case neighbour(sourceArea: ChangedFile.Area, sourceIndex: Int)
+    }
+
     static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
 
     /// The branch picker's face: the current branch, or where a detached HEAD sits.

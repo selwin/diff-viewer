@@ -249,8 +249,9 @@ struct RepositoryCommands: Commands {
     }
 }
 
-/// The Changes menu: the sidebar's writes on the selected rows, with shortcuts. Scoped to
-/// file-list focus, so ⌘⌫ still deletes text in the find bar and the commit sheet.
+/// The Changes menu: the sidebar's writes on the selected rows. Scoped to file-list focus,
+/// which is also when the selection popover shows, so the bare S and U shortcuts still
+/// type in the find bar and the commit sheet. The two that lose work have no shortcut.
 struct ChangesCommands: Commands {
     let services: AppServices
     @FocusedValue(\.fileListWindowState) private var windowState
@@ -260,11 +261,10 @@ struct ChangesCommands: Commands {
         let groups = availableGroups
         CommandMenu("Changes") {
             button("Stage", for: .stage, in: groups)
-                .keyboardShortcut("s")
+                .keyboardShortcut("s", modifiers: [])
             button("Unstage", for: .unstage, in: groups)
-                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .keyboardShortcut("u", modifiers: [])
             button("Discard Changes…", for: .discard, in: groups)
-                .keyboardShortcut(.delete, modifiers: .command)
             button("Move to Trash…", for: .trash, in: groups)
         }
     }

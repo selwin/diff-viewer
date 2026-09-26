@@ -71,20 +71,27 @@ struct SelectionActionsPopover: View {
     }
 
     /// Converts the stored `.global` frames into this layer's space once, then places.
+    ///
+    /// The row's own list decides whether it is in sight and which way it lies: indices and
+    /// built rows from the other list would say nothing about this one's scroll position.
     private var currentPlacement: SelectionPopoverPlacement? {
-        let rows = windowState.sidebarRows.map(\.id)
-        guard let firstID = windowState.selectedFiles.first?.id, let index = rows.firstIndex(of: firstID) else {
-            return nil
-        }
+        guard let first = windowState.selectedFiles.first else { return nil }
+        let list = SidebarList(area: first.area)
+        let rows = windowState.rows(in: list).map(\.id)
+        guard let index = rows.firstIndex(of: first.id), let listFrame = rowFrames.visibleListFrames[list],
+            let changesFrame = rowFrames.visibleListFrames[.changes]
+        else { return nil }
         let origin = containerFrame.origin
         let stored = rowFrames.firstSelectedRow
         let rowFrame = SelectionPopoverPlacement.rowFrame(
-            stored?.frame, measuredFor: stored?.id, firstSelectedID: firstID)
+            stored?.frame, measuredFor: stored?.id, firstSelectedID: first.id)
         return SelectionPopoverPlacement.place(
             rowFrame: rowFrame?.offsetBy(dx: -origin.x, dy: -origin.y),
             selectedRowIndex: index,
             mountedIndexRange: SelectionPopoverPlacement.mountedIndexRange(of: rowFrames.mountedRowIDs, in: rows),
-            visibleListFrame: rowFrames.visibleListFrame.offsetBy(dx: -origin.x, dy: -origin.y),
+            visibleListFrame: listFrame.offsetBy(dx: -origin.x, dy: -origin.y),
+            // Changes spans the sidebar's width; the tray is inset from its edge.
+            sidebarMaxX: changesFrame.maxX - origin.x,
             containerSize: containerFrame.size,
             popoverSize: panelSize)
     }
@@ -172,13 +179,12 @@ private struct SelectionActionLabel: View {
         }
     }
 
-    /// The Changes menu's shortcuts; Move to Trash has none there either.
+    /// The Changes menu's shortcuts; Discard and Move to Trash have none there either.
     private var shortcut: String? {
         switch action {
-        case .stage: "⌘S"
-        case .unstage: "⇧⌘S"
-        case .discard: "⌘⌫"
-        case .trash, .revealInFinder, .openInEditor, .copyPath: nil
+        case .stage: "S"
+        case .unstage: "U"
+        case .discard, .trash, .revealInFinder, .openInEditor, .copyPath: nil
         }
     }
 }

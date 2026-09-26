@@ -18,7 +18,7 @@ struct SidebarReselectionTests {
     @Test func thePathWinsOverTheRememberedRow() {
         let rows = [changedFile("b.swift"), changedFile("a.swift", area: .staged)]
         let result = selection(pending("a.swift", row: 0), in: rows)
-        #expect(result == [.file(rows[1].id)], "staging a file moves it, and the selection follows the path")
+        #expect(result == [.file(rows[1].id)], "the path is found again in whichever area it moved to")
     }
 
     @Test func theOriginalAreaWinsWhenThePathIsInBoth() {
@@ -65,7 +65,7 @@ struct SidebarReselectionTests {
         let rows = [changedFile("a.swift", area: .staged), changedFile("b.swift", area: .staged)]
         let result = SidebarReselection.selection(
             after: [pending("a.swift", row: 0), pending("b.swift", row: 1)], surviving: [], in: rows)
-        #expect(result == [.file(rows[0].id), .file(rows[1].id)], "staging two files keeps both selected")
+        #expect(result == [.file(rows[0].id), .file(rows[1].id)], "every path still there is selected again")
     }
 
     @Test func survivorsAreKeptAlongsideTheFoundPaths() {
@@ -114,6 +114,52 @@ struct SidebarReselectionTests {
         #expect(SidebarReselection.selection(after: [pending("gone.swift", row: 0)], surviving: [], in: []).isEmpty)
         let rows = [changedFile("x.swift")]
         #expect(SidebarReselection.selection(after: [pending("gone.swift")], surviving: [], in: rows).isEmpty)
+    }
+
+    // MARK: Stage and unstage move on to the neighbour
+
+    private func neighbour(
+        from area: ChangedFile.Area, at index: Int, surviving: Set<DiffSelection> = [], in rows: [ChangedFile]
+    ) -> Set<DiffSelection> {
+        SidebarReselection.neighbour(from: area, at: index, surviving: surviving, in: rows)
+    }
+
+    @Test func stagingAMiddleRowSelectsTheRowThatSlidUp() {
+        // b.swift, at index 1 of Changes, was staged.
+        let rows = [changedFile("a.swift"), changedFile("c.swift"), changedFile("b.swift", area: .staged)]
+        #expect(neighbour(from: .unstaged, at: 1, in: rows) == [.file(rows[1].id)])
+    }
+
+    @Test func stagingTheLastChangesRowSelectsTheNewLastChangesRow() {
+        // c.swift, at index 2 of Changes, was staged; the staged rows follow in sidebar order.
+        let rows = [
+            changedFile("a.swift"), changedFile("b.swift"),
+            changedFile("c.swift", area: .staged), changedFile("d.swift", area: .staged),
+        ]
+        #expect(neighbour(from: .unstaged, at: 2, in: rows) == [.file(rows[1].id)], "never a staged row")
+    }
+
+    @Test func stagingTheOnlyChangesRowSelectsNothing() {
+        let rows = [changedFile("a.swift", area: .staged), changedFile("b.swift", area: .staged)]
+        #expect(neighbour(from: .unstaged, at: 0, in: rows).isEmpty)
+    }
+
+    @Test func aSurvivingRowIsKeptAndNoNeighbourIsAdded() {
+        let rows = [changedFile("a.swift"), changedFile("c.swift"), changedFile("keep.swift", area: .staged)]
+        let result = neighbour(from: .unstaged, at: 0, surviving: [.file(rows[2].id)], in: rows)
+        #expect(result == [.file(rows[2].id)])
+    }
+
+    @Test func unstagingMovesOnWithinTheStagedRows() {
+        let rows = [
+            changedFile("a.swift"), changedFile("x.swift", area: .staged), changedFile("z.swift", area: .staged),
+        ]
+        // The middle staged row went: the one below slid up.
+        #expect(neighbour(from: .staged, at: 1, in: rows) == [.file(rows[2].id)])
+        // The last staged row went: clamped to the new last staged row, never a Changes row.
+        #expect(neighbour(from: .staged, at: 2, in: rows) == [.file(rows[2].id)])
+        // The only staged row went.
+        #expect(neighbour(from: .staged, at: 0, in: [changedFile("a.swift")]).isEmpty)
     }
 
     // MARK: Surviving a refresh

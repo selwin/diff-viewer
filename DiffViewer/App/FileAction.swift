@@ -139,7 +139,7 @@ enum FileAction: CaseIterable, Sendable {
         case .stage: return count == 1 ? "Stage" : "Stage \(count) files"
         case .unstage: return count == 1 ? "Unstage" : "Unstage \(count) files"
         case .discard:
-            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes" }
+            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes…" }
             return count == 1 ? "Restore" : "Restore \(count) files"
         case .trash: return "Move to Trash…"
         case .revealInFinder, .openInEditor, .copyPath: return title(for: files)

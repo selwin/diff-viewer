@@ -96,12 +96,7 @@ extension WindowState {
         // Capture selected targets before awaiting the write; a concurrent refresh may
         // remove their original ids.
         let revision = selectionRevision
-        let rows = sidebarRows
-        let rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let reselectionCandidates: [PendingSelection] = validated.compactMap { file in
-            guard selection.contains(.file(file.id)) else { return nil }
-            return PendingSelection(path: file.path, area: file.area, row: rowIndex[file.id])
-        }
+        let reselection = reselectionAfterWrite(action, on: validated)
         // Discard and Trash are never offered on a rename, so they keep one path per row.
         let paths =
             action == .stage || action == .unstage ? Self.writePaths(of: validated) : validated.map(\.path)
@@ -132,8 +127,8 @@ extension WindowState {
         // the write began, including while this refresh was waiting — the setter drops a
         // pending restoration, so a choice made in that gap wins too. A selection the
         // reader moved elsewhere, All changes included, outranks the rows being written.
-        if !reselectionCandidates.isEmpty, selectionRevision == revision {
-            restoreSelectionAfterNextRefresh(reselectionCandidates)
+        if let reselection, selectionRevision == revision {
+            restoreSelectionAfterNextRefresh(reselection)
         }
         // Refresh even after failure because earlier files may already have changed:
         // `git restore` checks out entries one by one and does not roll back the ones it
@@ -141,10 +136,35 @@ extension WindowState {
         // own events. Required after a success for the same last reason: `RepoWatcher` sets
         // `kFSEventStreamCreateFlagIgnoreSelf`, so nothing else would republish.
         await refresh(session: session, cause: .fileAction)
-        guard session === self.session, !isClosed, let failure else { return }
+        guard let failure, session === self.session, !isClosed else { return }
         // After the refresh, so the news survives it: a successful refresh clears only the
         // error a refresh raised.
         errorMessage = failure.localizedDescription
+    }
+
+    /// What the refresh after writing `files` should select, or nil when none of them is
+    /// selected. Read from the list on screen, before the write changes it.
+    ///
+    /// Stage and unstage move on to the row that takes the topmost selected row's place in
+    /// the list it left, so repeated staging walks down Changes. Discard and Trash find
+    /// the rows again by path, falling back to the row that slid up.
+    private func reselectionAfterWrite(_ action: FileAction, on files: [ChangedFile]) -> PendingReselection? {
+        let selected = files.filter { selection.contains(.file($0.id)) }
+        guard !selected.isEmpty else { return nil }
+        let rows = sidebarRows
+        switch action {
+        case .stage, .unstage:
+            let sourceArea: ChangedFile.Area = action == .stage ? .unstaged : .staged
+            let sourceRows = rows.filter { $0.area == sourceArea }
+            let selectedIDs = Set(selected.map(\.id))
+            guard let sourceIndex = sourceRows.firstIndex(where: { selectedIDs.contains($0.id) }) else { return nil }
+            return .neighbour(sourceArea: sourceArea, sourceIndex: sourceIndex)
+        case .discard, .trash:
+            let rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return .paths(selected.map { PendingSelection(path: $0.path, area: $0.area, row: rowIndex[$0.id]) })
+        case .revealInFinder, .openInEditor, .copyPath:
+            return nil
+        }
     }
 
     /// Reveal, Open, and Copy Path: they touch Finder, the default editor, and the

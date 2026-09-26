@@ -58,20 +58,18 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 ### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. The
-Changes menu (Stage ⌘S, Unstage ⇧⌘S, Discard Changes… ⌘⌫, Move to Trash…) and the
-selection popover have landed; what remains is below.
+Changes menu (Stage S, Unstage U, Discard Changes…, Move to Trash…, active while the
+file list has focus), the selection popover, and moving the selection on to the next
+file after staging or unstaging have landed; what remains is below.
 
 **Design.**
 - Stage All / Unstage All, ⌥⌘S / ⌥⇧⌘S, in the Changes menu. Disabled when they don't
   apply and run through `FileActionRunner`, like the other items.
-- After staging or unstaging, keep the sidebar selection on the next file in the
-  section the file left, so repeated ⌘S walks down the Unstaged list and the popover
-  walks with it. With All changes selected, ⌘S stages the file whose section is at the
-  top of the scroll.
-- The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
+- With All changes selected, S stages the file whose section is at the top of the
+  scroll.
+- The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
 
-**Tests.** Which file becomes selected after staging or unstaging (middle, last, and
-only file in a section); which file ⌘S targets in All changes from a scroll position.
+**Tests.** Which file S targets in All changes from a scroll position.
 
 ---
 
@@ -244,6 +242,25 @@ lets the reader ask for fresh counts.
   way an automatic fetch failure does.
 
 **Tests.** A manual fetch runs within the cooldown, where an automatic one doesn't.
+
+---
+
+### P. What ⌘A in the sidebar selects (requested 2026-09-26)
+
+**Goal.** Decide what ⌘A means while a file in the sidebar is selected. Today the
+sidebar list's default select-all highlights every row, including the All changes row.
+All changes is a view, not a file, so it probably shouldn't be part of a multi-selection.
+
+**To decide.**
+- Whether ⌘A selects every file (both sections) or only the files in the section the
+  current selection is in.
+- What the diff area shows for the result, and whether bulk actions (stage, unstage,
+  discard, trash) and the selection popover apply to it as they do to a click-built
+  multi-selection.
+- What ⌘A does while All changes itself is selected.
+
+**Tests.** Which rows ⌘A selects from a selection in each section, and that All changes
+is never among them.
 
 ---
 

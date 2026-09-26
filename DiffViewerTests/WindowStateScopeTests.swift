@@ -669,8 +669,9 @@ struct WindowStateScopeTests {
         #expect(state.selection == [.allChanges], "no row was selected, so nothing is restored")
     }
 
-    /// The reselection rule still applies to a file the reader was actually on.
-    @Test func aFileActionOnTheSelectedFileStillReselectsByPath() async {
+    /// The reselection rule still applies to a file the reader was actually on: staging it
+    /// moves on to the next unstaged file.
+    @Test func aFileActionOnTheSelectedFileStillReselects() async {
         let h = Harness()
         let state = h.makeState()
         let files = [changedFile("a.swift"), changedFile("b.swift")]
@@ -681,7 +682,7 @@ struct WindowStateScopeTests {
 
         await state.perform(.stage, on: [files[0]])
 
-        #expect(await eventually { await state.selection == [.file(staged.id)] })
+        #expect(await eventually { await state.selection == [.file(files[1].id)] })
     }
 
     /// The case a computed `selectedFileID` would get wrong: All changes and "nothing

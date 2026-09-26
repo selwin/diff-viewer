@@ -1,5 +1,17 @@
 import Foundation
 
+/// The sidebar's two lists: Changes, which holds everything but the staged files, and the
+/// staging tray's list below it. Each has its own focus and scroll position.
+enum SidebarList: Hashable {
+    case changes
+    case staged
+
+    /// The list rows of `area` are drawn in.
+    init(area: ChangedFile.Area) {
+        self = area == .staged ? .staged : .changes
+    }
+}
+
 /// The lists and names derived from `session`, `files` and `selection`: what the sidebar
 /// draws, what the detail area shows, and what the prefetcher warms.
 ///
@@ -83,6 +95,20 @@ extension WindowState {
     /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.
     /// Any rule that speaks of "the row above" or "the next row" means an index here.
     var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
+
+    /// The rows `list` draws, in sidebar order.
+    func rows(in list: SidebarList) -> [ChangedFile] {
+        switch list {
+        case .changes: unstagedFiles + commitFiles
+        case .staged: stagedFiles
+        }
+    }
+
+    /// The sidebar docks the staged files and the commit button below the other rows. A
+    /// merge keeps it with nothing staged, because the merge itself is still to commit.
+    var showsStagingTray: Bool {
+        scope == .workingTree && (!stagedFiles.isEmpty || commitDefaults.isMerging)
+    }
 
     /// Files worth warming in the difft cache: everything in the current scope but the
     /// selection, which is the loader's job at foreground priority.

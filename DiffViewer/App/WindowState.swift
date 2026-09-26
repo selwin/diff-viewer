@@ -54,7 +54,7 @@ final class WindowState {
         get { storedSelection }
         set {
             selectionRevision += 1
-            pendingReselections = []
+            pendingReselection = nil
             if applySelection(newValue, from: detailIdentity) { reloadDiff() }
         }
     }
@@ -135,13 +135,13 @@ final class WindowState {
     /// The last working-tree read threw and nothing has replaced its list since: an
     /// empty `files` then means unread, not clean.
     private(set) var listReadFailed = false
-    /// The rows to select again once the new list arrives. Held here rather than after the
-    /// scope task's own `refresh`, which may be superseded by a watcher refresh that
-    /// publishes the files instead.
-    private var pendingReselections: [PendingSelection] = []
+    /// What to select once the new list arrives. Held here rather than after the write's
+    /// or the branch switch's own `refresh`, which may be superseded by a watcher refresh
+    /// that publishes the files instead.
+    private var pendingReselection: PendingReselection?
     /// Armed on adoption, on a scope change, and by every empty list a refresh publishes;
     /// consumed by the refresh that publishes a list with rows. Held here for the same
-    /// reason as `pendingReselections`.
+    /// reason as `pendingReselection`.
     private var pendingAllChanges = false
 
     /// The commit-message draft; the reader's own edits bump its revision, applied
@@ -449,8 +449,8 @@ final class WindowState {
             listReadFailed = false
             // Taken before anything is applied: a restoration describes the list this
             // refresh is about to replace, and only this refresh can grant it.
-            let pending = pendingReselections
-            pendingReselections = []
+            let pending = pendingReselection
+            pendingReselection = nil
             let wantsAllChanges = pendingAllChanges
             // An empty list is not a first list: it keeps the flag armed, so a repository
             // with no changes lands on All changes when its first change arrives.
@@ -477,7 +477,7 @@ final class WindowState {
             if published != files { files = published }
             let surviving = SidebarReselection.surviving(storedSelection, before: before, in: newFiles)
             applySelection(
-                SidebarReselection.selection(after: pending, surviving: surviving, in: sidebarRows),
+                SidebarReselection.selection(for: pending, surviving: surviving, in: sidebarRows),
                 from: keyBefore)
             // All changes is the default after a first list or an empty one. A selection a
             // refresh emptied because its files vanished from a list that still has rows stays
@@ -720,16 +720,16 @@ extension WindowState {
         }
     }
 
-    /// Asks the next refresh that publishes a file list to put the selection back on
-    /// `selections`. The rule itself is `SidebarReselection`.
+    /// Asks the next refresh that publishes a file list to select according to
+    /// `reselection`. The rules themselves are `SidebarReselection`.
     ///
-    /// Exists because `pendingReselections` is private to the class body and the
+    /// Exists because `pendingReselection` is private to the class body and the
     /// file-action extension lives in another file. Deliberately narrow: it records a
     /// wish, and whichever refresh publishes the new list decides whether it can still be
     /// granted — not always the refresh that recorded it, since a watcher refresh can
-    /// overtake a scope change or a file action.
-    func restoreSelectionAfterNextRefresh(_ selections: [PendingSelection]) {
-        pendingReselections = selections
+    /// overtake a branch switch or a file action.
+    func restoreSelectionAfterNextRefresh(_ reselection: PendingReselection) {
+        pendingReselection = reselection
     }
 
     /// Returns to the working tree after a commit could not be read.
@@ -1189,7 +1189,7 @@ extension WindowState {
                 return PendingSelection(path: file.path, area: file.area, row: nil)
             }
             selection = []
-            if !candidates.isEmpty { restoreSelectionAfterNextRefresh(candidates) }
+            if !candidates.isEmpty { restoreSelectionAfterNextRefresh(.paths(candidates)) }
             pendingAllChanges = true
             cancelLineStats(session: session)
             files = []

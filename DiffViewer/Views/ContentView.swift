@@ -13,7 +13,8 @@ struct ContentView: View {
     /// An error alert is up; a new message waits for it to be dismissed rather than
     /// stacking another sheet on it.
     @State private var isPresentingError = false
-    @FocusState private var isFileListFocused: Bool
+    /// Which sidebar list has focus, if either; the sidebar moves it between the two.
+    @FocusState private var focusedSidebarList: SidebarList?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var rowFrames = SidebarRowFrames()
 
@@ -21,7 +22,7 @@ struct ContentView: View {
         @Bindable var windowState = windowState
         @Bindable var preferences = preferences
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(isFileListFocused: $isFileListFocused)
+            SidebarView(focusedList: $focusedSidebarList)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
         } detail: {
             detail
@@ -128,7 +129,8 @@ struct ContentView: View {
     /// focus test is what hides it for the diff pane and the find bar; AppKit keeps the
     /// first responder when the window resigns key, so an inactive window keeps it.
     private var isSelectionPopoverAllowed: Bool {
-        guard isFileListFocused, columnVisibility != .detailOnly, !windowState.selectedWriteGroups.isEmpty else {
+        guard focusedSidebarList != nil, columnVisibility != .detailOnly, !windowState.selectedWriteGroups.isEmpty
+        else {
             return false
         }
         return !windowState.isCommitSheetPresented && !windowState.isCommitPickerPresented

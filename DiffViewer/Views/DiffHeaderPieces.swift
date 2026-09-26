@@ -172,9 +172,12 @@ struct LoadingIndicator: View {
 }
 
 /// The +/− counts after a file row (byte counts for a binary file), the whole list's
-/// total on the All changes row, and the rail of a file header.
+/// total on the All changes row, the staged total in the staging tray, and the rail of a
+/// file header.
 struct ChurnLabel: View {
     let stats: LineStats?
+    /// Nil keeps the monospaced callout the headers and rows use.
+    var font: Font?
     /// A selected row inverts its text to white; the counts follow the file name
     /// there and let the +/− signs carry the meaning.
     @Environment(\.backgroundProminence) private var prominence
@@ -204,7 +207,7 @@ struct ChurnLabel: View {
                         Text(delta).foregroundStyle(deltaStyle(for: presentation.kind))
                     }
                 }
-                .font(.system(.callout, design: .monospaced))
+                .font(resolvedFont)
                 .fixedSize()
                 .lineLimit(1)
                 .help(presentation.helpText)
@@ -222,12 +225,14 @@ struct ChurnLabel: View {
                     Text("−\(deleted)").foregroundStyle(deletedStyle)
                 }
             }
-            .font(.system(.callout, design: .monospaced))
+            .font(resolvedFont)
             .fixedSize()
             .lineLimit(1)
             .help(countedHelpText(added: added, deleted: deleted))
         }
     }
+
+    private var resolvedFont: Font { font ?? .system(.callout, design: .monospaced) }
 
     private var addedStyle: AnyShapeStyle {
         prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(.green)
@@ -245,7 +250,7 @@ struct ChurnLabel: View {
     /// Byte counts that could not be read: still a binary, just an unsized one.
     private var binaryFallback: some View {
         Text("binary")
-            .font(.system(.callout, design: .monospaced))
+            .font(resolvedFont)
             .foregroundStyle(.tertiary)
             .fixedSize()
             .lineLimit(1)
