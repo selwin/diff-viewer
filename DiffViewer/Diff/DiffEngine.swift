@@ -94,28 +94,37 @@ enum DiffEngine {
             return Output(content: .text(entry.document), styles: entry.styles)
         }
 
-        let oldText = String(decoding: sources.old, as: UTF8.self)
-        let newText = String(decoding: sources.new, as: UTF8.self)
+        let (oldText, newText) = PerfProbe.measure("engine.decode") {
+            (String(decoding: sources.old, as: UTF8.self), String(decoding: sources.new, as: UTF8.self))
+        }
 
-        let difft = await cache.result(
-            for: difftKey, old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
+        let difft = await PerfProbe.measureAsync("engine.difft") {
+            await cache.result(
+                for: difftKey, old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
+        }
         try Task.checkCancellation()
         let hints = difft?.hints ?? DifftHints()
         let language = difft?.language
 
         let document = await Task.detached(priority: .userInitiated) {
-            let oldLines = TextLines.split(oldText)
-            let newLines = TextLines.split(newText)
-            let rows = DiffAligner.align(
-                oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
+            let (oldLines, newLines) = PerfProbe.measure("engine.split") {
+                (TextLines.split(oldText), TextLines.split(newText))
+            }
+            let rows = PerfProbe.measure("engine.align") {
+                DiffAligner.align(oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
+            }
             return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language)
         }.value
         try Task.checkCancellation()
 
         // Sequential, so a caller processing one file at a time runs one parse at a time.
-        let old = await highlight(document.oldLines, sources.fileName)
+        let old = await PerfProbe.measureAsync("engine.highlightOld") {
+            await highlight(document.oldLines, sources.fileName)
+        }
         try Task.checkCancellation()
-        let new = await highlight(document.newLines, sources.fileName)
+        let new = await PerfProbe.measureAsync("engine.highlightNew") {
+            await highlight(document.newLines, sources.fileName)
+        }
         let styles = SyntaxStyles(old: old, new: new)
 
         // Only a successful difft result is kept: `DifftCache` forgets a failure after a

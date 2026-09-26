@@ -1,0 +1,83 @@
+name: Benchmark
+
+# Stage timings for the load and render paths (DiffViewerTests/RenderPerfBenchmarks).
+# Release build, because Debug timings of Swift code say little about the shipped app.
+# Runs on demand, and on main when the benchmark or the probes change. See PERFORMANCE.md.
+on:
+  push:
+    branches: [main]
+    paths:
+      - DiffViewerTests/RenderPerfBenchmarks.swift
+      - DiffViewer/App/PerfProbe.swift
+      - .github/workflows/benchmark.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+jobs:
+  benchmark:
+    name: Benchmarks
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Restore Swift package checkouts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Fetch difft
+        run: scripts/fetch-difft.sh
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Run benchmarks
+        env:
+          TEST_RUNNER_DIFFVIEWER_BENCHMARKS: "1"
+          TEST_RUNNER_DIFFVIEWER_BENCHMARK_REPORT: ${{ runner.temp }}/benchmark.md
+        run: |
+          set -o pipefail
+          sysctl -n machdep.cpu.brand_string hw.model hw.ncpu hw.memsize
+          if ! xcodebuild test \
+            -project DiffViewer.xcodeproj \
+            -scheme DiffViewer \
+            -destination 'platform=macOS' \
+            -derivedDataPath build \
+            -configuration Release \
+            -only-testing:DiffViewerTests/RenderPerfBenchmarks \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            ENABLE_TESTABILITY=YES \
+            > xcodebuild.log 2>&1; then
+            grep -nE "error:|failed|Issue recorded|Expectation failed" xcodebuild.log | head -100 || true
+            tail -150 xcodebuild.log
+            exit 1
+          fi
+          grep -nE "Test run|passed|failed|Issue recorded" xcodebuild.log | tail -20 || true
+
+      - name: Report
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/benchmark.md" ]; then
+            cat "$RUNNER_TEMP/benchmark.md"
+            cat "$RUNNER_TEMP/benchmark.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report written."
+          fi

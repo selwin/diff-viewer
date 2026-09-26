@@ -77,6 +77,10 @@ final class DiffPaneView: NSView {
     /// caches (keyed by line index, which never shifts) stay valid and only the new
     /// lines are measured.
     func install(_ model: PaneModel?, mode: DocumentUpdate.Mode) {
+        PerfProbe.measure("pane.install") { installMeasured(model, mode: mode) }
+    }
+
+    private func installMeasured(_ model: PaneModel?, mode: DocumentUpdate.Mode) {
         let previousLineCount = self.model?.lines.count ?? 0
         self.model = model
         switch mode {
@@ -200,6 +204,10 @@ final class DiffPaneView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        PerfProbe.measure("pane.draw") { drawMeasured(dirtyRect) }
+    }
+
+    private func drawMeasured(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         DiffTheme.background.setFill()
         context.fill(bounds.intersection(dirtyRect))
@@ -207,6 +215,7 @@ final class DiffPaneView: NSView {
 
         let visible = visibleRect
         let rows = layout.rows(intersecting: dirtyRect.minY, dirtyRect.maxY)
+        PerfProbe.count("pane.draw.rows", rows.count)
         for displayIndex in rows where displayIndex < displayRows.count {
             let rowRect = NSRect(
                 x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
@@ -237,12 +246,23 @@ final class DiffPaneView: NSView {
     ) {
         let cell = model.cell(row)
         let (rowColor, tokenColor, gutterColor) = colors(for: row.kind, side: model.side, hasCell: cell != nil)
+        let timing = PerfProbe.isRecording
+        var t0 = timing ? PerfProbe.now() : 0
+        // Adds the time since the previous mark to `stage`.
+        func mark(_ stage: String) {
+            guard timing else { return }
+            let t1 = PerfProbe.now()
+            PerfProbe.record(stage, nanoseconds: t1 - t0)
+            t0 = t1
+        }
         if let cell {
             if let rowColor {
                 rowColor.setFill()
                 context.fill(fullWidthRect(rowRect))
             }
+            mark("pane.row.background")
             let cached = cachedLine(for: cell.lineIndex, model: model)
+            mark("pane.row.cachedLine")
             // The gutter tints are translucent, so nothing may be drawn under the gutter.
             context.saveGState()
             context.clip(
@@ -251,13 +271,17 @@ final class DiffPaneView: NSView {
             drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
             drawFindMatches(ofRow: index, cached: cached, in: rowRect, context: context)
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
+            mark("pane.row.tokenHighlights")
             drawLine(
                 cached.line, at: CGPoint(x: gutterWidth + textInset, y: rowRect.minY + 2 + ascent), context: context)
             context.restoreGState()
+            mark("pane.row.drawText")
         } else {
             drawPad(rowRect, context: context)
+            mark("pane.row.pad")
         }
         drawGutter(cell, inRow: index, rowRect: rowRect, gutterColor: gutterColor, context: context)
+        mark("pane.row.gutter")
     }
 
     /// The row across the whole document view, so a background reaches past the visible
@@ -470,14 +494,35 @@ final class DiffPaneView: NSView {
         case .expandRun: return "Show all \(hidden.count) unchanged lines"
         }
     }
+}
 
-    // MARK: - Caches
+// MARK: - Caches
 
+extension DiffPaneView {
     func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
-        if let cached = lineCache[lineIndex] { return cached }
-        if lineCache.count > 4000 { lineCache.removeAll(keepingCapacity: true) }
+        if let cached = lineCache[lineIndex] {
+            PerfProbe.count("pane.lineCache.hit", 1)
+            return cached
+        }
+        if lineCache.count > 4000 {
+            PerfProbe.count("pane.lineCache.evictAll", 1)
+            lineCache.removeAll(keepingCapacity: true)
+        }
+        return PerfProbe.measure("pane.shape") { shapeLine(lineIndex, model: model) }
+    }
+
+    private func shapeLine(_ lineIndex: Int, model: PaneModel) -> CachedLine {
+        let timing = PerfProbe.isRecording
+        var t0 = timing ? PerfProbe.now() : 0
+        func mark(_ stage: String) {
+            guard timing else { return }
+            let t1 = PerfProbe.now()
+            PerfProbe.record(stage, nanoseconds: t1 - t0)
+            t0 = t1
+        }
         let raw = model.lines[lineIndex]
         let expanded = TabExpander.expand(raw, tabWidth: DiffTheme.tabWidth)
+        mark("pane.shape.tabExpand")
         let attributed = NSMutableAttributedString(
             string: expanded.text,
             attributes: [
@@ -498,8 +543,11 @@ final class DiffPaneView: NSView {
                     range: NSRange(location: clampedLower, length: clampedUpper - clampedLower))
             }
         }
+        mark("pane.shape.attributes")
         let line = CTLineCreateWithAttributedString(attributed)
+        mark("pane.shape.ctLineCreate")
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+        mark("pane.shape.typographicBounds")
         let cached = CachedLine(line: line, map: expanded.map, width: width, rawLength: raw.utf16.count)
         lineCache[lineIndex] = cached
         return cached
