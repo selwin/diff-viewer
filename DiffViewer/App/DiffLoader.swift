@@ -91,7 +91,9 @@ final class DiffLoader {
                 try Task.checkCancellation()
                 let output = try await DiffEngine.build(
                     sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
-                    priority: .foreground)
+                    priority: .foreground, preview: { [weak self] document, syntax in
+                        await self?.publishPreview(document, syntax, fileID: file.id, generation: gen)
+                    })
                 try Task.checkCancellation()
                 // SVG stays a text diff, so it is previewed on its text content too.
                 let oldFormat = ImagePreview.format(for: file.originalPath ?? file.path)
@@ -121,8 +123,9 @@ final class DiffLoader {
                 imagePreview = preview
                 if case let .text(document) = output.content, let syntax = output.styles {
                     // A cache hit for the document already on screen keeps its snapshot,
-                    // so the panes do not reshape lines they already have.
-                    if styles?.documentID != document.id {
+                    // so the panes do not reshape lines they already have. A preview
+                    // snapshot is always replaced by the full one.
+                    if styles?.documentID != document.id || styles?.isPreview == true {
                         styles = DocumentStyles(
                             documentID: document.id, revision: 0, old: syntax.old, new: syntax.new)
                     }
@@ -175,6 +178,19 @@ final class DiffLoader {
         }
     }
 
+    /// Shows a single file's document as soon as its first lines are coloured, so a
+    /// large file does not wait for the full highlighting pass. `isLoading` stays true
+    /// until the full styles are published.
+    private func publishPreview(
+        _ document: DiffDocument, _ syntax: SyntaxStyles, fileID: ChangedFile.ID, generation gen: Int
+    ) {
+        guard gen == generation else { return }
+        content = .text(document)
+        contentFileID = fileID
+        styles = DocumentStyles(
+            documentID: document.id, revision: 0, old: syntax.old, new: syntax.new, isPreview: true)
+    }
+
     private func publish(_ publication: ChangesetAssembler.Publication, generation gen: Int) {
         guard gen == generation else { return }
         content = .changeset(publication.document)
@@ -193,4 +209,6 @@ struct DocumentStyles: Sendable {
     let revision: Int
     let old: [[StyleRun]]?
     let new: [[StyleRun]]?
+    /// True when only the first lines are coloured and the full styles are still coming.
+    var isPreview = false
 }

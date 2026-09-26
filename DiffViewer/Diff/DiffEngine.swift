@@ -70,6 +70,14 @@ enum DiffEngine {
         }.value
     }
 
+    /// Receives the finished document with styles for its first lines only, while the
+    /// full highlighting pass is still running.
+    typealias Preview = @Sendable (DiffDocument, SyntaxStyles) async -> Void
+
+    /// Lines per side coloured by the preview pass. Each row shows at most one line per
+    /// side, so the first 200 rows never go past line 200 on either side.
+    static let previewLineCount = 200
+
     /// A finished diff and the styles for it. Styles are nil for binary or identical
     /// content, which has no document to colour.
     struct Output: Sendable {
@@ -80,9 +88,13 @@ enum DiffEngine {
     /// Builds and highlights the document, or returns it from `resultCache`. On a miss,
     /// difft hints come from `cache` (which runs difft as needed); without hints the view
     /// still works as a plain line diff. Throws only `CancellationError`.
+    ///
+    /// With `preview`, when either side is longer than `previewLineCount` lines, a quick
+    /// pass colours just the first lines of each side and hands them to `preview` before
+    /// the full pass starts. A cache hit skips it: the full styles are already there.
     static func build(
         _ sources: Sources, hideWhitespace: Bool, cache: DifftCache, resultCache: DiffResultCache,
-        priority: DifftCache.Priority, highlight: Highlight = defaultHighlight
+        priority: DifftCache.Priority, highlight: Highlight = defaultHighlight, preview: Preview? = nil
     ) async throws -> Output {
         try Task.checkCancellation()
         if isBinary(sources.old) || isBinary(sources.new) { return Output(content: .binary, styles: nil) }
@@ -111,6 +123,19 @@ enum DiffEngine {
             return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language)
         }.value
         try Task.checkCancellation()
+
+        let limit = previewLineCount
+        if let preview, document.oldLines.count > limit || document.newLines.count > limit {
+            // Parsing only the first lines is fast and usually colours them as the full
+            // parse would. A construct cut off at the end, such as a block comment that
+            // closes after line 200, may colour wrongly until the full pass replaces it.
+            let old = await highlight(Array(document.oldLines.prefix(limit)), sources.fileName)
+            try Task.checkCancellation()
+            let new = await highlight(Array(document.newLines.prefix(limit)), sources.fileName)
+            try Task.checkCancellation()
+            await preview(document, SyntaxStyles(old: old, new: new))
+            try Task.checkCancellation()
+        }
 
         // Sequential, so a caller processing one file at a time runs one parse at a time.
         let old = await highlight(document.oldLines, sources.fileName)

@@ -181,8 +181,10 @@ running DiffViewer.
 
 ## Known limitations
 
-- Highlighting a 20k-line Swift file takes about 2.8 s per side in Debug builds. Both
-  sides run in parallel and never block scrolling.
+- Highlighting a 20k-line Swift file takes about 2.8 s per side in Debug builds. In the
+  single-file view, the first 200 lines of each side are coloured first, so the file
+  appears without waiting for the full pass; lines further down stay plain until it
+  ends. Highlighting never blocks scrolling.
 - In All changes, separators cannot be expanded in place and file headers do not stick
   while scrolling. The changeset is rebuilt whenever the list changes.
 - Highlighting that has started runs to completion even if its window closes, and

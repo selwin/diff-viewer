@@ -328,9 +328,11 @@ Roughly in priority order.
   table so both panes stay aligned (the taller side wins per row).
 - **Next/previous change crossing files in single-file mode.** Kaleidoscope 7.0's ⌘↓ at
   the last change advances to the next file. Small change to `ChangeNavigator`.
-- **Larger-file highlighting.** README follow-up: highlight visible rows first, or cache
-  compiled query predicates. Kaleidoscope auto-disables syntax colouring on very large
-  files; do the same above a line threshold with a "Highlight anyway" button.
+- **Larger-file highlighting.** README follow-up. Single files already colour their
+  first 200 lines first. Next: colour the rows on screen first (after a jump or scroll),
+  extend the preview to All changes, or cache compiled query predicates. Kaleidoscope
+  auto-disables syntax colouring on very large files; do the same above a line
+  threshold with a "Highlight anyway" button.
 - **Finer whitespace control.** Kaleidoscope splits ignore into leading / trailing /
   line-ending. Offer "Ignore all whitespace" vs "Ignore leading and trailing" if the
   single toggle proves too coarse; keep the persisted-toggle design.
