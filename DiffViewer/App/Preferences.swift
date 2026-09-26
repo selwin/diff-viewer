@@ -48,6 +48,12 @@ final class Preferences {
         didSet { defaults.set(findSide == .old ? "left" : "right", forKey: Keys.findScope) }
     }
 
+    /// Keyed by `RepositoryRoot.path`. Only expanded trays are stored, so a repository
+    /// never opened with one expanded reads as collapsed, the default.
+    private var stagingTrayExpansionByRoot: [String: Bool] {
+        didSet { defaults.set(stagingTrayExpansionByRoot, forKey: Keys.stagingTrayExpansion) }
+    }
+
     /// Most recently opened first.
     private(set) var recentRepositoryRoots: [RepositoryRoot] {
         didSet { defaults.set(recentRepositoryRoots.map(\.path), forKey: Keys.recentRepos) }
@@ -71,6 +77,7 @@ final class Preferences {
         static let collapseContextLines = "collapseContextLines"
         static let confirmDestructiveFileActions = "confirmDestructiveFileActions"
         static let findScope = "findScope"
+        static let stagingTrayExpansion = "stagingTrayExpansion"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -85,6 +92,8 @@ final class Preferences {
         confirmDestructiveFileActions =
             defaults.object(forKey: Keys.confirmDestructiveFileActions) as? Bool ?? true
         findSide = defaults.string(forKey: Keys.findScope) == "left" ? .old : .new
+        stagingTrayExpansionByRoot =
+            defaults.dictionary(forKey: Keys.stagingTrayExpansion) as? [String: Bool] ?? [:]
         foldOptions = FoldOptions.validated(contextLines: defaults.object(forKey: Keys.collapseContextLines) as? Int)
     }
 
@@ -94,6 +103,14 @@ final class Preferences {
         roots.removeAll { $0 == root }
         roots.insert(root, at: 0)
         recentRepositoryRoots = Array(roots.prefix(Self.maxRecentRepositories))
+    }
+
+    func isStagingTrayExpanded(for root: RepositoryRoot) -> Bool {
+        stagingTrayExpansionByRoot[root.path] ?? false
+    }
+
+    func setStagingTrayExpanded(_ expanded: Bool, for root: RepositoryRoot) {
+        stagingTrayExpansionByRoot[root.path] = expanded ? true : nil
     }
 
     func adjustFontSize(by delta: Double) {

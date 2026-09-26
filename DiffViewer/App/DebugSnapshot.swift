@@ -16,6 +16,8 @@ import Foundation
 ///   commit's sidebar and diffs can be screenshotted.
 /// - `DIFFVIEWER_COMMIT_SHEET=1` opens the commit sheet after the selection is applied;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the sheet instead of the window.
+/// - `DIFFVIEWER_STAGING_TRAY=expanded|collapsed` sets the window repository's staging
+///   tray that way, alongside the commit sheet, and keeps it for later runs in the suite.
 /// - `DIFFVIEWER_COMMIT_PICKER=1` opens the commit picker popover the same way;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
@@ -95,10 +97,12 @@ enum DebugLaunchOptions {
             let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
             let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
             let findQuery = env["DIFFVIEWER_FIND"] ?? ""
+            // Any other value is ignored, so a typo never clears the saved state.
+            let trayExpansion = ["expanded": true, "collapsed": false][env["DIFFVIEWER_STAGING_TRAY"] ?? ""]
             let needsWindow =
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
-                || env["DIFFVIEWER_FOCUS_LIST"] == "1"
+                || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -156,6 +160,9 @@ enum DebugLaunchOptions {
                         ? [.allChanges] : Set(selection.split(separator: ",").map { .file(String($0)) })
                 }
                 await arrangeSidebar(env: env, window: window)
+                if let root = windowState.repositoryRoot, let trayExpansion {
+                    windowState.preferences.setStagingTrayExpanded(trayExpansion, for: root)
+                }
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
@@ -564,7 +571,7 @@ extension DebugLaunchOptions {
         if size.count == 2 {
             window.setContentSize(NSSize(width: size[0], height: size[1]))
         }
-        // The sidebar is the only table in the window that is not inside a popover.
+        // The Changes list is the window's first table, ahead of the staging tray's.
         guard let table = window.contentView?.descendant(NSTableView.self) else {
             print("### DIFFVIEWER_SIDEBAR: no file list found")
             return

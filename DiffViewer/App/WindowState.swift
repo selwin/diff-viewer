@@ -736,7 +736,13 @@ extension WindowState {
     }
 
     /// Exists for the same reason: `selectionMove` is `private(set)`.
+    ///
+    /// A row carried into a collapsed tray opens it first, so the sidebar has a list to
+    /// reveal the row in. Leaving the tray never closes it.
     func recordSelectionMove(to area: ChangedFile.Area) {
+        if area == .staged, let root = repositoryRoot, !preferences.isStagingTrayExpanded(for: root) {
+            preferences.setStagingTrayExpanded(true, for: root)
+        }
         selectionMove = SelectionMove(area: area, serial: (selectionMove?.serial ?? 0) + 1)
     }
 

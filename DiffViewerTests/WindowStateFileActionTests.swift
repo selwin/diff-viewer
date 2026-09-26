@@ -345,6 +345,50 @@ struct WindowStateFileActionTests {
         #expect(state.selectionMove == nil)
     }
 
+    /// A row carried into a collapsed tray opens it, so there is a list to reveal it in.
+    @Test func stagingTheSelectedFileExpandsACollapsedTray() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: files)
+        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1], files[2]])
+        state.selection = [.file(files[0].id)]
+
+        await state.perform(.stage, on: [files[0]])
+
+        #expect(await eventually { await state.selectionMove?.area == .staged })
+        #expect(h.preferences.isStagingTrayExpanded(for: repo.root))
+    }
+
+    @Test func stagingAnUnselectedFileLeavesTheTrayCollapsed() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: files)
+        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1], files[2]])
+        state.selection = [.file(files[1].id)]
+
+        await state.perform(.stage, on: [files[0]])
+
+        #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(!h.preferences.isStagingTrayExpanded(for: repo.root))
+    }
+
+    /// Leaving the tray neither opens nor closes it.
+    @Test func unstagingTheSelectedFileLeavesTheTrayAsItWas() async {
+        for expanded in [false, true] {
+            let h = Harness()
+            let state = h.makeState()
+            let repo = await h.adopt(state, "A", files: files)
+            await repo.client.set(filesAfterWrite: [files[0], files[1], changedFile("c.swift")])
+            h.preferences.setStagingTrayExpanded(expanded, for: repo.root)
+            state.selection = [.file(files[2].id)]
+
+            await state.perform(.unstage, on: [files[2]])
+
+            #expect(await eventually { await state.selectionMove?.area == .unstaged })
+            #expect(h.preferences.isStagingTrayExpanded(for: repo.root) == expanded)
+        }
+    }
+
     // MARK: Batches
 
     /// One git process for the whole batch, and every row the reader was on is found

@@ -71,6 +71,38 @@ struct PreferencesTests {
         #expect(Preferences(defaults: defaults).findSide == .new)
     }
 
+    @Test func stagingTrayExpansionRoundTripsPerRoot() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+        let one = RepositoryRoot(path: "/tmp/one")
+        let two = RepositoryRoot(path: "/tmp/two")
+        #expect(!preferences.isStagingTrayExpanded(for: one))
+
+        preferences.setStagingTrayExpanded(true, for: one)
+        #expect(preferences.isStagingTrayExpanded(for: one))
+        #expect(!preferences.isStagingTrayExpanded(for: two))
+        let reloaded = Preferences(defaults: defaults)
+        #expect(reloaded.isStagingTrayExpanded(for: one))
+        #expect(!reloaded.isStagingTrayExpanded(for: two))
+    }
+
+    /// Collapsed is the default, so storing it would only grow the dictionary.
+    @Test func collapsingTheStagingTrayRemovesItsEntry() {
+        let (defaults, suite) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = Preferences(defaults: defaults)
+        let one = RepositoryRoot(path: "/tmp/one")
+        let two = RepositoryRoot(path: "/tmp/two")
+        preferences.setStagingTrayExpanded(true, for: one)
+        preferences.setStagingTrayExpanded(true, for: two)
+
+        preferences.setStagingTrayExpanded(false, for: one)
+        let stored = defaults.dictionary(forKey: "stagingTrayExpansion") as? [String: Bool]
+        #expect(stored == [two.path: true])
+        #expect(!Preferences(defaults: defaults).isStagingTrayExpanded(for: one))
+    }
+
     @Test func clampsStoredFontSize() {
         let (defaults, suite) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

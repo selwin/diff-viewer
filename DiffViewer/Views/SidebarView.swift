@@ -12,15 +12,22 @@ struct SidebarView: View {
     var body: some View {
         // The selection popover points at this row, so it alone measures its frame.
         let firstSelectedID = windowState.selectedFiles.first?.id
-        let stagedListHeight = StagingTrayLayout.listHeight(
-            rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
-            holdsSelection: windowState.selectedFiles.contains { $0.area == .staged })
+        let isTrayExpanded =
+            windowState.repositoryRoot.map { windowState.preferences.isStagingTrayExpanded(for: $0) } ?? false
+        // A collapsed tray leaves its list out, which also moves focus off it below.
+        let stagedListHeight =
+            isTrayExpanded
+            ? StagingTrayLayout.listHeight(
+                rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
+                holdsSelection: windowState.selectedFiles.contains { $0.area == .staged })
+            : 0
         let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
         VStack(spacing: 0) {
             changesList(firstSelectedID: firstSelectedID)
             if windowState.showsStagingTray {
                 StagingTrayView(
-                    listHeight: stagedListHeight, firstSelectedID: firstSelectedID, focusedList: focusedList,
+                    listHeight: stagedListHeight, isExpanded: isTrayExpanded, firstSelectedID: firstSelectedID,
+                    focusedList: focusedList,
                     pendingReveal: $pendingReveal
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))

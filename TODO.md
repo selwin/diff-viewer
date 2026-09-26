@@ -247,6 +247,25 @@ lets the reader ask for fresh counts.
 
 ---
 
+### P. What ⌘A in the sidebar selects (requested 2026-09-26)
+
+**Goal.** Decide what ⌘A means while a file in the sidebar is selected. Today the
+sidebar list's default select-all highlights every row, including the All changes row.
+All changes is a view, not a file, so it probably shouldn't be part of a multi-selection.
+
+**To decide.**
+- Whether ⌘A selects every file (both sections) or only the files in the section the
+  current selection is in.
+- What the diff area shows for the result, and whether bulk actions (stage, unstage,
+  discard, trash) and the selection popover apply to it as they do to a click-built
+  multi-selection.
+- What ⌘A does while All changes itself is selected.
+
+**Tests.** Which rows ⌘A selects from a selection in each section, and that All changes
+is never among them.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
