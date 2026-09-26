@@ -9,7 +9,6 @@ struct StagingTrayView: View {
     let isExpanded: Bool
     let firstSelectedID: ChangedFile.ID?
     var focusedList: FocusState<SidebarList?>.Binding
-    @Binding var pendingReveal: SidebarReveal?
     @Environment(WindowState.self) private var windowState
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -90,7 +89,7 @@ struct StagingTrayView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .environment(\.defaultMinListRowHeight, StagingTrayLayout.rowHeight)
-        .modifier(SidebarListBehavior(list: .staged, focusedList: focusedList, pendingReveal: $pendingReveal))
+        .modifier(SidebarListBehavior(list: .staged, focusedList: focusedList))
         .frame(height: listHeight)
         // Past the cap, the fade says there is more to scroll to.
         .overlay(alignment: .bottom) {

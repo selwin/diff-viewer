@@ -7,7 +7,6 @@ struct SidebarView: View {
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
-    @State private var pendingReveal: SidebarReveal?
 
     var body: some View {
         // The selection popover points at this row, so it alone measures its frame.
@@ -27,8 +26,7 @@ struct SidebarView: View {
             if windowState.showsStagingTray {
                 StagingTrayView(
                     listHeight: stagedListHeight, isExpanded: isTrayExpanded, firstSelectedID: firstSelectedID,
-                    focusedList: focusedList,
-                    pendingReveal: $pendingReveal
+                    focusedList: focusedList
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -43,18 +41,6 @@ struct SidebarView: View {
         // A merge shows the tray with no staged ids changing.
         .animation(.default, value: windowState.files.map(\.id))
         .animation(.default, value: windowState.showsStagingTray)
-        // A stage or unstage carried the selection across: the list it landed in reveals
-        // its first selected row there, and takes focus if the sidebar had it, so the
-        // keyboard keeps working on the rows the reader was on.
-        .onChange(of: windowState.selectionMove) { _, move in
-            guard let move else { return }
-            let list = SidebarList(area: move.area)
-            guard let row = windowState.selectedFiles.first(where: { SidebarList(area: $0.area) == list }) else {
-                return
-            }
-            pendingReveal = SidebarReveal(
-                list: list, rowID: row.id, takesFocus: focusedList.wrappedValue != nil, serial: move.serial)
-        }
         // A focused list that goes away would leave the keyboard nowhere in the sidebar.
         .onChange(of: showsStagedList) { _, shows in
             if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
@@ -130,74 +116,47 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .modifier(SidebarListBehavior(list: .changes, focusedList: focusedList, pendingReveal: $pendingReveal))
+        .modifier(SidebarListBehavior(list: .changes, focusedList: focusedList))
     }
-}
-
-/// A row a stage or unstage carried into `list`, waiting for that list to scroll to it.
-/// `takesFocus` records whether a sidebar list had focus when the row moved.
-struct SidebarReveal: Equatable {
-    let list: SidebarList
-    let rowID: ChangedFile.ID
-    let takesFocus: Bool
-    let serial: Int
 }
 
 /// What both sidebar lists do alike: report their viewport to the selection popover, take
-/// part in focus and the Changes menu, clear the selection on Escape or a blank click,
-/// offer the file context menu, and reveal a row moved into them.
+/// part in focus and the Changes menu, clear the selection on Escape or a blank click, and
+/// offer the file context menu.
 struct SidebarListBehavior: ViewModifier {
     let list: SidebarList
     var focusedList: FocusState<SidebarList?>.Binding
-    @Binding var pendingReveal: SidebarReveal?
     @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
     @Environment(SidebarRowFrames.self) private var rowFrames
-    @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
-        ScrollViewReader { proxy in
-            content
-                // The proxy's frame already leaves out the toolbar's safe area, so a row
-                // scrolled under the toolbar falls outside it and counts as out of sight.
-                .onGeometryChange(for: CGRect.self) { proxy in
-                    proxy.frame(in: .global)
-                } action: { frame in
-                    rowFrames.visibleListFrames[list] = frame
-                    height = frame.height
-                    reveal(with: proxy)
-                }
-                .onDisappear { rowFrames.visibleListFrames[list] = nil }
-                .onAppear { reveal(with: proxy) }
-                .onChange(of: pendingReveal) { reveal(with: proxy) }
-                .focused(focusedList, equals: list)
-                // Only while a list or a row control has focus, so the Changes menu's
-                // shortcuts never fire from the find bar or the commit sheet, where S and U
-                // are typed.
-                .focusedValue(\.fileListWindowState, windowState)
-                .onExitCommand { windowState.selection = [] }
-                // A row click takes focus back from the diff pane, and a click below the
-                // last row clears the selection as Finder does; the List does neither by
-                // itself. Each list's monitor looks only at clicks inside that list.
-                .background { SidebarClickMonitor { windowState.selection = [] } }
-                // The list-level form hands over the whole selection when the right-clicked
-                // row is part of it, and that row alone when it is not, which is what a
-                // Finder-shaped sidebar is expected to do.
-                .contextMenu(forSelectionType: DiffSelection.self) { selections in
-                    SidebarFileContextMenu(
-                        ids: Set(selections.compactMap(\.fileID)), windowState: windowState, services: services)
-                }
-        }
-    }
-
-    /// Waits for a laid-out list: a tray the same refresh inserted has no rows to scroll to
-    /// yet. The first attempt against a list with height settles the reveal, so a later
-    /// resize never scrolls the reader back.
-    private func reveal(with proxy: ScrollViewProxy) {
-        guard let pendingReveal, pendingReveal.list == list, height > 0 else { return }
-        proxy.scrollTo(pendingReveal.rowID)
-        if pendingReveal.takesFocus { focusedList.wrappedValue = list }
-        self.pendingReveal = nil
+        content
+            // The proxy's frame already leaves out the toolbar's safe area, so a row
+            // scrolled under the toolbar falls outside it and counts as out of sight.
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .global)
+            } action: { frame in
+                rowFrames.visibleListFrames[list] = frame
+            }
+            .onDisappear { rowFrames.visibleListFrames[list] = nil }
+            .focused(focusedList, equals: list)
+            // Only while a list or a row control has focus, so the Changes menu's
+            // shortcuts never fire from the find bar or the commit sheet, where S and U
+            // are typed.
+            .focusedValue(\.fileListWindowState, windowState)
+            .onExitCommand { windowState.selection = [] }
+            // A row click takes focus back from the diff pane, and a click below the
+            // last row clears the selection as Finder does; the List does neither by
+            // itself. Each list's monitor looks only at clicks inside that list.
+            .background { SidebarClickMonitor { windowState.selection = [] } }
+            // The list-level form hands over the whole selection when the right-clicked
+            // row is part of it, and that row alone when it is not, which is what a
+            // Finder-shaped sidebar is expected to do.
+            .contextMenu(forSelectionType: DiffSelection.self) { selections in
+                SidebarFileContextMenu(
+                    ids: Set(selections.compactMap(\.fileID)), windowState: windowState, services: services)
+            }
     }
 }
 

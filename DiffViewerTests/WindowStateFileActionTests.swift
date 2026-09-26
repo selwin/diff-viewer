@@ -18,7 +18,9 @@ struct WindowStateFileActionTests {
         return repo.client
     }
 
-    @Test func stagingTheSelectedFileMovesTheSelectionWithIt() async {
+    /// The reader works down Changes: the staged file lands in the tray unselected, and the
+    /// file below it takes its place.
+    @Test func stagingTheSelectedFileSelectsTheNextUnstagedFile() async {
         let h = Harness()
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
@@ -30,10 +32,23 @@ struct WindowStateFileActionTests {
         let performed = await client.performed
         #expect(performed.map(\.action) == [.stage])
         #expect(performed.map(\.paths) == [["a.swift"]])
-        #expect(await eventually { await state.selectedFileID == staged.id })
-        #expect(state.selectedFile?.area == .staged)
+        #expect(await eventually { await state.selection == [.file(files[1].id)] })
+        #expect(!state.selection.contains(.file(staged.id)))
         #expect(h.published.last?.cause == .fileAction)
         #expect(state.errorMessage == nil)
+    }
+
+    @Test func unstagingTheSelectedFileSelectsTheNextStagedFile() async {
+        let h = Harness()
+        let state = h.makeState()
+        let stagedD = changedFile("d.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: [files[0], files[2], stagedD])
+        await repo.client.set(filesAfterWrite: [files[0], changedFile("c.swift"), stagedD])
+        state.selection = [.file(files[2].id)]
+
+        await state.perform(.unstage, on: [files[2]])
+
+        #expect(await eventually { await state.selection == [.file(stagedD.id)] })
     }
 
     @Test func discardingTheSelectedFileSelectsTheRowThatTookItsPlace() async {
@@ -227,8 +242,8 @@ struct WindowStateFileActionTests {
     /// The write's own refresh is not always the one that publishes its result: a watcher
     /// refresh can land while `git` is still running and clear the selection, because the
     /// row's id has gone. The restoration is recorded from what was selected before the
-    /// write, so the reader still lands on the file they were reading.
-    @Test func aRefreshDuringTheWriteStillMovesTheSelection() async {
+    /// write, so the reader still moves on to the next file.
+    @Test func aRefreshDuringTheWriteStillSelectsTheNextFile() async {
         let h = Harness()
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
@@ -250,13 +265,13 @@ struct WindowStateFileActionTests {
         await client.releaseActions()
         await write.value
 
-        #expect(await eventually { await state.selectedFileID == staged.id })
+        #expect(await eventually { await state.selectedFileID == files[1].id })
         #expect(state.errorMessage == nil)
     }
 
-    /// The same race, except the reader picked another row while `git` was running. That
-    /// choice is newer than the write and is left alone.
-    @Test func aSelectionMadeDuringTheWriteIsNotOverridden() async {
+    /// The same race, except the reader cleared the selection while `git` was running.
+    /// That choice is newer than the write, so the next file is not selected for them.
+    @Test func aSelectionChangedDuringTheWriteIsLeftAlone() async {
         let h = Harness()
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
@@ -275,125 +290,19 @@ struct WindowStateFileActionTests {
                 guard await state.selectedFileID == nil else { return false }
                 return await state.files == afterWatcher
             })
-        state.selection = [.file(files[1].id)]
+        state.selection = []
         await client.releaseActions()
         await write.value
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selectedFileID == files[1].id)
-    }
-
-    // MARK: Selection moves
-
-    /// The sidebar follows a selected row into the list it moved to.
-    @Test func stagingTheSelectedFileRecordsAMoveToStaged() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await adopt(h, state, after: [changedFile("a.swift", area: .staged), files[1], files[2]])
-        state.selection = [.file(files[0].id)]
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await state.selectionMove?.area == .staged })
-    }
-
-    @Test func unstagingTheSelectedFileRecordsAMoveToUnstaged() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await adopt(h, state, after: [files[0], files[1], changedFile("c.swift")])
-        state.selection = [.file(files[2].id)]
-
-        await state.perform(.unstage, on: [files[2]])
-
-        #expect(await eventually { await state.selectionMove?.area == .unstaged })
-    }
-
-    /// The selection stayed where it was, so there is nothing for the sidebar to follow.
-    @Test func stagingAnUnselectedFileRecordsNoMove() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await adopt(h, state, after: [changedFile("a.swift", area: .staged), files[1], files[2]])
-        state.selection = [.file(files[1].id)]
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selectionMove == nil)
-    }
-
-    /// The reader's own choice is not a move, even when it lands on the row the write
-    /// would have moved to: here a half-staged file, whose staged row the reader picks
-    /// while its unstaged half is being staged.
-    @Test func aSelectionChangedDuringTheWriteRecordsNoMove() async {
-        let h = Harness()
-        let state = h.makeState()
-        let stagedA = changedFile("a.swift", area: .staged)
-        let repo = await h.adopt(state, "A", files: [files[0], stagedA, files[1]])
-        let client = repo.client
-        await client.set(filesAfterWrite: [stagedA, files[1]])
-        state.selection = [.file(files[0].id)]
-        await client.holdActions(true)
-
-        let write = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
-        state.selection = [.file(stagedA.id)]
-        await client.releaseActions()
-        await write.value
-
-        #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection == [.file(stagedA.id)])
-        #expect(state.selectionMove == nil)
-    }
-
-    /// A row carried into a collapsed tray opens it, so there is a list to reveal it in.
-    @Test func stagingTheSelectedFileExpandsACollapsedTray() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1], files[2]])
-        state.selection = [.file(files[0].id)]
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await state.selectionMove?.area == .staged })
-        #expect(h.preferences.isStagingTrayExpanded(for: repo.root))
-    }
-
-    @Test func stagingAnUnselectedFileLeavesTheTrayCollapsed() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1], files[2]])
-        state.selection = [.file(files[1].id)]
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(!h.preferences.isStagingTrayExpanded(for: repo.root))
-    }
-
-    /// Leaving the tray neither opens nor closes it.
-    @Test func unstagingTheSelectedFileLeavesTheTrayAsItWas() async {
-        for expanded in [false, true] {
-            let h = Harness()
-            let state = h.makeState()
-            let repo = await h.adopt(state, "A", files: files)
-            await repo.client.set(filesAfterWrite: [files[0], files[1], changedFile("c.swift")])
-            h.preferences.setStagingTrayExpanded(expanded, for: repo.root)
-            state.selection = [.file(files[2].id)]
-
-            await state.perform(.unstage, on: [files[2]])
-
-            #expect(await eventually { await state.selectionMove?.area == .unstaged })
-            #expect(h.preferences.isStagingTrayExpanded(for: repo.root) == expanded)
-        }
+        #expect(state.selection.isEmpty)
     }
 
     // MARK: Batches
 
-    /// One git process for the whole batch, and every row the reader was on is found
-    /// again in the area it moved to.
-    @Test func stagingTwoSelectedFilesWritesOnceAndKeepsBothSelected() async {
+    /// One git process for the whole batch. Changes is empty afterwards, so there is no
+    /// next file to move on to.
+    @Test func stagingEveryUnstagedFileWritesOnceAndEmptiesTheSelection() async {
         let h = Harness()
         let state = h.makeState()
         let stagedA = changedFile("a.swift", area: .staged)
@@ -406,8 +315,8 @@ struct WindowStateFileActionTests {
         let performed = await client.performed
         #expect(performed.map(\.action) == [.stage])
         #expect(performed.map(\.paths) == [["a.swift", "b.swift"]])
-        #expect(await eventually { await state.selection == [.file(stagedA.id), .file(stagedB.id)] })
-        #expect(state.detailSelection == .files)
+        #expect(await eventually { await state.files.map(\.id) == [stagedA.id, stagedB.id, files[2].id] })
+        #expect(state.selection.isEmpty)
         #expect(state.errorMessage == nil)
     }
 
@@ -427,8 +336,8 @@ struct WindowStateFileActionTests {
     }
 
     /// A row that came back with another kind means something else than the menu offered,
-    /// so it leaves the batch while the rest of it runs. It stays selected: nothing was
-    /// done to it.
+    /// so it leaves the batch while the rest of it runs. It stays selected, since nothing
+    /// was done to it, and the rows that were staged do not.
     @Test func aRowWhoseKindChangedLeavesTheBatchAtTheFirstPass() async {
         let h = Harness()
         let state = h.makeState()
@@ -441,10 +350,7 @@ struct WindowStateFileActionTests {
         await state.perform(.stage, on: [files[0], files[1], staleC])
 
         #expect(await client.performed.map(\.paths) == [["a.swift", "b.swift"]])
-        #expect(
-            await eventually {
-                await state.selection == [.file(stagedA.id), .file(stagedB.id), .file(files[2].id)]
-            })
+        #expect(await eventually { await state.selection == [.file(files[2].id)] })
     }
 
     /// The same, one pass later: `files` still agrees with the menu, and the fresh status
@@ -462,10 +368,7 @@ struct WindowStateFileActionTests {
         await state.perform(.stage, on: [files[0], files[1], files[2]])
 
         #expect(await client.performed.map(\.paths) == [["a.swift", "b.swift"]])
-        #expect(
-            await eventually {
-                await state.selection == [.file(stagedA.id), .file(stagedB.id), .file(files[2].id)]
-            })
+        #expect(await eventually { await state.selection == [.file(files[2].id)] })
     }
 
     /// Narrowing the selection while git runs is the reader's own choice and outranks the
