@@ -172,13 +172,12 @@ private struct SelectionActionLabel: View {
         }
     }
 
-    /// The Changes menu's shortcuts; Move to Trash has none there either.
+    /// The Changes menu's shortcuts; Discard and Move to Trash have none there either.
     private var shortcut: String? {
         switch action {
-        case .stage: "⌘S"
-        case .unstage: "⇧⌘S"
-        case .discard: "⌘⌫"
-        case .trash, .revealInFinder, .openInEditor, .copyPath: nil
+        case .stage: "S"
+        case .unstage: "U"
+        case .discard, .trash, .revealInFinder, .openInEditor, .copyPath: nil
         }
     }
 }

@@ -74,7 +74,7 @@ struct SidebarView: View {
         }
         .focused(isFileListFocused)
         // Only while the list or a row control has focus, so the Changes menu's shortcuts
-        // never fire from the find bar or the commit sheet, where ⌘⌫ edits text.
+        // never fire from the find bar or the commit sheet, where S and U are typed.
         .focusedValue(\.fileListWindowState, windowState)
         .onExitCommand { windowState.selection = [] }
         // A row click takes focus back from the diff pane, and a click below the last row

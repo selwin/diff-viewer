@@ -58,20 +58,20 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 ### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. The
-Changes menu (Stage ⌘S, Unstage ⇧⌘S, Discard Changes… ⌘⌫, Move to Trash…) and the
-selection popover have landed; what remains is below.
+Changes menu (Stage S, Unstage U, Discard Changes…, Move to Trash…, active while the
+file list has focus) and the selection popover have landed; what remains is below.
 
 **Design.**
 - Stage All / Unstage All, ⌥⌘S / ⌥⇧⌘S, in the Changes menu. Disabled when they don't
   apply and run through `FileActionRunner`, like the other items.
 - After staging or unstaging, keep the sidebar selection on the next file in the
-  section the file left, so repeated ⌘S walks down the Unstaged list and the popover
-  walks with it. With All changes selected, ⌘S stages the file whose section is at the
+  section the file left, so repeated S walks down the Unstaged list and the popover
+  walks with it. With All changes selected, S stages the file whose section is at the
   top of the scroll.
-- The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
+- The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
 
 **Tests.** Which file becomes selected after staging or unstaging (middle, last, and
-only file in a section); which file ⌘S targets in All changes from a scroll position.
+only file in a section); which file S targets in All changes from a scroll position.
 
 ---
 
