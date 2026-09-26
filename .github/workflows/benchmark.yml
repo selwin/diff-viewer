@@ -5,6 +5,7 @@ name: Benchmark
 on:
   push:
     branches: [claude/perf-instrumentation]
+    paths-ignore: ['**.md']
   workflow_dispatch:
 
 permissions:
@@ -19,9 +20,14 @@ env:
 
 jobs:
   benchmark:
-    name: Benchmarks
+    name: Benchmarks (difft ${{ matrix.difft }})
     runs-on: macos-26
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The version scripts/fetch-difft.sh pins, and the newest release, for comparison.
+        difft: ['0.63.0', '0.70.0']
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +44,8 @@ jobs:
             spm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Fetch difft
+        env:
+          DIFFT_VERSION: ${{ matrix.difft }}
         run: scripts/fetch-difft.sh
 
       - name: Generate the Xcode project

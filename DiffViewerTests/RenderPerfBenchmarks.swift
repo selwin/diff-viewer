@@ -28,6 +28,8 @@ struct RenderPerfBenchmarks {
         report.line("\(Self.repetitions) runs unless noted. Input: the app's own Swift sources, cut to N lines, ")
         report.line("with 10 scattered hunks (2 lines edited, 4 inserted, 2 deleted each) on the new side.")
         report.line("")
+        report.line("difft: \(Self.difftVersion())")
+        report.line("")
 
         // Before anything else touches the grammar, so this is the cold load.
         let coldStart = PerfProbe.now()
@@ -181,6 +183,20 @@ struct RenderPerfBenchmarks {
 
     // MARK: - Input
 
+    /// The first line of `difft --version` for the binary the app runs.
+    static func difftVersion() -> String {
+        guard let executable = DifftRunner.executable else { return "not found" }
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = executable
+        process.arguments = ["--version"]
+        process.standardOutput = pipe
+        guard (try? process.run()) != nil else { return "failed to run" }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: output, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "unknown"
+    }
+
     /// Every Swift source line of the app, in a stable order.
     static func corpus() -> [String] {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -290,7 +306,7 @@ private struct Report {
             "pane.row.tokenHighlights", "pane.row.drawText", "pane.row.pad", "pane.row.gutter",
         ] {
             let stat = stats[stage] ?? PerfProbe.Stat()
-            let each = stat.count > 0 ? stat.milliseconds * 1000 / Double(stat.count) : 0
+            let each = stat.milliseconds * 1000 / Double(max(stat.count, 1))
             line("| \(stage) | \(format(stat.milliseconds)) | \(stat.count) | \(format(each)) |")
         }
         let hits = stats["pane.lineCache.hit"]?.count ?? 0

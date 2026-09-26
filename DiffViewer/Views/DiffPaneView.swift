@@ -494,9 +494,11 @@ final class DiffPaneView: NSView {
         case .expandRun: return "Show all \(hidden.count) unchanged lines"
         }
     }
+}
 
-    // MARK: - Caches
+// MARK: - Caches
 
+extension DiffPaneView {
     func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
         if let cached = lineCache[lineIndex] {
             PerfProbe.count("pane.lineCache.hit", 1)
