@@ -258,8 +258,8 @@ Roughly in priority order.
 - **Sidebar action follow-ups.** Stage All / Unstage All and next-file selection are
   item G under "Requested". Still open: Stage All / Unstage All buttons on the Changes
   header and the staging tray header; one-step discard of a staged change
-  (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the `FileManager.trashItem` loop so a batch trash is
-  one Finder undo.
+  (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the
+  `FileManager.trashItem` loop so a batch trash is one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
   the overview strip; click-to-expand context inside the changeset (separators are
   inert today); tooltips for truncated header paths and notice text; section-aware
@@ -267,7 +267,8 @@ Roughly in priority order.
   preflight; an app-wide bound on concurrent git, difft and highlight work.
 - **Churn, remaining pieces.** The Changes header and the staging tray header show
   churn (`Changes 7 +340 −120`), and a counts-by-kind line (`5 modified, 2 added,
-  1 deleted`) somewhere unobtrusive. The per-file counts, the All changes total, and the changeset header total have shipped.
+  1 deleted`) somewhere unobtrusive. The per-file counts, the All changes total, and
+  the changeset header total have shipped.
 - **Commit picker search.** A search field between the pinned row and the list,
   matching subject, hash prefix and body (needs `%b` in the log format), highlighted
   subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
