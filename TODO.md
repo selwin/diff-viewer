@@ -73,22 +73,6 @@ file after staging or unstaging have landed; what remains is below.
 
 ---
 
-### H. Find button in the toolbar (requested 2026-09-23)
-
-**Goal.** Find is reachable today only through ⌘F and Edit ▸ Find, so readers who don't
-know the shortcut never see it. Add a visible way in.
-
-**Design.**
-- A `magnifyingglass` button in the toolbar next to the other diff controls, with the
-  tooltip "Find (⌘F)". It opens the bar or refocuses the field (`showFindBar()`), and
-  shows as on while the bar is open.
-- Disabled when `isFindAvailable` is false (binary, identical or failed selections),
-  like Find… in the menu.
-
-**Tests.** None; UI, checked by screenshot.
-
----
-
 ### I. Copy from the commit and branch pickers (requested 2026-09-24)
 
 **Goal.** Hovering over a commit or branch row offers a way to copy it, so a hash or
@@ -131,47 +115,14 @@ branches with no upstream, and branches whose upstream still exists don't.
 
 ---
 
-### K. Failed commit alert: copy button and subtitle (requested 2026-09-24)
+### K. Copy button on every git error alert (requested 2026-09-24)
 
-**Goal.** When a pre-commit hook fails, the reader can copy its whole output in one
-click, to paste into a terminal, an issue, or a chat. Today `ErrorAlert` shows a long
-message in a selectable scroll view, so copying takes select-all and ⌘C, and a short
-message sits in the alert's informative text, which can't be selected at all.
+**Goal.** The Commit Failed alert has a copy button in the corner of its output. Other
+git errors (stage, discard, sync) still show a plain "Error" alert with no copy button,
+where a short message sits in informative text that can't be selected. Give them the same
+button (`ErrorAlert`, `.generic` style).
 
-**Design.**
-- A small square glass copy button (`doc.on.doc`) pinned to the top-right corner of
-  the output scroller, not a button beside OK. It rests at low opacity and sharpens when
-  the pointer enters the scroller: the GitHub/Xcode code-block idiom with vibrancy
-  (`NSGlassEffectView`) and no extra chrome.
-- It stays put while the output scrolls. An exclusion path on the text container keeps
-  the first lines wrapping short of it, so no text sits under the button.
-- Clicking it puts the whole trimmed message on the pasteboard and leaves the alert
-  open, with brief "Copied" feedback. OK stays the default button.
-- Open question: a short message has no scroller to pin the button to. Either always
-  show the output in the scroller, or keep a plain Copy button for that case.
-- It lives in `ErrorAlert`, so every git error (commit, stage, discard, sync) gets it.
-
-**Title and subtitle.** Title the alert "Commit Failed" rather than "Error". Today the
-summary is the output's first line, which for a pre-commit run is its harmless
-"Unstaged files detected" warning. Git never says in its output that a hook failed, so
-guessing from the output text isn't reliable. Take the facts from git's trace2 event log:
-- Run `git commit` with `GIT_TRACE2_EVENT` pointing at a temp file (JSON lines, a
-  documented and versioned format). Checked against git 2.54 on 2026-09-24.
-- A failed hook shows up as a `child_start` event with `"child_class":"hook"` and a
-  `hook_name`, then a `child_exit` event with its `code`. This works for any hook manager.
-  Git's own failures (gpg signing, identity, index lock) show up as `error` events with a
-  `msg`.
-- Read only the top-level `git commit`'s events. Git run from inside a hook writes to the
-  same file, and a child's `sid` extends its parent's with `/`.
-- Subtitle: "The pre-commit hook exited with status 3." when a hook failed; otherwise
-  git's first `error` message; otherwise none. When a hook failed and the pre-commit
-  framework's result lines (`<name>....Failed` followed by `- hook id:`) are present,
-  add the failed hook names ("SwiftLint failed."). Never counts like "1 error": those
-  would come from each tool's own output.
-
-**Tests.** `ErrorAlert.layout`; the subtitle from trace2 event logs for a failed hook,
-git's own error, a hook whose own git call errors (ignored), and neither (no subtitle);
-hook names from pre-commit's `Failed` lines. UI, checked by screenshot.
+**Tests.** None; UI, checked by screenshot.
 
 ---
 
@@ -264,6 +215,34 @@ is never among them.
 
 ---
 
+### Q. Rework the All changes file header (requested 2026-09-26)
+
+**Goal.** The per-file section header in All changes needs a redesign. The
+"Renamed without changes" sections look especially bad. Goes with item M, which
+covers rename and path display.
+
+**Today** (screenshot of an Android repo, 2026-09-26).
+- The header is split across the two panes. The name and old path sit on the left, the
+  directory and churn sit at the far right of the right pane, and the pane divider runs
+  through the middle. Most of the right half is empty.
+- A rename with no content changes takes a header row, a notice row and a spacer, and
+  the notice ("Renamed without changes") appears in both panes. A run of pure renames
+  (five resource moves in the screenshot) fills the screen with repeated notices and
+  nothing to read.
+- A binary rename says "Binary file" and doesn't mention the rename; only the `R` badge
+  shows it (`DiffPaneView+Changeset.swift` `notice`).
+- The old path truncates at the tail, so it loses the file name (see M).
+
+**To decide.**
+- Whether the header spans both panes as one bar instead of being split at the divider.
+- Whether pure renames (and other sections with nothing to show) collapse to just the
+  header, with no notice row, or group into one compact "N files renamed" block.
+- Where the directory and churn go so they read with the name.
+
+**Tests.** None; UI, checked by screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -277,18 +256,18 @@ Roughly in priority order.
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
 - **Sidebar action follow-ups.** Stage All / Unstage All and next-file selection are
-  item G under "Requested". Still open: Stage All / Unstage All buttons on the section
-  headers; one-step discard of a staged change (`git restore --staged --worktree`); and
-  `NSWorkspace.recycle` instead of the `FileManager.trashItem` loop so a batch trash is
+  item G under "Requested". Still open: Stage All / Unstage All buttons on the Changes
+  header and the staging tray header; one-step discard of a staged change
+  (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the `FileManager.trashItem` loop so a batch trash is
   one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
   the overview strip; click-to-expand context inside the changeset (separators are
   inert today); tooltips for truncated header paths and notice text; section-aware
   scroll anchoring on a full replace; an aggregate source-byte budget with size
   preflight; an app-wide bound on concurrent git, difft and highlight work.
-- **Churn, remaining pieces.** Section headers become `Unstaged (7) +340 −120`, and a
-  counts-by-kind line (`5 modified, 2 added, 1 deleted`) somewhere unobtrusive. The
-  per-file counts, the All changes total, and the changeset header total have shipped.
+- **Churn, remaining pieces.** The Changes header and the staging tray header show
+  churn (`Changes 7 +340 −120`), and a counts-by-kind line (`5 modified, 2 added,
+  1 deleted`) somewhere unobtrusive. The per-file counts, the All changes total, and the changeset header total have shipped.
 - **Commit picker search.** A search field between the pinned row and the list,
   matching subject, hash prefix and body (needs `%b` in the log format), highlighted
   subject ranges, Escape clears before it dismisses, "No matches in loaded commits" when
