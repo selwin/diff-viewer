@@ -8,7 +8,7 @@ mkdir -p "$(dirname "$dest")"
 if src=$(command -v difft 2>/dev/null); then
   cp "$(readlink -f "$src")" "$dest"
 else
-  version=${DIFFT_VERSION:-0.63.0}
+  version=${DIFFT_VERSION:-0.70.0}
   arch=$(uname -m); [[ $arch == arm64 ]] && arch=aarch64
   url="https://github.com/Wilfred/difftastic/releases/download/${version}/difft-${arch}-apple-darwin.tar.gz"
   echo "Downloading $url"

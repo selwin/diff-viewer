@@ -17,7 +17,8 @@ all: build
 
 difft: DiffViewer/Resources/bin/difft
 
-DiffViewer/Resources/bin/difft:
+# Re-fetched when the script changes, so a version bump reaches existing checkouts.
+DiffViewer/Resources/bin/difft: scripts/fetch-difft.sh
 	scripts/fetch-difft.sh
 
 $(PROJECT): project.yml $(shell find DiffViewer DiffViewerTests -type d)
