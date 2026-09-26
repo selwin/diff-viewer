@@ -47,6 +47,8 @@ struct BranchPickerRow: Equatable {
     let isCurrent: Bool
     /// What follows the name: the upstream's state, or empty when there is nothing to say.
     let trailingText: String
+    /// The name's characters the query matched; empty when no query is active.
+    let matchedRanges: [Range<String.Index>]
 
     /// `configuredRemote` tells a branch that tracks nothing from one whose upstream the
     /// fetch settings hide.
@@ -64,6 +66,8 @@ enum BranchPickerEmptyState: Equatable {
     case loading
     case noBranches
     case failed
+    /// Branches exist, but the query matches none of them.
+    case noMatches
 }
 
 /// What follows the rows: a note, with an optional tooltip.
@@ -123,32 +127,64 @@ struct BranchPickerState {
     private(set) var rows: [BranchPickerRow]
     /// The branch the keyboard is on, or nil when there are no rows.
     private(set) var highlightedBranch: String?
+    /// The search text, normalized, so a spaces-only field reads as no query at all.
+    private(set) var query = ""
     private let grouping: CommitDayGrouping
 
     init(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) {
         self.snapshot = snapshot
         self.grouping = grouping
-        rows = Self.makeRows(snapshot: snapshot, grouping: grouping)
-        highlightedBranch = Self.initialHighlight(rows: rows)
+        rows = Self.makeRows(snapshot: snapshot, grouping: grouping, query: "")
+        highlightedBranch = Self.initialHighlight(rows: rows, query: "")
     }
 
-    /// Newest tip first, so the branches in play come before the ones left behind; names
-    /// break a tie so the order never depends on how git listed them.
-    private static func makeRows(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) -> [BranchPickerRow] {
-        let sorted = snapshot.branches.sorted {
-            $0.tipCommittedAt == $1.tipCommittedAt ? $0.name < $1.name : $0.tipCommittedAt > $1.tipCommittedAt
-        }
+    private static func makeRows(
+        snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, query: String
+    ) -> [BranchPickerRow] {
+        guard !query.isEmpty else { return datedRows(snapshot: snapshot, grouping: grouping) }
+        return rankedRows(snapshot: snapshot, query: query)
+    }
+
+    /// Newest tip first, so the branches in play come before the ones left behind.
+    private static func datedRows(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) -> [BranchPickerRow] {
+        let sorted = snapshot.branches.sorted(by: isNewer)
         let labels = grouping.gutterLabels(for: sorted.map(\.tipCommittedAt))
         return zip(sorted, labels).map { branch, label in
-            BranchPickerRow(
-                branch: branch, dayLabel: label, isCurrent: snapshot.headState == .named(branch.name),
-                trailingText: BranchPickerRow.trailingText(
-                    for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]))
+            row(for: branch, dayLabel: label, matchedRanges: [], snapshot: snapshot)
         }
     }
 
-    private static func initialHighlight(rows: [BranchPickerRow]) -> String? {
-        rows.first { $0.isCurrent }?.branch.name ?? rows.first?.branch.name
+    /// Best match first. Ranked rows form no same-day runs, so none carries a day label.
+    private static func rankedRows(snapshot: BranchPickerSnapshot, query: String) -> [BranchPickerRow] {
+        let matched = snapshot.branches.compactMap { branch in
+            FuzzyMatch.match(query, in: branch.name).map { (branch: branch, match: $0) }
+        }
+        let sorted = matched.sorted { a, b in
+            a.match.score == b.match.score ? isNewer(a.branch, b.branch) : a.match.score > b.match.score
+        }
+        return sorted.map { row(for: $0.branch, dayLabel: nil, matchedRanges: $0.match.ranges, snapshot: snapshot) }
+    }
+
+    /// Names break a tie so the order never depends on how git listed the branches.
+    private static func isNewer(_ a: LocalBranch, _ b: LocalBranch) -> Bool {
+        a.tipCommittedAt == b.tipCommittedAt ? a.name < b.name : a.tipCommittedAt > b.tipCommittedAt
+    }
+
+    private static func row(
+        for branch: LocalBranch, dayLabel: CommitDayGrouping.DayLabel?, matchedRanges: [Range<String.Index>],
+        snapshot: BranchPickerSnapshot
+    ) -> BranchPickerRow {
+        BranchPickerRow(
+            branch: branch, dayLabel: dayLabel, isCurrent: snapshot.headState == .named(branch.name),
+            trailingText: BranchPickerRow.trailingText(
+                for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]),
+            matchedRanges: matchedRanges)
+    }
+
+    /// A search starts on its best match; otherwise the current branch, else the first row.
+    private static func initialHighlight(rows: [BranchPickerRow], query: String) -> String? {
+        guard query.isEmpty else { return rows.first?.branch.name }
+        return rows.first { $0.isCurrent }?.branch.name ?? rows.first?.branch.name
     }
 
     // MARK: Derived
@@ -161,6 +197,7 @@ struct BranchPickerState {
     /// Nil when there are rows.
     var emptyState: BranchPickerEmptyState? {
         guard rows.isEmpty else { return nil }
+        if !query.isEmpty, !snapshot.branches.isEmpty { return .noMatches }
         switch snapshot.readStatus {
         case .unread: return .loading
         case .failed: return .failed
@@ -168,11 +205,11 @@ struct BranchPickerState {
         }
     }
 
-    /// A failed read keeps the last list up, and saying the counts may be stale outranks
-    /// any fetch news: the numbers on screen are what the reader is judging. Failures
-    /// come before success, the header's remote before the others.
+    /// A failed read keeps the last branch list, and saying its counts may be stale
+    /// outranks any fetch news, even while a search hides every row. Failures come before
+    /// success, the header's remote before the others.
     var footer: BranchPickerFooter {
-        if !rows.isEmpty, snapshot.readStatus == .failed {
+        if !snapshot.branches.isEmpty, snapshot.readStatus == .failed {
             return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
         }
         if case let .failed(remote, message) = snapshot.fetchStatus {
@@ -269,7 +306,7 @@ struct BranchPickerState {
         }
 
         let oldRows = rows
-        rows = Self.makeRows(snapshot: new, grouping: grouping)
+        rows = Self.makeRows(snapshot: new, grouping: grouping, query: query)
         let change: PickerTableChange
         if oldRows.map(\.branch.name) == rows.map(\.branch.name) {
             var refreshed = IndexSet()
@@ -283,7 +320,7 @@ struct BranchPickerState {
 
         // Keep the highlight by name across list reloads.
         if !rows.contains(where: { $0.branch.name == highlightedBranch }) {
-            highlightedBranch = Self.initialHighlight(rows: rows)
+            highlightedBranch = Self.initialHighlight(rows: rows, query: query)
         }
         return change
     }
@@ -298,6 +335,19 @@ struct BranchPickerState {
     /// The branch being deleted, which no row may activate.
     private static func deleting(_ snapshot: BranchPickerSnapshot) -> String? {
         snapshot.activeSync.flatMap { $0.operation == .delete ? $0.branch : nil }
+    }
+
+    // MARK: Query
+
+    /// Takes the search field's text. Lists are small, so any change reloads every row
+    /// rather than diffing them.
+    mutating func setQuery(_ text: String) -> PickerTableChange {
+        let normalized = FuzzyMatch.normalized(text)
+        guard normalized != query else { return .none }
+        query = normalized
+        rows = Self.makeRows(snapshot: snapshot, grouping: grouping, query: query)
+        highlightedBranch = Self.initialHighlight(rows: rows, query: query)
+        return .reloadAll
     }
 
     // MARK: Navigation

@@ -143,6 +143,7 @@ final class BranchPickerContainerView: NSView {
         case .loading: emptyState.configure(text: "Loading…", isLoading: true, showsRetry: false)
         case .noBranches: emptyState.configure(text: "No branches", isLoading: false, showsRetry: false)
         case .failed: emptyState.configure(text: "Couldn't read branches", isLoading: false, showsRetry: false)
+        case .noMatches: emptyState.configure(text: "No matching branches", isLoading: false, showsRetry: false)
         }
         needsLayout = true
     }
