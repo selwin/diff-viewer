@@ -194,4 +194,5 @@ running DiffViewer.
 
 Structural diffs by [difftastic](https://difftastic.wilfred.me.uk). The title bar's branch
 and commit icons are [Octicons](https://primer.style/octicons) by GitHub, MIT licensed
-(`DiffViewer/Assets.xcassets/Octicons-LICENSE`).
+(`DiffViewer/Assets.xcassets/Octicons-LICENSE`). The app icon's source is
+`DiffViewer/AppIcon.icon`, edited in Icon Composer.
