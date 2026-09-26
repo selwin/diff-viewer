@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The staged files and the commit button, in a card docked below the Changes list.
+/// The staged files and the commit button, in a sheet docked below the Changes list.
 struct StagingTrayView: View {
     /// From `StagingTrayLayout`; at 0 the list is left out and only the header and the
     /// button show.
@@ -13,7 +13,7 @@ struct StagingTrayView: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let cardFill = Color(nsColor: .controlBackgroundColor).opacity(0.85)
+    private static let sheetFill = Color(nsColor: .controlBackgroundColor).opacity(0.85)
 
     var body: some View {
         let staged = windowState.stagedFiles
@@ -30,13 +30,14 @@ struct StagingTrayView: View {
         }
         .padding(.top, 6)
         .padding(.bottom, 8)
+        // A bottom sheet across the sidebar's full width, so the rows get all of it.
         .background {
-            let card = RoundedRectangle(cornerRadius: 14, style: .continuous)
-            card.fill(Self.cardFill)
-                .overlay { card.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1 / displayScale) }
+            let sheet = UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14, style: .continuous)
+            sheet.fill(Self.sheetFill)
+                .overlay { sheet.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1 / displayScale) }
                 .shadow(color: .black.opacity(0.06), radius: 16, y: -2)
+                .ignoresSafeArea(edges: .bottom)
         }
-        .padding([.horizontal, .bottom], 8)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Staged files")
     }
@@ -95,7 +96,7 @@ struct StagingTrayView: View {
         // Past the cap, the fade says there is more to scroll to.
         .overlay(alignment: .bottom) {
             if staged.count > StagingTrayLayout.maxVisibleRows {
-                LinearGradient(colors: [.clear, Self.cardFill], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.clear, Self.sheetFill], startPoint: .top, endPoint: .bottom)
                     .frame(height: 28)
                     .allowsHitTesting(false)
             }

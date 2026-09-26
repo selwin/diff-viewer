@@ -5,8 +5,8 @@ import CoreGraphics
 enum StagingTrayLayout {
     static let rowHeight: CGFloat = 38
     static let maxVisibleRows = 5
-    /// The tray's header, commit button, padding and margins.
-    static let trayChrome: CGFloat = 84
+    /// The tray's header, commit button and padding.
+    static let trayChrome: CGFloat = 76
     static let changesFloor: CGFloat = 120
 
     /// The staged list's height: up to five rows, less when the sidebar is short, and none
