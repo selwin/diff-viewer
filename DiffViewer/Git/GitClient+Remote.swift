@@ -28,7 +28,8 @@ extension GitClient {
     }
 
     /// Updates the remote-tracking refs of `remote`, so the counts a branch reports are
-    /// current.
+    /// current, and prunes the ones whose remote branch is gone when that can touch
+    /// nothing else.
     func fetch(remote: String) async throws {
         // Git itself would read a leading dash as an option.
         guard !remote.hasPrefix("-") else {
@@ -37,12 +38,13 @@ extension GitClient {
         }
         // The remote's configured mappings decide which refs are updated, so the ref
         // `%(upstream:track)` compares against is the one refreshed whatever namespace it
-        // lives in. Pruning is off: the fetch creates or moves refs and never deletes one,
-        // so nothing a reader is looking at disappears underneath them. Tags may still be
-        // auto-followed.
+        // lives in. Pruning is what makes a deleted remote branch read as gone, but it
+        // deletes from every mapped destination, so it runs only when all of them are
+        // remote-tracking refs. Tags are never pruned, and may still be auto-followed.
+        let prune = FetchRefspecs.prunesOnlyTrackingRefs(try await fetchRefspecs(of: remote))
         let result = try await ProcessRunner.run(
             Self.executable,
-            arguments: ["fetch", "--no-prune", "--no-prune-tags", remote],
+            arguments: ["fetch", prune ? "--prune" : "--no-prune", "--no-prune-tags", remote],
             currentDirectory: repoRoot,
             environment: await remoteEnvironment()
         )
@@ -50,6 +52,23 @@ extension GitClient {
             throw ProcessError.failed(
                 command: "git fetch", status: result.status, stderr: Self.commandDiagnostics(result))
         }
+    }
+
+    /// The remote's `remote.<name>.fetch` mappings, in config order.
+    private func fetchRefspecs(of remote: String) async throws -> [String] {
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["config", "-z", "--get-all", "remote.\(remote).fetch"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // Status 1 is "no such key"; any other non-zero is a real config failure.
+        if result.status == 1 { return [] }
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git config remote.\(remote).fetch", status: result.status, stderr: result.stderrString)
+        }
+        return result.stdoutString.split(separator: "\0").map(String.init)
     }
 
     /// Brings the current branch up to date with its upstream.

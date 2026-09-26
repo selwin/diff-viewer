@@ -1270,3 +1270,159 @@ struct WindowStatePublishTests {
         await repo.client.releaseFetch()
     }
 }
+
+/// Deleting a branch whose upstream is gone from its row.
+@MainActor
+struct WindowStateDeleteTests {
+    private let main = localBranch("main", upstream: upstream("origin/main"))
+    private let feature = localBranch("feature", upstream: upstream("origin/feature", tracking: .gone))
+
+    private func adopt(_ h: Harness, _ state: WindowState, branches: [LocalBranch]) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let repo = h.repo("A", files: [changedFile("a.swift")])
+        await repo.client.set(localBranches: branches)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await state.branchReadStatus == .loaded })
+        return repo
+    }
+
+    // MARK: Running
+
+    @Test func aGoneBranchIsDeletedAndItsConfigForgotten() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature])
+        await repo.client.set(configuredUpstreamRemotes: ["main": "origin", "feature": "origin"])
+        state.isBranchPickerPresented = true
+        #expect(
+            await eventually { @MainActor in
+                let fetching = if case .fetching = state.fetchStatus { true } else { false }
+                return state.configuredUpstreamRemotes["feature"] == "origin" && !fetching
+                    && state.fetchingRemotes.isEmpty
+            })
+
+        await state.deleteBranch(feature)
+        #expect(await repo.client.deleteBranchCalls == ["feature"])
+        #expect(state.branches == [main], "the branches were re-read")
+        #expect(state.configuredUpstreamRemotes["feature"] == nil)
+        #expect(state.errorMessage == nil)
+        #expect(state.activeSync == nil)
+    }
+
+    @Test func aFailedDeleteIsReported() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature])
+        await repo.client.fail(deleteBranch: true)
+
+        await state.deleteBranch(feature)
+        #expect(await repo.client.deleteBranchCalls == ["feature"])
+        #expect(state.errorMessage != nil)
+        #expect(state.branches.contains(feature))
+        #expect(state.activeSync == nil)
+    }
+
+    // MARK: Admission
+
+    /// The fetch may bring the remote branch back, and the row would stop being gone.
+    @Test func aDeleteIsRefusedWhileItsRemoteIsFetched() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature])
+        await repo.client.holdFetch(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(state.fetchingRemotes == ["origin"])
+
+        await state.deleteBranch(feature)
+        #expect(await repo.client.deleteBranchCalls.isEmpty)
+        #expect(state.activeSync == nil)
+
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+    }
+
+    @Test func aDeleteIsRefusedUnlessTheListShowsTheBranchGone() async {
+        let h = Harness()
+        let state = h.makeState()
+        let tracked = localBranch("feature", upstream: upstream("origin/feature"))
+        let repo = await adopt(h, state, branches: [main, tracked])
+
+        await state.deleteBranch(feature)
+        #expect(await repo.client.deleteBranchCalls.isEmpty, "the list shows its upstream")
+        #expect(state.activeSync == nil)
+
+        let currentGone = localBranch("main", upstream: upstream("origin/main", tracking: .gone))
+        await repo.client.set(localBranches: [currentGone])
+        h.tick(repo.root, [.refs])
+        #expect(await eventually { await state.branches == [currentGone] })
+        await state.deleteBranch(currentGone)
+        #expect(await repo.client.deleteBranchCalls.isEmpty, "checked out")
+        #expect(state.activeSync == nil)
+    }
+
+    // MARK: Revalidation
+
+    /// The name was reused, retargeted, or checked out between the confirmation and the
+    /// delete's turn: that is another branch now, and it is left alone.
+    @Test func aDeleteSkipsABranchThatChangedBeforeItsTurn() async {
+        let moved = localBranch("feature", upstream: feature.upstream, tipSha: objectID("other"))
+        let retargeted = localBranch("feature", upstream: upstream("fork/feature", remote: "fork", tracking: .gone))
+        let changes: [(branches: [LocalBranch], head: HeadState)] = [
+            ([main, moved], .named("main")),
+            ([main, retargeted], .named("main")),
+            ([main, feature], .named("feature")),
+        ]
+        for change in changes {
+            let h = Harness()
+            let state = h.makeState()
+            let repo = await adopt(h, state, branches: [main, feature])
+            // What the repository says by the time the delete takes its turn.
+            await repo.client.set(localBranches: change.branches)
+            await repo.client.set(headState: change.head)
+
+            await state.deleteBranch(feature)
+            #expect(await repo.client.deleteBranchCalls.isEmpty)
+            #expect(state.errorMessage == "Branch or upstream changed before the delete could start")
+            #expect(state.activeSync == nil)
+        }
+    }
+
+    @Test func aBranchAlreadyDeletedIsSkippedSilently() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature])
+        await repo.client.set(localBranches: [main])
+
+        await state.deleteBranch(feature)
+        #expect(await repo.client.deleteBranchCalls.isEmpty)
+        #expect(state.errorMessage == nil)
+        #expect(state.branches == [main])
+    }
+
+    // MARK: Ordering
+
+    @Test func aSwitchToTheBranchBeingDeletedIsRefusedButAnotherQueues() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [main, feature, localBranch("other")])
+        await repo.client.holdLocalBranches(true)
+        let deleting = Task { await state.deleteBranch(feature) }
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
+        #expect(state.activeSync == ActiveSync(branch: "feature", operation: .delete))
+
+        await state.switchBranch(to: "feature")
+        #expect(!state.isSwitchingBranch)
+        let switching = Task { await state.switchBranch(to: "other") }
+        #expect(await eventually { await state.isSwitchingBranch })
+        #expect(await repo.client.switchBranchCalls.isEmpty, "queued behind the delete")
+
+        await repo.client.holdLocalBranches(false)
+        await repo.client.releaseLocalBranches()
+        await deleting.value
+        await switching.value
+        #expect(await repo.client.deleteBranchCalls == ["feature"])
+        #expect(await repo.client.switchBranchCalls == ["other"])
+    }
+}

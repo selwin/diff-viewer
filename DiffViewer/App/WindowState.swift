@@ -1157,9 +1157,11 @@ extension WindowState {
 extension WindowState {
     /// Switches the working tree to `branch` on the write chain; a second call while one
     /// is queued or running does nothing, and so does choosing the branch already checked
-    /// out. The scope is kept: a selected commit stays selected.
+    /// out or the one being deleted. The scope is kept: a selected commit stays selected.
     func switchBranch(to branch: String) async {
-        guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch) else { return }
+        guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
+            activeSync != ActiveSync(branch: branch, operation: .delete)
+        else { return }
         isSwitchingBranch = true  // before the first suspension: the admission guard
         defer { isSwitchingBranch = false }
         await enqueueWrite(session: session) { [weak self] in
@@ -1567,8 +1569,8 @@ extension WindowState {
             case .push:
                 try await session.client.push(
                     branch: requested.branch, to: requested.remote, remoteRef: requested.remoteRef)
-            case .publish:
-                // `allows` refuses it above; a publish runs through `runPublish`.
+            case .publish, .delete:
+                // `allows` refuses both above; they run through `runPublish` and `runDelete`.
                 return
             }
         } catch { failure = error }
@@ -1653,6 +1655,80 @@ extension WindowState {
             configuredUpstreamRemotes[request.branch] = request.remote
         }
         guard let failure else { return }
+        // After the refresh, so the news survives it.
+        errorMessage = failure.localizedDescription
+    }
+}
+
+// MARK: - Deleting gone branches
+
+/// Deleting a branch whose upstream is gone, from its row. Same file as the class so
+/// `activeSync` stays `private(set)`.
+extension WindowState {
+    /// Deletes `branch` as the reader confirmed it: admitted only while its row offers
+    /// Delete, on the write chain, and one operation at a time with pull and push. A fetch
+    /// of its remote may bring the remote branch back, so the delete waits it out.
+    func deleteBranch(_ branch: LocalBranch) async {
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
+            Self.isDeletable(branch, in: branches, headState: headState), let upstream = branch.upstream,
+            fetchStatus != .fetching(remote: nil), !fetchingRemotes.contains(upstream.remote)
+        else { return }
+        // Before the first suspension: the admission guard.
+        activeSync = ActiveSync(branch: branch.name, operation: .delete)
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runDelete(branch, session: session)
+        }
+    }
+
+    /// `list` still holds the branch as it was confirmed, same tip and same upstream, and
+    /// it may be deleted. A branch recreated under the name elsewhere is another branch.
+    private static func isDeletable(_ branch: LocalBranch, in list: [LocalBranch], headState: HeadState?) -> Bool {
+        guard let found = list.first(where: { $0.name == branch.name }) else { return false }
+        return found.tipSha == branch.tipSha && found.upstream == branch.upstream
+            && SyncPolicy.canDelete(found, isCurrent: headState == .named(branch.name))
+    }
+
+    /// Revalidates against the repository, deletes, and re-reads the branches. The
+    /// reservation is released on every exit.
+    private func runDelete(_ branch: LocalBranch, session: RepoSession) async {
+        defer { activeSync = nil }
+        guard session === self.session, !isClosed else { return }
+
+        // Read directly, as `runSync` does: the branch may have moved, been checked out or
+        // been recreated while this waited its turn.
+        let state: HeadState
+        let list: [LocalBranch]
+        do {
+            state = try await session.client.headState()
+            guard session === self.session, !isClosed else { return }
+            list = try await session.client.localBranches()
+        } catch {
+            guard session === self.session, !isClosed else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard session === self.session, !isClosed else { return }
+
+        guard Self.isDeletable(branch, in: list, headState: state) else {
+            await awaitBranchRead(session: session)
+            guard session === self.session, !isClosed else { return }
+            // Already gone is what the reader asked for; anything else is news.
+            if list.contains(where: { $0.name == branch.name }) {
+                errorMessage = "Branch or upstream changed before the delete could start"
+            }
+            return
+        }
+
+        var failure: (any Error)?
+        do { try await session.client.deleteBranch(branch.name) } catch { failure = error }
+        guard session === self.session, !isClosed else { return }
+        await awaitBranchRead(session: session)
+        guard session === self.session, !isClosed else { return }
+        guard let failure else {
+            // Git removed the branch's config with it.
+            configuredUpstreamRemotes[branch.name] = nil
+            return
+        }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
     }

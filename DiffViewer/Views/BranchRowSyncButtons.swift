@@ -1,30 +1,34 @@
 import AppKit
 
 /// A branch row's Pull and Push buttons, Push on the left, where Publish takes Push's
-/// place on a branch that tracks nothing. A running button keeps its place and its
-/// width: the spinner replaces the title rather than the button. The callbacks carry the
-/// branch these were configured for, never a row index, so a recycled cell cannot act on
-/// another row.
+/// place on a branch that tracks nothing; or its Delete, alone, on a branch whose
+/// upstream is gone. A running button keeps its place and its width: the spinner
+/// replaces the title rather than the button. The callbacks carry the branch these were
+/// configured for, never a row index, so a recycled cell cannot act on another row.
 final class BranchRowSyncButtons: NSView {
     private static let gap: CGFloat = 6
 
     private let pullButton = NSButton(title: "Pull", target: nil, action: nil)
     private let pushButton = NSButton(title: "Push", target: nil, action: nil)
+    private let deleteButton = NSButton(title: "Delete…", target: nil, action: nil)
     private let pullSpinner = NSProgressIndicator(frame: .zero)
     private let pushSpinner = NSProgressIndicator(frame: .zero)
+    private let deleteSpinner = NSProgressIndicator(frame: .zero)
     /// Measured with the title in place, so a running button keeps its width while its
     /// title is blank.
     private var pullSize = NSSize.zero
     private var pushSize = NSSize.zero
+    private var deleteSize = NSSize.zero
     private var states = RowSyncButtons.hidden
     private var onPull: () -> Void = {}
     private var onPush: () -> Void = {}
     private var onPublish: (String) -> Void = { _ in }
+    private var onDelete: () -> Void = {}
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        for (button, indicator) in [(pullButton, pullSpinner), (pushButton, pushSpinner)] {
+        for (button, indicator) in spinners {
             button.bezelStyle = .rounded
             button.controlSize = .small
             // The table keeps the keyboard; VoiceOver reaches these through the row's
@@ -42,6 +46,7 @@ final class BranchRowSyncButtons: NSView {
         pullButton.bezelColor = .controlAccentColor
         pullButton.action = #selector(pullClicked)
         pushButton.action = #selector(pushClicked)
+        deleteButton.action = #selector(deleteClicked)
     }
 
     @available(*, unavailable)
@@ -50,6 +55,7 @@ final class BranchRowSyncButtons: NSView {
     override var isFlipped: Bool { true }
 
     @objc private func pullClicked() { onPull() }
+    @objc private func deleteClicked() { onDelete() }
     @objc private func pushClicked() {
         switch states.publish {
         case nil: onPush()
@@ -82,19 +88,23 @@ final class BranchRowSyncButtons: NSView {
 
     // swiftlint:disable function_parameter_count
     /// Shows the buttons while `isRevealed` or while one of them runs, and hides the view
-    /// when neither has anything to show. `onPublish` takes the branch, then the remote.
+    /// when none has anything to show. `onPublish` takes the branch, then the remote;
+    /// `onDelete` comes already bound to the row's branch.
     func configure(
         _ buttons: RowSyncButtons, isRevealed: Bool, branch: String, onPull: @escaping (String) -> Void,
-        onPush: @escaping (String) -> Void, onPublish: @escaping (String, String) -> Void
+        onPush: @escaping (String) -> Void, onPublish: @escaping (String, String) -> Void,
+        onDelete: @escaping () -> Void
     ) {
         states = buttons
         self.onPull = { onPull(branch) }
         self.onPush = { onPush(branch) }
         self.onPublish = { onPublish(branch, $0) }
+        self.onDelete = onDelete
         pullSize = apply(buttons.pull, to: pullButton, indicator: pullSpinner, title: "Pull")
         pushSize = apply(buttons.push, to: pushButton, indicator: pushSpinner, title: buttons.pushTitle)
-        let isRunning = buttons.pull == .running || buttons.push == .running
-        isHidden = !(isRevealed || isRunning) || (buttons.pull == .hidden && buttons.push == .hidden)
+        deleteSize = apply(buttons.delete, to: deleteButton, indicator: deleteSpinner, title: "Delete…")
+        let all = [buttons.pull, buttons.push, buttons.delete]
+        isHidden = !(isRevealed || all.contains(.running)) || all.allSatisfy { $0 == .hidden }
         invalidateIntrinsicContentSize()
         needsLayout = true
     }
@@ -121,8 +131,17 @@ final class BranchRowSyncButtons: NSView {
         return size
     }
 
+    private var spinners: [(NSButton, NSProgressIndicator)] {
+        [(pullButton, pullSpinner), (pushButton, pushSpinner), (deleteButton, deleteSpinner)]
+    }
+
+    /// Left to right, each with its size measured with the title in place.
+    private var laidOut: [(NSButton, NSSize)] {
+        [(pushButton, pushSize), (pullButton, pullSize), (deleteButton, deleteSize)]
+    }
+
     override var intrinsicContentSize: NSSize {
-        let sizes = [(pushButton, pushSize), (pullButton, pullSize)].filter { !$0.0.isHidden }.map(\.1)
+        let sizes = laidOut.filter { !$0.0.isHidden }.map(\.1)
         let width = sizes.map(\.width).reduce(0, +) + Self.gap * CGFloat(max(sizes.count - 1, 0))
         return NSSize(width: width, height: sizes.map(\.height).max() ?? 0)
     }
@@ -130,11 +149,11 @@ final class BranchRowSyncButtons: NSView {
     override func layout() {
         super.layout()
         var x: CGFloat = 0
-        for (button, size) in [(pushButton, pushSize), (pullButton, pullSize)] where !button.isHidden {
+        for (button, size) in laidOut where !button.isHidden {
             button.frame = NSRect(x: x, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
             x += size.width + Self.gap
         }
-        for (button, indicator) in [(pullButton, pullSpinner), (pushButton, pushSpinner)] where !indicator.isHidden {
+        for (button, indicator) in spinners where !indicator.isHidden {
             indicator.frame.origin = NSPoint(
                 x: (button.bounds.width - indicator.frame.width) / 2,
                 y: (button.bounds.height - indicator.frame.height) / 2)
@@ -161,6 +180,9 @@ final class BranchRowSyncButtons: NSView {
                     actions.append(action("Publish to \(item.remote)") { $0.onPublish(item.remote) })
                 }
             }
+        }
+        if states.delete == .enabled {
+            actions.append(action("Delete branch") { $0.onDelete() })
         }
         return actions
     }

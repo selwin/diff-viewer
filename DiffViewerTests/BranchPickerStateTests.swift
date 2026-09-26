@@ -100,6 +100,41 @@ struct BranchPickerStateTests {
         #expect(!picker.canActivate(tableRow: 1))
     }
 
+    @Test func theBranchBeingDeletedCannotBeActivated() {
+        let deleting = ActiveSync(branch: "feature", operation: .delete)
+        let picker = state(snapshot(branches: [main, feature, old], activeSync: deleting))
+        #expect(!picker.canActivate(tableRow: 1))
+        #expect(picker.canActivate(tableRow: 2))
+        let pushing = ActiveSync(branch: "feature", operation: .push)
+        #expect(state(snapshot(branches: [main, feature], activeSync: pushing)).canActivate(tableRow: 1))
+    }
+
+    /// The cells hold whether a row can activate, so a delete starting has to reach them.
+    @Test func aDeleteStartingOrEndingRefreshesOnlyItsRow() throws {
+        var picker = state(snapshot(branches: [main, feature]))
+        let row = try #require(picker.rows.firstIndex { $0.branch.name == "feature" })
+        let deleting = ActiveSync(branch: "feature", operation: .delete)
+        #expect(
+            picker.apply(snapshot(branches: [main, feature], activeSync: deleting)).rows
+                == .incremental(inserted: nil, refreshed: IndexSet(integer: row)))
+        #expect(
+            picker.apply(snapshot(branches: [main, feature])).rows
+                == .incremental(inserted: nil, refreshed: IndexSet(integer: row)))
+    }
+
+    /// A branch read landing with the delete still refreshes the deleting row, so its cell
+    /// drops the switch action.
+    @Test func aDeleteStartingWithABranchChangeRefreshesItsRow() throws {
+        var picker = state(snapshot(branches: [main, feature]))
+        let row = try #require(picker.rows.firstIndex { $0.branch.name == "feature" })
+        let mainRow = try #require(picker.rows.firstIndex { $0.branch.name == "main" })
+        let moved = localBranch("main", tipSha: objectID("moved"), tipCommittedAt: main.tipCommittedAt)
+        let deleting = ActiveSync(branch: "feature", operation: .delete)
+        #expect(
+            picker.apply(snapshot(branches: [moved, feature], activeSync: deleting)).rows
+                == .incremental(inserted: nil, refreshed: IndexSet([mainRow, row])))
+    }
+
     // MARK: Snapshots
 
     @Test func anUnchangedSnapshotChangesNothing() {
@@ -133,8 +168,8 @@ struct BranchPickerStateTests {
         picker.moveDown()
         #expect(picker.highlightedBranch == "feature")
 
-        let tracked = LocalBranch(
-            name: "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 3)),
+        let tracked = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 3)),
             tipCommittedAt: feature.tipCommittedAt)
         #expect(
             picker.apply(snapshot(branches: [main, tracked])).rows
@@ -145,7 +180,7 @@ struct BranchPickerStateTests {
 
     @Test func aReorderReloadsEverything() {
         var picker = state(snapshot(branches: [main, feature]))
-        let movedMain = LocalBranch(name: "main", upstream: nil, tipCommittedAt: Self.now - 100_000)
+        let movedMain = localBranch("main", tipCommittedAt: Self.now - 100_000)
         #expect(picker.apply(snapshot(branches: [movedMain, feature])).rows == PickerTableChange.reloadAll)
         #expect(picker.rows.map(\.branch.name) == ["feature", "main"])
     }

@@ -659,9 +659,26 @@ import Testing
         #expect(after.upstream?.tracking == .counts(ahead: 0, behind: 1))
     }
 
-    /// Pruning is configurable, and a reader's fetch must never be the thing that deletes
-    /// a ref or a tag out from under them.
-    @Test func fetchNeverPrunes() async throws {
+    /// Under the default mapping, a remote branch deleted after a merge reads as gone after
+    /// the fetch, and tags are never pruned whatever the config says.
+    @Test func fetchPrunesTrackingRefsUnderTheDefaultMapping() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "fetch.pruneTags", "true"])
+        try await repo.git(["tag", "local-only"])
+        try await repo.git(["push", "origin", "main:refs/heads/feature"])
+        try await repo.git(["branch", "--track", "feature", "origin/feature"])
+        try await remote.git(["branch", "-D", "feature"])
+
+        try await repo.client.fetch(remote: "origin")
+
+        let feature = try #require(try await repo.client.localBranches().first { $0.name == "feature" })
+        #expect(feature.upstream?.tracking == .gone)
+        #expect(try await repo.git(["rev-parse", "--verify", "refs/tags/local-only"]) != "")
+    }
+
+    /// `--prune` deletes from every mapped destination, so with a tag mapping a prune could
+    /// delete a local-only tag. The fetch then deletes nothing at all.
+    @Test func fetchDoesNotPruneUnderATagMapping() async throws {
         let (repo, remote) = try await pushedRepo()
         try await repo.git(["config", "fetch.prune", "true"])
         try await repo.git(["config", "fetch.pruneTags", "true"])
@@ -1110,6 +1127,30 @@ import Testing
         #expect(main.upstream?.remoteRef == "refs/heads/main")
         #expect(main.upstream?.localRef == "refs/remotes/origin/main")
         _ = remote
+    }
+
+    /// `-D`: a squash-merged branch never reads as merged, and `-d` would refuse it.
+    @Test func deleteBranchRemovesAnUnmergedBranch() async throws {
+        let repo = try await twoBranchRepo()
+        try await repo.client.deleteBranch("side")
+        #expect(try await repo.client.localBranches().map(\.name) == ["main"])
+    }
+
+    /// Git would read the name as an option rather than a branch.
+    @Test func deleteBranchRejectsANameThatLooksLikeAnOption() async throws {
+        let repo = try await twoBranchRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.deleteBranch("-f")
+        }
+        #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
+    }
+
+    @Test func deleteBranchRefusesTheCheckedOutBranch() async throws {
+        let repo = try await twoBranchRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.deleteBranch("main")
+        }
+        #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
     }
 
     @Test func switchBranchMovesHead() async throws {
