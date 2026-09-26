@@ -1,8 +1,8 @@
 import CoreGraphics
 
 /// Where the selection popover goes: beside the sidebar at the first selected row, or
-/// pinned to the list's edge nearest that row when it is out of sight. Every input is in
-/// the overlay's own coordinates.
+/// pinned to the edge nearest that row of the list holding it when it is out of sight.
+/// Every input is in the overlay's own coordinates.
 struct SelectionPopoverPlacement: Equatable {
     /// The panel's top-left corner, arrow excluded.
     let origin: CGPoint
@@ -20,12 +20,15 @@ struct SelectionPopoverPlacement: Equatable {
 
     // swiftlint:disable function_parameter_count
     /// The placement, or nil to hide the popover: a row out of sight whose direction is
-    /// unknown is better not pointed at than pointed at the wrong way.
+    /// unknown is better not pointed at than pointed at the wrong way, and a list with no
+    /// height has no row to point at. `visibleListFrame` is the list holding the row;
+    /// `sidebarMaxX` is the sidebar's trailing edge, which a list inset from it does not reach.
     static func place(
         rowFrame: CGRect?, selectedRowIndex: Int, mountedIndexRange: ClosedRange<Int>?, visibleListFrame: CGRect,
-        containerSize: CGSize, popoverSize: CGSize
+        sidebarMaxX: CGFloat, containerSize: CGSize, popoverSize: CGSize
     ) -> SelectionPopoverPlacement? {
-        let preferredX = visibleListFrame.maxX + sidebarGap
+        guard visibleListFrame.height > 0 else { return nil }
+        let preferredX = sidebarMaxX + sidebarGap
         let x = max(margin, min(preferredX, containerSize.width - popoverSize.width - margin))
         // Pulled left over the sidebar, the arrow would be drawn over the rows.
         let arrowFits = x >= preferredX
@@ -71,7 +74,8 @@ struct SelectionPopoverPlacement: Equatable {
         rowID == firstSelectedID ? frame : nil
     }
 
-    /// The lowest and highest sidebar index among the built rows, or nil when none is built.
+    /// The lowest and highest index among the built rows of `rows`, one list's rows in
+    /// order, or nil when none of them is built.
     static func mountedIndexRange(of mounted: Set<ChangedFile.ID>, in rows: [ChangedFile.ID]) -> ClosedRange<Int>? {
         let indices = rows.indices.filter { mounted.contains(rows[$0]) }
         guard let first = indices.first, let last = indices.last else { return nil }

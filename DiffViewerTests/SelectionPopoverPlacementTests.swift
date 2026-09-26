@@ -19,11 +19,11 @@ struct SelectionPopoverPlacementTests {
 
     private static func place(
         rowFrame: CGRect?, index: Int = 10, mounted: ClosedRange<Int>? = 5...20,
-        container: CGSize = container
+        list: CGRect = list, container: CGSize = container
     ) -> SelectionPopoverPlacement? {
         SelectionPopoverPlacement.place(
             rowFrame: rowFrame, selectedRowIndex: index, mountedIndexRange: mounted, visibleListFrame: list,
-            containerSize: container, popoverSize: popover)
+            sidebarMaxX: Self.list.maxX, containerSize: container, popoverSize: popover)
     }
 
     /// The arrow's tip lands inside the row, in the overlay's coordinates.
@@ -127,6 +127,26 @@ struct SelectionPopoverPlacementTests {
         let rows = ["a", "b", "c", "d", "e"]
         #expect(SelectionPopoverPlacement.mountedIndexRange(of: ["d", "b"], in: rows) == 1...3)
         #expect(SelectionPopoverPlacement.mountedIndexRange(of: ["gone"], in: rows) == nil)
+    }
+
+    // MARK: The staging tray
+
+    /// The tray's list is inset from the sidebar's edge; the panel stays at the edge, and
+    /// the tray's own viewport decides whether its row is in sight.
+    @Test func aRowInTheTrayGetsThePanelAtTheSidebarEdge() throws {
+        let tray = CGRect(x: 8, y: 300, width: 212, height: 76)
+        let row = Self.row(y: 320)
+        let placement = try #require(Self.place(rowFrame: row, list: tray))
+        #expect(placement.origin.x == Self.panelX)
+        #expect(Self.arrowTouches(row, placement))
+        #expect(Self.place(rowFrame: Self.row(y: 150), list: tray)?.arrowY == nil)
+    }
+
+    /// A tray squeezed to no rows has nothing to point at, measured or not.
+    @Test func aListWithNoHeightHidesThePanel() {
+        let squeezed = CGRect(x: 8, y: 300, width: 212, height: 0)
+        #expect(Self.place(rowFrame: Self.row(y: 300), list: squeezed) == nil)
+        #expect(Self.place(rowFrame: nil, index: 2, mounted: 5...20, list: squeezed) == nil)
     }
 
     // MARK: Narrow windows

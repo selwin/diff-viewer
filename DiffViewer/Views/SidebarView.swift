@@ -1,18 +1,68 @@
 import SwiftUI
 
+/// The Changes list, and below it the staging tray while the working tree has something
+/// to commit. Both lists share one selection; each has its own focus and scroll position.
 struct SidebarView: View {
-    @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
-    @Environment(SidebarRowFrames.self) private var rowFrames
-    /// Owned by `ContentView`, which also needs to know when the list has focus.
-    var isFileListFocused: FocusState<Bool>.Binding
+    /// Owned by `ContentView`, which also needs to know when a list has focus.
+    var focusedList: FocusState<SidebarList?>.Binding
+    @State private var sidebarHeight: CGFloat = 0
+    @State private var pendingReveal: SidebarReveal?
 
     var body: some View {
-        @Bindable var windowState = windowState
-        let staged = windowState.stagedFiles
         // The selection popover points at this row, so it alone measures its frame.
         let firstSelectedID = windowState.selectedFiles.first?.id
-        List(selection: $windowState.selection) {
+        let stagedListHeight = StagingTrayLayout.listHeight(
+            rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
+            holdsSelection: windowState.selectedFiles.contains { $0.area == .staged })
+        let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
+        VStack(spacing: 0) {
+            changesList(firstSelectedID: firstSelectedID)
+            if windowState.showsStagingTray {
+                StagingTrayView(
+                    listHeight: stagedListHeight, firstSelectedID: firstSelectedID, focusedList: focusedList,
+                    pendingReveal: $pendingReveal
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: {
+            sidebarHeight = $0
+        }
+        // Keyed on the ids, not the files: staging moves a row between the lists and should
+        // slide, while line counts arriving for the same rows should not start a transaction.
+        // A merge shows the tray with no staged ids changing.
+        .animation(.default, value: windowState.files.map(\.id))
+        .animation(.default, value: windowState.showsStagingTray)
+        // A stage or unstage carried the selection across: the list it landed in reveals
+        // its first selected row there, and takes focus if the sidebar had it, so the
+        // keyboard keeps working on the rows the reader was on.
+        .onChange(of: windowState.selectionMove) { _, move in
+            guard let move else { return }
+            let list = SidebarList(area: move.area)
+            guard let row = windowState.selectedFiles.first(where: { SidebarList(area: $0.area) == list }) else {
+                return
+            }
+            pendingReveal = SidebarReveal(
+                list: list, rowID: row.id, takesFocus: focusedList.wrappedValue != nil, serial: move.serial)
+        }
+        // A focused list that goes away would leave the keyboard nowhere in the sidebar.
+        .onChange(of: showsStagedList) { _, shows in
+            if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
+        }
+    }
+
+    private func changesList(firstSelectedID: ChangedFile.ID?) -> some View {
+        @Bindable var windowState = windowState
+        // Both lists bind the one selection. The intent: a plain click in either replaces
+        // it, ⌘-click keeps the other list's rows, ⇧-click extends within the clicked list
+        // and keeps the other's, and the arrow keys stay within one list. If AppKit drops
+        // the rows its table does not hold on ⌘- or ⇧-click, the fallback is one list at a
+        // time: each list's getter filters the selection to its own rows and its setter
+        // replaces the selection with them.
+        return List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it
                 // returns; on a slow repository, saying "no changes" in that gap would
@@ -47,74 +97,114 @@ struct SidebarView: View {
                 .tag(DiffSelection.allChanges)
             }
             if !windowState.unstagedFiles.isEmpty {
-                Section("Unstaged (\(windowState.unstagedFiles.count))") {
-                    ForEach(windowState.unstagedFiles) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
-                }
-            }
-            if !staged.isEmpty {
-                Section("Staged (\(staged.count))") {
-                    commitRow
-                    ForEach(staged) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
+                Section {
+                    ForEach(windowState.unstagedFiles) {
+                        SidebarFileRow(file: $0, isFirstSelected: $0.id == firstSelectedID)
+                    }
+                } header: {
+                    HStack {
+                        Text("Changes")
+                        Spacer()
+                        Text("\(windowState.unstagedFiles.count)")
+                    }
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    // Section headers run to the sidebar's edge; the rows' counts stop short of it.
+                    .padding(.trailing, 12)
                 }
             }
             // A commit has one list: its own staging is long settled.
             if !windowState.commitFiles.isEmpty {
                 Section("Changed (\(windowState.commitFiles.count))") {
-                    ForEach(windowState.commitFiles) { FileRow(file: $0, isFirstSelected: $0.id == firstSelectedID) }
+                    ForEach(windowState.commitFiles) {
+                        SidebarFileRow(file: $0, isFirstSelected: $0.id == firstSelectedID)
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
-        // The proxy's frame already leaves out the toolbar's safe area, so a row scrolled
-        // under the toolbar falls outside it and counts as out of sight.
-        .onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: .global)
-        } action: {
-            rowFrames.visibleListFrame = $0
-        }
-        .focused(isFileListFocused)
-        // Only while the list or a row control has focus, so the Changes menu's shortcuts
-        // never fire from the find bar or the commit sheet, where S and U are typed.
-        .focusedValue(\.fileListWindowState, windowState)
-        .onExitCommand { windowState.selection = [] }
-        // A row click takes focus back from the diff pane, and a click below the last row
-        // clears the selection as Finder does; the List does neither by itself.
-        .background { SidebarClickMonitor { windowState.selection = [] } }
-        // Keyed on the ids, not the files: staging moves a row between sections and should
-        // slide, while line counts arriving for the same rows should not start a transaction.
-        .animation(.default, value: windowState.files.map(\.id))
-        // The list-level form hands over the whole selection when the right-clicked row is
-        // part of it, and that row alone when it is not, which is what a Finder-shaped
-        // sidebar is expected to do.
-        .contextMenu(forSelectionType: DiffSelection.self) { selections in
-            contextMenu(for: Set(selections.compactMap(\.fileID)))
+        .modifier(SidebarListBehavior(list: .changes, focusedList: focusedList, pendingReveal: $pendingReveal))
+    }
+}
+
+/// A row a stage or unstage carried into `list`, waiting for that list to scroll to it.
+/// `takesFocus` records whether a sidebar list had focus when the row moved.
+struct SidebarReveal: Equatable {
+    let list: SidebarList
+    let rowID: ChangedFile.ID
+    let takesFocus: Bool
+    let serial: Int
+}
+
+/// What both sidebar lists do alike: report their viewport to the selection popover, take
+/// part in focus and the Changes menu, clear the selection on Escape or a blank click,
+/// offer the file context menu, and reveal a row moved into them.
+struct SidebarListBehavior: ViewModifier {
+    let list: SidebarList
+    var focusedList: FocusState<SidebarList?>.Binding
+    @Binding var pendingReveal: SidebarReveal?
+    @Environment(AppServices.self) private var services
+    @Environment(WindowState.self) private var windowState
+    @Environment(SidebarRowFrames.self) private var rowFrames
+    @State private var height: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content
+                // The proxy's frame already leaves out the toolbar's safe area, so a row
+                // scrolled under the toolbar falls outside it and counts as out of sight.
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .global)
+                } action: { frame in
+                    rowFrames.visibleListFrames[list] = frame
+                    height = frame.height
+                    reveal(with: proxy)
+                }
+                .onDisappear { rowFrames.visibleListFrames[list] = nil }
+                .onAppear { reveal(with: proxy) }
+                .onChange(of: pendingReveal) { reveal(with: proxy) }
+                .focused(focusedList, equals: list)
+                // Only while a list or a row control has focus, so the Changes menu's
+                // shortcuts never fire from the find bar or the commit sheet, where S and U
+                // are typed.
+                .focusedValue(\.fileListWindowState, windowState)
+                .onExitCommand { windowState.selection = [] }
+                // A row click takes focus back from the diff pane, and a click below the
+                // last row clears the selection as Finder does; the List does neither by
+                // itself. Each list's monitor looks only at clicks inside that list.
+                .background { SidebarClickMonitor { windowState.selection = [] } }
+                // The list-level form hands over the whole selection when the right-clicked
+                // row is part of it, and that row alone when it is not, which is what a
+                // Finder-shaped sidebar is expected to do.
+                .contextMenu(forSelectionType: DiffSelection.self) { selections in
+                    SidebarFileContextMenu(
+                        ids: Set(selections.compactMap(\.fileID)), windowState: windowState, services: services)
+                }
         }
     }
 
-    /// Opens the commit sheet. The first row of the Staged section, with selection off so
-    /// it never highlights like a file.
-    private var commitRow: some View {
-        HStack {
-            Spacer()
-            // Hooks and signing can take seconds; the button alone would look stuck.
-            if windowState.isCommitting {
-                ProgressView().controlSize(.small)
-            }
-            Button("Commit…") { windowState.isCommitSheetPresented = true }
-                .disabled(!windowState.canOpenCommitSheet)
-                .help("Commit (⌘↩)")
-        }
-        .controlSize(.small)
-        .selectionDisabled()
+    /// Waits for a laid-out list: a tray the same refresh inserted has no rows to scroll to
+    /// yet. The first attempt against a list with height settles the reveal, so a later
+    /// resize never scrolls the reader back.
+    private func reveal(with proxy: ScrollViewProxy) {
+        guard let pendingReveal, pendingReveal.list == list, height > 0 else { return }
+        proxy.scrollTo(pendingReveal.rowID)
+        if pendingReveal.takesFocus { focusedList.wrappedValue = list }
+        self.pendingReveal = nil
     }
+}
 
-    /// The menu for the rows `ids` names, in sidebar order: one code path for one row and
-    /// for twenty. Every item, write or not, must apply to every selected file.
-    /// Right-clicking a row outside the selection still acts on that row alone — the list
-    /// hands over just that id — and a header, blank space, or the All changes row names no
-    /// file at all, which has nothing to act on.
-    @ViewBuilder
-    private func contextMenu(for ids: Set<ChangedFile.ID>) -> some View {
+/// The menu for the rows `ids` names, in sidebar order: one code path for one row and for
+/// twenty. Every item, write or not, must apply to every selected file.
+/// Right-clicking a row outside the selection still acts on that row alone — the list
+/// hands over just that id — and a header, blank space, or the All changes row names no
+/// file at all, which has nothing to act on.
+struct SidebarFileContextMenu: View {
+    let ids: Set<ChangedFile.ID>
+    let windowState: WindowState
+    let services: AppServices
+
+    var body: some View {
         let files = windowState.sidebarRows.filter { ids.contains($0.id) }
         if files.isEmpty {
             EmptyView()
@@ -152,7 +242,7 @@ struct SidebarView: View {
     }
 }
 
-private struct FileRow: View {
+struct SidebarFileRow: View {
     let file: ChangedFile
     /// The selection popover points at this row.
     let isFirstSelected: Bool

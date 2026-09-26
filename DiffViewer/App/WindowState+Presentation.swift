@@ -17,6 +17,13 @@ extension WindowState {
         var row: Int?
     }
 
+    /// A stage or unstage carried the selection into the other list. `area` is the list
+    /// it moved to; `serial` makes a second move to the same list a change too.
+    struct SelectionMove: Equatable, Sendable {
+        let area: ChangedFile.Area
+        let serial: Int
+    }
+
     static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
 
     /// The branch picker's face: the current branch, or where a detached HEAD sits.

@@ -141,10 +141,32 @@ extension WindowState {
         // own events. Required after a success for the same last reason: `RepoWatcher` sets
         // `kFSEventStreamCreateFlagIgnoreSelf`, so nothing else would republish.
         await refresh(session: session, cause: .fileAction)
-        guard session === self.session, !isClosed, let failure else { return }
+        guard session === self.session, !isClosed else { return }
+        recordSelectionMoveIfCarried(action, from: reselectionCandidates, revision: revision)
+        guard let failure else { return }
         // After the refresh, so the news survives it: a successful refresh clears only the
         // error a refresh raised.
         errorMessage = failure.localizedDescription
+    }
+
+    /// Tells the sidebar when this write carried a selected row into the other list, so
+    /// focus and scrolling can follow it there. Not when the reader chose something since
+    /// the write began: a refresh reselects without bumping the revision, so an unchanged
+    /// one means every change to the selection since then was the refresh's.
+    private func recordSelectionMoveIfCarried(
+        _ action: FileAction, from candidates: [PendingSelection], revision: Int
+    ) {
+        let destination: ChangedFile.Area
+        switch action {
+        case .stage: destination = .staged
+        case .unstage: destination = .unstaged
+        case .discard, .trash, .revealInFinder, .openInEditor, .copyPath: return
+        }
+        guard !candidates.isEmpty, selectionRevision == revision else { return }
+        let movedPaths = Set(candidates.filter { $0.area != destination }.map(\.path))
+        if selectedFiles.contains(where: { $0.area == destination && movedPaths.contains($0.path) }) {
+            recordSelectionMove(to: destination)
+        }
     }
 
     /// Reveal, Open, and Copy Path: they touch Finder, the default editor, and the

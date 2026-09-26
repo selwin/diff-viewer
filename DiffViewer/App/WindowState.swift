@@ -43,6 +43,9 @@ final class WindowState {
     /// reader changed it while git ran. Writable only here; the action extension reads it.
     private(set) var selectionRevision = 0
     private var storedSelection: Set<DiffSelection> = []
+    /// The last time a file action carried the selection between the sidebar's two lists,
+    /// so the destination list can take focus and scroll to it. Only `runWrite` records one.
+    private(set) var selectionMove: SelectionMove?
 
     /// The rows highlighted in the sidebar: All changes, any number of files, or nothing.
     ///
@@ -730,6 +733,11 @@ extension WindowState {
     /// overtake a scope change or a file action.
     func restoreSelectionAfterNextRefresh(_ selections: [PendingSelection]) {
         pendingReselections = selections
+    }
+
+    /// Exists for the same reason: `selectionMove` is `private(set)`.
+    func recordSelectionMove(to area: ChangedFile.Area) {
+        selectionMove = SelectionMove(area: area, serial: (selectionMove?.serial ?? 0) + 1)
     }
 
     /// Returns to the working tree after a commit could not be read.

@@ -283,6 +283,68 @@ struct WindowStateFileActionTests {
         #expect(state.selectedFileID == files[1].id)
     }
 
+    // MARK: Selection moves
+
+    /// The sidebar follows a selected row into the list it moved to.
+    @Test func stagingTheSelectedFileRecordsAMoveToStaged() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state, after: [changedFile("a.swift", area: .staged), files[1], files[2]])
+        state.selection = [.file(files[0].id)]
+
+        await state.perform(.stage, on: [files[0]])
+
+        #expect(await eventually { await state.selectionMove?.area == .staged })
+    }
+
+    @Test func unstagingTheSelectedFileRecordsAMoveToUnstaged() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state, after: [files[0], files[1], changedFile("c.swift")])
+        state.selection = [.file(files[2].id)]
+
+        await state.perform(.unstage, on: [files[2]])
+
+        #expect(await eventually { await state.selectionMove?.area == .unstaged })
+    }
+
+    /// The selection stayed where it was, so there is nothing for the sidebar to follow.
+    @Test func stagingAnUnselectedFileRecordsNoMove() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state, after: [changedFile("a.swift", area: .staged), files[1], files[2]])
+        state.selection = [.file(files[1].id)]
+
+        await state.perform(.stage, on: [files[0]])
+
+        #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(state.selectionMove == nil)
+    }
+
+    /// The reader's own choice is not a move, even when it lands on the row the write
+    /// would have moved to: here a half-staged file, whose staged row the reader picks
+    /// while its unstaged half is being staged.
+    @Test func aSelectionChangedDuringTheWriteRecordsNoMove() async {
+        let h = Harness()
+        let state = h.makeState()
+        let stagedA = changedFile("a.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: [files[0], stagedA, files[1]])
+        let client = repo.client
+        await client.set(filesAfterWrite: [stagedA, files[1]])
+        state.selection = [.file(files[0].id)]
+        await client.holdActions(true)
+
+        let write = Task { await state.perform(.stage, on: [files[0]]) }
+        #expect(await eventually { await client.heldActionCount == 1 })
+        state.selection = [.file(stagedA.id)]
+        await client.releaseActions()
+        await write.value
+
+        #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(state.selection == [.file(stagedA.id)])
+        #expect(state.selectionMove == nil)
+    }
+
     // MARK: Batches
 
     /// One git process for the whole batch, and every row the reader was on is found

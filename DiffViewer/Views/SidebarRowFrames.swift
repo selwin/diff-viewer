@@ -18,8 +18,9 @@ final class SidebarRowFrames {
     /// Rows the List has built. A built row may still be scrolled out of sight; this is
     /// row lifetime, which is what tells an unmeasured row's direction.
     private(set) var mountedRowIDs: Set<ChangedFile.ID> = []
-    /// The List's scroll viewport, without the part under the toolbar.
-    var visibleListFrame: CGRect = .zero
+    /// Each list's scroll viewport, without the part under the toolbar. A list that is not
+    /// on screen has no entry.
+    var visibleListFrames: [SidebarList: CGRect] = [:]
 
     func rowAppeared(_ id: ChangedFile.ID) {
         if !mountedRowIDs.contains(id) { mountedRowIDs.insert(id) }

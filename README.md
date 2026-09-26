@@ -44,8 +44,9 @@ experience. We want this to be speedy when reviewing large diffs.
 - Font size (⌘+ / ⌘- / ⌘0), light and dark mode.
 
 **Around the diff**
-- **Sidebar** of unstaged and staged files, refreshed live as the repository changes,
-  with per-file `+12 −4` counts from `git diff --numstat`.
+- **Sidebar** of unstaged changes, with the staged files and a Commit button in a tray
+  docked below them, refreshed live as the repository changes, with per-file `+12 −4`
+  counts from `git diff --numstat`.
 - **Context menu** on one or many files (⌘-click, ⇧-click, ⌘A): stage, unstage, discard,
   restore a delete, or move an untracked file to the Trash, plus Reveal in Finder, Open in
   Default Editor, and Copy Path. A selection runs as one git command with one
