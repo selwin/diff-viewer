@@ -82,7 +82,8 @@ struct StagingTrayView: View {
         // Bound to the same selection as Changes; `SidebarView` says how the two share it.
         return List(selection: $windowState.selection) {
             ForEach(staged) { file in
-                SidebarFileRow(file: file, isFirstSelected: file.id == firstSelectedID)
+                // No per-file counts: the tray is narrow, and the header carries the total.
+                SidebarFileRow(file: file, isFirstSelected: file.id == firstSelectedID, showsChurn: false)
                     .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
             }
         }

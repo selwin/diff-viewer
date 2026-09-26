@@ -212,6 +212,7 @@ struct SidebarFileRow: View {
     let file: ChangedFile
     /// The selection popover points at this row.
     let isFirstSelected: Bool
+    var showsChurn = true
     @Environment(SidebarRowFrames.self) private var rowFrames
     /// Kept for a row the List hides and shows again in place: its frame has not changed,
     /// so the geometry callback stays quiet, but hiding it cleared the store.
@@ -239,7 +240,9 @@ struct SidebarFileRow: View {
                 }
             }
             Spacer(minLength: 8)
-            ChurnLabel(stats: file.lineStats)
+            if showsChurn {
+                ChurnLabel(stats: file.lineStats)
+            }
         }
         // Every other row returns nil, so only the first selected row ever reports.
         .onGeometryChange(for: CGRect?.self) { proxy in

@@ -39,7 +39,10 @@ struct CommitSheetView: View {
                 Button {
                     windowState.generateCommitMessage()
                 } label: {
-                    Label("Generate", systemImage: "sparkles")
+                    HStack(spacing: 4) {
+                        Text("Generate")
+                        Image(systemName: "sparkles").accessibilityHidden(true)
+                    }
                 }
                 .disabled(!windowState.canGenerateCommitMessage)
                 .help(
