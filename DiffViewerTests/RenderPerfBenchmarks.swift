@@ -25,8 +25,9 @@ struct RenderPerfBenchmarks {
         report.line("Host: \(sysctlString("machdep.cpu.brand_string")) (\(sysctlString("hw.model"))), ")
         report.line("\(info.activeProcessorCount) cores, \(info.physicalMemory >> 30) GB, ")
         report.line("macOS \(info.operatingSystemVersionString). Times in ms; medians of ")
-        report.line("\(Self.repetitions) runs unless noted. Input: the app's own Swift sources, cut to N lines, ")
-        report.line("with 10 scattered hunks (2 lines edited, 4 inserted, 2 deleted each) on the new side.")
+        report.line("\(Self.repetitions) runs unless noted. Input: whole Swift files from the app's sources, ")
+        report.line("about N lines, with 10 scattered hunks (1 line edited, 4 inserted, up to 2 deleted each) ")
+        report.line("on the new side.")
         report.line("")
         report.line("difft: \(Self.difftVersion())")
         report.line("")
@@ -38,10 +39,10 @@ struct RenderPerfBenchmarks {
         report.line("")
 
         let corpus = Self.corpus()
-        #expect(corpus.count >= Self.sizes.max()!, "not enough source lines for the corpus")
+        #expect(corpus.map(\.count).reduce(0, +) >= Self.sizes.max()!, "not enough source lines for the corpus")
         for size in Self.sizes {
             let (old, new) = Self.texts(corpus: corpus, lineCount: size)
-            report.line("## \(size) lines")
+            report.line("## \(size) lines (\(TextLines.split(old).count) old, \(TextLines.split(new).count) new)")
             report.line("")
             let output = try await loadPipeline(old: old, new: new, report: &report)
             guard case let .text(document) = output.content else {
@@ -65,9 +66,11 @@ struct RenderPerfBenchmarks {
         let sources = DiffEngine.Sources(old: Data(old.utf8), new: Data(new.utf8), fileName: Self.fileName)
 
         var difftTimes: [Double] = []
+        var difftLanguage = ""
         for _ in 0..<3 {
             let start = PerfProbe.now()
-            _ = try await DifftRunner.run(old: sources.old, new: sources.new, fileName: Self.fileName)
+            let file = try await DifftRunner.run(old: sources.old, new: sources.new, fileName: Self.fileName)
+            difftLanguage = file.language
             difftTimes.append(msValue(since: start))
         }
 
@@ -96,7 +99,7 @@ struct RenderPerfBenchmarks {
         report.line("")
         report.line("| Stage | ms | Notes |")
         report.line("|---|---:|---|")
-        report.row("difft alone (process, parse, JSON)", median(difftTimes), "median of 3")
+        report.row("difft alone (process, parse, JSON)", median(difftTimes), "median of 3; language: \(difftLanguage)")
         report.row("**DiffEngine.build total**", median(totals), "fresh caches, includes difft")
         for (stage, note) in [
             ("engine.decode", "UTF-8 → String, both sides"),
@@ -197,34 +200,48 @@ struct RenderPerfBenchmarks {
         return String(decoding: output, as: UTF8.self).split(separator: "\n").first.map(String.init) ?? "unknown"
     }
 
-    /// Every Swift source line of the app, in a stable order.
-    static func corpus() -> [String] {
+    /// The app's Swift files, each split into lines, in a stable order.
+    static func corpus() -> [[String]] {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("DiffViewer", isDirectory: true)
         let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
         let files = (enumerator?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "swift" }
             .sorted { $0.path < $1.path }
-        return files.flatMap { TextLines.split((try? String(contentsOf: $0, encoding: .utf8)) ?? "") }
+        return files.map { TextLines.split((try? String(contentsOf: $0, encoding: .utf8)) ?? "") }
     }
 
-    /// The first `lineCount` corpus lines, and a copy with 10 evenly spaced hunks.
-    static func texts(corpus: [String], lineCount: Int) -> (old: String, new: String) {
-        let old = Array(corpus.prefix(lineCount))
-        var new: [String] = []
-        let spacing = lineCount / 11
-        var index = 0
-        while index < old.count {
-            let hunk = index / spacing
-            if index % spacing == 0, index > 0, hunk <= 10 {
-                new.append(old[index] + " // reviewed")
-                new.append(old[index + 1] + " // reviewed")
-                new.append(contentsOf: (0..<4).map { "        let benchmarkValue\(hunk)_\($0) = \($0) * 2" })
-                // Skips the two edited lines and deletes the two after them.
-                index += 4
-                continue
-            }
-            new.append(old[index])
-            index += 1
+    /// Whole files, so both sides stay valid Swift and difft diffs them structurally
+    /// instead of falling back to text: files are taken in order, skipping any that
+    /// would overshoot, until within 40 lines of `lineCount`. The new side has 10 evenly
+    /// spaced hunks, each at a `let` statement inside a body: that line gets a trailing
+    /// comment, 4 statements are inserted after it, and the next 2 blank or comment lines
+    /// within 30 lines are deleted.
+    static func texts(corpus: [[String]], lineCount: Int) -> (old: String, new: String) {
+        var old: [String] = []
+        for file in corpus where old.count + file.count <= lineCount {
+            old.append(contentsOf: file)
+            if lineCount - old.count < 40 { break }
+        }
+        let statement = #/^ {8,}let [a-z]\w* = /#
+        var anchors: [Int] = []
+        for hunk in 1...10 {
+            var index = old.count * hunk / 11
+            while index < old.count - 2, (try? statement.prefixMatch(in: old[index])) == nil { index += 1 }
+            if index < old.count - 2 { anchors.append(index) }
+        }
+        var new = old
+        // Bottom up, so the anchors above each edit keep their indices.
+        for (hunk, index) in anchors.enumerated().reversed() {
+            let indent = String(old[index].prefix { $0 == " " })
+            new[index] = old[index] + " // reviewed"
+            let inserted = (0..<4).map { "\(indent)let benchmarkValue\(hunk)_\($0) = \($0) * 2" }
+            new.insert(contentsOf: inserted, at: index + 1)
+            let window = (index + 5)..<min(index + 35, new.count)
+            let deletions = window.filter {
+                let trimmed = new[$0].trimmingCharacters(in: .whitespaces)
+                return trimmed.isEmpty || trimmed.hasPrefix("//")
+            }.prefix(2)
+            for line in deletions.reversed() { new.remove(at: line) }
         }
         return (old.joined(separator: "\n") + "\n", new.joined(separator: "\n") + "\n")
     }
