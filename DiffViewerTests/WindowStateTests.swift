@@ -649,20 +649,26 @@ struct StubGenerationError: LocalizedError {
     var errorDescription: String? { "the model gave up" }
 }
 
-/// A stream the test drives by hand: the stub hands its continuation over, and the test
-/// yields, finishes or fails it whenever it likes. A lock rather than an actor so a test
-/// can drive it without awaiting.
+/// A stream the test drives by hand: the stub hands over its continuation and request,
+/// and the test yields, finishes or fails it whenever it likes. A lock rather than an
+/// actor so a test can drive it without awaiting.
 final class StubGenerationChannel: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<String, any Error>.Continuation?
     private var calls = 0
+    private var request: CommitMessagePrompt.Request?
 
     /// How many generations the stub started through this channel.
     var generateCalls: Int { lock.withLock { calls } }
+    /// What the latest generation was asked to describe.
+    var lastRequest: CommitMessagePrompt.Request? { lock.withLock { request } }
 
-    func register(_ continuation: AsyncThrowingStream<String, any Error>.Continuation) {
+    func register(
+        _ continuation: AsyncThrowingStream<String, any Error>.Continuation, request: CommitMessagePrompt.Request
+    ) {
         lock.withLock {
             self.continuation = continuation
+            self.request = request
             calls += 1
         }
     }
@@ -684,7 +690,7 @@ struct StubCommitMessageGenerator: CommitMessageGenerator {
     func generate(_ request: CommitMessagePrompt.Request) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
             if let channel {
-                channel.register(continuation)
+                channel.register(continuation, request: request)
                 return
             }
             for text in texts { continuation.yield(text) }
