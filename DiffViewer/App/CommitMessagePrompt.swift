@@ -18,17 +18,24 @@ enum CommitMessagePrompt {
         unrelated to each other.
         """
 
-    /// One generation's input: the staged changes, and subjects from the repository's own
-    /// history as style examples.
+    /// One generation's input: the staged changes, recent subjects as style examples, the
+    /// reader's own note (why), and the branch name (what the work is for). Nil leaves a
+    /// section out.
     struct Request: Sendable, Equatable {
         var patchWithStat: String
         var recentSubjects: [String]
+        var draftNote: String?
+        var branch: String?
     }
 
     /// At most this many recent subjects, each clipped to this many characters. They are
     /// style examples, so a long tail is not worth its tokens.
     private static let subjectLimit = 8
     private static let subjectCharacterLimit = 80
+    /// A note is a hint about intent; past this it starts crowding out the patch.
+    private static let draftNoteCharacterLimit = 500
+    /// Branch names that say nothing about the work and invite "Update main".
+    private static let uninformativeBranches: Set<String> = ["main", "master", "trunk", "develop"]
 
     /// Splits `git diff --patch-with-stat` output at the first `diff --git` line: the stat
     /// is everything before it, the patch everything from it on. No such line → all stat.
@@ -56,9 +63,10 @@ enum CommitMessagePrompt {
         return nil
     }
 
-    /// The user prompt: style examples, then the stat and the patch, which share
-    /// `characterBudget` characters. The stat gets up to a quarter and the patch the rest;
-    /// each ends with a marker line when cut.
+    /// The user prompt: style examples, the branch, the reader's note, then the stat and
+    /// the patch, which share `characterBudget` characters. The stat gets up to a quarter
+    /// and the patch the rest; each ends with a marker line when cut. An absent note or
+    /// branch is not mentioned at all: the model fills any slot it is told about.
     static func prompt(for request: Request, characterBudget: Int) -> String {
         let (stat, patch) = split(request.patchWithStat)
         var sections: [String] = []
@@ -72,10 +80,30 @@ enum CommitMessagePrompt {
                 """
             sections.append(([heading] + subjects).joined(separator: "\n"))
         }
+        if let branch = request.branch, !uninformativeBranches.contains(branch) {
+            sections.append(
+                """
+                The branch this commit goes on, for context about the work:
+                \(branch)
+                (it names the ongoing work, not the change below)
+                """)
+        }
+        let note = request.draftNote.map { String($0.prefix(draftNoteCharacterLimit)) }
+        if let note {
+            sections.append("The author's note about this change, in their own words:\n\(note)")
+        }
         let statText = truncated(stat, budget: characterBudget / 4, marker: "[stat truncated]")
         sections.append("The staged changes to describe:\n\n\(statText)")
         sections.append(truncated(patch, budget: characterBudget - statText.count, marker: "[patch truncated]"))
-        sections.append("Write the commit message for these changes.")
+        if note == nil {
+            sections.append("Write the commit message for these changes.")
+        } else {
+            sections.append(
+                """
+                Write the commit message for these changes. Take the intent from the author's \
+                note and the facts from the patch; say nothing the patch does not show.
+                """)
+        }
         return sections.joined(separator: "\n\n")
     }
 

@@ -169,6 +169,9 @@ final class WindowState {
     private(set) var commitDefaults = CommitDefaults.none
     /// Last automatically applied message, used to preserve edited drafts.
     private var lastAppliedDefaultMessage: String?
+    /// The latest text the model streamed into the draft, so pressing Generate again does
+    /// not hand the model its own output as the reader's note.
+    private var lastGeneratedMessage: String?
     /// A commit is queued or running.
     private(set) var isCommitting = false
     /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
@@ -1001,10 +1004,12 @@ extension WindowState {
         if commitDraftRevision == revision {
             if failure == nil {
                 storedCommitMessage = ""
+                lastGeneratedMessage = nil
             } else {
                 // A defaults read that landed while git ran may have replaced or emptied
                 // the draft. Put the submitted message back, and count it as the reader's
-                // own from now on so no later refresh can take it away.
+                // own from now on so no later refresh can take it away. It is still no
+                // note for Generate if the model wrote it: `lastGeneratedMessage` stays.
                 storedCommitMessage = message
             }
             lastAppliedDefaultMessage = nil
@@ -1096,9 +1101,21 @@ extension WindowState {
         guard canGenerateCommitMessage, let session else { return }
         isGeneratingCommitMessage = true  // before the first suspension: the admission guard
         commitGenerationError = nil
+        // Read now: streaming replaces the draft.
+        let note = draftNote
+        let branch = currentBranchName
         session.commitGenerationTask = Task { [weak self] in
-            await self?.runCommitMessageGeneration(session: session)
+            await self?.runCommitMessageGeneration(note: note, branch: branch, session: session)
         }
+    }
+
+    /// The draft, when it is the reader's own words: not blank, not git's untouched
+    /// suggestion, and not the model's last answer left as it was.
+    private var draftNote: String? {
+        let draft = storedCommitMessage
+        guard draft != lastAppliedDefaultMessage, draft != lastGeneratedMessage else { return nil }
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Stops the generation in flight. Whatever it has written by then stays in the draft:
@@ -1116,12 +1133,13 @@ extension WindowState {
     /// model reproduced that suggestion word for word.
     private func applyGeneratedText(_ text: String) {
         storedCommitMessage = text
+        lastGeneratedMessage = text
         lastAppliedDefaultMessage = nil
         commitDraftRevision += 1
     }
 
     /// Reads the staged patch, then streams the model's answer into the draft.
-    private func runCommitMessageGeneration(session: RepoSession) async {
+    private func runCommitMessageGeneration(note: String?, branch: String?, session: RepoSession) async {
         // A cancelled run was already settled by whoever cancelled it, and a newer run may
         // be up by now; only a run that ends on its own turns the flag off.
         defer { if !Task.isCancelled { isGeneratingCommitMessage = false } }
@@ -1136,7 +1154,8 @@ extension WindowState {
                 return
             }
             let request = CommitMessagePrompt.Request(
-                patchWithStat: patchWithStat, recentSubjects: history.commits.map(\.subject))
+                patchWithStat: patchWithStat, recentSubjects: history.commits.map(\.subject),
+                draftNote: note, branch: branch)
             for try await text in commitMessageGenerator.generate(request) {
                 guard isCurrent() else { return }
                 applyGeneratedText(text)
@@ -1162,6 +1181,8 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch) else { return }
         isSwitchingBranch = true  // before the first suspension: the admission guard
         defer { isSwitchingBranch = false }
+        // A run in flight would pair the old branch name with the new branch's patch.
+        cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
             await self?.runBranchSwitch(to: branch, session: session)
         }

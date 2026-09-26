@@ -726,4 +726,123 @@ struct WindowStateCommitTests {
         #expect(!state.isGeneratingCommitMessage)
         #expect(channel.generateCalls == 0)
     }
+
+    // MARK: What the model is told
+
+    /// Starts a generation through `channel`, streams `text`, finishes it and waits for
+    /// the run to settle.
+    private func generate(_ state: WindowState, _ channel: StubGenerationChannel, writing text: String) async {
+        let calls = channel.generateCalls
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == calls + 1 })
+        channel.yield(text)
+        channel.finish()
+        #expect(await eventually { await !state.isGeneratingCommitMessage })
+    }
+
+    /// What the reader typed before pressing Generate steers the message.
+    @Test func aTypedDraftIsSentAsTheNote() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        state.commitMessage = "fix flicker"
+
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == "fix flicker")
+    }
+
+    /// git's suggestion left as it was is not the reader's words.
+    @Test func anUntouchedSuggestionIsNoNote() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(
+            defaults: merging(mergeText), generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        #expect(state.commitMessage == mergeText)
+
+        await generate(state, channel, writing: message)
+        #expect(channel.generateCalls == 1)
+        #expect(channel.lastRequest?.draftNote == nil)
+    }
+
+    /// Pressing Generate again does not feed the model its own answer; editing that
+    /// answer first makes it the reader's note.
+    @Test func regeneratingSendsOnlyAnEditedAnswerAsTheNote() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+
+        await generate(state, channel, writing: message)
+        await generate(state, channel, writing: message)
+        #expect(channel.generateCalls == 2)
+        #expect(channel.lastRequest?.draftNote == nil)
+
+        state.commitMessage = "Add the picker for commits"
+        await generate(state, channel, writing: message)
+        #expect(channel.generateCalls == 3)
+        #expect(channel.lastRequest?.draftNote == "Add the picker for commits")
+    }
+
+    /// A rejected commit puts the generated message back, and it is still the model's
+    /// answer rather than a note.
+    @Test func aGeneratedMessageRestoredAfterAFailedCommitIsNoNote() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        await generate(state, channel, writing: message)
+
+        await client.fail(commit: true)
+        await state.commit()
+        #expect(state.commitMessage == message)
+
+        await generate(state, channel, writing: message)
+        #expect(channel.generateCalls == 2)
+        #expect(channel.lastRequest?.draftNote == nil)
+    }
+
+    /// A named HEAD is sent as the branch; the prompt decides whether it says anything.
+    @Test func aNamedHeadIsSentAsTheBranch() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        #expect(state.headState == .named("main"))
+
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.branch == "main")
+    }
+
+    @Test func aDetachedHeadSendsNoBranch() async throws {
+        let channel = StubGenerationChannel()
+        let (h, state, client, root) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        let detached = HeadState.detached(sha: String(repeating: "a", count: 40))
+        await client.set(headState: detached)
+        h.tick(root, [.refs])
+        #expect(await eventually { await state.headState == detached })
+
+        await generate(state, channel, writing: message)
+        #expect(channel.generateCalls == 1)
+        #expect(channel.lastRequest?.branch == nil)
+    }
+
+    /// A run that outlived a switch would pair the old branch name with the new branch's
+    /// patch, so the switch stops it; what it wrote stays.
+    @Test func aBranchSwitchCancelsGeneration() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        await client.set(headStateAfterSwitch: .named("side"))
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+        let task = try #require(state.session?.commitGenerationTask)
+
+        await state.switchBranch(to: "side")
+        #expect(!state.isGeneratingCommitMessage)
+
+        channel.yield("Add the pic")
+        await task.value
+        #expect(state.commitMessage == "Add", "a cancelled run writes nothing more")
+    }
 }
