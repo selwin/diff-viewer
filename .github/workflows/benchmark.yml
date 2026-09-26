@@ -2,10 +2,14 @@ name: Benchmark
 
 # Stage timings for the load and render paths (DiffViewerTests/RenderPerfBenchmarks).
 # Release build, because Debug timings of Swift code say little about the shipped app.
+# Runs on demand, and on main when the benchmark or the probes change. See PERFORMANCE.md.
 on:
   push:
-    branches: [claude/perf-instrumentation]
-    paths-ignore: ['**.md']
+    branches: [main]
+    paths:
+      - DiffViewerTests/RenderPerfBenchmarks.swift
+      - DiffViewer/App/PerfProbe.swift
+      - .github/workflows/benchmark.yml
   workflow_dispatch:
 
 permissions:
@@ -20,14 +24,9 @@ env:
 
 jobs:
   benchmark:
-    name: Benchmarks (difft ${{ matrix.difft }})
+    name: Benchmarks
     runs-on: macos-26
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # The version scripts/fetch-difft.sh pins, and the newest release, for comparison.
-        difft: ['0.63.0', '0.70.0']
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,8 +43,6 @@ jobs:
             spm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Fetch difft
-        env:
-          DIFFT_VERSION: ${{ matrix.difft }}
         run: scripts/fetch-difft.sh
 
       - name: Generate the Xcode project
