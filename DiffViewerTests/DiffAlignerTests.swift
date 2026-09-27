@@ -37,6 +37,60 @@ struct DiffAlignerTests {
         #expect(rows[0].new?.highlights == [0..<12])
     }
 
+    @Test func typoInsideDifftTokenNarrowsToChangedCharacter() {
+        // difft marks the whole string literal on both sides.
+        var hints = DifftHints()
+        hints.oldChanges[0] = [8..<20]
+        hints.newChanges[0] = [8..<21]
+        let rows = DiffAligner.align(
+            oldLines: [#"let s = "Helo world""#], newLines: [#"let s = "Hello world""#],
+            hideWhitespace: false, hints: hints)
+        #expect(rows[0].old?.highlights == [])
+        #expect(rows[0].new?.highlights == [12..<13])
+    }
+
+    @Test func mostlyChangedDifftTokenStaysWhole() {
+        // Myers finds `done` inside `undone`, but the new literal is mostly changed.
+        var hints = DifftHints()
+        hints.newChanges[0] = [4..<18]
+        let rows = DiffAligner.align(
+            oldLines: [#"log("done")"#], newLines: [#"log("undone again")"#], hideWhitespace: false, hints: hints)
+        #expect(rows[0].old?.highlights == [])
+        #expect(rows[0].new?.highlights == [4..<18])
+    }
+
+    @Test func characterChangesOutsideDifftTokensAreDropped() {
+        // difft marks `,` and `b`; the inserted space between them is not a token.
+        var hints = DifftHints()
+        hints.newChanges[0] = [6..<7, 8..<9]
+        let rows = DiffAligner.align(
+            oldLines: ["call(a)"], newLines: ["call(a, b)"], hideWhitespace: false, hints: hints)
+        #expect(rows[0].old?.highlights == [])
+        #expect(rows[0].new?.highlights == [6..<7, 8..<9])
+    }
+
+    @Test func rewrittenLineKeepsDifftTokens() {
+        var hints = DifftHints()
+        hints.oldChanges[0] = [0..<6, 7..<12]
+        hints.newChanges[0] = [0..<5, 6..<11]
+        let rows = DiffAligner.align(
+            oldLines: ["return total"], newLines: ["print(error)"], hideWhitespace: false, hints: hints)
+        #expect(rows[0].old?.highlights == [0..<6, 7..<12])
+        #expect(rows[0].new?.highlights == [0..<5, 6..<11])
+    }
+
+    @Test func refinedRangesCoverWholeGraphemes() {
+        // difft marks only the combining mark: UTF-8 bytes 13..<15, UTF-16 13..<14.
+        var hints = DifftHints()
+        hints.oldChanges[0] = [13..<15]
+        hints.newChanges[0] = [13..<15]
+        let rows = DiffAligner.align(
+            oldLines: ["let s = \"cafe\u{301}\""], newLines: ["let s = \"cafe\u{300}\""],
+            hideWhitespace: false, hints: hints)
+        #expect(rows[0].old?.highlights == [12..<14])
+        #expect(rows[0].new?.highlights == [12..<14])
+    }
+
     @Test func pureAdditionProducesPadRows() {
         let rows = DiffAligner.align(
             oldLines: ["a", "c"], newLines: ["a", "b", "c"], hideWhitespace: true, hints: DifftHints())

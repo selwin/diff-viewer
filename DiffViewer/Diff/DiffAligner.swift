@@ -24,8 +24,8 @@ enum DiffAligner {
             DiffSide(lineIndex: index, highlights: utf16Ranges(hints.newChanges[index] ?? [], in: newLines[index]))
         }
 
-        /// Emits a modified/added/deleted row. Uses character-level highlights, or a
-        /// prefix/suffix fallback, when difftastic has no ranges for a modified pair.
+        /// Emits a modified/added/deleted row. For a modified pair, character-level changes
+        /// refine difftastic's tokens, or stand in for them when difftastic has none.
         func emit(old: Int?, new: Int?) {
             var oldSide = old.map(side(old:))
             var newSide = new.map(side(new:))
@@ -33,14 +33,20 @@ enum DiffAligner {
             switch (oldSide, newSide) {
             case (.some, .some):
                 kind = .modified
+                let characterRanges = CharacterDiff.ranges(
+                    old: oldLines[old!], new: newLines[new!], hideWhitespace: hideWhitespace)
                 if oldSide!.highlights.isEmpty, newSide!.highlights.isEmpty {
                     // nil means the lines are too long or too dissimilar for a character
                     // diff to help, so one span over the differing middle reads better.
-                    let (o, n) =
-                        CharacterDiff.ranges(old: oldLines[old!], new: newLines[new!], hideWhitespace: hideWhitespace)
-                        ?? prefixSuffixHighlights(oldLines[old!], newLines[new!])
+                    let (o, n) = characterRanges ?? prefixSuffixHighlights(oldLines[old!], newLines[new!])
                     oldSide!.highlights = o
                     newSide!.highlights = n
+                } else if let characterRanges {
+                    // A token that is mostly changed stays whole, so a new token isn't
+                    // chopped up by stray letter matches; an edited one shows only the
+                    // characters that differ.
+                    oldSide!.highlights = refine(oldSide!.highlights, with: characterRanges.old, in: oldLines[old!])
+                    newSide!.highlights = refine(newSide!.highlights, with: characterRanges.new, in: newLines[new!])
                 }
             case (.some, .none):
                 kind = .deleted
@@ -150,6 +156,46 @@ enum DiffAligner {
                 result[result.count - 1] = last.lowerBound..<max(last.upperBound, e)
             } else {
                 result.append(s..<e)
+            }
+        }
+        return result
+    }
+
+    /// Narrows difftastic's token ranges to the changed characters inside them. A token
+    /// more than half changed stays whole; character changes outside every token are
+    /// dropped because difftastic judged them unchanged. Results cover whole graphemes.
+    private static func refine(_ tokens: [Range<Int>], with characters: [Range<Int>], in line: String) -> [Range<Int>] {
+        var refined: [Range<Int>] = []
+        for token in tokens {
+            let overlap = intersection(characters, with: token)
+            let changedUnits = overlap.reduce(0) { $0 + $1.count }
+            refined += changedUnits * 2 > token.count ? [token] : overlap
+        }
+        return expandToGraphemes(refined, in: line)
+    }
+
+    /// The parts of sorted `ranges` that fall inside `bounds`.
+    private static func intersection(_ ranges: [Range<Int>], with bounds: Range<Int>) -> [Range<Int>] {
+        ranges.compactMap { range in
+            let lower = max(range.lowerBound, bounds.lowerBound)
+            let upper = min(range.upperBound, bounds.upperBound)
+            return lower < upper ? lower..<upper : nil
+        }
+    }
+
+    /// Widens sorted ranges to grapheme boundaries and merges any that then touch, since
+    /// a difftastic range can cover only part of a grapheme, such as a combining mark.
+    private static func expandToGraphemes(_ ranges: [Range<Int>], in line: String) -> [Range<Int>] {
+        var boundaries = [0]
+        for character in line { boundaries.append(boundaries.last! + character.utf16.count) }
+        var result: [Range<Int>] = []
+        for range in ranges {
+            let lower = boundaries.last(where: { $0 <= range.lowerBound }) ?? 0
+            let upper = boundaries.first(where: { $0 >= range.upperBound }) ?? boundaries.last!
+            if let last = result.last, lower <= last.upperBound {
+                result[result.count - 1] = last.lowerBound..<max(last.upperBound, upper)
+            } else {
+                result.append(lower..<upper)
             }
         }
         return result

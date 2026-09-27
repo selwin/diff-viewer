@@ -344,6 +344,42 @@ functions.
 
 ---
 
+### X. Don't highlight unchanged lines for difft's re-nested delimiters (requested 2026-09-27)
+
+**Goal.** A line whose text didn't change shouldn't light up as a change just because
+difftastic re-paired its brackets. Found in a scratch repo where a top-level
+`func total` moved into `final class Cart { … }`: `final class Cart {` and its closing
+`}` are identical on both sides, yet both show as modified with the brace in the strong
+tint.
+
+**Cause.**
+- difftastic picks the path with the fewest changed tokens. It matched the old top-level
+  `func receipt(...) -> [String] {` skeleton (`func`, `(`, `:`, `)`, `->`, `{`) with the
+  new `func total(...) -> Int {` inside the class. Crossing that nesting level is only
+  possible if the class's `{` and `}` count as novel on both sides, and six matched tokens
+  outweigh two novel ones. Confirmed from `difft --display json` output.
+- `DiffAligner.align` promotes an equal-op row to `.modified` whenever difft reports
+  ranges on it, so the identical line is drawn as changed.
+
+**Why not drop difft ranges on every identical line.** The promotion is useful: when code
+gets wrapped in a new block, the line diff often pairs an identical `}` with the wrong
+one, and difft's highlight is what points at the new brace.
+
+**Design.**
+- On an equal-op row, ignore difft's ranges (and keep the row `.equal`) only when every
+  range on both sides is a single delimiter character, and the delimiter's partner on the
+  same side also sits on an equal-op row. A wrapped block fails the second test (its new
+  brace's partner is on an inserted line), so it keeps today's highlight.
+- Finding the partner needs difft's delimiter pairing or a bracket match over the line
+  text; decide which after Stage 3 of item R, which also changes how difft ranges are
+  treated.
+
+**Tests.** The re-nested class case (both braces unhighlighted, rows equal); a block
+wrapped in a new `if` (the new `}` still highlighted); an equal-op row where difft marks
+a non-delimiter token (unchanged behaviour).
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
