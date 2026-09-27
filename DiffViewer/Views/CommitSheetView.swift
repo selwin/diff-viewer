@@ -47,7 +47,7 @@ struct CommitSheetView: View {
                 .disabled(!windowState.canGenerateCommitMessage)
                 .help(
                     windowState.commitGenerationUnavailableReason
-                        ?? "Generate a commit message from the staged changes (⌘G)"
+                        ?? "Generate a commit message from the staged changes and any note you typed (⌘G)"
                 )
                 .keyboardShortcut("g", modifiers: .command)
                 if windowState.isGeneratingCommitMessage {
@@ -108,9 +108,10 @@ struct CommitSheetView: View {
                 // Padded to sit where the editor's own first line starts, so typing
                 // does not shift the text.
                 if windowState.commitMessage.isEmpty {
-                    Text("Commit message")
+                    Text("Commit message, or a note for Generate")
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 5)
                         .allowsHitTesting(false)

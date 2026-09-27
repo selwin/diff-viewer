@@ -123,6 +123,43 @@ import Testing
         #expect(!prompt.contains(String(repeating: "x", count: 81)))
     }
 
+    @Test func promptIncludesTheNoteAndTheBranchWhenGiven() {
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(
+                patchWithStat: patchWithStat, recentSubjects: [], draftNote: "fix flicker when tray collapses",
+                branch: "staging-tray"),
+            characterBudget: 10_000)
+        #expect(prompt.contains("author's note"))
+        #expect(prompt.contains("fix flicker when tray collapses"))
+        #expect(prompt.contains("branch this commit goes on"))
+        #expect(prompt.contains("staging-tray"))
+    }
+
+    /// The model writes about any slot it is told of, so an absent note or branch is not
+    /// mentioned at all.
+    @Test func promptLeavesOutAnAbsentNoteAndBranch() {
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: patchWithStat, recentSubjects: []), characterBudget: 10_000)
+        #expect(!prompt.contains("author's note"))
+        #expect(!prompt.contains("branch this commit goes on"))
+        #expect(prompt.hasSuffix("Write the commit message for these changes."))
+    }
+
+    /// A default branch says nothing about the work.
+    @Test func promptLeavesOutADefaultBranch() {
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: patchWithStat, recentSubjects: [], branch: "main"), characterBudget: 10_000)
+        #expect(!prompt.contains("branch this commit goes on"))
+    }
+
+    @Test func promptClipsALongNote() {
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: patchWithStat, recentSubjects: [], draftNote: String(repeating: "x", count: 900)),
+            characterBudget: 10_000)
+        #expect(prompt.contains(String(repeating: "x", count: 500)))
+        #expect(!prompt.contains(String(repeating: "x", count: 501)))
+    }
+
     // MARK: Cleaning the answer
 
     @Test func cleanedStripsAFenceALabelAndBlankEdges() {
