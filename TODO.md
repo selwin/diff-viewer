@@ -13,6 +13,7 @@ Where DiffViewer stands versus the bar:
 |---|---|---|---|---|
 | Side-by-side, aligned rows | yes | yes (or inline) | yes | yes |
 | Structural (AST-aware) token highlights | no (word-level) | no (character-level) | no (word-level) | **yes (difftastic)** |
+| Character-level highlights inside a changed line | no (word-level) | yes | no (word-level) | **yes** |
 | Full syntax colouring both panes | yes | yes | yes | yes |
 | Ignore whitespace | yes (3 kinds + regex filters) | yes | not documented | yes (one toggle) |
 | Live working-copy refresh | yes (7.0 headline) | yes | yes | yes |
@@ -203,31 +204,6 @@ covers rename and path display.
 
 ---
 
-### R. Character-level diffs within a changed line (requested 2026-09-27)
-
-**Goal.** When a line is modified rather than replaced, show exactly which characters
-changed, the way Sublime Merge does. difft's highlights are per token, so a one-letter
-typo fix in a long string literal, comment or identifier lights up the whole token, and
-lines difft treats as text (unsupported languages, its fallback) get no highlight within
-the line at all.
-
-**Design.**
-- For each aligned row pair where both sides are changed, run a character diff of the
-  two lines (`LineDiff` is already a generic Myers diff) and draw the changed ranges in
-  a stronger tint on top of the row's change colour.
-- Where difft has highlighted a token, refine inside it: a token whose old and new text
-  mostly match shows only the characters that differ. Tokens that are wholly new keep
-  difft's highlight.
-- Skip the refinement when the two lines share too little (say under half their
-  characters), so a rewritten line doesn't turn into confetti. Snap ranges to word
-  boundaries when a change touches most of a word.
-- Cap the work per row (line length) so a minified file doesn't stall highlighting.
-
-**Tests.** Changed ranges for a typo fix, an inserted argument, a rewritten line (no
-refinement), and a tab-indented line (ranges survive `TabExpander`).
-
----
-
 ### S. Show where code moved (requested 2026-09-27)
 
 **Goal.** When a block is cut from one place and pasted in another, say so. Today a move
@@ -371,8 +347,8 @@ one, and difft's highlight is what points at the new brace.
   same side also sits on an equal-op row. A wrapped block fails the second test (its new
   brace's partner is on an inserted line), so it keeps today's highlight.
 - Finding the partner needs difft's delimiter pairing or a bracket match over the line
-  text; decide which after Stage 3 of item R, which also changes how difft ranges are
-  treated.
+  text. Character-level refinement narrows difft ranges only on modified rows, so an
+  equal-op row still carries difft's ranges as reported.
 
 **Tests.** The re-nested class case (both braces unhighlighted, rows equal); a block
 wrapped in a new `if` (the new `}` still highlighted); an equal-op row where difft marks

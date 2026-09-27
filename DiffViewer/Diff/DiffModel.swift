@@ -7,8 +7,9 @@ enum DocumentSide: Sendable, Equatable { case old, new }
 struct DiffSide: Sendable, Equatable {
     /// 0-based index into the side's line array.
     let lineIndex: Int
-    /// UTF-16 ranges within the line that changed (token-level, from difftastic,
-    /// or a prefix/suffix estimate for whitespace-only changes).
+    /// UTF-16 ranges within the line that changed: difftastic's tokens, narrowed to the
+    /// changed characters on a modified pair. A modified pair difftastic left bare gets a
+    /// character diff or, failing that, a prefix/suffix span.
     var highlights: [Range<Int>]
 
     var lineNumber: Int { lineIndex + 1 }

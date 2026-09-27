@@ -166,21 +166,22 @@ enum DiffAligner {
     /// dropped because difftastic judged them unchanged. Results cover whole graphemes.
     private static func refine(_ tokens: [Range<Int>], with characters: [Range<Int>], in line: String) -> [Range<Int>] {
         var refined: [Range<Int>] = []
+        // Both lists are sorted and disjoint, so one forward pass finds every overlap;
+        // a fragmented line can carry dozens of each.
+        var next = 0
         for token in tokens {
-            let overlap = intersection(characters, with: token)
+            while next < characters.count, characters[next].upperBound <= token.lowerBound { next += 1 }
+            var overlap: [Range<Int>] = []
+            var i = next
+            while i < characters.count, characters[i].lowerBound < token.upperBound {
+                let range = characters[i]
+                overlap.append(max(range.lowerBound, token.lowerBound)..<min(range.upperBound, token.upperBound))
+                i += 1
+            }
             let changedUnits = overlap.reduce(0) { $0 + $1.count }
             refined += changedUnits * 2 > token.count ? [token] : overlap
         }
         return expandToGraphemes(refined, in: line)
-    }
-
-    /// The parts of sorted `ranges` that fall inside `bounds`.
-    private static func intersection(_ ranges: [Range<Int>], with bounds: Range<Int>) -> [Range<Int>] {
-        ranges.compactMap { range in
-            let lower = max(range.lowerBound, bounds.lowerBound)
-            let upper = min(range.upperBound, bounds.upperBound)
-            return lower < upper ? lower..<upper : nil
-        }
     }
 
     /// Widens sorted ranges to grapheme boundaries and merges any that then touch, since
@@ -189,9 +190,14 @@ enum DiffAligner {
         var boundaries = [0]
         for character in line { boundaries.append(boundaries.last! + character.utf16.count) }
         var result: [Range<Int>] = []
+        // Ranges are sorted, so the boundary search resumes where the previous one stopped.
+        var start = 0
         for range in ranges {
-            let lower = boundaries.last(where: { $0 <= range.lowerBound }) ?? 0
-            let upper = boundaries.first(where: { $0 >= range.upperBound }) ?? boundaries.last!
+            while start + 1 < boundaries.count, boundaries[start + 1] <= range.lowerBound { start += 1 }
+            var end = start
+            while end < boundaries.count, boundaries[end] < range.upperBound { end += 1 }
+            let lower = boundaries[start]
+            let upper = end < boundaries.count ? boundaries[end] : boundaries.last!
             if let last = result.last, lower <= last.upperBound {
                 result[result.count - 1] = last.lowerBound..<max(last.upperBound, upper)
             } else {
