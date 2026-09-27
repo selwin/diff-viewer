@@ -316,30 +316,6 @@ middle of a file, and staging, unstaging and discarding one hunk in a temporary 
 
 ---
 
-### V. Expand context a few lines at a time (requested 2026-09-27)
-
-**Goal.** Clicking a collapsed-lines separator should reveal a few lines, not the whole
-hidden run. Today the up and down chevrons reveal `FoldOptions.expansionStep` (20)
-lines, but they are small targets, and a click anywhere else on the separator falls
-back to `.expandRun`, which shows every hidden line
-(`DiffPaneView+Selection.swift` `mouseDown`). In All changes the separators do nothing.
-
-**Design.**
-- A click on the separator body expands by the step, toward the change it is closer
-  to (or down by default); the chevrons stay for choosing a direction. ⌥-click keeps
-  revealing the whole file, and a separate "show all N lines" control (or ⇧-click)
-  reveals one run.
-- Consider a smaller step (10) now that it's the main action, and make both chevron
-  hit areas the full half of the separator.
-- The same controls in All changes, which is the "click-to-expand context inside the
-  changeset" item from the Next list.
-- VoiceOver labels follow the new behaviour.
-
-**Tests.** The fold state after body clicks near either end of a run, a run shorter
-than the step, and an expansion inside an All changes section.
-
----
-
 ### W. Show the function or method a change is in (requested 2026-09-27)
 
 **Goal.** When reading a change, see which function, method or type it belongs to
@@ -386,7 +362,8 @@ Roughly in priority order.
   (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
-  the overview strip (click-to-expand context is item V); tooltips for truncated header paths and notice text; section-aware
+  the overview strip; click-to-expand context inside the changeset (separators are
+  inert today); tooltips for truncated header paths and notice text; section-aware
   scroll anchoring on a full replace; an aggregate source-byte budget with size
   preflight; an app-wide bound on concurrent git, difft and highlight work.
 - **Churn, remaining pieces.** The Changes header and the staging tray header show
