@@ -107,7 +107,7 @@ enum DiffAligner {
 
     /// ASCII whitespace, the only characters `git diff -w` ignores under LC_ALL=C:
     /// space, tab, CR, LF, form feed and vertical tab.
-    private static let asciiWhitespace: Set<Unicode.Scalar> = [
+    static let asciiWhitespace: Set<Unicode.Scalar> = [
         " ", "\t", "\r", "\n", "\u{000C}", "\u{000B}",
     ]
 

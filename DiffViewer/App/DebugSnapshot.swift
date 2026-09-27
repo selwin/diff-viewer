@@ -40,6 +40,8 @@ import Foundation
 /// - `DIFFVIEWER_SCROLL_X=<points>[,...]` scrolls the panes horizontally to each offset
 ///   in turn after the diff has loaded, through the clip view like a scroller does, so
 ///   partial redraws on horizontal scroll can be screenshotted with `screencapture`.
+/// - `DIFFVIEWER_SCROLL_Y=<points>[,...]` then does the same vertically, so a move band
+///   with one end off screen can be snapshotted.
 /// - `DIFFVIEWER_SNAPSHOT=<path.png>` renders the window contents to a PNG afterwards
 ///   (works even when the window is on another Space, unlike `screencapture`).
 /// - `DIFFVIEWER_OPEN=<JSON array of paths>` opens those repositories, in order, as if
@@ -438,15 +440,17 @@ enum DebugLaunchOptions {
         return condition()
     }
 
-    /// Scrolls the right pane's clip view to each x in turn; the container syncs the left pane.
+    /// Scrolls the right pane's clip view to each offset in turn, along x or y; the
+    /// container syncs the left pane.
     @MainActor
-    private static func scrollHorizontally(to xs: [Double], in window: NSWindow) async {
+    private static func scroll(to offsets: [Double], vertically: Bool, in window: NSWindow) async {
         guard let container = window.contentView?.descendant(SideBySideContainerView.self),
             let scroll = container.rightPane.enclosingScrollView
         else { return }
         let clip = scroll.contentView
-        for x in xs {
-            clip.scroll(to: NSPoint(x: x, y: clip.bounds.origin.y))
+        for offset in offsets {
+            let origin = clip.bounds.origin
+            clip.scroll(to: vertically ? NSPoint(x: origin.x, y: offset) : NSPoint(x: offset, y: origin.y))
             scroll.reflectScrolledClipView(clip)
             try? await Task.sleep(for: .seconds(0.3))
         }
@@ -514,7 +518,7 @@ enum DebugLaunchOptions {
 
 extension DebugLaunchOptions {
     /// The steps after the selection and Next Change presses: find, folds, horizontal
-    /// scrolls, then the snapshot. A failed find exits first, so no snapshot is written.
+    /// then vertical scrolls, then the snapshot. A failed find exits first, so no snapshot is written.
     @MainActor
     fileprivate static func finishSequence(
         env: [String: String], afterNext: Bool, windowState: WindowState, window: NSWindow,
@@ -522,6 +526,7 @@ extension DebugLaunchOptions {
     ) async {
         let folds = (env["DIFFVIEWER_FOLD"] ?? "").split(separator: ",").map(String.init)
         let scrollXs = (env["DIFFVIEWER_SCROLL_X"] ?? "").split(separator: ",").compactMap { Double($0) }
+        let scrollYs = (env["DIFFVIEWER_SCROLL_Y"] ?? "").split(separator: ",").compactMap { Double($0) }
         if let query = env["DIFFVIEWER_FIND"], !query.isEmpty {
             if let failure = await openFind(query, in: windowState) {
                 fputs("### DIFFVIEWER_FIND FAILED: \(failure)\n", stderr)
@@ -539,12 +544,14 @@ extension DebugLaunchOptions {
                 try? await Task.sleep(for: .seconds(0.2))
             }
         }
-        if !scrollXs.isEmpty {
+        let scrolled = !scrollXs.isEmpty || !scrollYs.isEmpty
+        if scrolled {
             try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty ? 0.5 : 2))
-            await scrollHorizontally(to: scrollXs, in: window)
+            await scroll(to: scrollXs, vertically: false, in: window)
+            await scroll(to: scrollYs, vertically: true, in: window)
         }
         if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
-            try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty || !scrollXs.isEmpty ? 1 : 3))
+            try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty || scrolled ? 1 : 3))
             snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
         }
     }

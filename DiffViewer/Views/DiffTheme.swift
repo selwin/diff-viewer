@@ -28,6 +28,19 @@ enum DiffTheme {
     static let addedToken = dynamic(light: rgb(74, 194, 107, 0.45), dark: rgb(46, 160, 67, 0.42))
     static let addedGutter = dynamic(light: rgb(172, 238, 187), dark: rgb(46, 160, 67, 0.30))
 
+    /// Moved lines. Purple, so they read apart from added, deleted and the blue
+    /// current-change bar; the accent draws the gutter marker that jumps to the other end.
+    static let movedRow = dynamic(light: rgb(242, 235, 255), dark: rgb(163, 113, 247, 0.16))
+    static let movedGutter = dynamic(light: rgb(223, 208, 255), dark: rgb(163, 113, 247, 0.30))
+    static let movedAccent = dynamic(light: rgb(130, 80, 223), dark: rgb(188, 140, 255))
+    /// `movedGutter` as the pane paints it, over `movedRow`, so the connector band can end
+    /// in exactly the colour of the right pane's moved gutter.
+    static let movedGutterOnRow = dynamic(light: rgb(223, 208, 255), dark: rgb(163, 113, 247, 0.412))
+    /// The middle of the connector band, which fades to this from the rows at both ends;
+    /// translucent so crossing bands show through each other. Hover makes it stronger.
+    static let movedBandMiddle = dynamic(light: rgb(223, 208, 255, 0.6), dark: rgb(163, 113, 247, 0.14))
+    static let movedBandMiddleHover = dynamic(light: rgb(200, 178, 250), dark: rgb(163, 113, 247, 0.4))
+
     /// Find hits, near-opaque so they read on added and deleted rows too. The current
     /// match is a stronger orange so it stands out while the Find field has focus.
     static let findMatch = dynamic(light: rgb(255, 229, 110, 0.9), dark: rgb(255, 214, 0, 0.5))

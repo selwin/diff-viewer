@@ -2,7 +2,8 @@
 # Usage: scripts/snapshot.sh out.png [repo-path] [changed-file-id]
 # Env: NEXT=<n> presses Next Change n times; APPEARANCE=dark|light forces appearance;
 #      FOLD=up|down|run|all[,...] clicks separator controls; COLLAPSE=true|false sets the preference;
-#      FIND=<query> opens the find bar with that query.
+#      FIND=<query> opens the find bar with that query;
+#      SCROLL_X / SCROLL_Y=<points>[,...] scroll the panes to those offsets before the render.
 # Renders the window from inside the app (Debug build), so it works on any Space.
 # The repo is seeded as the saved session (openRepositoryRoots), which the app restores.
 # -ApplePersistenceIgnoreState keeps a live Xcode-run instance of the same bundle id from
@@ -24,7 +25,7 @@ fi
 if [[ -n ${COLLAPSE:-} ]]; then defaults write "$suite" collapseUnchanged -bool "$COLLAPSE"; fi
 rm -f "$out"
 log=$(mktemp -t snapshot)
-DIFFVIEWER_DEFAULTS_SUITE="$suite" DIFFVIEWER_SNAPSHOT="$out" DIFFVIEWER_NEXT="${NEXT:-0}" DIFFVIEWER_FIND="${FIND:-}" DIFFVIEWER_FOLD="${FOLD:-}" DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" -ApplePersistenceIgnoreState YES >/dev/null 2>"$log" &
+DIFFVIEWER_DEFAULTS_SUITE="$suite" DIFFVIEWER_SNAPSHOT="$out" DIFFVIEWER_NEXT="${NEXT:-0}" DIFFVIEWER_FIND="${FIND:-}" DIFFVIEWER_FOLD="${FOLD:-}" DIFFVIEWER_SCROLL_X="${SCROLL_X:-}" DIFFVIEWER_SCROLL_Y="${SCROLL_Y:-}" DIFFVIEWER_APPEARANCE="${APPEARANCE:-}" DIFFVIEWER_SELECT="$select" "$app" -ApplePersistenceIgnoreState YES >/dev/null 2>"$log" &
 pid=$!
 # A failed hook exits the app without writing $out, so stop waiting when it is gone.
 for _ in {1..40}; do [[ -f $out ]] && break; kill -0 $pid 2>/dev/null || break; sleep 0.5; done

@@ -99,6 +99,24 @@ struct ChangesetBuilderTests {
         #expect(modified.new?.highlights == [1..<2])
     }
 
+    @Test func movesAreShiftedByTheirFilesOffsets() {
+        let a = text(["a0", "a1", "a2"], ["a0"], [.equal(old: 0, new: 0), deletedRow(1), deletedRow(2)])
+        let move = DiffMove(oldLineRange: 0..<1, newLineRange: 2..<3, oldRowRange: 0..<1, newRowRange: 3..<4)
+        let b = ChangesetBuilder.FileResult.content(
+            .text(
+                DiffDocument(
+                    oldLines: ["m", "b1"], newLines: ["b0", "b1", "m"],
+                    rows: [deletedRow(0), addedRow(0), .equal(old: 1, new: 1), addedRow(2)], language: "Swift",
+                    moves: [move])))
+        let changeset = build([(changedFile("a.swift"), a), (changedFile("b.swift"), b)])
+
+        // B starts at old line 3, new line 1 and row 3.
+        #expect(
+            changeset.document.moves == [
+                DiffMove(oldLineRange: 3..<4, newLineRange: 3..<4, oldRowRange: 3..<4, newRowRange: 6..<7)
+            ])
+    }
+
     // MARK: Counts
 
     @Test func perSectionCountsComeFromTheSectionsRows() {

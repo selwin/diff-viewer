@@ -20,6 +20,7 @@ enum ChangesetBuilder {
         var newLines: [String] = []
         var rows: [DiffRow] = []
         var boundaries: [Int] = []
+        var moves: [DiffMove] = []
         var sections: [ChangesetSection] = []
 
         for (file, result) in results {
@@ -55,6 +56,15 @@ enum ChangesetBuilder {
                         old: shifted(row.old, by: oldStart),
                         new: shifted(row.new, by: newStart)))
             }
+            // Moves are found per file, so none crosses a section.
+            for move in document.moves {
+                moves.append(
+                    DiffMove(
+                        oldLineRange: shifted(move.oldLineRange, by: oldStart),
+                        newLineRange: shifted(move.newLineRange, by: newStart),
+                        oldRowRange: shifted(move.oldRowRange, by: rowStart),
+                        newRowRange: shifted(move.newRowRange, by: rowStart)))
+            }
             oldLines.append(contentsOf: document.oldLines)
             newLines.append(contentsOf: document.newLines)
 
@@ -72,7 +82,8 @@ enum ChangesetBuilder {
         }
 
         let flat = DiffDocument(
-            oldLines: oldLines, newLines: newLines, rows: rows, language: nil, blockBoundaries: boundaries)
+            oldLines: oldLines, newLines: newLines, rows: rows, language: nil, blockBoundaries: boundaries,
+            moves: moves)
         return ChangesetDocument(
             document: flat, sections: sections, loadID: loadID, revision: revision, foldOptions: foldOptions)
     }
@@ -112,6 +123,10 @@ enum ChangesetBuilder {
         case .notShown: .notShown
         case let .failed(message): .failed(message)
         }
+    }
+
+    private static func shifted(_ range: Range<Int>, by offset: Int) -> Range<Int> {
+        (range.lowerBound + offset)..<(range.upperBound + offset)
     }
 
     private static func shifted(_ side: DiffSide?, by offset: Int) -> DiffSide? {
