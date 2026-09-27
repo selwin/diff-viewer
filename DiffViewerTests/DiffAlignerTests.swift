@@ -25,8 +25,16 @@ struct DiffAlignerTests {
             oldLines: ["x = 1"], newLines: ["x  =  1"], hideWhitespace: false, hints: DifftHints())
         #expect(rows.count == 1)
         #expect(rows[0].kind == .modified)
-        #expect(rows[0].old?.highlights == [2..<3])
-        #expect(rows[0].new?.highlights == [2..<5])
+        // Only the two inserted spaces light up, not the `=` between them.
+        #expect(rows[0].old?.highlights == [])
+        #expect(rows[0].new?.highlights == [2..<3, 4..<5])
+    }
+
+    @Test func rewrittenLineWithoutHintsFallsBackToPrefixSuffix() {
+        let rows = DiffAligner.align(
+            oldLines: ["return total"], newLines: ["print(error)"], hideWhitespace: false, hints: DifftHints())
+        #expect(rows[0].old?.highlights == [0..<12])
+        #expect(rows[0].new?.highlights == [0..<12])
     }
 
     @Test func pureAdditionProducesPadRows() {

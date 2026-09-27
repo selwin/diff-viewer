@@ -24,8 +24,8 @@ enum DiffAligner {
             DiffSide(lineIndex: index, highlights: utf16Ranges(hints.newChanges[index] ?? [], in: newLines[index]))
         }
 
-        /// Emits a modified/added/deleted row, adding prefix/suffix highlights when
-        /// difftastic had nothing to say about a pair of textually different lines.
+        /// Emits a modified/added/deleted row. Uses character-level highlights, or a
+        /// prefix/suffix fallback, when difftastic has no ranges for a modified pair.
         func emit(old: Int?, new: Int?) {
             var oldSide = old.map(side(old:))
             var newSide = new.map(side(new:))
@@ -34,7 +34,11 @@ enum DiffAligner {
             case (.some, .some):
                 kind = .modified
                 if oldSide!.highlights.isEmpty, newSide!.highlights.isEmpty {
-                    let (o, n) = prefixSuffixHighlights(oldLines[old!], newLines[new!])
+                    // nil means the lines are too long or too dissimilar for a character
+                    // diff to help, so one span over the differing middle reads better.
+                    let (o, n) =
+                        CharacterDiff.ranges(old: oldLines[old!], new: newLines[new!], hideWhitespace: hideWhitespace)
+                        ?? prefixSuffixHighlights(oldLines[old!], newLines[new!])
                     oldSide!.highlights = o
                     newSide!.highlights = n
                 }
