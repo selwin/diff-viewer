@@ -22,8 +22,8 @@ import Foundation
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
 /// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
-///   code (`126` is ↑, `36` Return, `53` Escape), a character (reaches type-select),
-///   `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
+///   code (`126` is ↑, `36` Return, `53` Escape), a character (typed into the first
+///   responder), `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
 ///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
 ///   popover from outside), `picker` to toggle the commit picker, or `selectAll`
 ///   (⌘A's action, sent to the first responder). It needs no `DIFFVIEWER_SELECT`, so
@@ -389,8 +389,9 @@ enum DebugLaunchOptions {
                 continue
             }
             let code = UInt16(key)
-            // Escape carries its character, or it never reaches `cancelOperation:`.
-            let characters = code == nil ? key : (code == 53 ? "\u{1b}" : "")
+            // Keys carry their characters, or a text field's key bindings never map them
+            // to `moveUp:`, `insertNewline:`, `cancelOperation:` and the like.
+            let characters = code.map(characters(forKeyCode:)) ?? key
             for type in [NSEvent.EventType.keyDown, .keyUp] {
                 guard
                     let event = NSEvent.keyEvent(
@@ -563,6 +564,21 @@ extension DebugLaunchOptions {
         guard finished else { return "search for \(query) did not finish" }
         try? await Task.sleep(for: .milliseconds(100))
         return nil
+    }
+
+    /// The characters a real key press with `code` carries; empty for keys not listed.
+    fileprivate static func characters(forKeyCode code: UInt16) -> String {
+        let scalar: Int? =
+            switch code {
+            case 126: NSUpArrowFunctionKey
+            case 125: NSDownArrowFunctionKey
+            case 115: NSHomeFunctionKey
+            case 119: NSEndFunctionKey
+            case 36, 76: 0x0D
+            case 53: 0x1B
+            default: nil
+            }
+        return scalar.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? ""
     }
 }
 

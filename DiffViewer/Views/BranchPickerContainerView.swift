@@ -1,8 +1,8 @@
 import AppKit
 
-/// The branch picker's AppKit root: header, gutter, the branch table, and the footer or
-/// empty state, laid out top-down by hand. Owns the `BranchPickerState` and applies each
-/// snapshot to the table as the state directs.
+/// The branch picker's AppKit root: header, search field, gutter, the branch table, and
+/// the footer or empty state, laid out top-down by hand. Owns the `BranchPickerState` and
+/// applies each snapshot and query to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
     private(set) var state: BranchPickerState
@@ -17,6 +17,7 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch) -> Void = { _ in }
 
     let header = BranchPickerHeaderView(frame: .zero)
+    let searchField = NSSearchField()
     let gutter = CommitPickerGutterView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = CommitPickerTableView()
@@ -27,7 +28,7 @@ final class BranchPickerContainerView: NSView {
     /// must not read back as the reader's choice.
     var isApplyingSelection = false
     private var hasRevealedHighlight = false
-    private var hasFocusedTable = false
+    private var hasFocusedSearchField = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
 
@@ -35,13 +36,24 @@ final class BranchPickerContainerView: NSView {
         self.state = state
         super.init(frame: .zero)
         clipsToBounds = true
+        configureSearchField()
         configureTable()
-        for view in [gutter, header, scrollView, footer, emptyState] { addSubview(view) }
+        for view in [gutter, header, searchField, scrollView, footer, emptyState] { addSubview(view) }
         renderChrome()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    private func configureSearchField() {
+        searchField.placeholderString = "Search"
+        searchField.setAccessibilityLabel("Search branches")
+        searchField.controlSize = .large
+        searchField.sendsSearchStringImmediately = true
+        searchField.target = self
+        searchField.action = #selector(queryChanged)
+        searchField.delegate = self
+    }
 
     private func configureTable() {
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("branch"))
@@ -55,6 +67,8 @@ final class BranchPickerContainerView: NSView {
         tableView.selectionHighlightStyle = .regular
         tableView.allowsEmptySelection = true
         tableView.focusRingType = .none
+        // The search field keeps the keyboard; a click on a row or its buttons must not take it.
+        tableView.refusesFirstResponder = true
         tableView.usesAutomaticRowHeights = false
         tableView.dataSource = self
         tableView.delegate = self
@@ -128,6 +142,38 @@ final class BranchPickerContainerView: NSView {
         updateSyncButtons(rows: [previous, state.highlightedTableRow].compactMap { $0 })
     }
 
+    // MARK: Query
+
+    /// Typing and the clear button both send this.
+    @objc private func queryChanged() {
+        applyQuery()
+    }
+
+    /// Setting the text by hand sends no action, so the state is updated here too.
+    private func clearQuery() {
+        searchField.stringValue = ""
+        applyQuery()
+    }
+
+    /// The one path from the field's text to the table. An unchanged query (a typed
+    /// space) keeps the scroll and highlight.
+    private func applyQuery() {
+        guard state.setQuery(searchField.stringValue) != .none else { return }
+        isApplyingSelection = true
+        tableView.cancelPress()
+        tableView.reloadData()
+        isApplyingSelection = false
+        syncSelection()
+        // The best match is shown at the top; with no query, the current branch as on open.
+        if state.query.isEmpty {
+            revealHighlight()
+        } else {
+            tableView.scroll(.zero)
+        }
+        renderChrome()
+        tableView.refreshHover()
+    }
+
     private func renderChrome() {
         header.configure(state.headerText)
         switch state.footer {
@@ -166,25 +212,25 @@ final class BranchPickerContainerView: NSView {
             return
         }
         let view = cell.accessory as? BranchRowSyncButtons ?? BranchRowSyncButtons(frame: .zero)
-        // The popover stays up during an operation, and the table keeps the keyboard: a
-        // click must not leave focus on a button that is about to disable.
+        // The popover stays up during an operation, and the search field keeps the
+        // keyboard: a click must not leave focus on a button that is about to disable.
         view.configure(
             buttons, isRevealed: row == tableView.hoveredRow || row == state.highlightedTableRow, branch: branch.name,
             onPull: { [weak self] name in
                 self?.onPull(name)
-                self?.returnFocusToTable()
+                self?.returnFocusToSearchField()
             },
             onPush: { [weak self] name in
                 self?.onPush(name)
-                self?.returnFocusToTable()
+                self?.returnFocusToSearchField()
             },
             onPublish: { [weak self] name, remote in
                 self?.onPublish(name, remote)
-                self?.returnFocusToTable()
+                self?.returnFocusToSearchField()
             },
             onDelete: { [weak self] in
                 self?.onDelete(branch)
-                self?.returnFocusToTable()
+                self?.returnFocusToSearchField()
             })
         cell.accessory = view
         cell.needsLayout = true
@@ -215,7 +261,11 @@ final class BranchPickerContainerView: NSView {
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         gutter.frame = NSRect(
             x: 0, y: headerHeight, width: CommitPickerMetrics.gutterWidth, height: height - headerHeight)
-        let tableTop = headerHeight + 8
+        searchField.frame = NSRect(
+            x: CommitPickerMetrics.contentLeading, y: headerHeight + 8,
+            width: width - CommitPickerMetrics.contentLeading - CommitPickerMetrics.contentTrailing,
+            height: searchField.intrinsicContentSize.height)
+        let tableTop = searchField.frame.maxY + 8
         let footerHeight = footer.isHidden ? 0 : CommitPickerMetrics.footerHeight
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop - footerHeight, 0))
         footer.frame = NSRect(x: 0, y: height - footerHeight, width: width, height: footerHeight)
@@ -252,26 +302,29 @@ final class BranchPickerContainerView: NSView {
         removeKeyObserver()
         // SwiftUI dismantles the view lazily after a dismissal, but detaches it at once.
         guard let window else { return }
-        window.initialFirstResponder = tableView
+        window.initialFirstResponder = searchField
         keyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.focusTableOnce() }
+            MainActor.assumeIsolated { self?.focusSearchFieldOnce() }
         }
-        focusTableOnce()
+        focusSearchFieldOnce()
     }
 
-    /// The table takes focus once per presentation, as soon as the popover's window is
-    /// key: it is key from the moment it shows when the app is active. Under a scripted
-    /// launch it is not key and this waits for the `didBecomeKey` observer.
-    private func focusTableOnce() {
-        guard !hasFocusedTable, let window, window.isKeyWindow else { return }
-        hasFocusedTable = true
-        window.makeFirstResponder(tableView)
+    /// The search field takes focus once per presentation, as soon as the popover's
+    /// window is key: it is key from the moment it shows when the app is active. Under a
+    /// scripted launch it is not key and this waits for the `didBecomeKey` observer.
+    private func focusSearchFieldOnce() {
+        guard !hasFocusedSearchField, let window, window.isKeyWindow else { return }
+        hasFocusedSearchField = true
+        window.makeFirstResponder(searchField)
     }
 
-    private func returnFocusToTable() {
-        window?.makeFirstResponder(tableView)
+    /// The search field holds focus. Only a field that lost it is refocused: refocusing
+    /// selects its text, and the next key would replace the query.
+    private func returnFocusToSearchField() {
+        guard searchField.currentEditor() == nil else { return }
+        window?.makeFirstResponder(searchField)
     }
 
     private func removeKeyObserver() {
@@ -290,7 +343,8 @@ final class BranchPickerContainerView: NSView {
     }
 }
 
-/// Plain keys in the table move the highlight and reveal it; Return and Escape act.
+/// Keys from the search field move the highlight and reveal it; Return and Escape act,
+/// and so does a click on a row.
 extension BranchPickerContainerView: PickerTableHandler {
     func moveUp() {
         state.moveUp()
@@ -324,5 +378,21 @@ extension BranchPickerContainerView: PickerTableHandler {
 
     func cancel() {
         onDismiss()
+    }
+}
+
+/// The search field holds the keyboard; the arrows, Return and Escape reach the list.
+extension BranchPickerContainerView: NSSearchFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)): moveUp()
+        case #selector(NSResponder.moveDown(_:)): moveDown()
+        case #selector(NSResponder.insertNewline(_:)): activate()
+        // Escape clears the query first, then dismisses.
+        case #selector(NSResponder.cancelOperation(_:)):
+            if searchField.stringValue.isEmpty { cancel() } else { clearQuery() }
+        default: return false
+        }
+        return true
     }
 }

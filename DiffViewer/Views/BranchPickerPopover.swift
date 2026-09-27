@@ -30,7 +30,8 @@ struct BranchPickerPopover: View {
                 }
             }
         )
-        .frame(width: 560, height: 520)
+        // The commit picker's 520, plus the search field and its gap, so the list keeps its rows.
+        .frame(width: 560, height: 556)
     }
 }
 
