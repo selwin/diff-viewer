@@ -1,8 +1,8 @@
 import Foundation
 
 /// Parses `git for-each-ref refs/remotes/` written with the field layout in
-/// `GitClient.remoteBranches`: one ref per line, five NUL-separated fields — ref name,
-/// symref target, author name, author email, committer date.
+/// `GitClient.remoteBranches`: one ref per line, four NUL-separated fields — ref name,
+/// symref target, author name, committer date.
 enum RemoteBranchParser {
     /// `refspecsByRemote` holds each remote's `remote.<name>.fetch` values. A ref's remote
     /// and branch come from the one mapping that stores into it, never from its path.
@@ -14,7 +14,7 @@ enum RemoteBranchParser {
         // The literal terminator, as in `LocalBranchParser`.
         return try output.split(separator: "\n").compactMap { line in
             let fields = line.components(separatedBy: "\0")
-            guard fields.count == 5 else { throw BranchParseError.malformedRecord(String(line)) }
+            guard fields.count == 4 else { throw BranchParseError.malformedRecord(String(line)) }
             let ref = fields[0]
             // `origin/HEAD` points at another branch; it is not one to check out.
             guard fields[1].isEmpty else { return nil }
@@ -24,7 +24,7 @@ enum RemoteBranchParser {
                 source.ref.count > heads.count
             else { return nil }
 
-            let date = fields[4]
+            let date = fields[3]
             guard let tipCommittedAt = dates.date(from: date) else {
                 throw BranchParseError.unreadableDate(date)
             }
@@ -33,7 +33,6 @@ enum RemoteBranchParser {
                 name: String(source.ref.dropFirst(heads.count)),
                 ref: ref,
                 tipCommitAuthor: fields[2],
-                tipCommitAuthorEmail: fields[3],
                 tipCommittedAt: tipCommittedAt)
         }
     }

@@ -1124,7 +1124,6 @@ import Testing
         let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
         #expect(main.tipCommittedAt == ISO8601DateFormatter().date(from: stamp))
         #expect(main.tipCommitAuthor == "Tester")
-        #expect(main.tipCommitAuthorEmail == "tester@example.com", "without git's angle brackets")
         #expect(main.upstream?.remote == "origin")
         #expect(main.upstream?.remoteRef == "refs/heads/main")
         #expect(main.upstream?.localRef == "refs/remotes/origin/main")
@@ -1287,7 +1286,6 @@ import Testing
         #expect(branches.map(\.remote) == ["origin", "origin"])
         #expect(branches.map(\.ref) == ["refs/remotes/origin/feature/x", "refs/remotes/origin/main"])
         #expect(branches.first?.tipCommitAuthor == "Tester")
-        #expect(branches.first?.tipCommitAuthorEmail == "tester@example.com", "without git's angle brackets")
         _ = remote
     }
 
@@ -1371,17 +1369,6 @@ import Testing
         }
         #expect(try await repo.client.localBranches().map(\.name) == ["main"])
         _ = remote
-    }
-
-    /// The fixture's environment keeps the developer's global config out, so the key is
-    /// genuinely missing until the repository sets it.
-    @Test func userEmailIsNilUntilConfigured() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        #expect(try await repo.client.userEmail() == nil)
-
-        try await repo.prepareForCommits()
-        #expect(try await repo.client.userEmail() == "tester@example.com")
     }
 
     // MARK: Contents

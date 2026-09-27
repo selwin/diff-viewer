@@ -10,17 +10,29 @@ protocol PickerTableHandler: AnyObject {
     func activate()
     func activate(tableRow: Int)
     func cancel()
+    /// False for rows that take no hover, highlight or click, such as section headers.
+    func canHighlight(tableRow: Int) -> Bool
+}
+
+/// A row cell with controls of its own, whose clicks must not activate the row.
+@MainActor
+protocol PickerRowAccessoryHosting: AnyObject {
+    var accessory: NSView? { get }
 }
 
 /// The picker's table: unmodified navigation keys go to the handler, everything else
 /// (type-select included) to AppKit. A click on a row activates it on release, so a
-/// drag off the row cancels; clicks in the gutter, which belongs to the day labels, and
-/// below the rows are swallowed, and so are clicks on a row's accessory, whose buttons
-/// take their own. Tracks the hovered row.
+/// drag off the row cancels; clicks in the gutter, which belongs to the day labels, on rows
+/// the handler says take no highlight, and below the rows are swallowed, and so are clicks
+/// on a row's accessory, whose buttons take their own. Tracks the hovered row.
 final class CommitPickerTableView: NSTableView {
     weak var handler: (any PickerTableHandler)?
     /// Called with the previously hovered row and the new one whenever the hover moves.
-    var onHoverChange: ((_ previous: Int?, _ current: Int?) -> Void)?
+    /// `pointerMoved` is false when the rows moved under a still pointer: a scroll or a
+    /// reload, which a keyboard move can cause.
+    var onHoverChange: ((_ previous: Int?, _ current: Int?, _ pointerMoved: Bool) -> Void)?
+    /// Points left of this belong to the day labels, not the rows; zero for no gutter.
+    var gutterWidth = CommitPickerMetrics.gutterWidth
 
     private var trackingArea: NSTrackingArea?
     private(set) var hoveredRow: Int?
@@ -80,48 +92,57 @@ final class CommitPickerTableView: NSTableView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        setHoveredRow(contentRow(at: convert(event.locationInWindow, from: nil)))
+        setHoveredRow(contentRow(at: convert(event.locationInWindow, from: nil)), pointerMoved: true)
     }
 
     override func mouseMoved(with event: NSEvent) {
-        setHoveredRow(contentRow(at: convert(event.locationInWindow, from: nil)))
+        setHoveredRow(contentRow(at: convert(event.locationInWindow, from: nil)), pointerMoved: true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        setHoveredRow(nil)
+        setHoveredRow(nil, pointerMoved: true)
     }
 
     /// Re-reads the pointer after the rows moved under it: a scroll or a reload.
     func refreshHover() {
-        guard let window, window.isKeyWindow else { return setHoveredRow(nil) }
+        guard let window, window.isKeyWindow else { return setHoveredRow(nil, pointerMoved: false) }
         let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        setHoveredRow(visibleRect.contains(point) ? contentRow(at: point) : nil)
+        setHoveredRow(visibleRect.contains(point) ? contentRow(at: point) : nil, pointerMoved: false)
     }
 
     private func isOnAccessory(_ point: NSPoint) -> Bool {
         let row = row(at: point)
         guard row >= 0,
-            let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? ScopeRowContentView,
+            let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? any PickerRowAccessoryHosting,
             let accessory = cell.accessory, !accessory.isHidden
         else { return false }
+        // Pills fading out refuse clicks but still swallow them: a press aimed at Pull
+        // must not switch branches instead.
         return accessory.bounds.contains(accessory.convert(point, from: self))
     }
 
-    /// The row under `point`, or nil in the gutter or below the rows.
+    /// The row under `point`, or nil in the gutter, on a row that takes no highlight, or
+    /// below the rows.
     private func contentRow(at point: NSPoint) -> Int? {
-        guard point.x >= CommitPickerMetrics.gutterWidth else { return nil }
+        guard point.x >= gutterWidth else { return nil }
         let row = row(at: point)
-        return row >= 0 ? row : nil
+        guard row >= 0, handler?.canHighlight(tableRow: row) ?? true else { return nil }
+        return row
     }
 
-    private func setHoveredRow(_ row: Int?) {
-        guard row != hoveredRow else { return }
+    private func setHoveredRow(_ row: Int?, pointerMoved: Bool) {
+        guard row != hoveredRow else {
+            // The keyboard may have moved the highlight off this row since; a real move
+            // lets the owner take it back. Nothing is redrawn here.
+            if pointerMoved { onHoverChange?(row, row, true) }
+            return
+        }
         let previous = hoveredRow
         hoveredRow = row
         // The previous row can be past the end after a reload shrank the table.
         for index in [previous, row].compactMap({ $0 }) where index < numberOfRows {
             (rowView(atRow: index, makeIfNecessary: false) as? CommitPickerTableRowView)?.isHovered = index == row
         }
-        onHoverChange?(previous, row)
+        onHoverChange?(previous, row, pointerMoved)
     }
 }

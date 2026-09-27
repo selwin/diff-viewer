@@ -1,5 +1,23 @@
 import Foundation
 
+/// The branch picker's recency sections, newest first.
+enum BranchDateGroup: CaseIterable, Sendable {
+    case today
+    case yesterday
+    /// Two to six days ago.
+    case thisWeek
+    case older
+
+    var title: String {
+        switch self {
+        case .today: "Today"
+        case .yesterday: "Yesterday"
+        case .thisWeek: "This week"
+        case .older: "Older"
+        }
+    }
+}
+
 /// How the commit picker names days: relative for today and yesterday, by weekday
 /// after that, with the year only when it is not this one.
 ///
@@ -16,6 +34,7 @@ struct CommitDayGrouping {
     private let dayMonth: DateFormatter
     private let dayMonthYear: DateFormatter
     private let time: DateFormatter
+    private let shortWeekday: DateFormatter
 
     init(
         calendar: Calendar = .current, locale: Locale = .current, timeZone: TimeZone = .current, now: Date = .now
@@ -39,6 +58,7 @@ struct CommitDayGrouping {
         dayMonth = formatter("d MMM")
         dayMonthYear = formatter("d MMM yyyy")
         time = formatter("HH:mm")
+        shortWeekday = formatter("EEE")
     }
 
     func dayLabel(for date: Date) -> DayLabel {
@@ -73,6 +93,27 @@ struct CommitDayGrouping {
             default: dayMonthYear.string(from: date)
             }
         return "\(day) at \(time.string(from: date))"
+    }
+
+    /// A tip dated after now counts as today.
+    func branchGroup(for date: Date) -> BranchDateGroup {
+        switch daysAgo(date) {
+        case ...0: .today
+        case 1: .yesterday
+        case 2...6: .thisWeek
+        default: .older
+        }
+    }
+
+    /// Short enough for a row's subtitle; the section header says which day.
+    func branchTimeText(for date: Date) -> String {
+        switch branchGroup(for: date) {
+        case .today, .yesterday: return time.string(from: date)
+        case .thisWeek: return shortWeekday.string(from: date)
+        case .older:
+            let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+            return (sameYear ? dayMonth : dayMonthYear).string(from: date)
+        }
     }
 
     /// Whole local days between `date` and `now`; negative for a date after `now`.

@@ -31,8 +31,6 @@ struct LocalBranch: Sendable, Equatable {
     let tipCommittedAt: Date
     /// The tip commit's author, which says nothing about who owns the branch.
     let tipCommitAuthor: String
-    /// The tip commit's author email, without git's angle brackets.
-    let tipCommitAuthorEmail: String
 }
 
 /// The state of a branch against its upstream, as `%(upstream:track)` reports it.

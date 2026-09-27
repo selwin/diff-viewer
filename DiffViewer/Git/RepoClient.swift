@@ -23,8 +23,6 @@ protocol RepoClient: Sendable {
     func localBranches() async throws -> [LocalBranch]
     /// Remote-tracking branches sorted by ref name, without symbolic refs like `origin/HEAD`.
     func remoteBranches() async throws -> [RemoteBranch]
-    /// `git config user.email`, or nil when it is not set.
-    func userEmail() async throws -> String?
     /// The branch's commits, newest first, following first parents only.
     ///
     /// Takes the revision to start from rather than reading HEAD itself: the caller

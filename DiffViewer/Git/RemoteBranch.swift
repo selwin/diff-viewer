@@ -10,8 +10,6 @@ struct RemoteBranch: Sendable, Equatable {
     let ref: String
     /// The tip commit's author, which says nothing about who owns the branch.
     let tipCommitAuthor: String
-    /// The tip commit's author email, without git's angle brackets.
-    let tipCommitAuthorEmail: String
     /// The tip commit's committer date.
     let tipCommittedAt: Date
 }

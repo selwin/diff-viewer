@@ -104,13 +104,13 @@ final class CurrentPillView: NSView {
     }
 }
 
-/// One row's face, shared by the commit picker's cells and pinned Working Tree row and
-/// by the branch picker's cells: gutter labels on the left, the subject, an optional
-/// CURRENT pill, trailing text, and an optional accessory.
+/// One row's face, shared by the commit picker's cells and pinned Working Tree row:
+/// gutter labels on the left, the subject, an optional CURRENT pill, trailing text, and
+/// an optional accessory.
 /// The pill, trailing text and accessory are centred on the subject's capitals. As a
 /// table cell it stays an accessibility cell; a press, or the named accessibility action,
 /// activates the row, and the accessory's own actions are offered beside it.
-final class ScopeRowContentView: NSTableCellView {
+final class ScopeRowContentView: NSTableCellView, PickerRowAccessoryHosting {
     static let identifier = NSUserInterfaceItemIdentifier("ScopeRowContentView")
 
     /// Set by the table's owner; nil inside the pinned row, which presses as a whole,
@@ -131,7 +131,7 @@ final class ScopeRowContentView: NSTableCellView {
     enum TrailingStyle {
         /// A commit's hash: monospaced, tertiary.
         case hash
-        /// Plain words beside the subject — a file count, a branch's tracking: secondary.
+        /// Plain words beside the subject, such as a file count: secondary.
         case secondary
     }
 
@@ -144,8 +144,6 @@ final class ScopeRowContentView: NSTableCellView {
         var trailingStyle: TrailingStyle
         /// The accessibility action's name: what activating this row does.
         var accessibilityActionName: String
-        /// Parts of the subject drawn semibold: the characters a search matched.
-        var subjectEmphasisRanges: [NSRange] = []
     }
 
     private static let subjectFont = NSFont.systemFont(ofSize: 13.5)
@@ -195,12 +193,7 @@ final class ScopeRowContentView: NSTableCellView {
     func configure(_ content: Content) {
         gutterTitle.stringValue = content.gutterTitle ?? ""
         gutterSubtitle.stringValue = content.gutterSubtitle ?? ""
-        // Set either way, so a recycled cell drops its old emphasis.
-        if content.subjectEmphasisRanges.isEmpty {
-            subject.stringValue = content.subject
-        } else {
-            subject.attributedStringValue = Self.emphasized(content.subject, ranges: content.subjectEmphasisRanges)
-        }
+        subject.stringValue = content.subject
         pill.isHidden = !content.showsCurrentPill
         trailing.stringValue = content.trailing
         accessibilityActionName = content.accessibilityActionName
@@ -214,18 +207,6 @@ final class ScopeRowContentView: NSTableCellView {
         }
         setAccessibilityLabel(content.showsCurrentPill ? "\(content.subject), current" : content.subject)
         needsLayout = true
-    }
-
-    /// The subject as its label draws it, with `ranges` semibold.
-    private static func emphasized(_ text: String, ranges: [NSRange]) -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineBreakMode = .byTruncatingTail
-        let string = NSMutableAttributedString(
-            string: text,
-            attributes: [.font: subjectFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
-        let bold = NSFont.systemFont(ofSize: subjectFont.pointSize, weight: .semibold)
-        for range in ranges { string.addAttribute(.font, value: bold, range: range) }
-        return string
     }
 
     // The subject is centred in the row; the trailing text and pill are centred on its
@@ -282,10 +263,22 @@ final class ScopeRowContentView: NSTableCellView {
 }
 
 /// A table row that highlights only its content area, with rounded corners, and
-/// never paints a background of its own so the gutter shows through. The highlight
-/// is a neutral fill, so the text keeps its colors.
+/// never paints a background of its own so the gutter shows through. In the commit
+/// picker the highlight is a neutral fill, so the text keeps its colors; in the branch
+/// picker it is the accent fill, which the cell answers with white text.
 final class CommitPickerTableRowView: NSTableRowView {
     static let identifier = NSUserInterfaceItemIdentifier("CommitPickerTableRowView")
+
+    enum Style {
+        /// Neutral fills inside the content area, beside the gutter.
+        case commitPicker
+        /// An accent fill across the row, and no hover fill: hover moves the highlight.
+        case branchPicker
+    }
+
+    var style = Style.commitPicker {
+        didSet { if style != oldValue { needsDisplay = true } }
+    }
 
     /// Set by the table's pointer tracking; drawn only while the row is not selected.
     var isHovered = false {
@@ -302,22 +295,29 @@ final class CommitPickerTableRowView: NSTableRowView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var highlightPath: NSBezierPath {
-        NSBezierPath(
-            roundedRect: CommitPickerMetrics.contentRect(in: bounds), xRadius: CommitPickerMetrics.cornerRadius,
-            yRadius: CommitPickerMetrics.cornerRadius)
+        let rect =
+            switch style {
+            case .commitPicker: CommitPickerMetrics.contentRect(in: bounds)
+            case .branchPicker: bounds.insetBy(dx: BranchPickerMetrics.rowInset, dy: 0)
+            }
+        return NSBezierPath(
+            roundedRect: rect, xRadius: CommitPickerMetrics.cornerRadius, yRadius: CommitPickerMetrics.cornerRadius)
     }
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isHovered, !isSelected else { return }
+        guard style == .commitPicker, isHovered, !isSelected else { return }
         CommitPickerMetrics.hoverColor.setFill()
         highlightPath.fill()
     }
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        CommitPickerMetrics.highlightColor.setFill()
+        switch style {
+        case .commitPicker: CommitPickerMetrics.highlightColor.setFill()
+        case .branchPicker: NSColor.selectedContentBackgroundColor.setFill()
+        }
         highlightPath.fill()
     }
 }

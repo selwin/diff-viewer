@@ -13,6 +13,7 @@ extension WindowState {
             headState: headState, branches: branches, readStatus: branchReadStatus,
             isSwitchingBranch: isSwitchingBranch, fetchStatus: fetchStatus,
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
-            configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound)
+            configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
+            remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches)
     }
 }

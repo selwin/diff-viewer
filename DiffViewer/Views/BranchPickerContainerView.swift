@@ -1,13 +1,19 @@
 import AppKit
 
-/// The branch picker's AppKit root: header, search field, gutter, and the branch table or
-/// its empty state, laid out top-down by hand. Owns the `BranchPickerState` and
-/// applies each snapshot and query to the table as the state directs.
+/// The branch picker's AppKit root: header, search field, and the branch table or its
+/// empty state, laid out top-down by hand. Owns the `BranchPickerState` and applies each
+/// snapshot and query to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
+    private static let searchInset: CGFloat = 12
+    private static let gap: CGFloat = 8
+    private static let searchHeight: CGFloat = 30
+    /// What an empty list keeps room for: its message, or a spinner.
+    private static let emptyListHeight: CGFloat = 120
+
     private(set) var state: BranchPickerState
 
-    var onActivate: (String) -> Void = { _ in }
+    var onActivate: (BranchActivation) -> Void = { _ in }
     var onDismiss: () -> Void = {}
     var onPull: (String) -> Void = { _ in }
     var onPush: (String) -> Void = { _ in }
@@ -21,8 +27,9 @@ final class BranchPickerContainerView: NSView {
     var now: @MainActor () -> Date = Date.init
 
     let header = BranchPickerHeaderView(frame: .zero)
-    let searchField = NSSearchField()
-    let gutter = CommitPickerGutterView(frame: .zero)
+    let searchField = FilledSearchField()
+    /// The search field's rounded fill; the field itself draws no bezel.
+    private let searchBackground = RoundedFillView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = CommitPickerTableView()
     let emptyState = CommitPickerEmptyStateView(frame: .zero)
@@ -36,6 +43,9 @@ final class BranchPickerContainerView: NSView {
     private var scrollObserver: (any NSObjectProtocol)?
     /// Refreshes the header's fetch text so its relative time doesn't stay "just now".
     private var fetchTimeTimer: Timer?
+    /// The height the popover asks for: the full list's, up to the maximum. Held while a
+    /// query filters the list, so the popover doesn't shrink under the reader's typing.
+    private(set) var preferredHeight: CGFloat = 0
 
     init(state: BranchPickerState) {
         self.state = state
@@ -43,16 +53,37 @@ final class BranchPickerContainerView: NSView {
         clipsToBounds = true
         configureSearchField()
         configureTable()
-        for view in [gutter, header, searchField, scrollView, emptyState] { addSubview(view) }
-        header.onFetch = { [weak self] in self?.onFetch() }
+        for view in [header, searchBackground, searchField, scrollView, emptyState] { addSubview(view) }
+        configureHeader()
         fetchTimeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderFetchTime() }
         }
         renderChrome()
+        updatePreferredHeight()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The header's buttons act on the current branch, and return focus like the rows' do.
+    private func configureHeader() {
+        header.onFetch = { [weak self] in
+            self?.onFetch()
+            self?.returnFocusToSearchField()
+        }
+        header.onPull = { [weak self] name in
+            self?.onPull(name)
+            self?.returnFocusToSearchField()
+        }
+        header.onPush = { [weak self] name in
+            self?.onPush(name)
+            self?.returnFocusToSearchField()
+        }
+        header.onPublish = { [weak self] name, remote in
+            self?.onPublish(name, remote)
+            self?.returnFocusToSearchField()
+        }
+    }
 
     private func configureSearchField() {
         searchField.placeholderString = "Search"
@@ -70,8 +101,9 @@ final class BranchPickerContainerView: NSView {
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
-        tableView.rowHeight = CommitPickerMetrics.rowHeight
-        tableView.intercellSpacing = NSSize(width: 0, height: CommitPickerMetrics.rowGap)
+        tableView.gutterWidth = 0
+        tableView.rowHeight = BranchPickerMetrics.rowHeight
+        tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
         tableView.allowsEmptySelection = true
@@ -82,8 +114,12 @@ final class BranchPickerContainerView: NSView {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.handler = self
-        tableView.onHoverChange = { [weak self] previous, current in
-            self?.updateSyncButtons(rows: [previous, current].compactMap { $0 })
+        // Hover is the highlight, as in a menu. Rows moving under a still pointer (a
+        // keyboard move that scrolled) must not take it back from the keyboard.
+        tableView.onHoverChange = { [weak self] _, current, pointerMoved in
+            guard let self, pointerMoved, let current else { return }
+            // Also sent for a move within the hovered row; only an actual change redraws.
+            if state.highlight(tableRow: current) { syncSelection() }
         }
         scrollView.documentView = tableView
         scrollView.drawsBackground = false
@@ -126,18 +162,19 @@ final class BranchPickerContainerView: NSView {
         // Reloaded cells configured their buttons already; the others are restyled here.
         if change.buttonsChanged {
             let visible = tableView.rows(in: tableView.visibleRect)
-            updateSyncButtons(rows: visible.lowerBound..<visible.upperBound)
+            updateRows(visible.lowerBound..<visible.upperBound, animated: false)
         }
         syncSelection()
         renderChrome()
+        updatePreferredHeight()
         // Rows that arrive after the first layout get the initial reveal here: layout
         // may not run again.
         revealInitialHighlightIfReady()
         tableView.refreshHover()
     }
 
-    /// Moves the table's selection to the highlight without scrolling. The row buttons
-    /// follow the highlight.
+    /// Moves the table's selection to the highlight without scrolling. The rows' colours
+    /// and pills follow the highlight.
     func syncSelection() {
         let wasApplying = isApplyingSelection
         isApplyingSelection = true
@@ -148,7 +185,7 @@ final class BranchPickerContainerView: NSView {
         } else {
             tableView.deselectAll(nil)
         }
-        updateSyncButtons(rows: [previous, state.highlightedTableRow].compactMap { $0 })
+        updateRows([previous, state.highlightedTableRow].compactMap { $0 }, animated: true)
     }
 
     // MARK: Query
@@ -180,6 +217,7 @@ final class BranchPickerContainerView: NSView {
             tableView.scroll(.zero)
         }
         renderChrome()
+        updatePreferredHeight()
         tableView.refreshHover()
     }
 
@@ -190,6 +228,7 @@ final class BranchPickerContainerView: NSView {
 
     private func renderChrome() {
         header.configure(state.headerText, fetch: state.fetchText(now: now()))
+        wireKeyViewLoop()
         switch state.emptyState {
         case nil: emptyState.configure(text: nil, isLoading: false, showsRetry: false)
         case .loading: emptyState.configure(text: "Loading…", isLoading: true, showsRetry: false)
@@ -202,26 +241,31 @@ final class BranchPickerContainerView: NSView {
 
     // MARK: Highlight
 
+    /// Moves the highlight to a row the pointer or a click chose, without scrolling.
     func highlight(tableRow row: Int) {
-        let previous = state.highlightedTableRow
         state.highlight(tableRow: row)
-        updateSyncButtons(rows: [previous, row].compactMap { $0 })
+        syncSelection()
     }
 
     // MARK: Row buttons
 
-    /// Sets `cell`'s Pull and Push, Publish, or Delete from the current snapshot. They show
-    /// on the hovered and the highlighted row, and wherever one runs.
-    func configureSyncButtons(of cell: ScopeRowContentView, row: Int) {
+    /// Sets `cell`'s highlight and its Pull and Push, Publish, or Delete from the current
+    /// snapshot. The buttons show on the highlighted row, and wherever one runs. `animated`
+    /// lets an on-screen cell ease its pills in or out as the highlight moves.
+    func configureHighlightAndButtons(of cell: BranchPickerRowView, row: Int, animated: Bool) {
+        let isHighlighted = row == state.highlightedTableRow
+        cell.isHighlighted = isHighlighted
         guard let buttons = state.syncButtons(forTableRow: row), let branch = state.branch(forTableRow: row) else {
             cell.accessory = nil
+            cell.showAccessory(false, animated: false)
             return
         }
-        let view = cell.accessory as? BranchRowSyncButtons ?? BranchRowSyncButtons(frame: .zero)
+        let view = cell.accessory as? BranchRowSyncButtons ?? BranchRowSyncButtons(style: .rowPills)
+        view.isOnAccent = isHighlighted
         // The popover stays up during an operation, and the search field keeps the
         // keyboard: a click must not leave focus on a button that is about to disable.
         view.configure(
-            buttons, isRevealed: row == tableView.hoveredRow || row == state.highlightedTableRow, branch: branch.name,
+            buttons, isRevealed: isHighlighted, branch: branch.name,
             onPull: { [weak self] name in
                 self?.onPull(name)
                 self?.returnFocusToSearchField()
@@ -239,15 +283,15 @@ final class BranchPickerContainerView: NSView {
                 self?.returnFocusToSearchField()
             })
         cell.accessory = view
-        cell.needsLayout = true
+        cell.showAccessory(view.shouldShow, animated: animated)
     }
 
-    /// Re-configures the buttons of whichever of `rows` have a cell on screen.
-    private func updateSyncButtons(rows: some Sequence<Int>) {
+    /// Re-configures whichever of `rows` have a cell on screen.
+    private func updateRows(_ rows: some Sequence<Int>, animated: Bool) {
         for row in rows where row >= 0 && row < tableView.numberOfRows {
-            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ScopeRowContentView
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? BranchPickerRowView
             else { continue }
-            configureSyncButtons(of: cell, row: row)
+            configureHighlightAndButtons(of: cell, row: row, animated: animated)
         }
     }
 
@@ -265,14 +309,16 @@ final class BranchPickerContainerView: NSView {
         let height = bounds.height
         let headerHeight = header.fittingHeight
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
-        gutter.frame = NSRect(
-            x: 0, y: headerHeight, width: CommitPickerMetrics.gutterWidth, height: height - headerHeight)
+        searchBackground.frame = NSRect(
+            x: Self.searchInset, y: headerHeight + Self.gap, width: width - Self.searchInset * 2,
+            height: Self.searchHeight)
+        let fieldHeight = searchField.intrinsicContentSize.height
         searchField.frame = NSRect(
-            x: CommitPickerMetrics.contentLeading, y: headerHeight + 8,
-            width: width - CommitPickerMetrics.contentLeading - CommitPickerMetrics.contentTrailing,
-            height: searchField.intrinsicContentSize.height)
-        let tableTop = searchField.frame.maxY + 8
-        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop, 0))
+            x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
+            width: searchBackground.frame.width - 8, height: fieldHeight)
+        let tableTop = searchBackground.frame.maxY + Self.gap
+        scrollView.frame = NSRect(
+            x: 0, y: tableTop, width: width, height: max(height - tableTop - BranchPickerMetrics.rowInset, 0))
         emptyState.frame = scrollView.frame
         tableView.sizeLastColumnToFit()
         // The table only knows its rows once it has laid out, so the initial highlight
@@ -297,6 +343,25 @@ final class BranchPickerContainerView: NSView {
         } else {
             tableView.scroll(.zero)
         }
+    }
+
+    /// Recomputed from the unfiltered list only; SwiftUI reads it through `sizeThatFits`.
+    private func updatePreferredHeight() {
+        guard state.query.isEmpty else { return }
+        let list = state.items.reduce(CGFloat(0)) { total, item in
+            total + (item.row == nil ? BranchPickerMetrics.headerRowHeight : BranchPickerMetrics.rowHeight)
+        }
+        let chrome =
+            header.fittingHeight + Self.gap + Self.searchHeight + Self.gap
+            + BranchPickerMetrics.rowInset
+        let height = min(chrome + max(list, Self.emptyListHeight), BranchPickerMetrics.maximumHeight).rounded(.up)
+        guard height != preferredHeight else { return }
+        preferredHeight = height
+        invalidateIntrinsicContentSize()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: BranchPickerMetrics.width, height: preferredHeight)
     }
 
     // MARK: Window
@@ -324,11 +389,37 @@ final class BranchPickerContainerView: NSView {
         window.makeFirstResponder(searchField)
     }
 
-    /// The search field holds focus. Only a field that lost it is refocused: refocusing
-    /// selects its text, and the next key would replace the query.
+    /// The search field holds focus. Only a field that lost it is refocused, with the caret
+    /// at the end: refocusing selects the text, and the next key would replace the query.
     private func returnFocusToSearchField() {
         guard searchField.currentEditor() == nil else { return }
         window?.makeFirstResponder(searchField)
+        let end = searchField.stringValue.utf16.count
+        searchField.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
+    }
+
+    /// Search field → Fetch → Pull → Push → search field, over the header buttons that can
+    /// act; AppKit skips buttons unless Full Keyboard Access is on. Set explicitly rather
+    /// than recalculated, so the order doesn't depend on the popover window.
+    private func wireKeyViewLoop() {
+        let loop = [searchField] + header.keyViews(for: state.headerText.focusOrder)
+        for (view, next) in zip(loop, loop.dropFirst() + [searchField]) { view.nextKeyView = next }
+        // A focused button that just left the loop (disabled or hidden) hands focus back.
+        if let focused = window?.firstResponder as? NSView, focused.isDescendant(of: header),
+            !loop.contains(focused)
+        {
+            returnFocusToSearchField()
+        }
+    }
+
+    /// Return from a focused header button still activates the highlighted row; other keys
+    /// go on up the chain.
+    override func keyDown(with event: NSEvent) {
+        let modifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        guard event.modifierFlags.isDisjoint(with: modifiers), [36, 76].contains(event.keyCode) else {
+            return super.keyDown(with: event)
+        }
+        activate()
     }
 
     private func removeKeyObserver() {
@@ -391,12 +482,16 @@ extension BranchPickerContainerView: PickerTableHandler {
     }
 
     func activate(tableRow row: Int) {
-        guard state.canActivate(tableRow: row), let name = state.branchName(forTableRow: row) else { return }
-        onActivate(name)
+        guard let activation = state.activation(forTableRow: row) else { return }
+        onActivate(activation)
     }
 
     func cancel() {
         onDismiss()
+    }
+
+    func canHighlight(tableRow row: Int) -> Bool {
+        state.canHighlight(tableRow: row)
     }
 }
 
@@ -413,5 +508,81 @@ extension BranchPickerContainerView: NSSearchFieldDelegate {
         default: return false
         }
         return true
+    }
+}
+
+/// A search field without a bezel, drawn over a `RoundedFillView`.
+final class FilledSearchField: NSSearchField {
+    override static var cellClass: AnyClass? {
+        get { FilledSearchFieldCell.self }
+        set {}
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBezeled = false
+        isBordered = false
+        drawsBackground = false
+        focusRingType = .none
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Without a bezel the cell no longer keeps its text clear of the magnifier and the clear
+/// button, so it is told where each goes, and the drawn text and the field editor are
+/// both put in the text's place.
+final class FilledSearchFieldCell: NSSearchFieldCell {
+    private static let buttonWidth: CGFloat = 22
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        searchTextRect(forBounds: rect)
+    }
+
+    override func select(
+        withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int,
+        length selLength: Int
+    ) {
+        super.select(
+            withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate,
+            start: selStart, length: selLength)
+    }
+
+    override func edit(
+        withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?
+    ) {
+        super.edit(
+            withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate,
+            event: event)
+    }
+
+    override func searchButtonRect(forBounds rect: NSRect) -> NSRect {
+        NSRect(x: rect.minX, y: rect.minY, width: Self.buttonWidth, height: rect.height)
+    }
+
+    override func searchTextRect(forBounds rect: NSRect) -> NSRect {
+        let inset = Self.buttonWidth + 2
+        return NSRect(x: rect.minX + inset, y: rect.minY, width: max(rect.width - inset * 2, 0), height: rect.height)
+    }
+
+    override func cancelButtonRect(forBounds rect: NSRect) -> NSRect {
+        NSRect(x: rect.maxX - Self.buttonWidth, y: rect.minY, width: Self.buttonWidth, height: rect.height)
+    }
+}
+
+/// A quiet rounded fill, behind a borderless control.
+final class RoundedFillView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.quaternarySystemFill.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
     }
 }

@@ -11,8 +11,7 @@ extension GitClient {
             Self.executable,
             arguments: [
                 "for-each-ref",
-                "--format=%(refname)%00%(symref)%00%(authorname)%00%(authoremail:trim)"
-                    + "%00%(committerdate:iso-strict)",
+                "--format=%(refname)%00%(symref)%00%(authorname)%00%(committerdate:iso-strict)",
                 "refs/remotes/",
             ],
             currentDirectory: repoRoot,
@@ -55,24 +54,6 @@ extension GitClient {
             refspecs[remote, default: []].append(String(record[record.index(after: newline)...]))
         }
         return refspecs
-    }
-
-    /// `git config user.email`, or nil when it is not set.
-    func userEmail() async throws -> String? {
-        let result = try await ProcessRunner.run(
-            Self.executable,
-            arguments: ["config", "--get", "user.email"],
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
-        // Status 1 is "no such key"; any other non-zero is a real config failure.
-        if result.status == 1 { return nil }
-        guard result.status == 0 else {
-            throw ProcessError.failed(
-                command: "git config user.email", status: result.status, stderr: result.stderrString)
-        }
-        let email = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        return email.isEmpty ? nil : email
     }
 
     /// Creates `branch` from the remote-tracking ref `trackingRef` and switches to it. Git

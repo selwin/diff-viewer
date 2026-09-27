@@ -1,45 +1,36 @@
 import AppKit
 
-/// The branch picker's header: where HEAD is, with the CURRENT pill when it is on a
-/// branch, a detail line for how far that branch is from its upstream and how the fetch
-/// went, and a Fetch button with a spinner while a round runs. Pull and Push live on the
-/// rows.
+/// The branch picker's header: where HEAD is, a detail line for how far that branch is from
+/// its upstream and how the fetch went, the current branch's Pull and Push, and a round
+/// Fetch button that spins while a round runs.
 final class BranchPickerHeaderView: NSVisualEffectView {
     private static let topPadding: CGFloat = 13
     private static let sidePadding: CGFloat = 16
     private static let bottomPadding: CGFloat = 12
-    private static let lineGap: CGFloat = 3
-    private static let controlGap: CGFloat = 6
+    private static let lineGap: CGFloat = 2
+    private static let controlGap: CGFloat = 8
 
     private let title = CommitPickerMetrics.label(font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
-    private let pill = CurrentPillView(frame: .zero)
     private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private let hairline = HairlineView(frame: .zero)
-    private let fetchSpinner = NSProgressIndicator(frame: .zero)
-    private let fetchButton = NSButton(title: "Fetch", target: nil, action: nil)
+    private let syncButtons = BranchRowSyncButtons(style: .header)
+    private let fetchButton = FetchButton(frame: .zero)
 
     var onFetch: () -> Void = {}
-    /// The upstream part of the detail line, kept so the fetch text can be redrawn alone.
-    private var upstreamDetail = ""
+    var onPull: (String) -> Void = { _ in }
+    var onPush: (String) -> Void = { _ in }
+    /// Takes the branch, then the remote to publish it to.
+    var onPublish: (String, String) -> Void = { _, _ in }
+    private var text = BranchPickerHeaderText(title: "")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
         material = .headerView
         blendingMode = .withinWindow
-        fetchSpinner.style = .spinning
-        fetchSpinner.controlSize = .small
-        fetchSpinner.isDisplayedWhenStopped = false
-        fetchSpinner.sizeToFit()
-        fetchButton.controlSize = .small
-        fetchButton.bezelStyle = .push
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
-        // The search field keeps the keyboard.
-        fetchButton.refusesFirstResponder = true
-        fetchButton.sizeToFit()
-        for view in [title, pill, detail, hairline, fetchSpinner, fetchButton] { addSubview(view) }
-        pill.isHidden = true
+        for view in [title, detail, hairline, syncButtons, fetchButton] { addSubview(view) }
     }
 
     @available(*, unavailable)
@@ -49,29 +40,43 @@ final class BranchPickerHeaderView: NSVisualEffectView {
 
     /// `fetch` follows the upstream on the detail line, and its tooltip covers the line.
     func configure(_ text: BranchPickerHeaderText, fetch: BranchPickerFetchText?) {
+        self.text = text
         title.stringValue = text.title
-        pill.isHidden = !text.showsCurrentPill
-        upstreamDetail = text.detail
         configureFetch(fetch)
         fetchButton.isEnabled = text.canFetch
-        fetchSpinner.isHidden = !text.showsSpinner
-        if text.showsSpinner {
-            fetchSpinner.startAnimation(nil)
+        fetchButton.isSpinning = text.showsSpinner
+        if let branch = text.branch {
+            syncButtons.configure(
+                text.buttons, isRevealed: true, branch: branch,
+                onPull: { [weak self] in self?.onPull($0) }, onPush: { [weak self] in self?.onPush($0) },
+                onPublish: { [weak self] in self?.onPublish($0, $1) }, onDelete: {})
+            syncButtons.isHidden = !syncButtons.shouldShow
         } else {
-            fetchSpinner.stopAnimation(nil)
+            syncButtons.isHidden = true
         }
         needsLayout = true
     }
 
-    /// Redraws only the fetch text. The detail line's frame spans the header whatever it
+    /// Redraws only the fetch text. The detail line's frame spans its space whatever it
     /// says, so this needs no layout.
     func configureFetch(_ fetch: BranchPickerFetchText?) {
-        detail.stringValue = [upstreamDetail, fetch?.text ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+        detail.stringValue = text.detail(fetch: fetch)
         detail.toolTip = fetch?.tooltip
     }
 
     @objc private func fetchClicked() {
         onFetch()
+    }
+
+    /// The header's controls for `order`, which the container chains after the search field.
+    func keyViews(for order: [BranchPickerHeaderText.Control]) -> [NSView] {
+        order.map { control in
+            switch control {
+            case .fetch: fetchButton
+            case .pull: syncButtons.pullButton
+            case .push: syncButtons.pushButton
+            }
+        }
     }
 
     /// Two text lines, padding, and the hairline; constant so counts arriving later do
@@ -89,42 +94,114 @@ final class BranchPickerHeaderView: NSVisualEffectView {
 
     override func layout() {
         super.layout()
-        let maxX = bounds.width - Self.sidePadding
-        let titleSize = CommitPickerMetrics.naturalSize(of: title)
-        let pillWidth = pill.isHidden ? 0 : pill.intrinsicContentSize.width + 8
-        let spinnerSize = fetchSpinner.frame.size
-        let buttonSize = fetchButton.frame.size
-        // Everything on the trailing edge is measured first; the title takes what is left.
-        var trailing = maxX - buttonSize.width - Self.controlGap
-        let spinnerMaxX = trailing
-        if !fetchSpinner.isHidden { trailing -= spinnerSize.width + Self.controlGap }
-        let titleWidth = min(titleSize.width, trailing - Self.sidePadding - pillWidth)
-        title.frame = NSRect(
-            x: Self.sidePadding, y: Self.topPadding, width: max(titleWidth, 0), height: titleSize.height)
-
-        let centerY = CommitPickerMetrics.capCenterY(of: title)
-        fetchButton.frame = backingAlignedRect(
-            NSRect(
-                x: maxX - buttonSize.width, y: centerY - buttonSize.height / 2, width: buttonSize.width,
-                height: buttonSize.height),
-            options: CommitPickerMetrics.pixelAlignment)
-        if !fetchSpinner.isHidden {
-            fetchSpinner.frame = NSRect(
-                x: spinnerMaxX - spinnerSize.width, y: centerY - spinnerSize.height / 2, width: spinnerSize.width,
-                height: spinnerSize.height)
+        let titleHeight = CommitPickerMetrics.naturalSize(of: title).height
+        let centerY = (Self.topPadding + titleHeight + Self.lineGap + Self.detailHeight + Self.topPadding) / 2
+        // The controls on the trailing edge are placed first; the text takes what is left.
+        var trailing = bounds.width - Self.sidePadding
+        // Both controls carry a margin for their focus rings; the gaps are between the shapes.
+        let margin = SyncPillButton.focusRingMargin
+        let fetchSide = FetchButton.frameSide
+        fetchButton.frame = NSRect(
+            x: trailing - fetchSide + margin, y: (centerY - fetchSide / 2).rounded(), width: fetchSide,
+            height: fetchSide)
+        trailing = fetchButton.frame.minX + margin - Self.controlGap
+        if !syncButtons.isHidden {
+            let size = syncButtons.intrinsicContentSize
+            syncButtons.frame = NSRect(
+                x: trailing - size.width + margin, y: (centerY - size.height / 2).rounded(), width: size.width,
+                height: size.height)
+            trailing = syncButtons.frame.minX + margin - Self.controlGap
         }
-
-        if !pill.isHidden {
-            let pillSize = pill.intrinsicContentSize
-            pill.frame = backingAlignedRect(
-                NSRect(
-                    x: title.frame.maxX + 8, y: centerY - pillSize.height / 2,
-                    width: pillSize.width, height: pillSize.height),
-                options: CommitPickerMetrics.pixelAlignment)
-        }
+        let textWidth = max(trailing - Self.sidePadding, 0)
+        title.frame = NSRect(x: Self.sidePadding, y: Self.topPadding, width: textWidth, height: titleHeight)
         detail.frame = NSRect(
-            x: Self.sidePadding, y: title.frame.maxY + Self.lineGap, width: maxX - Self.sidePadding,
-            height: Self.detailHeight)
+            x: Self.sidePadding, y: title.frame.maxY + Self.lineGap, width: textWidth, height: Self.detailHeight)
         hairline.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
+    }
+}
+
+/// A round button with a symbol that turns while a fetch runs.
+final class FetchButton: NSButton {
+    private static let side: CGFloat = 28
+    /// The circle plus room for its focus ring, which would otherwise be clipped.
+    static let frameSide = side + SyncPillButton.focusRingMargin * 2
+
+    private let symbol = NSImageView()
+
+    /// Also shown as disabled: a round is already running.
+    var isSpinning = false {
+        didSet {
+            guard isSpinning != oldValue else { return }
+            if isSpinning {
+                symbol.addSymbolEffect(.rotate, options: .repeating)
+            } else {
+                symbol.removeAllSymbolEffects()
+            }
+            applyTint()
+        }
+    }
+
+    override var isEnabled: Bool {
+        didSet { applyTint() }
+    }
+
+    override var isHighlighted: Bool {
+        didSet { needsDisplay = true }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        isBordered = false
+        title = ""
+        // Takes focus for keyboard users, like the header's Pull and Push.
+        focusRingType = .default
+        toolTip = "Fetch (⌘R)"
+        setAccessibilityLabel("Fetch")
+        symbol.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+        symbol.imageScaling = .scaleNone
+        addSubview(symbol)
+        applyTint()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// The symbol is decoration: clicks on it belong to the button.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return bounds.contains(local) ? self : nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: Self.frameSide, height: Self.frameSide)
+    }
+
+    private var circle: NSBezierPath {
+        NSBezierPath(ovalIn: focusRingMaskBounds)
+    }
+
+    override var focusRingMaskBounds: NSRect {
+        let inset = SyncPillButton.focusRingMargin
+        return bounds.insetBy(dx: inset, dy: inset)
+    }
+
+    override func drawFocusRingMask() {
+        circle.fill()
+    }
+
+    private func applyTint() {
+        symbol.contentTintColor = isEnabled || isSpinning ? .secondaryLabelColor : .tertiaryLabelColor
+    }
+
+    override func layout() {
+        super.layout()
+        symbol.frame = bounds
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : 0.07).setFill()
+        circle.fill()
     }
 }

@@ -58,7 +58,6 @@ struct TaggedClient: RepoClient {
     func headState() async throws -> HeadState { .named("main") }
     func localBranches() async throws -> [LocalBranch] { [] }
     func remoteBranches() async throws -> [RemoteBranch] { [] }
-    func userEmail() async throws -> String? { nil }
     func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] { [] }
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }

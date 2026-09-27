@@ -148,7 +148,7 @@ struct WindowStateBranchPickerTests {
 
         var picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
         #expect(!picker.rows.isEmpty)
-        #expect(picker.rows.indices.allSatisfy { !picker.canActivate(tableRow: $0) })
+        #expect(picker.items.indices.allSatisfy { !picker.canActivate(tableRow: $0) })
 
         await state.switchBranch(to: "feature")
         await repo.client.holdSwitchBranch(false)
@@ -157,6 +157,6 @@ struct WindowStateBranchPickerTests {
         #expect(await repo.client.switchBranchCalls == ["feature"], "the second call was ignored")
 
         picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
-        #expect(picker.rows.indices.contains { picker.canActivate(tableRow: $0) }, "rows unlock once it settles")
+        #expect(picker.items.indices.contains { picker.canActivate(tableRow: $0) }, "rows unlock once it settles")
     }
 }

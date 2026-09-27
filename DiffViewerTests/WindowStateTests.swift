@@ -53,7 +53,6 @@ actor StubRepoClient: RepoClient {
     private var stubbedRemoteBranches: [RemoteBranch] = []
     private var failsRemoteBranches = false
     private(set) var remoteBranchesCalls = 0
-    private var stubbedUserEmail: String?
     /// Every remote checkout asked for, in order, whether or not it succeeded.
     private(set) var checkoutTrackingCalls: [(branch: String, trackingRef: String)] = []
     private var failsCheckoutTracking = false
@@ -333,7 +332,6 @@ actor StubRepoClient: RepoClient {
 
     func set(remoteBranches branches: [RemoteBranch]) { stubbedRemoteBranches = branches }
     func fail(remoteBranches on: Bool) { failsRemoteBranches = on }
-    func set(userEmail email: String?) { stubbedUserEmail = email }
     /// Makes `checkoutTracking` throw, after recording the call.
     func fail(checkoutTracking on: Bool) { failsCheckoutTracking = on }
 
@@ -376,8 +374,6 @@ actor StubRepoClient: RepoClient {
         }
         return stubbedRemoteBranches
     }
-
-    func userEmail() async throws -> String? { stubbedUserEmail }
 
     /// Adds the tracking branch and moves HEAD onto it on success, as git would.
     func checkoutTracking(branch: String, trackingRef: String) async throws {
