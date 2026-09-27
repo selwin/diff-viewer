@@ -119,6 +119,13 @@ enum DiffAligner {
         return String(line.unicodeScalars.filter { !asciiWhitespace.contains($0) })
     }
 
+    /// True when every scalar of `c` is ASCII whitespace, so `"\r\n"` counts but a space
+    /// carrying a combining mark does not. Stricter than `key`, which drops the space scalar
+    /// from such a grapheme; character highlighting sees it whole and may still flag it.
+    static func isIgnorableWhitespace(_ c: Character) -> Bool {
+        c.unicodeScalars.allSatisfy { asciiWhitespace.contains($0) }
+    }
+
     /// Converts UTF-8 byte ranges from difftastic into UTF-16 ranges, merging overlaps.
     static func utf16Ranges(_ byteRanges: [Range<Int>], in line: String) -> [Range<Int>] {
         guard !byteRanges.isEmpty else { return [] }
