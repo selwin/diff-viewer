@@ -28,7 +28,7 @@ struct FoldOptions: Sendable {
     /// Equal rows kept visible on each side of a change block.
     var contextLines = 5
     /// Rows revealed by one expand-up / expand-down click.
-    var expansionStep = 20
+    var expansionStep = 10
     /// A separator costs a row; hiding fewer rows than this is not worth a click.
     var minimumHiddenRun = 4
 
@@ -158,10 +158,10 @@ struct FoldedRows: Sendable {
 
 /// Controls shown on a separator, in left-to-right order.
 enum FoldControl: Equatable, Sendable {
-    /// Reveal the last `expansionStep` hidden rows (extends the hunk below upward).
-    case expandUp
     /// Reveal the first `expansionStep` hidden rows (extends the hunk above downward).
     case expandDown
+    /// Reveal the last `expansionStep` hidden rows (extends the hunk below upward).
+    case expandUp
     /// Reveal the whole run (shown alone when the run fits in one step).
     case expandRun
 }
@@ -207,6 +207,6 @@ enum RowFolding {
         if hidden.count <= options.expansionStep { return [.expandRun] }
         if hidden.lowerBound == 0 { return [.expandUp] }
         if hidden.upperBound == documentRowCount { return [.expandDown] }
-        return [.expandUp, .expandDown]
+        return [.expandDown, .expandUp]
     }
 }

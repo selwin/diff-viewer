@@ -127,7 +127,7 @@ struct RowFoldingTests {
         #expect(RowFolding.controls(for: 0..<20, documentRowCount: 100, options: options) == [.expandRun])
         #expect(RowFolding.controls(for: 0..<45, documentRowCount: 100, options: options) == [.expandUp])
         #expect(RowFolding.controls(for: 57..<100, documentRowCount: 100, options: options) == [.expandDown])
-        #expect(RowFolding.controls(for: 30..<60, documentRowCount: 100, options: options) == [.expandUp, .expandDown])
+        #expect(RowFolding.controls(for: 30..<60, documentRowCount: 100, options: options) == [.expandDown, .expandUp])
     }
 
     @Test func invariantsHoldForRandomBlockSets() {

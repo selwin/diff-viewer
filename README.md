@@ -33,8 +33,8 @@ experience. We want this to be speedy when reviewing large diffs.
   both sides (Swift, Python, JS, TS/TSX, JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby,
   YAML, TOML, Java, Kotlin, PHP, Markdown).
 - **Collapse unchanged lines** (⇧⌘U, on by default): changed hunks plus 5 lines of
-  context. Each hidden run is one separator that expands 20 lines at a time; ⌥-click
-  reveals the whole file.
+  context. Each hidden run is one separator: its arrows reveal 10 lines at a time, a
+  click elsewhere on it reveals the whole run, and ⌥-click reveals the whole file.
 - **Hide whitespace** (⇧⌘W), meaning exactly git's `-w`.
 - **Find** (⌘F) with ⌘G / ⇧⌘G to step, and a side scope (⌥⌘← / ⌥⌘→) that shows the
   match count on each side.
