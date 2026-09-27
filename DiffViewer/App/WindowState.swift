@@ -192,20 +192,21 @@ final class WindowState {
             Task { @MainActor [weak self] in await self?.fetchForBranchPicker() }
         }
     }
-    /// How the picker's automatic fetch is going: it drives the header's spinner and the
-    /// footer's news.
+    /// Where the fetch round is: it drives the header's spinner and holds a pull while the
+    /// remotes are listed.
     private(set) var fetchStatus: FetchStatus = .idle
-    /// Every remote being fetched, the current branch's included. A remote stays here until
-    /// the branch re-read after its fetch lands, so nothing acts on its old counts.
+    /// The remotes the running round fetches. They stay here until the round's branch read
+    /// publishes, so nothing acts on counts from before the round.
     private(set) var fetchingRemotes: Set<String> = []
-    /// The repository's remotes, as last read when the picker opened.
+    /// The repository's remotes, as the last fetch round listed them.
     private(set) var remotes: [String] = []
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
     /// branches whose upstream the fetch mapping doesn't cover.
     private(set) var configuredUpstreamRemotes: [String: String] = [:]
-    /// Remote to git's message, for each remote other than the current branch's whose
-    /// fetch failed. Reset when the picker opens; a remote's entry clears when it succeeds.
-    private(set) var secondaryFetchFailures: [String: String] = [:]
+    /// How each remote fared in the last finished fetch round, or nil before the first.
+    private(set) var lastFetchRound: FetchRound?
+    /// The remote-tracking refs fetch rounds brought in, cleared by a successful switch.
+    private(set) var newRemoteBranches: Set<String> = []
     /// The pull or push queued or running, and its branch, or nil when neither is.
     private(set) var activeSync: ActiveSync?
     /// A commit message is being written by the model.
@@ -233,8 +234,9 @@ final class WindowState {
     private var initialRefresh: Task<Void, Never>?
     /// Writes the commit message the sheet's Generate button asks for.
     private let commitMessageGenerator: any CommitMessageGenerator
-    /// The clock the fetch cooldown is measured against; injected so tests can move it.
-    private let now: @MainActor () -> Date
+    /// The clock the fetch cooldown and the picker's fetch times are measured against;
+    /// injected so tests can move it.
+    let now: @MainActor () -> Date
 
     init(
         preferences: Preferences, cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
@@ -836,12 +838,17 @@ extension WindowState {
     /// Returns whether this read published anything: a failure that publishes `.failed`
     /// counts, a superseded or closed one does not. The fetch waits on that, so a read of
     /// its own lands before it reports the counts as caught up.
+    ///
+    /// `round` is stored once this read holds the newest ticket: only this read or a newer
+    /// one can publish after that point, so the round is never paired with branches read
+    /// before its fetches ended.
     @discardableResult
-    private func refreshHeadState(session: RepoSession) async -> Bool {
+    private func refreshHeadState(session: RepoSession, finishing round: PendingFetchRound? = nil) async -> Bool {
         // A watcher callback queued before its window closed: skip the read.
         guard session === self.session, !isClosed else { return false }
         session.headStateCheckSerial += 1
         let ticket = session.headStateCheckSerial
+        if let round { session.pendingFetchRound = round }
         // A failure leaves the last known pair on show: the next tick reads again, and
         // stale beats blank. Nothing is published until every read is in, so the picker
         // never sees a HEAD the branch lists have not caught up with.
@@ -859,6 +866,7 @@ extension WindowState {
         } catch {
             guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
             branchReadStatus = .failed
+            publishPendingFetchRound(session: session)
             publishedBranchRead(session: session)
             return true
         }
@@ -867,6 +875,7 @@ extension WindowState {
         branches = list
         remoteBranches = remoteList
         branchReadStatus = .loaded
+        publishPendingFetchRound(session: session)
         publishedBranchRead(session: session)
         return true
     }
@@ -1202,6 +1211,7 @@ extension WindowState {
     /// `checkout` is the git call that moves HEAD; everything after it is shared.
     private func runBranchSwitch(session: RepoSession, checkout: (any RepoClient) async throws -> Void) async {
         guard session === self.session, !isClosed else { return }
+        let headBefore = headState
         var failure: (any Error)?
         do { try await checkout(session.client) } catch { failure = error }
         guard session === self.session, !isClosed else { return }
@@ -1235,7 +1245,12 @@ extension WindowState {
         // page when it did; two branches at one commit keep their list.
         await reloadHistoryIfHeadMoved(session: session)
         await refreshHeadState(session: session)
-        guard session === self.session, !isClosed, let failure else { return }
+        guard session === self.session, !isClosed else { return }
+        // A failed post-checkout hook can still have moved HEAD, and a successful checkout
+        // whose re-read failed still did. A failed checkout whose re-read also failed may
+        // have moved HEAD unseen; dropping the flags beats leaving stale ones.
+        if failure == nil || headState != headBefore || branchReadStatus == .failed { newRemoteBranches = [] }
+        guard let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
     }
@@ -1271,216 +1286,194 @@ extension WindowState {
     /// shows the last fetch instead of running another.
     static let fetchCooldown: TimeInterval = 60
 
-    /// Which remote a fetch should update: what the current branch tracks, else origin,
-    /// else the only remote there is. An upstream naming a remote git no longer has is
-    /// ignored, since fetching it could only fail.
-    static func resolveFetchRemote(headState: HeadState?, branches: [LocalBranch], remotes: [String]) -> String? {
-        if case let .named(name)? = headState,
-            let remote = branches.first(where: { $0.name == name })?.upstream?.remote,
-            remotes.contains(remote)
-        {
-            return remote
-        }
-        if remotes.contains("origin") { return "origin" }
-        return remotes.count == 1 ? remotes.first : nil
+    /// What asked for a fetch round.
+    private enum FetchRoundKind {
+        /// Opening the picker: skips remotes inside their cooldown, and stops if the picker
+        /// closes before git fetch starts.
+        case opening
+        /// Fetch or ⌘R: every remote, however recently fetched.
+        case manual
     }
 
-    /// Opening the branch picker refreshes the remote-tracking refs its ahead/behind
-    /// counts are read from, then re-reads the branches. The header's remote goes first,
-    /// then every other remote a listed branch tracks.
+    /// Opening the branch picker refreshes the remote-tracking refs its counts are read
+    /// from: a round over every remote outside its cooldown.
     ///
     /// Runs on its own task rather than the write chain: a fetch updates the refs the
     /// remote's configured mappings name, independently of the worktree and index writes
-    /// that chain serializes. A failure is footer news, never `errorMessage`.
-    ///
-    /// Before git fetch starts, every step also checks that the picker is still up: a
-    /// dismissal stops the work before it costs anything. Once the fetch is running only
-    /// the session is checked, so a dismissal mid-fetch still records the outcome and
-    /// refreshes the counts, while a closed window publishes nothing.
+    /// that chain serializes. A failure is header news, never `errorMessage`.
     func fetchForBranchPicker() async {
-        guard let covered = await fetchPrimaryRemote(attempted: []), let session else { return }
-        await fetchSecondaryRemotes(excluding: covered, session: session)
+        await fetchRound(.opening)
     }
 
-    /// Starts a branch read and waits for a publication. A read superseded here waits for
-    /// its replacement instead of retrying: the newest read publishes unless the window
-    /// closes, which wakes the waiters too.
-    private func awaitBranchRead(session: RepoSession) async {
-        let before = session.branchReadGeneration
-        if await refreshHeadState(session: session) { return }
-        guard session === self.session, !isClosed, session.branchReadGeneration == before else { return }
-        await withCheckedContinuation { session.branchReadWaiters.append($0) }
+    /// The picker's Fetch: a round over every remote, cooldown or not.
+    func fetchAllRemotes() async {
+        await fetchRound(.manual)
     }
 
-    /// Fetches the current branch's remote, reporting through `fetchStatus`. `attempted`
-    /// holds the remotes this opening already tried, so the follow-up cannot bounce between
-    /// two of them. Returns the remotes it covered, or nil when the opening stopped and the
-    /// other remotes should be skipped.
-    ///
-    /// A reopening while this runs makes it start over once it releases the reservation, so
-    /// the remotes are read again; the cooldown spares a second fetch of a remote that just
-    /// succeeded.
-    private func fetchPrimaryRemote(attempted: Set<String>) async -> Set<String>? {
+    /// Runs a round, or waits for the one already running: one round per session. A manual
+    /// request still gets every remote fetched: it upgrades a round that hasn't applied the
+    /// cooldown yet, and queues one follow-up behind a round whose cooldown skipped a remote.
+    private func fetchRound(_ kind: FetchRoundKind) async {
+        guard let session, !isClosed else { return }
+        if let running = session.activeFetchRound {
+            if kind == .manual {
+                switch session.fetchRoundSkippedRemotes {
+                case nil: session.fetchRoundUpgradedToManual = true
+                case true?: return await manualRound(after: running, session: session)
+                case false?: break
+                }
+            }
+            await running.value
+            return
+        }
         // Re-checked here because the flag may already be false again by the time the
         // presentation's task runs.
-        guard let session, !isClosed, isBranchPickerPresented else { return nil }
+        guard kind == .manual || isBranchPickerPresented else { return }
         // A pull or push is about to move the same counts; let it publish them.
-        guard activeSync == nil else { return nil }
-        if case .fetching = fetchStatus {
-            // Join the running opening; it reads the remotes again for this one when it ends.
-            session.remoteRediscoveryRequested = true
-            return nil
-        }
-        let previous = fetchStatus
-        fetchStatus = .fetching(remote: nil)  // before the first suspension: the reservation
-        if attempted.isEmpty {
-            secondaryFetchFailures = [:]
-            session.pickerOpeningGeneration += 1
-            session.remoteRediscoveryRequested = false
-        }
+        guard activeSync == nil else { return }
+        fetchStatus = .discovering
+        session.fetchRoundUpgradedToManual = false
+        session.fetchRoundSkippedRemotes = nil
+        let round = Task { await self.runFetchRound(kind, session: session) }
+        // Before the first suspension, so every later caller joins this round.
+        session.activeFetchRound = round
+        await round.value
+    }
 
-        func isSessionCurrentAndOpen() -> Bool { session === self.session && !isClosed }
-        /// Releases the reservation, publishing nothing for a window that has moved on.
-        func finish(_ status: FetchStatus) {
-            guard isSessionCurrentAndOpen() else { return }
-            fetchStatus = status
+    /// Waits for `running` to finish, then runs a manual round, sharing the one already
+    /// queued if there is one.
+    private func manualRound(after running: Task<Void, Never>, session: RepoSession) async {
+        if let queued = session.followUpManualRound { return await queued.value }
+        let followUp = Task {
+            await running.value
+            // Released before the round starts, so a request that finds a round skipping
+            // remotes then can't wait on this task from inside it.
+            session.followUpManualRound = nil
+            await self.fetchRound(.manual)
         }
-        /// Releases the reservation; a reopening that arrived meanwhile gets a fresh start.
-        func release(_ status: FetchStatus, covering covered: Set<String>?) async -> Set<String>? {
-            finish(status)
-            guard isSessionCurrentAndOpen(), session.remoteRediscoveryRequested else { return covered }
-            return await fetchPrimaryRemote(attempted: [])
-        }
+        session.followUpManualRound = followUp
+        await followUp.value
+    }
 
-        // A fetch never blocks a retry of the local read, and a retry that works carries
-        // on to the fetch below whatever the previous attempt ended as.
-        if branchReadStatus != .loaded {
-            await awaitBranchRead(session: session)
-            guard isSessionCurrentAndOpen(), isBranchPickerPresented, branchReadStatus == .loaded else {
-                return await release(previous, covering: nil)
-            }
+    /// Lists the remotes, fetches them all at once, then re-reads the branches once and
+    /// publishes the result with them.
+    ///
+    /// An opening round checks the picker is still up at every step before git fetch
+    /// starts, so a dismissal stops it before it costs anything. Once the fetches run only
+    /// the session is checked: a dismissal still records the outcome and refreshes the
+    /// counts, while a closed window publishes nothing.
+    private func runFetchRound(_ kind: FetchRoundKind, session: RepoSession) async {
+        func isWanted() -> Bool {
+            session === self.session && !isClosed
+                && (kind == .manual || session.fetchRoundUpgradedToManual || isBranchPickerPresented)
         }
 
         let remotes: [String]
         do {
             remotes = try await session.client.remoteNames()
-            guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-                return await release(previous, covering: nil)
-            }
         } catch {
-            guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-                return await release(previous, covering: nil)
-            }
-            return await release(.failed(remote: nil, message: error.localizedDescription), covering: nil)
+            guard isWanted() else { return abandonFetchRound(session: session) }
+            let round = FetchRound(discoveryError: error.localizedDescription)
+            let pending = PendingFetchRound(round: round, before: nil, fetched: [])
+            await awaitBranchRead(session: session, finishing: pending)
+            return
         }
         // A failed read keeps the previous value; the fetch doesn't depend on it.
         let configured = try? await session.client.configuredUpstreamRemotes()
-        guard isSessionCurrentAndOpen(), isBranchPickerPresented else {
-            return await release(previous, covering: nil)
-        }
+        guard isWanted() else { return abandonFetchRound(session: session) }
         self.remotes = remotes
         if let configured { configuredUpstreamRemotes = configured }
-
-        guard let remote = Self.resolveFetchRemote(headState: headState, branches: branches, remotes: remotes) else {
-            return await release(.noFetchTarget, covering: attempted)
-        }
-        let covered = attempted.union([remote])
-        // The footer describes the remote that was wanted, so a fresh one reports its own
-        // last fetch rather than whatever the previous attempt left behind. Nothing
-        // follows a cooldown hit: the branches it resolved from are the ones just read.
-        if let at = session.lastSuccessfulFetchAtByRemote[remote], now().timeIntervalSince(at) < Self.fetchCooldown {
-            return await release(.fetched(remote: remote, at: at), covering: covered)
-        }
         // A push admitted during discovery is about to move the same counts; let it
-        // publish them. The footer keeps what it said before this opening.
-        guard activeSync == nil else { return await release(previous, covering: nil) }
+        // publish them.
+        guard activeSync == nil else { return abandonFetchRound(session: session) }
 
-        fetchStatus = .fetching(remote: remote)
-        let result = await startFetch(remote: remote, session: session).value
-        guard isSessionCurrentAndOpen() else { return nil }
-        switch result {
-        case let .success(at): finish(.fetched(remote: remote, at: at))
-        case let .failure(error): finish(.failed(remote: remote, message: error.localizedDescription))
-        }
-        // A fresh opening resolves the current remote itself, so it replaces the follow-up.
-        if session.remoteRediscoveryRequested { return await fetchPrimaryRemote(attempted: []) }
-
-        // The refreshed branches may point the current branch at another remote — a switch
-        // during the fetch, say. Fetch that one too, whether this attempt succeeded or
-        // not, but only once per opening: a remote already tried, a same-remote failure,
-        // and no eligible remote all end the cycle.
-        guard isSessionCurrentAndOpen(), isBranchPickerPresented, branchReadStatus == .loaded,
-            let wanted = Self.resolveFetchRemote(headState: headState, branches: branches, remotes: remotes),
-            !covered.contains(wanted)
-        else { return covered }
-        return await fetchPrimaryRemote(attempted: covered)
-    }
-
-    /// Fetches every other remote a listed branch tracks, all at once, so a slow remote
-    /// holds back only its own rows. All of them start before the first suspension, so
-    /// the guard below applies to each.
-    private func fetchSecondaryRemotes(excluding covered: Set<String>, session: RepoSession) async {
-        guard session === self.session, !isClosed, isBranchPickerPresented, activeSync == nil else { return }
-        let generation = session.pickerOpeningGeneration
-        let tracked = Set(branches.compactMap { $0.upstream?.remote })
-        let wanted = tracked.intersection(remotes).subtracting(covered).filter { remote in
-            guard let at = session.lastSuccessfulFetchAtByRemote[remote] else { return true }
-            return now().timeIntervalSince(at) >= Self.fetchCooldown
-        }
-        let fetches = wanted.sorted().map { (remote: $0, task: startFetch(remote: $0, session: session)) }
-        await withDiscardingTaskGroup { group in
-            for fetch in fetches {
-                group.addTask {
-                    let result = await fetch.task.value
-                    await self.recordSecondaryFetch(
-                        remote: fetch.remote, result: result, session: session, generation: generation)
-                }
+        // Decided here: a manual request that joins later gets a follow-up round if this
+        // one skipped anything.
+        let usesCooldown = kind == .opening && !session.fetchRoundUpgradedToManual
+        var outcomes: [String: FetchRound.Outcome] = [:]
+        var wanted: [String] = []
+        for remote in remotes {
+            if usesCooldown, let at = session.lastSuccessfulFetchAtByRemote[remote],
+                now().timeIntervalSince(at) < Self.fetchCooldown
+            {
+                outcomes[remote] = .fetched(at: at)
+            } else {
+                wanted.append(remote)
             }
         }
-    }
+        session.fetchRoundSkippedRemotes = !outcomes.isEmpty
+        fetchingRemotes = Set(wanted)
+        fetchStatus = .fetching
 
-    /// Records the outcome in the footer, unless a later opening has taken it over: the
-    /// remote may no longer be tracked, and one still tracked joins the fetch to record it.
-    private func recordSecondaryFetch(
-        remote: String, result: Result<Date, any Error>, session: RepoSession, generation: Int
-    ) {
-        guard session === self.session, !isClosed, session.pickerOpeningGeneration == generation else { return }
-        switch result {
-        case .success: secondaryFetchFailures[remote] = nil
-        case let .failure(error): secondaryFetchFailures[remote] = error.localizedDescription
+        // Read fresh rather than taken from the published list, which another git process
+        // may have changed since: a branch that was already there must not show as new.
+        var before: Set<String>?
+        if !wanted.isEmpty, let list = try? await session.client.remoteBranches() {
+            before = Set(list.map(\.ref))
         }
+        guard isWanted() else { return abandonFetchRound(session: session) }
+
+        // All started before the first is awaited, so they run in parallel.
+        let fetches = wanted.map { remote in (remote, Task { await self.fetch(remote: remote, session: session) }) }
+        var fetched: Set<String> = []
+        for (remote, task) in fetches {
+            switch await task.value {
+            case let .success(at):
+                outcomes[remote] = .fetched(at: at)
+                fetched.insert(remote)
+            case let .failure(error):
+                outcomes[remote] = .failed(message: error.localizedDescription)
+            }
+        }
+        // Re-read even after a failure, since a fetch can update refs before it fails.
+        let pending = PendingFetchRound(round: FetchRound(outcomes: outcomes), before: before, fetched: fetched)
+        await awaitBranchRead(session: session, finishing: pending)
     }
 
-    /// Fetches `remote` and re-reads the branches, or hands back the fetch of it already
-    /// running: a reopened picker joins a slow fetch instead of starting a second one.
-    private func startFetch(remote: String, session: RepoSession) -> Task<Result<Date, any Error>, Never> {
-        if let running = session.remoteFetches[remote] { return running }
-        fetchingRemotes.insert(remote)
-        let task = Task { await self.runFetch(remote: remote, session: session) }
-        session.remoteFetches[remote] = task
-        return task
-    }
-
-    private func runFetch(remote: String, session: RepoSession) async -> Result<Date, any Error> {
-        let result: Result<Date, any Error>
+    /// Runs git fetch alone. Only a success starts a cooldown: a failure stays retryable.
+    private func fetch(remote: String, session: RepoSession) async -> Result<Date, any Error> {
         do {
             try await session.client.fetch(remote: remote)
-            result = .success(now())
         } catch {
-            result = .failure(error)
+            return .failure(error)
         }
-        // A closed window publishes nothing, so the remote stays marked as fetching.
-        guard session === self.session, !isClosed else { return result }
-        // Only a success starts a cooldown: a failure has to stay retryable.
-        if case let .success(at) = result { session.lastSuccessfulFetchAtByRemote[remote] = at }
-        // Re-read even after a failure, since a fetch can update refs before it fails. The
-        // remote stays marked until a read publishes (possibly a watcher's that superseded
-        // this one), so nothing acts on pre-fetch counts.
-        await awaitBranchRead(session: session)
-        guard session === self.session, !isClosed else { return result }
-        fetchingRemotes.remove(remote)
-        session.remoteFetches[remote] = nil
-        return result
+        let at = now()
+        session.lastSuccessfulFetchAtByRemote[remote] = at
+        return .success(at)
+    }
+
+    /// Releases a round that stopped before git fetch, publishing nothing.
+    private func abandonFetchRound(session: RepoSession) {
+        guard session === self.session, !isClosed else { return }
+        fetchingRemotes = []
+        fetchStatus = .idle
+        session.activeFetchRound = nil
+    }
+
+    /// Publishes a finished round in the same turn as the branch read that follows it. A
+    /// failed read keeps the last New flags, but the outcomes still show and the remotes
+    /// are released, so the sync buttons never stay disabled.
+    private func publishPendingFetchRound(session: RepoSession) {
+        guard let pending = session.pendingFetchRound else { return }
+        session.pendingFetchRound = nil
+        if branchReadStatus == .loaded {
+            newRemoteBranches = NewRemoteBranches.update(
+                previous: newRemoteBranches, before: pending.before, after: remoteBranches, fetched: pending.fetched)
+        }
+        lastFetchRound = pending.round
+        fetchingRemotes = []
+        fetchStatus = .idle
+        session.activeFetchRound = nil
+    }
+
+    /// Starts a branch read and waits for a publication. A read superseded here waits for
+    /// its replacement instead of retrying: the newest read publishes unless the window
+    /// closes, which wakes the waiters too. A `round` is published by whichever read that is.
+    private func awaitBranchRead(session: RepoSession, finishing round: PendingFetchRound? = nil) async {
+        let before = session.branchReadGeneration
+        if await refreshHeadState(session: session, finishing: round) { return }
+        guard session === self.session, !isClosed, session.branchReadGeneration == before else { return }
+        await withCheckedContinuation { session.branchReadWaiters.append($0) }
     }
 }
 
@@ -1504,7 +1497,7 @@ extension WindowState {
     /// its upstream. Admitted on the same terms as a pull or push, and on the same chain.
     func publish(branch: String, to remote: String) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
-            fetchStatus != .fetching(remote: nil), !fetchingRemotes.contains(remote)
+            fetchStatus != .discovering, !fetchingRemotes.contains(remote)
         else { return }
         let request = PublishRequest(branch: branch, remote: remote)
         guard
@@ -1523,7 +1516,8 @@ extension WindowState {
     /// revalidation and execution both see the branch state the reader acted on.
     ///
     /// A pull is refused while a fetch may still move its counts. A fetch can only take a
-    /// push away, so a push waits for its remote's fetch instead and `runSync` re-checks.
+    /// push away, so a push waits for the round fetching its remote instead and `runSync`
+    /// re-checks.
     private func sync(_ operation: SyncOperation, branch: String) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch else { return }
         var isCurrent = headState == .named(branch)
@@ -1537,10 +1531,12 @@ extension WindowState {
         // starting a fetch while the operation waits or runs.
         activeSync = ActiveSync(branch: branch, operation: operation)
         var requested = target.destination
-        if operation == .push, let fetch = session.remoteFetches[target.destination.remote] {
-            // Off the write chain, so a slow fetch doesn't hold up local writes. The task
-            // ends once the post-fetch branch read has published.
-            _ = await fetch.value
+        if operation == .push, fetchingRemotes.contains(target.destination.remote),
+            let round = session.activeFetchRound
+        {
+            // Off the write chain, so a slow fetch doesn't hold up local writes. The round
+            // ends once its branch read has published.
+            await round.value
             guard session === self.session, !isClosed else {
                 activeSync = nil
                 return
@@ -1723,7 +1719,7 @@ extension WindowState {
     func deleteBranch(_ branch: LocalBranch) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
             Self.isDeletable(branch, in: branches, headState: headState), let upstream = branch.upstream,
-            fetchStatus != .fetching(remote: nil), !fetchingRemotes.contains(upstream.remote)
+            fetchStatus != .discovering, !fetchingRemotes.contains(upstream.remote)
         else { return }
         // Before the first suspension: the admission guard.
         activeSync = ActiveSync(branch: branch.name, operation: .delete)

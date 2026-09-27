@@ -155,7 +155,7 @@ enum SyncPolicy {
     /// that remote) or a fetch of its remote. Other remotes' fetches don't count. Only
     /// a pull is refused during one; a push waits it out instead.
     static func isFetching(target: SyncTarget?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
-        if fetchStatus == .fetching(remote: nil) { return true }
+        if fetchStatus == .discovering { return true }
         guard let target else { return false }
         return fetchingRemotes.contains(target.destination.remote)
     }

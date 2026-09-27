@@ -8,17 +8,13 @@ enum BranchReadStatus: Equatable, Sendable {
     case failed
 }
 
-/// How the picker's automatic fetch went. The remote is unknown until it is resolved,
-/// which is why `.fetching` and `.failed` both allow a nil one.
+/// Where the running fetch round is.
 enum FetchStatus: Equatable, Sendable {
     case idle
-    /// Nil while the remote is still being resolved.
-    case fetching(remote: String?)
-    case fetched(remote: String, at: Date)
-    /// A nil remote means remote discovery itself failed.
-    case failed(remote: String?, message: String)
-    /// No eligible remote could be resolved.
-    case noFetchTarget
+    /// Listing the remotes: any of them may yet be fetched.
+    case discovering
+    /// Fetching the remotes in `fetchingRemotes`, then re-reading the branches.
+    case fetching
 }
 
 /// What the window hands the branch picker on every change.
@@ -30,14 +26,13 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var fetchStatus: FetchStatus = .idle
     /// The pull, push, publish or delete in flight and its branch, or nil when none is running.
     var activeSync: ActiveSync?
-    /// Every remote being fetched, the current branch's included.
+    /// The remotes the running round fetches, held until its branch read publishes.
     var fetchingRemotes: Set<String> = []
     var remotes: [String] = []
     /// Branch name to its configured upstream remote, including upstreams git can't map.
     var configuredUpstreamRemotes: [String: String] = [:]
-    /// Remote to git's message, for each remote other than the current branch's whose
-    /// fetch failed.
-    var secondaryFetchFailures: [String: String] = [:]
+    /// How each remote fared in the last finished round, or nil before the first.
+    var lastFetchRound: FetchRound?
 }
 
 struct BranchPickerRow: Equatable {
@@ -70,31 +65,30 @@ enum BranchPickerEmptyState: Equatable {
     case noMatches
 }
 
-/// What follows the rows: a note, with an optional tooltip.
-enum BranchPickerFooter: Equatable {
-    case none
-    case text(String, tooltip: String?)
-}
-
 /// The header's face: where HEAD is, and how far it is from its upstream.
 struct BranchPickerHeaderText: Equatable {
     let title: String
     let showsCurrentPill: Bool
     let detail: String
-    /// True while a fetch runs, whether or not its remote is known yet.
+    /// True while a fetch round runs, whether or not its remotes are known yet.
     var showsSpinner = false
+    /// Fetch is offered unless a round is running or a pull or push is about to move the
+    /// same counts, which a round would not start beside.
+    var canFetch = true
 
     static func make(snapshot: BranchPickerSnapshot) -> BranchPickerHeaderText {
-        let spinner = if case .fetching = snapshot.fetchStatus { true } else { false }
+        let spinner = snapshot.fetchStatus != .idle
+        let canFetch = !spinner && snapshot.activeSync == nil
         guard let headState = snapshot.headState else {
             let title = snapshot.readStatus == .failed ? "Couldn't read branches" : "Loading…"
             return BranchPickerHeaderText(
-                title: title, showsCurrentPill: false, detail: "", showsSpinner: spinner)
+                title: title, showsCurrentPill: false, detail: "", showsSpinner: spinner, canFetch: canFetch)
         }
         switch headState {
         case let .detached(sha):
             return BranchPickerHeaderText(
-                title: "Detached " + sha.prefix(7), showsCurrentPill: false, detail: "", showsSpinner: spinner)
+                title: "Detached " + sha.prefix(7), showsCurrentPill: false, detail: "", showsSpinner: spinner,
+                canFetch: canFetch)
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
             let detail = snapshot.branches.first { $0.name == name }.map { branch in
@@ -106,7 +100,7 @@ struct BranchPickerHeaderText: Equatable {
                 return upstream.tracking.summary ?? "up to date"
             }
             return BranchPickerHeaderText(
-                title: name, showsCurrentPill: true, detail: detail ?? "", showsSpinner: spinner)
+                title: name, showsCurrentPill: true, detail: detail ?? "", showsSpinner: spinner, canFetch: canFetch)
         }
     }
 }
@@ -205,36 +199,11 @@ struct BranchPickerState {
         }
     }
 
-    /// A failed read keeps the last branch list, and saying its counts may be stale
-    /// outranks any fetch news, even while a search hides every row. Failures come before
-    /// success, the header's remote before the others.
-    var footer: BranchPickerFooter {
-        if !snapshot.branches.isEmpty, snapshot.readStatus == .failed {
-            return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
-        }
-        if case let .failed(remote, message) = snapshot.fetchStatus {
-            let text = remote.map { "Couldn't fetch \($0)" } ?? "Couldn't load remotes"
-            return .text(text, tooltip: message)
-        }
-        let failures = snapshot.secondaryFetchFailures.sorted { $0.key < $1.key }
-        if let only = failures.first, failures.count == 1 {
-            return .text("Couldn't fetch \(only.key)", tooltip: only.value)
-        }
-        if !failures.isEmpty {
-            let names = failures.map(\.key).joined(separator: ", ")
-            let messages = failures.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
-            return .text("Couldn't fetch \(names)", tooltip: messages)
-        }
-        if case let .fetched(remote, at) = snapshot.fetchStatus {
-            return .text("Fetched \(remote) \(Self.fetchedTime(at))", tooltip: nil)
-        }
-        return .none
-    }
-
-    /// Wall-clock time rather than "just now", which would go stale while the popover
-    /// stays open.
-    static func fetchedTime(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
+    /// The header's fetch news as of `now`; the caller re-asks as time passes.
+    func fetchText(now: Date) -> BranchPickerFetchText? {
+        BranchPickerFetchText.make(
+            isFetching: snapshot.fetchStatus != .idle, readFailed: snapshot.readStatus == .failed,
+            lastRound: snapshot.lastFetchRound, now: now)
     }
 
     var headerText: BranchPickerHeaderText {
@@ -254,7 +223,7 @@ struct BranchPickerState {
         SyncPolicy.rowButtons(
             branch: row.branch, isCurrent: row.isCurrent, readStatus: snapshot.readStatus,
             active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch,
-            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes,
+            isDiscovering: snapshot.fetchStatus == .discovering, fetchingRemotes: snapshot.fetchingRemotes,
             remotes: snapshot.remotes, configuredRemote: snapshot.configuredUpstreamRemotes[row.branch.name])
     }
 
@@ -277,8 +246,8 @@ struct BranchPickerState {
 
     // MARK: Snapshots
 
-    /// Takes a new snapshot and reports what the table must do. Header, footer and the
-    /// empty state are re-read after every call; only the rows and buttons are reported.
+    /// Takes a new snapshot and reports what the table must do. Header and the empty
+    /// state are re-read after every call; only the rows and buttons are reported.
     mutating func apply(_ new: BranchPickerSnapshot) -> BranchPickerChange {
         guard new != snapshot else { return BranchPickerChange(rows: .none, buttonsChanged: false) }
         let old = snapshot

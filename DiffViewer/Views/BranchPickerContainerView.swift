@@ -1,7 +1,7 @@
 import AppKit
 
-/// The branch picker's AppKit root: header, search field, gutter, the branch table, and
-/// the footer or empty state, laid out top-down by hand. Owns the `BranchPickerState` and
+/// The branch picker's AppKit root: header, search field, gutter, and the branch table or
+/// its empty state, laid out top-down by hand. Owns the `BranchPickerState` and
 /// applies each snapshot and query to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
@@ -15,13 +15,16 @@ final class BranchPickerContainerView: NSView {
     var onPublish: (String, String) -> Void = { _, _ in }
     /// Takes the branch as its row showed it, which the delete checks before it runs.
     var onDelete: (LocalBranch) -> Void = { _ in }
+    /// The header's Fetch button and ⌘R.
+    var onFetch: () -> Void = {}
+    /// The clock the header's fetch time is read against.
+    var now: @MainActor () -> Date = Date.init
 
     let header = BranchPickerHeaderView(frame: .zero)
     let searchField = NSSearchField()
     let gutter = CommitPickerGutterView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = CommitPickerTableView()
-    let footer = CommitPickerFooterView(frame: .zero)
     let emptyState = CommitPickerEmptyStateView(frame: .zero)
 
     /// Set while the container itself moves the table's selection, which the delegate
@@ -31,6 +34,8 @@ final class BranchPickerContainerView: NSView {
     private var hasFocusedSearchField = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
+    /// Refreshes the header's fetch text so its relative time doesn't stay "just now".
+    private var fetchTimeTimer: Timer?
 
     init(state: BranchPickerState) {
         self.state = state
@@ -38,7 +43,11 @@ final class BranchPickerContainerView: NSView {
         clipsToBounds = true
         configureSearchField()
         configureTable()
-        for view in [gutter, header, searchField, scrollView, footer, emptyState] { addSubview(view) }
+        for view in [gutter, header, searchField, scrollView, emptyState] { addSubview(view) }
+        header.onFetch = { [weak self] in self?.onFetch() }
+        fetchTimeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.renderFetchTime() }
+        }
         renderChrome()
     }
 
@@ -174,16 +183,13 @@ final class BranchPickerContainerView: NSView {
         tableView.refreshHover()
     }
 
+    /// The timer's tick: only the fetch text ages, so nothing else is redrawn or laid out.
+    private func renderFetchTime() {
+        header.configureFetch(state.fetchText(now: now()))
+    }
+
     private func renderChrome() {
-        header.configure(state.headerText)
-        switch state.footer {
-        case .none:
-            footer.configure(text: "", tooltip: nil, isLoading: false, showsRetry: false)
-            footer.isHidden = true
-        case let .text(text, tooltip):
-            footer.configure(text: text, tooltip: tooltip, isLoading: false, showsRetry: false)
-            footer.isHidden = false
-        }
+        header.configure(state.headerText, fetch: state.fetchText(now: now()))
         switch state.emptyState {
         case nil: emptyState.configure(text: nil, isLoading: false, showsRetry: false)
         case .loading: emptyState.configure(text: "Loading…", isLoading: true, showsRetry: false)
@@ -266,9 +272,7 @@ final class BranchPickerContainerView: NSView {
             width: width - CommitPickerMetrics.contentLeading - CommitPickerMetrics.contentTrailing,
             height: searchField.intrinsicContentSize.height)
         let tableTop = searchField.frame.maxY + 8
-        let footerHeight = footer.isHidden ? 0 : CommitPickerMetrics.footerHeight
-        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop - footerHeight, 0))
-        footer.frame = NSRect(x: 0, y: height - footerHeight, width: width, height: footerHeight)
+        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop, 0))
         emptyState.frame = scrollView.frame
         tableView.sizeLastColumnToFit()
         // The table only knows its rows once it has laid out, so the initial highlight
@@ -333,6 +337,8 @@ final class BranchPickerContainerView: NSView {
     }
 
     func tearDown() {
+        fetchTimeTimer?.invalidate()
+        fetchTimeTimer = nil
         removeKeyObserver()
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
@@ -340,6 +346,19 @@ final class BranchPickerContainerView: NSView {
 
     override func cancelOperation(_ sender: Any?) {
         onDismiss()
+    }
+
+    /// ⌘R fetches while the popover is key. The key window's views see a key equivalent
+    /// before the main menu does, and this runs whichever view has focus, the search
+    /// field's editor included, so the menu's Refresh never gets it. Once the popover
+    /// closes this view is out of the key window and ⌘R is Refresh again.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        guard modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "r" else {
+            return super.performKeyEquivalent(with: event)
+        }
+        onFetch()
+        return true
     }
 }
 

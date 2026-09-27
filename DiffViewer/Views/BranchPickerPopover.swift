@@ -28,7 +28,9 @@ struct BranchPickerPopover: View {
                     guard await BranchDeleteConfirmation.confirm(branch, window: window) else { return }
                     await windowState.deleteBranch(branch)
                 }
-            }
+            },
+            onFetch: { Task { await windowState.fetchAllRemotes() } },
+            now: windowState.now
         )
         // The commit picker's 520, plus the search field and its gap, so the list keeps its rows.
         .frame(width: 560, height: 556)
@@ -45,6 +47,8 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPush: (String) -> Void
     let onPublish: (String, String) -> Void
     let onDelete: (LocalBranch) -> Void
+    let onFetch: () -> Void
+    let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
         let view = BranchPickerContainerView(state: BranchPickerState(snapshot: snapshot, grouping: grouping))
@@ -68,5 +72,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onPush = onPush
         view.onPublish = onPublish
         view.onDelete = onDelete
+        view.onFetch = onFetch
+        view.now = now
     }
 }

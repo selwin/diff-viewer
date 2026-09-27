@@ -17,12 +17,12 @@ struct BranchPickerStateTests {
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         isSwitchingBranch: Bool = false, fetchStatus: FetchStatus = .idle,
         activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = [],
-        configuredUpstreamRemotes: [String: String] = [:], secondaryFetchFailures: [String: String] = [:]
+        configuredUpstreamRemotes: [String: String] = [:], lastFetchRound: FetchRound? = nil
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: isSwitchingBranch,
             fetchStatus: fetchStatus, activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
-            configuredUpstreamRemotes: configuredUpstreamRemotes, secondaryFetchFailures: secondaryFetchFailures)
+            configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound)
     }
 
     private func state(_ snapshot: BranchPickerSnapshot) -> BranchPickerState {
@@ -271,13 +271,6 @@ struct BranchPickerStateTests {
         #expect(failed.emptyState == .failed)
     }
 
-    @Test func theStaleFooterOutlivesASearchThatEmptiesTheList() {
-        var picker = state(snapshot(branches: [main], readStatus: .failed))
-        _ = picker.setQuery("zzz")
-        #expect(picker.rows.isEmpty)
-        #expect(picker.footer == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
-    }
-
     // MARK: Chrome
 
     private static func header(_ title: String, pill: Bool = false, detail: String = "") -> BranchPickerHeaderText {
@@ -332,93 +325,54 @@ struct BranchPickerStateTests {
             headState: .named("main"), branches: branches, readStatus: .loaded, isSwitchingBranch: false)
     }
 
-    @Test func theFooterOnlySpeaksForAFailedReadWithRows() {
-        #expect(state(snapshot(branches: [main])).footer == BranchPickerFooter.none)
-        #expect(state(snapshot(branches: [], readStatus: .failed)).footer == BranchPickerFooter.none)
-        #expect(
-            state(snapshot(branches: [main], readStatus: .failed)).footer
-                == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
-    }
-
     // MARK: Fetching
 
-    @Test func theSpinnerOnlyShowsWhileFetching() {
-        #expect(state(snapshot(branches: [main], fetchStatus: .fetching(remote: nil))).headerText.showsSpinner)
-        #expect(state(snapshot(branches: [main], fetchStatus: .fetching(remote: "origin"))).headerText.showsSpinner)
-        #expect(!state(snapshot(branches: [main])).headerText.showsSpinner)
-        #expect(
-            !state(snapshot(branches: [main], fetchStatus: .fetched(remote: "origin", at: Self.now)))
-                .headerText.showsSpinner)
+    @Test func theSpinnerShowsAndFetchIsWithheldWhileARoundRuns() {
+        for status in [FetchStatus.discovering, .fetching] {
+            let header = state(snapshot(branches: [main], fetchStatus: status)).headerText
+            #expect(header.showsSpinner)
+            #expect(!header.canFetch)
+        }
+        let idle = state(snapshot(branches: [main])).headerText
+        #expect(!idle.showsSpinner)
+        #expect(idle.canFetch)
         // A header with no HEAD yet still reports the fetch.
         #expect(
-            state(snapshot(headState: nil, branches: [], readStatus: .unread, fetchStatus: .fetching(remote: nil)))
+            state(snapshot(headState: nil, branches: [], readStatus: .unread, fetchStatus: .discovering))
                 .headerText.showsSpinner)
     }
 
-    @Test func theFooterReportsTheFetch() {
-        let time = BranchPickerState.fetchedTime(Self.now)
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: .fetched(remote: "origin", at: Self.now))).footer
-                == .text("Fetched origin \(time)", tooltip: nil))
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: .failed(remote: nil, message: "no remotes"))).footer
-                == .text("Couldn't load remotes", tooltip: "no remotes"))
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: .failed(remote: "origin", message: "host down"))).footer
-                == .text("Couldn't fetch origin", tooltip: "host down"))
-        #expect(state(snapshot(branches: [main], fetchStatus: .noFetchTarget)).footer == BranchPickerFooter.none)
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: .fetching(remote: "origin"))).footer
-                == BranchPickerFooter.none)
+    /// A round would not start beside a pull or push, so the button doesn't offer one.
+    @Test func fetchIsWithheldWhileASyncRuns() {
+        let pulling = snapshot(branches: [main], activeSync: ActiveSync(branch: "main", operation: .pull))
+        #expect(!state(pulling).headerText.canFetch)
     }
 
-    @Test func theFooterReportsAnotherRemotesFailure() {
-        let time = BranchPickerState.fetchedTime(Self.now)
-        let fork = ["fork": "host down"]
+    @Test func theFetchTextFollowsTheSnapshot() {
+        let round = FetchRound(outcomes: ["origin": .fetched(at: Self.now - 120)])
+        let fetched = state(snapshot(branches: [main], lastFetchRound: round))
+        #expect(fetched.fetchText(now: Self.now) == BranchPickerFetchText(text: "Fetched 2 min ago"))
         #expect(
-            state(snapshot(branches: [main], fetchStatus: .noFetchTarget, secondaryFetchFailures: fork)).footer
-                == .text("Couldn't fetch fork", tooltip: "host down"))
-        let fetched = FetchStatus.fetched(remote: "origin", at: Self.now)
+            state(snapshot(branches: [main], fetchStatus: .fetching, lastFetchRound: round)).fetchText(now: Self.now)
+                == BranchPickerFetchText(text: "Fetching…"))
         #expect(
-            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: fork)).footer
-                == .text("Couldn't fetch fork", tooltip: "host down"))
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: [:])).footer
-                == .text("Fetched origin \(time)", tooltip: nil))
-        let two = ["upstream": "timed out", "fork": "host down"]
-        #expect(
-            state(snapshot(branches: [main], fetchStatus: fetched, secondaryFetchFailures: two)).footer
-                == .text("Couldn't fetch fork, upstream", tooltip: "fork: host down\nupstream: timed out"))
-    }
-
-    @Test func theHeadersRemoteFailureOutranksAnotherRemotes() {
-        let taken = snapshot(
-            branches: [main], fetchStatus: .failed(remote: "origin", message: "refused"),
-            secondaryFetchFailures: ["fork": "host down"])
-        #expect(state(taken).footer == .text("Couldn't fetch origin", tooltip: "refused"))
-    }
-
-    /// The counts on screen are what the reader is judging, so their staleness outranks
-    /// news about the fetch.
-    @Test func aStaleReadOutranksTheFetch() {
-        let taken = snapshot(
-            branches: [main], readStatus: .failed, fetchStatus: .fetched(remote: "origin", at: Self.now))
-        #expect(state(taken).footer == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
+            state(snapshot(branches: [main], readStatus: .failed, lastFetchRound: round)).fetchText(now: Self.now)
+                == BranchPickerFetchText(text: "Couldn't refresh branches", tooltip: "Counts may be stale"))
     }
 
     @Test func fetchNewsLeavesTheRowsAlone() {
         var picker = state(snapshot(branches: [main, feature]))
         let rows = picker.rows
         #expect(
-            picker.apply(snapshot(branches: [main, feature], fetchStatus: .fetching(remote: nil))).rows
+            picker.apply(snapshot(branches: [main, feature], fetchStatus: .discovering)).rows
                 == PickerTableChange.none)
+        let failed = FetchRound(outcomes: ["fork": .failed(message: "down")])
         #expect(
-            picker.apply(
-                snapshot(
-                    branches: [main, feature], fetchingRemotes: ["fork"], secondaryFetchFailures: ["fork": "down"])
-            ).rows == PickerTableChange.none)
+            picker.apply(snapshot(branches: [main, feature], fetchingRemotes: ["fork"], lastFetchRound: failed)).rows
+                == PickerTableChange.none)
         #expect(picker.rows == rows)
-        #expect(picker.footer == .text("Couldn't fetch fork", tooltip: "down"), "the footer still follows")
+        let expected = BranchPickerFetchText(text: "Fetch failed — retry", tooltip: "fork: down")
+        #expect(picker.fetchText(now: Self.now) == expected, "the header still follows")
     }
 
     // MARK: Sync buttons
@@ -444,7 +398,7 @@ struct BranchPickerStateTests {
         #expect(
             fetchingOrigin.syncButtons(forTableRow: 0)
                 == RowSyncButtons(pull: .disabled(reason: "Fetching…"), push: .hidden))
-        let discovering = state(snapshot(branches: [behind, ahead], fetchStatus: .fetching(remote: nil)))
+        let discovering = state(snapshot(branches: [behind, ahead], fetchStatus: .discovering))
         #expect(
             discovering.syncButtons(forTableRow: 0)
                 == RowSyncButtons(pull: .disabled(reason: "Fetching…"), push: .hidden))
@@ -462,7 +416,7 @@ struct BranchPickerStateTests {
         #expect(picker.rows == rows)
         #expect(picker.syncButtons(forTableRow: 0) == RowSyncButtons(pull: .running, push: .hidden))
         #expect(
-            picker.apply(snapshot(branches: [behind, feature], fetchStatus: .fetched(remote: "origin", at: Self.now)))
+            picker.apply(snapshot(branches: [behind, feature]))
                 == BranchPickerChange(rows: .none, buttonsChanged: true), "the pull finished")
         #expect(
             picker.apply(snapshot(branches: [behind, feature], fetchingRemotes: ["fork"]))
