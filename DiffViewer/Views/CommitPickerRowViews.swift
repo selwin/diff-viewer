@@ -144,13 +144,17 @@ final class ScopeRowContentView: NSTableCellView {
         var trailingStyle: TrailingStyle
         /// The accessibility action's name: what activating this row does.
         var accessibilityActionName: String
+        /// Parts of the subject drawn semibold: the characters a search matched.
+        var subjectEmphasisRanges: [NSRange] = []
     }
+
+    private static let subjectFont = NSFont.systemFont(ofSize: 13.5)
 
     private let gutterTitle = CommitPickerMetrics.label(
         font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor, alignment: .right)
     private let gutterSubtitle = CommitPickerMetrics.label(
         font: .systemFont(ofSize: 11), color: .secondaryLabelColor, alignment: .right)
-    private let subject = CommitPickerMetrics.label(font: .systemFont(ofSize: 13.5), color: .labelColor)
+    private let subject = CommitPickerMetrics.label(font: subjectFont, color: .labelColor)
     private let pill = CurrentPillView(frame: .zero)
     private var accessibilityActionName = "Show"
     private let trailing = CommitPickerMetrics.label(
@@ -191,7 +195,12 @@ final class ScopeRowContentView: NSTableCellView {
     func configure(_ content: Content) {
         gutterTitle.stringValue = content.gutterTitle ?? ""
         gutterSubtitle.stringValue = content.gutterSubtitle ?? ""
-        subject.stringValue = content.subject
+        // Set either way, so a recycled cell drops its old emphasis.
+        if content.subjectEmphasisRanges.isEmpty {
+            subject.stringValue = content.subject
+        } else {
+            subject.attributedStringValue = Self.emphasized(content.subject, ranges: content.subjectEmphasisRanges)
+        }
         pill.isHidden = !content.showsCurrentPill
         trailing.stringValue = content.trailing
         accessibilityActionName = content.accessibilityActionName
@@ -205,6 +214,18 @@ final class ScopeRowContentView: NSTableCellView {
         }
         setAccessibilityLabel(content.showsCurrentPill ? "\(content.subject), current" : content.subject)
         needsLayout = true
+    }
+
+    /// The subject as its label draws it, with `ranges` semibold.
+    private static func emphasized(_ text: String, ranges: [NSRange]) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingTail
+        let string = NSMutableAttributedString(
+            string: text,
+            attributes: [.font: subjectFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph])
+        let bold = NSFont.systemFont(ofSize: subjectFont.pointSize, weight: .semibold)
+        for range in ranges { string.addAttribute(.font, value: bold, range: range) }
+        return string
     }
 
     // The subject is centred in the row; the trailing text and pill are centred on its

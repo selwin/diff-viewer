@@ -197,6 +197,87 @@ struct BranchPickerStateTests {
         #expect(picker.highlightedBranch == "feature", "the first row when nothing is current")
     }
 
+    // MARK: Query
+
+    @Test func aQueryFiltersAndRanksTheRows() {
+        let safe = localBranch("safe", tipCommittedAt: Self.now)
+        let fern = localBranch("fern", tipCommittedAt: Self.now - 60)
+        let feed = localBranch("feed", tipCommittedAt: Self.now - 3600)
+        var picker = state(snapshot(branches: [main, feed, feature, old, safe, fern]))
+        #expect(picker.setQuery("fe") == .reloadAll)
+        // A word-start match beats a mid-word one; an equal score falls back to newest first,
+        // then to the name when the tips are the same age.
+        #expect(picker.rows.map(\.branch.name) == ["fern", "feature", "feed", "safe"])
+        let matched = picker.rows.map { row in row.matchedRanges.map { String(row.branch.name[$0]) } }
+        #expect(matched == [["fe"], ["fe"], ["fe"], ["fe"]])
+    }
+
+    @Test func dayLabelsHideWhileAQueryIsActive() {
+        var picker = state(snapshot(branches: [main, feature, old]))
+        _ = picker.setQuery("a")
+        #expect(picker.rows.map(\.dayLabel) == [nil, nil])
+        _ = picker.setQuery("")
+        #expect(picker.rows.map { $0.dayLabel?.title } == ["Today", nil, "Yesterday"])
+        #expect(picker.rows.map(\.matchedRanges) == [[], [], []])
+    }
+
+    @Test func aQueryHighlightsTheFirstRowAndClearingItTheCurrentBranch() {
+        let aiTools = localBranch("ai-tools", tipCommittedAt: Self.now - 3600)
+        var picker = state(snapshot(branches: [main, aiTools]))
+        _ = picker.setQuery("ai")
+        #expect(picker.rows.map(\.branch.name) == ["ai-tools", "main"])
+        #expect(picker.highlightedBranch == "ai-tools", "the best match, though main is current")
+        _ = picker.setQuery("")
+        #expect(picker.highlightedBranch == "main")
+    }
+
+    @Test func theSameNormalizedQueryChangesNothing() {
+        var picker = state(snapshot(branches: [main, feature]))
+        #expect(picker.setQuery("fe") == .reloadAll)
+        #expect(picker.setQuery(" fe ") == PickerTableChange.none)
+        #expect(picker.query == "fe")
+    }
+
+    @Test func aSpacesOnlyQueryIsNoQuery() {
+        var picker = state(snapshot(branches: [main, feature, old]))
+        #expect(picker.setQuery("   ") == PickerTableChange.none)
+        #expect(picker.rows.map { $0.dayLabel?.title } == ["Today", nil, "Yesterday"])
+        #expect(picker.highlightedBranch == "main")
+        #expect(picker.emptyState == nil)
+    }
+
+    @Test func aSnapshotDuringASearchKeepsTheFilter() {
+        var picker = state(snapshot(branches: [main, feature]))
+        _ = picker.setQuery("fe")
+        let fetchFix = localBranch("fetch-fix", tipCommittedAt: Self.now - 60)
+        #expect(picker.apply(snapshot(branches: [main, feature, fetchFix, old])).rows == .reloadAll)
+        #expect(picker.rows.map(\.branch.name) == ["fetch-fix", "feature"])
+    }
+
+    @Test func aQueryMatchingNothingSaysSo() {
+        var picker = state(snapshot(branches: [main, feature]))
+        _ = picker.setQuery("zzz")
+        #expect(picker.rows.isEmpty)
+        #expect(picker.emptyState == .noMatches)
+
+        var noBranches = state(snapshot(branches: []))
+        _ = noBranches.setQuery("zzz")
+        #expect(noBranches.emptyState == .noBranches)
+        var unread = state(snapshot(headState: nil, branches: [], readStatus: .unread))
+        _ = unread.setQuery("zzz")
+        #expect(unread.emptyState == .loading)
+        var failed = state(snapshot(headState: nil, branches: [], readStatus: .failed))
+        _ = failed.setQuery("zzz")
+        #expect(failed.emptyState == .failed)
+    }
+
+    @Test func theStaleFooterOutlivesASearchThatEmptiesTheList() {
+        var picker = state(snapshot(branches: [main], readStatus: .failed))
+        _ = picker.setQuery("zzz")
+        #expect(picker.rows.isEmpty)
+        #expect(picker.footer == .text("Couldn't refresh branches; counts may be stale", tooltip: nil))
+    }
+
     // MARK: Chrome
 
     private static func header(_ title: String, pill: Bool = false, detail: String = "") -> BranchPickerHeaderText {

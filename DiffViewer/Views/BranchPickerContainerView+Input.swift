@@ -1,7 +1,7 @@
 import AppKit
 
-/// The table's data source and delegate: rows come from `state`, and a selection the
-/// keyboard or type-select makes becomes the highlight.
+/// The table's data source and delegate: rows come from `state`, and a selection made by
+/// a click or the keyboard becomes the highlight.
 extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
         state.rows.count
@@ -17,7 +17,8 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
             ScopeRowContentView.Content(
                 gutterTitle: entry.dayLabel?.title, gutterSubtitle: entry.dayLabel?.subtitle,
                 subject: entry.branch.name, showsCurrentPill: entry.isCurrent, trailing: entry.trailingText,
-                trailingStyle: .secondary, accessibilityActionName: "Switch to branch"))
+                trailingStyle: .secondary, accessibilityActionName: "Switch to branch",
+                subjectEmphasisRanges: entry.matchedRanges.map { NSRange($0, in: entry.branch.name) }))
         configureSyncButtons(of: cell, row: row)
         // No callback on a row that cannot be switched to: the action must not be offered.
         guard state.canActivate(tableRow: row) else {
@@ -40,10 +41,6 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         // A recycled row view keeps its last hover.
         rowView.isHovered = row == self.tableView.hoveredRow
         return rowView
-    }
-
-    func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        state.rows.indices.contains(row) ? state.rows[row].branch.name : nil
     }
 
     /// An empty selection changes nothing: the highlight is always a row.
