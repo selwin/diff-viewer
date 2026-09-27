@@ -12,8 +12,9 @@ struct DiffMove: Sendable, Equatable {
 }
 
 /// Finds moved blocks among a diff's changed lines, in the spirit of `git diff
-/// --color-moved`: runs of consecutive changed lines removed in one place and added, with
-/// the same text up to indentation, in another.
+/// --color-moved`: runs of consecutive lines removed in one place and added in another.
+/// Lines match after trimming ASCII whitespace at both ends, or after removing all ASCII
+/// whitespace when Hide Whitespace is on.
 enum MoveDetector {
     /// A line this common among added lines (`}`, `return`) never starts a run, which keeps
     /// the search from pairing every brace with every other; it can still extend one.
@@ -80,14 +81,14 @@ enum MoveDetector {
     private static func candidateRuns(
         old: Side, new: Side, makeRun: (_ old: Int, _ new: Int, _ length: Int) -> Run
     ) -> [Run] {
-        var starts: [String: [Int]] = [:]
+        var newLinesByKey: [String: [Int]] = [:]
         for (j, key) in new.keys.enumerated() {
-            if let key { starts[key, default: []].append(j) }
+            if let key { newLinesByKey[key, default: []].append(j) }
         }
         var scanned = Set<Pair>()
         var runs: [Run] = []
         for (i, key) in old.keys.enumerated() {
-            guard let key, !key.isEmpty, let targets = starts[key], targets.count <= maxStartOccurrences else {
+            guard let key, !key.isEmpty, let targets = newLinesByKey[key], targets.count <= maxStartOccurrences else {
                 continue
             }
             for j in targets where old.rowOf[i] != new.rowOf[j] && !scanned.contains(Pair(old: i, new: j)) {
