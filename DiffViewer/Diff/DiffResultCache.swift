@@ -29,7 +29,7 @@ actor DiffResultCache {
     struct Entry: Sendable {
         let document: DiffDocument
         let styles: SyntaxStyles
-        /// Estimated retained bytes: the lines, rows, blocks and style runs, not total
+        /// Estimated retained bytes: the lines, rows, blocks, moves and style runs, not total
         /// app memory.
         let cost: Int
 
@@ -51,6 +51,7 @@ actor DiffResultCache {
                 total += ranges * MemoryLayout<Range<Int>>.stride
             }
             total += document.changeBlocks.count * MemoryLayout<Range<Int>>.stride
+            total += document.moves.count * MemoryLayout<DiffMove>.stride
             return total
         }
 

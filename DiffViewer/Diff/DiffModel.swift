@@ -44,23 +44,30 @@ struct DiffDocument: Sendable, Identifiable {
     let language: String?
     /// Consecutive runs of non-equal rows.
     let changeBlocks: [Range<Int>]
+    /// Blocks of lines cut from one place and pasted in another, ordered by old line.
+    let moves: [DiffMove]
 
     /// `blockBoundaries` are row indices a change block may not span: a run of non-equal
     /// rows is split at every boundary, so a changeset's files never share a block. The
     /// boundaries themselves are not stored, only the blocks they produce.
-    init(oldLines: [String], newLines: [String], rows: [DiffRow], language: String?, blockBoundaries: [Int] = []) {
+    init(
+        oldLines: [String], newLines: [String], rows: [DiffRow], language: String?, blockBoundaries: [Int] = [],
+        moves: [DiffMove] = []
+    ) {
         self.oldLines = oldLines
         self.newLines = newLines
         self.rows = rows
         self.language = language
-        self.changeBlocks = Self.computeChangeBlocks(rows, boundaries: blockBoundaries)
+        self.changeBlocks = Self.changeBlocks(of: rows, boundaries: blockBoundaries)
+        self.moves = moves
     }
 
     static func empty() -> DiffDocument {
         DiffDocument(oldLines: [], newLines: [], rows: [], language: nil)
     }
 
-    private static func computeChangeBlocks(_ rows: [DiffRow], boundaries: [Int]) -> [Range<Int>] {
+    /// Not private: move detection needs the blocks before the document exists.
+    static func changeBlocks(of rows: [DiffRow], boundaries: [Int] = []) -> [Range<Int>] {
         let splits = Set(boundaries)
         var blocks: [Range<Int>] = []
         var start: Int?
