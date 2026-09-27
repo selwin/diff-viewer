@@ -4,11 +4,12 @@
 diff.
 
 DiffViewer is a macOS 26 app that shows a repository's changes side by side, with
-structural token highlights from [difftastic](https://difftastic.wilfred.me.uk) and full
-syntax colouring from tree-sitter. It is a viewer first. It never edits a file's text
-or resolves conflicts, and its git actions are only the ones a reader needs right after
-reading a diff: stage, discard, commit, switch branch, push. It aims to be the best diff
-viewer on the platform.
+structural token highlights from [difftastic](https://difftastic.wilfred.me.uk), refined
+to character-level highlights for small edits, and full syntax colouring from
+tree-sitter. It is a viewer first. It never edits a file's text or resolves conflicts,
+and its git actions are only the ones a reader needs right after reading a diff: stage,
+discard, commit, switch branch, push. It aims to be the best diff viewer on the
+platform.
 
 DiffViewer is fully vibe coded: every line was written by AI coding agents, directed and
 reviewed by a human.
@@ -32,6 +33,9 @@ experience. We want this to be speedy when reviewing large diffs.
 - **Structural highlights** from a bundled `difft`, and **full tree-sitter colouring** of
   both sides (Swift, Python, JS, TS/TSX, JSON, Go, Rust, C, C++, HTML, CSS, Bash, Ruby,
   YAML, TOML, Java, Kotlin, PHP, Markdown).
+- **Character-level highlights** inside an edited line: a one-letter typo lights up one
+  letter, not the whole token, in plain text too. A rewritten line keeps the broader
+  highlight rather than breaking into confetti.
 - **Collapse unchanged lines** (⇧⌘U, on by default): changed hunks plus 5 lines of
   context. Each hidden run is one separator: its arrows reveal 10 lines at a time, a
   click elsewhere on it reveals the whole run, and ⌥-click reveals the whole file.

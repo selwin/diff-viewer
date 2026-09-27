@@ -24,8 +24,8 @@ enum DiffAligner {
             DiffSide(lineIndex: index, highlights: utf16Ranges(hints.newChanges[index] ?? [], in: newLines[index]))
         }
 
-        /// Emits a modified/added/deleted row, adding prefix/suffix highlights when
-        /// difftastic had nothing to say about a pair of textually different lines.
+        /// Emits a modified/added/deleted row. For a modified pair, character-level changes
+        /// refine difftastic's tokens, or stand in for them when difftastic has none.
         func emit(old: Int?, new: Int?) {
             var oldSide = old.map(side(old:))
             var newSide = new.map(side(new:))
@@ -33,10 +33,20 @@ enum DiffAligner {
             switch (oldSide, newSide) {
             case (.some, .some):
                 kind = .modified
+                let characterRanges = CharacterDiff.ranges(
+                    old: oldLines[old!], new: newLines[new!], hideWhitespace: hideWhitespace)
                 if oldSide!.highlights.isEmpty, newSide!.highlights.isEmpty {
-                    let (o, n) = prefixSuffixHighlights(oldLines[old!], newLines[new!])
+                    // nil means the lines are too long or too dissimilar for a character
+                    // diff to help, so one span over the differing middle reads better.
+                    let (o, n) = characterRanges ?? prefixSuffixHighlights(oldLines[old!], newLines[new!])
                     oldSide!.highlights = o
                     newSide!.highlights = n
+                } else if let characterRanges {
+                    // A token that is mostly changed stays whole, so a new token isn't
+                    // chopped up by stray letter matches; an edited one shows only the
+                    // characters that differ.
+                    oldSide!.highlights = refine(oldSide!.highlights, with: characterRanges.old, in: oldLines[old!])
+                    newSide!.highlights = refine(newSide!.highlights, with: characterRanges.new, in: newLines[new!])
                 }
             case (.some, .none):
                 kind = .deleted
@@ -119,6 +129,13 @@ enum DiffAligner {
         return String(line.unicodeScalars.filter { !asciiWhitespace.contains($0) })
     }
 
+    /// True when every scalar of `c` is ASCII whitespace, so `"\r\n"` counts but a space
+    /// carrying a combining mark does not. Stricter than `key`, which drops the space scalar
+    /// from such a grapheme; character highlighting sees it whole and may still flag it.
+    static func isIgnorableWhitespace(_ c: Character) -> Bool {
+        c.unicodeScalars.allSatisfy { asciiWhitespace.contains($0) }
+    }
+
     /// Converts UTF-8 byte ranges from difftastic into UTF-16 ranges, merging overlaps.
     static func utf16Ranges(_ byteRanges: [Range<Int>], in line: String) -> [Range<Int>] {
         guard !byteRanges.isEmpty else { return [] }
@@ -139,6 +156,52 @@ enum DiffAligner {
                 result[result.count - 1] = last.lowerBound..<max(last.upperBound, e)
             } else {
                 result.append(s..<e)
+            }
+        }
+        return result
+    }
+
+    /// Narrows difftastic's token ranges to the changed characters inside them. A token
+    /// more than half changed stays whole; character changes outside every token are
+    /// dropped because difftastic judged them unchanged. Results cover whole graphemes.
+    private static func refine(_ tokens: [Range<Int>], with characters: [Range<Int>], in line: String) -> [Range<Int>] {
+        var refined: [Range<Int>] = []
+        // Both lists are sorted and disjoint, so one forward pass finds every overlap;
+        // a fragmented line can carry dozens of each.
+        var next = 0
+        for token in tokens {
+            while next < characters.count, characters[next].upperBound <= token.lowerBound { next += 1 }
+            var overlap: [Range<Int>] = []
+            var i = next
+            while i < characters.count, characters[i].lowerBound < token.upperBound {
+                let range = characters[i]
+                overlap.append(max(range.lowerBound, token.lowerBound)..<min(range.upperBound, token.upperBound))
+                i += 1
+            }
+            let changedUnits = overlap.reduce(0) { $0 + $1.count }
+            refined += changedUnits * 2 > token.count ? [token] : overlap
+        }
+        return expandToGraphemes(refined, in: line)
+    }
+
+    /// Widens sorted ranges to grapheme boundaries and merges any that then touch, since
+    /// a difftastic range can cover only part of a grapheme, such as a combining mark.
+    private static func expandToGraphemes(_ ranges: [Range<Int>], in line: String) -> [Range<Int>] {
+        var boundaries = [0]
+        for character in line { boundaries.append(boundaries.last! + character.utf16.count) }
+        var result: [Range<Int>] = []
+        // Ranges are sorted, so the boundary search resumes where the previous one stopped.
+        var start = 0
+        for range in ranges {
+            while start + 1 < boundaries.count, boundaries[start + 1] <= range.lowerBound { start += 1 }
+            var end = start
+            while end < boundaries.count, boundaries[end] < range.upperBound { end += 1 }
+            let lower = boundaries[start]
+            let upper = end < boundaries.count ? boundaries[end] : boundaries.last!
+            if let last = result.last, lower <= last.upperBound {
+                result[result.count - 1] = last.lowerBound..<max(last.upperBound, upper)
+            } else {
+                result.append(lower..<upper)
             }
         }
         return result
