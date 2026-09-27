@@ -110,25 +110,6 @@ final class MoveConnectorView: NSView {
         return path
     }
 
-    /// The edge strokes sit half a point inside the band, so they stay on its own rows.
-    private func topCurve(of band: MoveConnectorBand) -> CGPath {
-        curve(from: band.left.top + 0.5, to: band.right.top + 0.5)
-    }
-
-    private func bottomCurve(of band: MoveConnectorBand) -> CGPath {
-        curve(from: band.left.bottom - 0.5, to: band.right.bottom - 0.5)
-    }
-
-    private func curve(from leftY: CGFloat, to rightY: CGFloat) -> CGPath {
-        let path = CGMutablePath()
-        let midX = bounds.width / 2
-        path.move(to: CGPoint(x: 0, y: leftY))
-        path.addCurve(
-            to: CGPoint(x: bounds.width, y: rightY), control1: CGPoint(x: midX, y: leftY),
-            control2: CGPoint(x: midX, y: rightY))
-        return path
-    }
-
     /// The topmost band under `point`; later bands are drawn over earlier ones.
     private func band(at point: NSPoint, in bands: [(index: Int, band: MoveConnectorBand)]) -> (
         index: Int, band: MoveConnectorBand
@@ -143,7 +124,7 @@ final class MoveConnectorView: NSView {
         drawnClipYs = leftScroll.flatMap { left in
             rightScroll.map { (left.contentView.bounds.minY, $0.contentView.bounds.minY) }
         }
-        DiffTheme.gutterBackground.setFill()
+        DiffTheme.background.setFill()
         context.fill(bounds)
         DiffTheme.divider.setFill()
         context.fill(NSRect(x: 0, y: 0, width: 1, height: bounds.height))
@@ -151,31 +132,52 @@ final class MoveConnectorView: NSView {
 
         let bands = visibleBands()
         drawnHover = pointer.flatMap { band(at: $0, in: bands)?.index }
+        // Every band's base goes down before any band, so the hairlines stop where a band
+        // meets its rows while crossing bands still show through each other.
+        for (_, band) in bands {
+            drawFading(band, context: context) {
+                context.addPath(outline(of: band))
+                context.setFillColor(DiffTheme.background.cgColor)
+                context.fillPath()
+            }
+        }
         for (index, band) in bands {
-            draw(band, isHovered: index == drawnHover, context: context)
+            drawFading(band, context: context) { draw(band, isHovered: index == drawnHover, context: context) }
         }
     }
 
+    /// The band's fill runs from the left pane's moved rows (text area) to the right pane's
+    /// (gutter), fading in the middle, so each end reads as its rows flowing out.
     private func draw(_ band: MoveConnectorBand, isHovered: Bool, context: CGContext) {
-        let outline = outline(of: band)
+        let middle = isHovered ? DiffTheme.movedBandMiddleHover : DiffTheme.movedBandMiddle
         context.saveGState()
-        let fadeEdge = fadeEdgeY(of: band)
-        if fadeEdge != nil {
-            context.clip(to: outline.boundingBoxOfPath.insetBy(dx: -1, dy: -1))
-            context.beginTransparencyLayer(auxiliaryInfo: nil)
-        }
-        context.addPath(outline)
-        context.setFillColor((isHovered ? DiffTheme.movedBandHover : DiffTheme.movedBand).cgColor)
-        context.fillPath()
-        context.addPath(topCurve(of: band))
-        context.addPath(bottomCurve(of: band))
-        context.setStrokeColor(DiffTheme.movedAccent.withAlphaComponent(isHovered ? 1 : 0.6).cgColor)
-        context.setLineWidth(1)
-        context.strokePath()
-        if let fadeEdge {
-            fadeOut(towardY: fadeEdge, context: context)
-            context.endTransparencyLayer()
-        }
+        context.addPath(outline(of: band))
+        context.clip()
+        drawHorizontalGradient([DiffTheme.movedRow, middle, DiffTheme.movedGutterOnRow], context: context)
+        context.restoreGState()
+    }
+
+    /// Fills the current clip left to right through `colors`, evenly spaced.
+    private func drawHorizontalGradient(_ colors: [NSColor], context: CGContext) {
+        guard
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors.map(\.cgColor) as CFArray,
+                locations: nil)
+        else { return }
+        context.drawLinearGradient(
+            gradient, start: CGPoint(x: 0, y: 0), end: CGPoint(x: bounds.width, y: 0), options: [])
+    }
+
+    /// Runs `body` so that, when one end is clamped, what it draws fades out toward the
+    /// viewport edge that end leaves through.
+    private func drawFading(_ band: MoveConnectorBand, context: CGContext, _ body: () -> Void) {
+        guard let fadeEdge = fadeEdgeY(of: band) else { return body() }
+        context.saveGState()
+        context.clip(to: outline(of: band).boundingBoxOfPath.insetBy(dx: -1, dy: -1))
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        body()
+        fadeOut(towardY: fadeEdge, context: context)
+        context.endTransparencyLayer()
         context.restoreGState()
     }
 

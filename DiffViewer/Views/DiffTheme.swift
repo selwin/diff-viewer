@@ -33,10 +33,13 @@ enum DiffTheme {
     static let movedRow = dynamic(light: rgb(242, 235, 255), dark: rgb(163, 113, 247, 0.16))
     static let movedGutter = dynamic(light: rgb(223, 208, 255), dark: rgb(163, 113, 247, 0.30))
     static let movedAccent = dynamic(light: rgb(130, 80, 223), dark: rgb(188, 140, 255))
-    /// The connector band between a move's two ends; translucent so crossing bands show
-    /// through each other. Hover makes it stronger.
-    static let movedBand = dynamic(light: rgb(130, 80, 223, 0.18), dark: rgb(163, 113, 247, 0.28))
-    static let movedBandHover = dynamic(light: rgb(130, 80, 223, 0.34), dark: rgb(163, 113, 247, 0.48))
+    /// `movedGutter` as the pane paints it, over `movedRow`, so the connector band can end
+    /// in exactly the colour of the right pane's moved gutter.
+    static let movedGutterOnRow = dynamic(light: rgb(223, 208, 255), dark: rgb(163, 113, 247, 0.412))
+    /// The middle of the connector band, which fades to this from the rows at both ends;
+    /// translucent so crossing bands show through each other. Hover makes it stronger.
+    static let movedBandMiddle = dynamic(light: rgb(223, 208, 255, 0.6), dark: rgb(163, 113, 247, 0.14))
+    static let movedBandMiddleHover = dynamic(light: rgb(200, 178, 250), dark: rgb(163, 113, 247, 0.4))
 
     /// Find hits, near-opaque so they read on added and deleted rows too. The current
     /// match is a stronger orange so it stands out while the Find field has focus.
