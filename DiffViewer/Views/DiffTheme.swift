@@ -33,6 +33,10 @@ enum DiffTheme {
     static let movedRow = dynamic(light: rgb(242, 235, 255), dark: rgb(163, 113, 247, 0.16))
     static let movedGutter = dynamic(light: rgb(223, 208, 255), dark: rgb(163, 113, 247, 0.30))
     static let movedAccent = dynamic(light: rgb(130, 80, 223), dark: rgb(188, 140, 255))
+    /// The connector band between a move's two ends; translucent so crossing bands show
+    /// through each other. Hover makes it stronger.
+    static let movedBand = dynamic(light: rgb(130, 80, 223, 0.18), dark: rgb(163, 113, 247, 0.28))
+    static let movedBandHover = dynamic(light: rgb(130, 80, 223, 0.34), dark: rgb(163, 113, 247, 0.48))
 
     /// Find hits, near-opaque so they read on added and deleted rows too. The current
     /// match is a stronger orange so it stands out while the Find field has focus.

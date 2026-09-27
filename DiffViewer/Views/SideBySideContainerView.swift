@@ -9,6 +9,8 @@ final class SideBySideContainerView: NSView {
     let overview = ChangeOverviewView(frame: .zero)
     private let leftScroll = NSScrollView()
     private let rightScroll = NSScrollView()
+    private let connector = MoveConnectorView(frame: .zero)
+    /// The line between the find headers; the connector separates the panes below them.
     private let divider = NSView()
     private let leftHeader = PaneHeaderView(frame: .zero)
     private let rightHeader = PaneHeaderView(frame: .zero)
@@ -103,6 +105,10 @@ final class SideBySideContainerView: NSView {
             self?.findOwnedSelection = nil
             self?.onPaneInteraction?(.new)
         }
+        connector.leftScroll = leftScroll
+        connector.rightScroll = rightScroll
+        connector.onJumpToDocumentRow = { [weak self] row in self?.scroll(toRow: row) }
+        addSubview(connector)
         divider.wantsLayer = true
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
         addSubview(divider)
@@ -133,6 +139,8 @@ final class SideBySideContainerView: NSView {
             redrawIfScrolledHorizontally(rightScroll, pane: rightPane)
             sync(from: rightScroll, to: leftScroll)
         }
+        // After the sync, so the bands are drawn against both clips' new origins.
+        connector.redrawIfScrolledVertically()
     }
 
     /// The gutter is drawn at the visible left edge, and a layer-backed clip view only
@@ -147,6 +155,7 @@ final class SideBySideContainerView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
+        connector.needsDisplay = true
     }
 
     override func viewDidMoveToWindow() {
@@ -166,6 +175,7 @@ final class SideBySideContainerView: NSView {
         let anchor = captureAnchor()
         leftPane.fontSize = fontSize
         rightPane.fontSize = fontSize
+        connector.rowHeight = rightPane.layout.rowHeight
         switch mode {
         case .replace:
             visibleSectionPublisher.reset()
@@ -231,6 +241,7 @@ final class SideBySideContainerView: NSView {
         overview.changeBlocks = incoming.document.changeBlocks
         folded = incoming.folded
         projectionChanged()
+        connector.setMoves(incoming.document.moves, folded: folded)
         leftPane.displayRows = folded.displayRows
         rightPane.displayRows = folded.displayRows
         needsLayout = true
@@ -273,6 +284,7 @@ final class SideBySideContainerView: NSView {
         let anchor = captureAnchor()
         leftPane.fontSize = fontSize
         rightPane.fontSize = fontSize
+        connector.rowHeight = rightPane.layout.rowHeight
         restoreScroll(anchor)
     }
 
@@ -350,6 +362,7 @@ final class SideBySideContainerView: NSView {
             folded = .identity(documentRowCount: document?.rows.count ?? 0)
         }
         projectionChanged()
+        connector.setMoves(document?.moves ?? [], folded: folded)
         leftPane.displayRows = folded.displayRows
         rightPane.displayRows = folded.displayRows
         applyCurrentBlock()
@@ -486,25 +499,22 @@ final class SideBySideContainerView: NSView {
 
     override func layout() {
         super.layout()
-        let overviewWidth = ChangeOverviewView.width
-        let width = bounds.width - overviewWidth
-        let leftWidth = floor((width - 1) / 2)
-        // Not flipped: the headers take the top strip and the panes keep y = 0.
-        let headerHeight = findScope == nil ? 0 : PaneHeaderView.height
-        let height = max(0, bounds.height - headerHeight)
-        leftHeader.frame = NSRect(x: 0, y: height, width: leftWidth, height: headerHeight)
-        rightHeader.frame = NSRect(
-            x: leftWidth + 1, y: height, width: bounds.width - leftWidth - 1, height: headerHeight)
-        leftScroll.frame = NSRect(x: 0, y: 0, width: leftWidth, height: height)
-        // Full height, so it also separates the two headers.
-        divider.frame = NSRect(x: leftWidth, y: 0, width: 1, height: bounds.height)
-        rightScroll.frame = NSRect(x: leftWidth + 1, y: 0, width: width - leftWidth - 1, height: height)
-        overview.frame = NSRect(x: bounds.width - overviewWidth, y: 0, width: overviewWidth, height: height)
+        let frames = SideBySideLayout(
+            bounds: bounds, overviewWidth: ChangeOverviewView.width, connectorWidth: MoveConnectorView.width,
+            headerHeight: findScope == nil ? 0 : PaneHeaderView.height)
+        leftHeader.frame = frames.leftHeader
+        rightHeader.frame = frames.rightHeader
+        divider.frame = frames.headerSeparator
+        leftScroll.frame = frames.leftScroll
+        connector.frame = frames.connector
+        rightScroll.frame = frames.rightScroll
+        overview.frame = frames.overview
         for (scroll, pane) in [(leftScroll, leftPane), (rightScroll, rightPane)] {
             let clip = scroll.contentView.bounds.size
             let size = pane.desiredSize(clipWidth: clip.width, clipHeight: clip.height)
             if pane.frame.size != size { pane.setFrameSize(size) }
         }
+        connector.needsDisplay = true
     }
 
     private func sync(from source: NSScrollView?, to target: NSScrollView?) {
