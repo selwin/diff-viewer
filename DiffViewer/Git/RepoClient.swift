@@ -21,6 +21,10 @@ protocol RepoClient: Sendable {
     func headState() async throws -> HeadState
     /// Local branches sorted by ref name. An unborn branch has no ref and is omitted.
     func localBranches() async throws -> [LocalBranch]
+    /// Remote-tracking branches sorted by ref name, without symbolic refs like `origin/HEAD`.
+    func remoteBranches() async throws -> [RemoteBranch]
+    /// `git config user.email`, or nil when it is not set.
+    func userEmail() async throws -> String?
     /// The branch's commits, newest first, following first parents only.
     ///
     /// Takes the revision to start from rather than reading HEAD itself: the caller
@@ -71,6 +75,9 @@ protocol RepoClient: Sendable {
     /// Switches to an existing local branch without creating a tracking branch. Throws
     /// git's and the hooks' diagnostics when it refuses or a post-checkout hook fails.
     func switchBranch(to branch: String) async throws
+    /// Creates `branch` tracking the remote-tracking ref `trackingRef` and switches to it.
+    /// Throws git's diagnostics when it refuses, as for a name that already exists locally.
+    func checkoutTracking(branch: String, trackingRef: String) async throws
     /// Deletes a local branch whether or not it is merged: `git branch -D`. Throws git's
     /// diagnostics when it refuses, as for a branch checked out in any worktree.
     func deleteBranch(_ name: String) async throws

@@ -114,6 +114,8 @@ final class WindowState {
     private(set) var headState: HeadState?
     /// The local branches the picker lists, read with `headState` on the same ticket.
     private(set) var branches: [LocalBranch] = []
+    /// Every remote-tracking branch, tracked or not, published with `branches`.
+    private(set) var remoteBranches: [RemoteBranch] = []
     /// How the last paired HEAD + branch read went, so the picker can tell unread from empty.
     private(set) var branchReadStatus: BranchReadStatus = .unread
     /// The branch names the picker's menu lists, in the order they were read.
@@ -828,8 +830,8 @@ extension WindowState {
         startHistoryLoad(session: session, source: .revision(head))
     }
 
-    /// Re-reads where HEAD points and the local branch list, on its own serial so a
-    /// commit-list load cannot cancel it or be cancelled.
+    /// Re-reads where HEAD points and the local and remote branch lists, on its own serial
+    /// so a commit-list load cannot cancel it or be cancelled.
     ///
     /// Returns whether this read published anything: a failure that publishes `.failed`
     /// counts, a superseded or closed one does not. The fetch waits on that, so a read of
@@ -841,16 +843,19 @@ extension WindowState {
         session.headStateCheckSerial += 1
         let ticket = session.headStateCheckSerial
         // A failure leaves the last known pair on show: the next tick reads again, and
-        // stale beats blank. Nothing is published until both reads are in, so the picker
-        // never sees a HEAD the branch list has not caught up with.
+        // stale beats blank. Nothing is published until every read is in, so the picker
+        // never sees a HEAD the branch lists have not caught up with.
         let state: HeadState
         let list: [LocalBranch]
+        let remoteList: [RemoteBranch]
         do {
             state = try await session.client.headState()
-            // A superseded or closed request stops here rather than starting a second
+            // A superseded or closed request stops here rather than starting another
             // git process for an answer nobody will publish.
             guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
             list = try await session.client.localBranches()
+            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+            remoteList = try await session.client.remoteBranches()
         } catch {
             guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
             branchReadStatus = .failed
@@ -860,6 +865,7 @@ extension WindowState {
         guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
         headState = state
         branches = list
+        remoteBranches = remoteList
         branchReadStatus = .loaded
         publishedBranchRead(session: session)
         return true
@@ -1172,8 +1178,8 @@ extension WindowState {
 
 // MARK: - Switching branches
 
-/// Checking out another local branch from the title bar. Same file as the class so
-/// `isSwitchingBranch` stays `private(set)`.
+/// Checking out another local branch, or a remote one as a new tracking branch, from the
+/// title bar. Same file as the class so `isSwitchingBranch` stays `private(set)`.
 extension WindowState {
     /// Switches the working tree to `branch` on the write chain; a second call while one
     /// is queued or running does nothing, and so does choosing the branch already checked
@@ -1187,14 +1193,17 @@ extension WindowState {
         // A run in flight would pair the old branch name with the new branch's patch.
         cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
-            await self?.runBranchSwitch(to: branch, session: session)
+            await self?.runBranchSwitch(session: session) { client in
+                try await client.switchBranch(to: branch)
+            }
         }
     }
 
-    private func runBranchSwitch(to branch: String, session: RepoSession) async {
+    /// `checkout` is the git call that moves HEAD; everything after it is shared.
+    private func runBranchSwitch(session: RepoSession, checkout: (any RepoClient) async throws -> Void) async {
         guard session === self.session, !isClosed else { return }
         var failure: (any Error)?
-        do { try await session.client.switchBranch(to: branch) } catch { failure = error }
+        do { try await checkout(session.client) } catch { failure = error }
         guard session === self.session, !isClosed else { return }
         // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
         // and the watcher ignores this process's own events. A commit's files and diff
@@ -1229,6 +1238,27 @@ extension WindowState {
         guard session === self.session, !isClosed, let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+    }
+
+    /// Creates a local branch tracking `branch` and switches to it, on the same terms as
+    /// `switchBranch(to:)`. A local branch of the same name is reported rather than
+    /// switched to or renamed around: it may track something else entirely.
+    func checkoutRemoteBranch(_ branch: RemoteBranch) async {
+        guard let session, !isClosed, !isSwitchingBranch else { return }
+        // Git would refuse too; this says why in words. One created since the last read
+        // still reaches git, whose refusal is reported the same way.
+        guard !branches.contains(where: { $0.name == branch.name }) else {
+            errorMessage = "A local branch named \(branch.name) already exists"
+            return
+        }
+        isSwitchingBranch = true  // before the first suspension: the admission guard
+        defer { isSwitchingBranch = false }
+        cancelCommitMessageGeneration()
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runBranchSwitch(session: session) { client in
+                try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
+            }
+        }
     }
 }
 

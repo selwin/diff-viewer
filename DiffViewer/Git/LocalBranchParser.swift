@@ -1,6 +1,7 @@
 import Foundation
 
-enum LocalBranchParseError: Error, LocalizedError {
+/// Why a `git for-each-ref` branch listing could not be read.
+enum BranchParseError: Error, LocalizedError {
     case unreadableDate(String)
     case malformedRecord(String)
 
@@ -9,15 +10,16 @@ enum LocalBranchParseError: Error, LocalizedError {
         case let .unreadableDate(field):
             "git for-each-ref returned an unreadable date: \(field)"
         case let .malformedRecord(line):
-            "git for-each-ref returned a record without eight fields: \(line)"
+            "git for-each-ref returned a record with the wrong number of fields: \(line)"
         }
     }
 }
 
 /// Parses `git for-each-ref` written with the field layout in `GitClient.localBranches`:
-/// one branch per line, eight NUL-separated fields — ref name, upstream short name,
+/// one branch per line, ten NUL-separated fields — ref name, upstream short name,
 /// upstream track, upstream remote name, upstream remote ref, committer date, upstream
-/// full ref, tip SHA. The upstream fields may be empty; the committer date must parse.
+/// full ref, tip SHA, author name, author email. The upstream fields may be empty; the
+/// committer date must parse.
 enum LocalBranchParser {
     static func parse(_ output: String) throws -> [LocalBranch] {
         let dates = ISO8601DateFormatter()
@@ -27,12 +29,12 @@ enum LocalBranchParser {
         // inside a name.
         return try output.split(separator: "\n").map { line in
             let fields = line.components(separatedBy: "\0")
-            guard fields.count == 8 else { throw LocalBranchParseError.malformedRecord(String(line)) }
+            guard fields.count == 10 else { throw BranchParseError.malformedRecord(String(line)) }
 
             let shortName = fields[1]
             let date = fields[5]
             guard let tipCommittedAt = dates.date(from: date) else {
-                throw LocalBranchParseError.unreadableDate(date)
+                throw BranchParseError.unreadableDate(date)
             }
             return LocalBranch(
                 name: branchName(fromRef: fields[0]),
@@ -46,7 +48,9 @@ enum LocalBranchParser {
                         localRef: fields[6],
                         tracking: UpstreamTracking.parse(fields[2])),
                 tipSha: fields[7],
-                tipCommittedAt: tipCommittedAt)
+                tipCommittedAt: tipCommittedAt,
+                tipCommitAuthor: fields[8],
+                tipCommitAuthorEmail: fields[9])
         }
     }
 

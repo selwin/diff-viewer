@@ -29,6 +29,10 @@ struct LocalBranch: Sendable, Equatable {
     let tipSha: String
     /// The tip commit's committer date.
     let tipCommittedAt: Date
+    /// The tip commit's author, which says nothing about who owns the branch.
+    let tipCommitAuthor: String
+    /// The tip commit's author email, without git's angle brackets.
+    let tipCommitAuthorEmail: String
 }
 
 /// The state of a branch against its upstream, as `%(upstream:track)` reports it.
@@ -59,7 +63,7 @@ enum UpstreamTracking: Sendable, Equatable {
     }
 
     /// The words the branch picker shows after the name, or nil when there is nothing to
-    /// say. Behind comes first: it is the one that decides whether a pull is due.
+    /// say.
     var summary: String? {
         switch self {
         case .gone:
@@ -67,9 +71,9 @@ enum UpstreamTracking: Sendable, Equatable {
             return "upstream gone"
         case let .counts(ahead, behind):
             var parts: [String] = []
-            if behind > 0 { parts.append("\(behind) behind") }
             if ahead > 0 { parts.append("\(ahead) ahead") }
-            return parts.isEmpty ? nil : parts.joined(separator: ", ")
+            if behind > 0 { parts.append("\(behind) behind") }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
     }
 }

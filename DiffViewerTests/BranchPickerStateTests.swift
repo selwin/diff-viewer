@@ -53,7 +53,7 @@ struct BranchPickerStateTests {
                 tipCommittedAt: Self.now - 3),
         ]
         let picker = state(snapshot(branches: branches))
-        #expect(picker.rows.map(\.trailingText) == ["no upstream", "", "upstream gone", "2 behind, 1 ahead"])
+        #expect(picker.rows.map(\.trailingText) == ["no upstream", "", "upstream gone", "1 ahead · 2 behind"])
     }
 
     // MARK: Highlight
@@ -317,7 +317,7 @@ struct BranchPickerStateTests {
             ),
             (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2)))]),
-                header("main", pill: true, detail: "2 behind, 1 ahead")
+                header("main", pill: true, detail: "1 ahead · 2 behind")
             ),
             // HEAD on a branch the list does not carry: nothing is known about its upstream.
             (named([localBranch("other")]), header("main", pill: true)),

@@ -50,6 +50,13 @@ actor StubRepoClient: RepoClient {
     private var holdsLocalBranches = false
     private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
     private(set) var localBranchesCalls = 0
+    private var stubbedRemoteBranches: [RemoteBranch] = []
+    private var failsRemoteBranches = false
+    private(set) var remoteBranchesCalls = 0
+    private var stubbedUserEmail: String?
+    /// Every remote checkout asked for, in order, whether or not it succeeded.
+    private(set) var checkoutTrackingCalls: [(branch: String, trackingRef: String)] = []
+    private var failsCheckoutTracking = false
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
     /// Every branch a delete was asked for, in order, whether or not it succeeded.
@@ -324,6 +331,12 @@ actor StubRepoClient: RepoClient {
     /// Releases the oldest held branches read, for the other half of that choice.
     func releaseFirstLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeFirst().resume() } }
 
+    func set(remoteBranches branches: [RemoteBranch]) { stubbedRemoteBranches = branches }
+    func fail(remoteBranches on: Bool) { failsRemoteBranches = on }
+    func set(userEmail email: String?) { stubbedUserEmail = email }
+    /// Makes `checkoutTracking` throw, after recording the call.
+    func fail(checkoutTracking on: Bool) { failsCheckoutTracking = on }
+
     /// Makes `switchBranch` throw, after recording the call and moving HEAD.
     func fail(switchBranch on: Bool) { failsSwitchBranch = on }
     /// Suspends `switchBranch` after it records the call.
@@ -354,6 +367,27 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone")
         }
         return snapshot
+    }
+
+    func remoteBranches() async throws -> [RemoteBranch] {
+        remoteBranchesCalls += 1
+        if failsRemoteBranches {
+            throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone")
+        }
+        return stubbedRemoteBranches
+    }
+
+    func userEmail() async throws -> String? { stubbedUserEmail }
+
+    /// Adds the tracking branch and moves HEAD onto it on success, as git would.
+    func checkoutTracking(branch: String, trackingRef: String) async throws {
+        checkoutTrackingCalls.append((branch: branch, trackingRef: trackingRef))
+        if failsCheckoutTracking {
+            throw ProcessError.failed(command: "git switch", status: 128, stderr: "checkout failed")
+        }
+        let shortName = String(trackingRef.dropFirst("refs/remotes/".count))
+        stubbedLocalBranches.append(localBranch(branch, upstream: upstream(shortName, localRef: trackingRef)))
+        stubbedHeadState = .named(branch)
     }
 
     func switchBranch(to branch: String) async throws {

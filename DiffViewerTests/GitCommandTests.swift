@@ -1123,6 +1123,8 @@ import Testing
 
         let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
         #expect(main.tipCommittedAt == ISO8601DateFormatter().date(from: stamp))
+        #expect(main.tipCommitAuthor == "Tester")
+        #expect(main.tipCommitAuthorEmail == "tester@example.com", "without git's angle brackets")
         #expect(main.upstream?.remote == "origin")
         #expect(main.upstream?.remoteRef == "refs/heads/main")
         #expect(main.upstream?.localRef == "refs/remotes/origin/main")
@@ -1270,6 +1272,116 @@ import Testing
             #expect(error.localizedDescription.contains("hook says no"), "\(error.localizedDescription)")
         }
         #expect(try await repo.client.headState() == .named("side"))
+    }
+
+    // MARK: Remote branches
+
+    /// `origin/HEAD` is a symbolic ref to another branch, not a branch of its own.
+    @Test func remoteBranchesListsTrackingRefsWithoutSymrefs() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["push", "origin", "main:refs/heads/feature/x"])
+        try await repo.git(["remote", "set-head", "origin", "main"])
+
+        let branches = try await repo.client.remoteBranches()
+        #expect(branches.map(\.name) == ["feature/x", "main"])
+        #expect(branches.map(\.remote) == ["origin", "origin"])
+        #expect(branches.map(\.ref) == ["refs/remotes/origin/feature/x", "refs/remotes/origin/main"])
+        #expect(branches.first?.tipCommitAuthor == "Tester")
+        #expect(branches.first?.tipCommitAuthorEmail == "tester@example.com", "without git's angle brackets")
+        _ = remote
+    }
+
+    /// A remote name may contain a slash; its mapping, not the ref's path, splits it.
+    @Test func remoteBranchesSplitAfterARemoteNameWithASlash() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["remote", "add", "team/a", remote.url.path])
+        try await repo.git(["fetch", "team/a"])
+
+        let branches = try await repo.client.remoteBranches().filter { $0.remote == "team/a" }
+        #expect(branches.map(\.name) == ["main"])
+        #expect(branches.map(\.ref) == ["refs/remotes/team/a/main"])
+        _ = remote
+    }
+
+    /// A mapping into another namespace still names its own remote, and the checkout's
+    /// upstream follows the mapping rather than the ref's path.
+    @Test func aCustomFetchMappingNamesItsRemote() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["push", "origin", "main:refs/heads/feature"])
+        try await repo.git(["config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/company/*"])
+        try await repo.git(["fetch", "origin"])
+
+        let branches = try await repo.client.remoteBranches()
+        let feature = try #require(branches.first { $0.ref == "refs/remotes/company/feature" })
+        #expect(feature.remote == "origin")
+        #expect(feature.name == "feature")
+        #expect(!branches.contains { $0.ref.hasPrefix("refs/remotes/origin/") }, "no longer mapped")
+
+        try await repo.client.checkoutTracking(branch: feature.name, trackingRef: feature.ref)
+
+        #expect(try await repo.client.headState() == .named("feature"))
+        #expect(try await repo.git(["config", "branch.feature.remote"]) == "origin")
+        #expect(try await repo.git(["config", "branch.feature.merge"]) == "refs/heads/feature")
+        _ = remote
+    }
+
+    @Test func checkoutTrackingCreatesABranchTrackingTheRemote() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["push", "origin", "main:refs/heads/feature"])
+
+        try await repo.client.checkoutTracking(branch: "feature", trackingRef: "refs/remotes/origin/feature")
+
+        #expect(try await repo.client.headState() == .named("feature"))
+        let feature = try #require(try await repo.client.localBranches().first { $0.name == "feature" })
+        #expect(feature.upstream?.localRef == "refs/remotes/origin/feature")
+        #expect(feature.upstream?.remoteRef == "refs/heads/feature")
+        _ = remote
+    }
+
+    /// `-c`, not `-C`: an existing local branch is neither reset nor switched to.
+    @Test func checkoutTrackingRefusesAnExistingLocalName() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["push", "origin", "main:refs/heads/feature"])
+        try repo.write("b.txt", "two\n")
+        try await repo.commit("Local only")
+        try await repo.git(["branch", "feature"])
+        let localTip = try await repo.git(["rev-parse", "feature"])
+        try await repo.git(["reset", "--hard", "HEAD~1"])
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.checkoutTracking(branch: "feature", trackingRef: "refs/remotes/origin/feature")
+        }
+        #expect(try await repo.client.headState() == .named("main"))
+        #expect(try await repo.git(["rev-parse", "feature"]) == localTip)
+        _ = remote
+    }
+
+    /// Git would read the name as an option, and anything outside `refs/remotes/` is not
+    /// a remote-tracking ref to track.
+    @Test func checkoutTrackingRejectsNamesThatLookLikeOptions() async throws {
+        let (repo, remote) = try await pushedRepo()
+        await #expect(throws: (any Error).self) {
+            try await repo.client.checkoutTracking(branch: "-f", trackingRef: "refs/remotes/origin/main")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.checkoutTracking(branch: "copy", trackingRef: "--detach")
+        }
+        await #expect(throws: (any Error).self) {
+            try await repo.client.checkoutTracking(branch: "copy", trackingRef: "refs/heads/main")
+        }
+        #expect(try await repo.client.localBranches().map(\.name) == ["main"])
+        _ = remote
+    }
+
+    /// The fixture's environment keeps the developer's global config out, so the key is
+    /// genuinely missing until the repository sets it.
+    @Test func userEmailIsNilUntilConfigured() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        #expect(try await repo.client.userEmail() == nil)
+
+        try await repo.prepareForCommits()
+        #expect(try await repo.client.userEmail() == "tester@example.com")
     }
 
     // MARK: Contents

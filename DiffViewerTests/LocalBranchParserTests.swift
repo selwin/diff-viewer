@@ -15,9 +15,11 @@ struct LocalBranchParserTests {
         remoteRef: String = "refs/heads/main",
         date: String = LocalBranchParserTests.date,
         localRef: String = "refs/remotes/origin/main",
-        tipSha: String = objectID("tip")
+        tipSha: String = objectID("tip"),
+        author: String = "Ada Lovelace",
+        email: String = "ada@example.com"
     ) -> String {
-        [ref, shortName, track, remote, remoteRef, date, localRef, tipSha].joined(separator: "\0")
+        [ref, shortName, track, remote, remoteRef, date, localRef, tipSha, author, email].joined(separator: "\0")
     }
 
     @Test func everyUpstreamFieldIsRead() throws {
@@ -27,6 +29,8 @@ struct LocalBranchParserTests {
         #expect(branch.name == "main")
         #expect(branch.tipSha == objectID("tip"))
         #expect(branch.tipCommittedAt == ISO8601DateFormatter().date(from: Self.date))
+        #expect(branch.tipCommitAuthor == "Ada Lovelace")
+        #expect(branch.tipCommitAuthorEmail == "ada@example.com")
         let upstream = try #require(branch.upstream)
         #expect(upstream.shortName == "origin/main")
         #expect(upstream.remote == "origin")
@@ -48,18 +52,18 @@ struct LocalBranchParserTests {
     }
 
     @Test func anUnreadableDateThrows() {
-        #expect(throws: LocalBranchParseError.self) {
+        #expect(throws: BranchParseError.self) {
             try LocalBranchParser.parse(line(date: "not a date") + "\n")
         }
     }
 
-    @Test func aRecordWithoutEightFieldsThrows() {
-        #expect(throws: LocalBranchParseError.self) {
+    @Test func aRecordWithoutTenFieldsThrows() {
+        #expect(throws: BranchParseError.self) {
             try LocalBranchParser.parse("refs/heads/main\0origin/main\n")
         }
-        let sevenFields = line().components(separatedBy: "\0").dropLast().joined(separator: "\0")
-        #expect(throws: LocalBranchParseError.self) {
-            try LocalBranchParser.parse(sevenFields + "\n")
+        let nineFields = line().components(separatedBy: "\0").dropLast().joined(separator: "\0")
+        #expect(throws: BranchParseError.self) {
+            try LocalBranchParser.parse(nineFields + "\n")
         }
     }
 
