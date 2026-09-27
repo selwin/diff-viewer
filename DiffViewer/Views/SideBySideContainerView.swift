@@ -90,6 +90,7 @@ final class SideBySideContainerView: NSView {
             scroll.horizontalScrollElasticity = .none
             scroll.contentView.drawsBackground = false
             pane.onFoldAction = { [weak self] action in self?.handle(action) }
+            pane.onJumpToDocumentRow = { [weak self] row in self?.scroll(toRow: row) }
             addSubview(scroll)
         }
         leftPane.onInteraction = { [weak self] in
@@ -240,7 +241,8 @@ final class SideBySideContainerView: NSView {
     }
 
     /// Hands both panes the current document, with the changeset's sections and section
-    /// index when there is one, so the gutter can number lines per file.
+    /// index when there is one, so the gutter can number lines per file. Both install and
+    /// append come through here, so the panes' moved-line maps always cover every move.
     private func installModels(mode: DocumentUpdate.Mode) {
         guard let document else { return }
         let sections = changeset?.sections ?? []
@@ -248,11 +250,11 @@ final class SideBySideContainerView: NSView {
         leftPane.install(
             PaneModel(
                 side: .old, rows: document.rows, lines: document.oldLines, sections: sections,
-                sectionIndex: sectionIndex), mode: mode)
+                sectionIndex: sectionIndex, moves: document.moves), mode: mode)
         rightPane.install(
             PaneModel(
                 side: .new, rows: document.rows, lines: document.newLines, sections: sections,
-                sectionIndex: sectionIndex), mode: mode)
+                sectionIndex: sectionIndex, moves: document.moves), mode: mode)
     }
 
     /// Applies a style snapshot built for the installed document. A snapshot is

@@ -26,9 +26,10 @@ extension DiffPaneView {
         NSCursor.arrow.set()
     }
 
-    /// Pointing hand on a separator, I-beam over text, arrow over the gutter and pads.
+    /// Pointing hand on a separator or a move marker, I-beam over text, arrow over the
+    /// gutter and pads.
     private func cursor(at point: NSPoint) -> NSCursor {
-        if separatorHidden(at: point) != nil { return .pointingHand }
+        if separatorHidden(at: point) != nil || moveMarkerTarget(at: point) != nil { return .pointingHand }
         guard let model, !displayRows.isEmpty, point.x >= visibleRect.minX + gutterWidth else { return .arrow }
         let index = layout.row(atY: point.y)
         guard index < displayRows.count, case let .documentRow(row) = displayRows[index],
@@ -47,10 +48,6 @@ extension DiffPaneView {
         return (index, hidden)
     }
 
-    func separatorRowRect(at index: Int) -> NSRect {
-        NSRect(x: visibleRect.minX, y: layout.y(forRow: index), width: visibleRect.width, height: layout.rowHeight)
-    }
-
     static func action(for control: FoldControl, hidden: Range<Int>) -> FoldAction {
         switch control {
         case .expandUp: .expandUp(hidden)
@@ -60,6 +57,14 @@ extension DiffPaneView {
     }
 
     // MARK: - Hit testing
+
+    /// A display row at the visible left edge, where the gutter is drawn. Drawing and hit
+    /// testing both start from it, so they agree while the pane scrolls horizontally.
+    func rowRect(at displayIndex: Int) -> NSRect {
+        NSRect(
+            x: visibleRect.minX, y: layout.y(forRow: displayIndex), width: visibleRect.width,
+            height: layout.rowHeight)
+    }
 
     /// The document row and raw UTF-16 offset under `point`. Nil when there is no
     /// document or the point is on a separator row; offset 0 over a pad or the gutter.
@@ -86,11 +91,12 @@ extension DiffPaneView {
         let point = convert(event.locationInWindow, from: nil)
         if let onFoldAction, let (index, hidden) = separatorHidden(at: point) {
             if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
-            let control = controlRects(for: hidden, rowRect: separatorRowRect(at: index)).first(where: {
+            let control = controlRects(for: hidden, rowRect: rowRect(at: index)).first(where: {
                 $0.rect.contains(point)
             })?.control
             return onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
         }
+        if let onJumpToDocumentRow, let row = moveMarkerTarget(at: point) { return onJumpToDocumentRow(row) }
         guard let position = textPosition(at: point) else { return super.mouseDown(with: event) }
         window?.makeFirstResponder(self)
         onInteraction?()

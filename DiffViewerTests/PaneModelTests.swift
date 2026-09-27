@@ -81,4 +81,29 @@ struct PaneModelTests {
         let notices = [section("logo.png", rowRange: 0..<0, old: (0, 0), new: (0, 0), outcome: .binary)]
         #expect(PaneModel(side: .old, rows: [], lines: [], sections: notices).gutterDigits == 4)
     }
+
+    /// Old lines 0-1 moved down to new lines 4-5; old line 5 moved up to new line 1. Row
+    /// ranges differ from line ranges so a lookup by the wrong one would show.
+    private let moves = [
+        DiffMove(oldLineRange: 0..<2, newLineRange: 4..<6, oldRowRange: 0..<3, newRowRange: 4..<6),
+        DiffMove(oldLineRange: 5..<6, newLineRange: 1..<2, oldRowRange: 5..<6, newRowRange: 1..<2),
+    ]
+
+    @Test func movedLinesAreLookedUpPerSide() {
+        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves)
+        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves)
+        #expect((0..<6).filter(old.isMoved(line:)) == [0, 1, 5])
+        #expect((0..<8).filter(new.isMoved(line:)) == [1, 4, 5])
+    }
+
+    @Test func markerSitsOnARunsFirstLineAndPointsAtThePartner() {
+        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves)
+        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves)
+        #expect(old.moveMarker(forLine: 0) == MoveMarker(partnerRow: 4, pointsUp: false))
+        #expect(old.moveMarker(forLine: 1) == nil)
+        #expect(old.moveMarker(forLine: 5) == MoveMarker(partnerRow: 1, pointsUp: true))
+        #expect(new.moveMarker(forLine: 4) == MoveMarker(partnerRow: 0, pointsUp: true))
+        #expect(new.moveMarker(forLine: 1) == MoveMarker(partnerRow: 5, pointsUp: false))
+        #expect(new.moveMarker(forLine: 2) == nil)
+    }
 }

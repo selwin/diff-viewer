@@ -55,6 +55,9 @@ final class DiffPaneView: NSView {
     /// Called when the user clicks a separator row.
     var onFoldAction: ((FoldAction) -> Void)?
 
+    /// Called with the document row to scroll to when the user clicks a move marker.
+    var onJumpToDocumentRow: ((Int) -> Void)?
+
     /// Display rows of the current change block; drawn with an accent bar in the gutter.
     var currentChangeRows: Range<Int>? {
         didSet { if currentChangeRows != oldValue { needsDisplay = true } }
@@ -208,8 +211,7 @@ final class DiffPaneView: NSView {
         let visible = visibleRect
         let rows = layout.rows(intersecting: dirtyRect.minY, dirtyRect.maxY)
         for displayIndex in rows where displayIndex < displayRows.count {
-            let rowRect = NSRect(
-                x: visible.minX, y: layout.y(forRow: displayIndex), width: visible.width, height: layout.rowHeight)
+            let rowRect = rowRect(at: displayIndex)
             switch displayRows[displayIndex] {
             case let .documentRow(rowIndex):
                 drawDocumentRow(model.rows[rowIndex], at: rowIndex, in: rowRect, model: model, context: context)
@@ -236,7 +238,9 @@ final class DiffPaneView: NSView {
         _ row: DiffRow, at index: Int, in rowRect: NSRect, model: PaneModel, context: CGContext
     ) {
         let cell = model.cell(row)
-        let (rowColor, tokenColor, gutterColor) = colors(for: row.kind, side: model.side, hasCell: cell != nil)
+        let isMoved = cell.map { model.isMoved(line: $0.lineIndex) } ?? false
+        let (rowColor, tokenColor, gutterColor) = colors(
+            for: row.kind, side: model.side, hasCell: cell != nil, isMoved: isMoved)
         if let cell {
             if let rowColor {
                 rowColor.setFill()
@@ -248,7 +252,10 @@ final class DiffPaneView: NSView {
             context.clip(
                 to: NSRect(
                     x: rowRect.minX + gutterWidth, y: rowRect.minY, width: rowRect.width, height: rowRect.height))
-            drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
+            // A move's two ends match apart from whitespace, so token highlights would mark nothing useful.
+            if !isMoved {
+                drawHighlights(cell.highlights, cached: cached, in: rowRect, tokenColor: tokenColor, context: context)
+            }
             drawFindMatches(ofRow: index, cached: cached, in: rowRect, context: context)
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
             drawLine(
@@ -266,8 +273,13 @@ final class DiffPaneView: NSView {
         NSRect(x: 0, y: rowRect.minY, width: max(bounds.width, rowRect.maxX), height: rowRect.height)
     }
 
-    private func colors(for kind: DiffRow.Kind, side: PaneModel.Side, hasCell: Bool) -> (NSColor?, NSColor, NSColor?) {
+    /// Row, token and gutter colours for one side's cell. `isMoved` is per side: a modified
+    /// row can be moved on one side and keep its normal look on the other.
+    private func colors(
+        for kind: DiffRow.Kind, side: PaneModel.Side, hasCell: Bool, isMoved: Bool
+    ) -> (NSColor?, NSColor, NSColor?) {
         guard hasCell else { return (nil, .clear, nil) }
+        if isMoved { return (DiffTheme.movedRow, .clear, DiffTheme.movedGutter) }
         switch kind {
         case .equal:
             return (nil, .clear, nil)
@@ -311,6 +323,7 @@ final class DiffPaneView: NSView {
         drawLine(
             numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: rowRect.minY + 2 + ascent),
             context: context)
+        drawMoveMarker(forLine: cell.lineIndex, rowRect: rowRect, model: model, context: context)
     }
 
     /// Fills the gutter band of a row and returns it. Rows with no line number
@@ -442,21 +455,22 @@ final class DiffPaneView: NSView {
 
     // MARK: - Accessibility
 
-    /// One button per visible separator control, so VoiceOver can expand folded regions.
+    /// Buttons for the visible fold controls and move markers, so VoiceOver can use them.
     override func accessibilityChildren() -> [Any]? {
-        guard let onFoldAction else { return nil }
+        foldControlElements() + moveMarkerElements()
+    }
+
+    private func foldControlElements() -> [NSAccessibilityElement] {
+        guard let onFoldAction else { return [] }
         var elements: [NSAccessibilityElement] = []
         for index in layout.rows(intersecting: visibleRect.minY, visibleRect.maxY) where index < displayRows.count {
             guard case let .separator(hidden) = displayRows[index] else { continue }
-            for (control, rect) in controlRects(for: hidden, rowRect: separatorRowRect(at: index)) {
-                let element = FoldControlElement()
-                element.setAccessibilityRole(.button)
-                element.setAccessibilityParent(self)
-                element.setAccessibilityFrameInParentSpace(rect)
-                element.setAccessibilityLabel(accessibilityLabel(for: control, hidden: hidden))
+            for (control, rect) in controlRects(for: hidden, rowRect: rowRect(at: index)) {
                 let action = Self.action(for: control, hidden: hidden)
-                element.onPress = { onFoldAction(action) }
-                elements.append(element)
+                elements.append(
+                    ButtonElement(
+                        parent: self, frame: rect, label: accessibilityLabel(for: control, hidden: hidden),
+                        onPress: { onFoldAction(action) }))
             }
         }
         return elements
@@ -521,11 +535,20 @@ final class DiffPaneView: NSView {
     }
 }
 
-private final class FoldControlElement: NSAccessibilityElement {
-    var onPress: (() -> Void)?
+/// An accessibility button for a control the pane draws itself.
+final class ButtonElement: NSAccessibilityElement {
+    private let onPress: () -> Void
+
+    init(parent: NSView, frame: NSRect, label: String, onPress: @escaping () -> Void) {
+        self.onPress = onPress
+        super.init()
+        setAccessibilityRole(.button)
+        setAccessibilityParent(parent)
+        setAccessibilityFrameInParentSpace(frame)
+        setAccessibilityLabel(label)
+    }
 
     override func accessibilityPerformPress() -> Bool {
-        guard let onPress else { return false }
         onPress()
         return true
     }

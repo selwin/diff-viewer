@@ -109,8 +109,7 @@ enum DiffEngine {
             let rows = DiffAligner.align(
                 oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
             let moves = MoveDetector.detect(
-                oldLines: oldLines, newLines: newLines, rows: rows, changeBlocks: DiffDocument.changeBlocks(of: rows),
-                hideWhitespace: hideWhitespace)
+                oldLines: oldLines, newLines: newLines, rows: rows, hideWhitespace: hideWhitespace)
             return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language, moves: moves)
         }.value
         try Task.checkCancellation()

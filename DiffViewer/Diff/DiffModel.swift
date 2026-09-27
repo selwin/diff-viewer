@@ -58,7 +58,7 @@ struct DiffDocument: Sendable, Identifiable {
         self.newLines = newLines
         self.rows = rows
         self.language = language
-        self.changeBlocks = Self.changeBlocks(of: rows, boundaries: blockBoundaries)
+        self.changeBlocks = Self.computeChangeBlocks(rows, boundaries: blockBoundaries)
         self.moves = moves
     }
 
@@ -66,8 +66,7 @@ struct DiffDocument: Sendable, Identifiable {
         DiffDocument(oldLines: [], newLines: [], rows: [], language: nil)
     }
 
-    /// Not private: move detection needs the blocks before the document exists.
-    static func changeBlocks(of rows: [DiffRow], boundaries: [Int] = []) -> [Range<Int>] {
+    private static func computeChangeBlocks(_ rows: [DiffRow], boundaries: [Int]) -> [Range<Int>] {
         let splits = Set(boundaries)
         var blocks: [Range<Int>] = []
         var start: Int?

@@ -4,20 +4,18 @@ import Testing
 @testable import DiffViewer
 
 struct MoveDetectorTests {
-    /// Aligns the texts as the engine does (no difft hints) and detects moves.
-    private func moves(_ old: [String], _ new: [String], hideWhitespace: Bool = false) -> (
-        moves: [DiffMove], rows: [DiffRow]
-    ) {
-        let rows = DiffAligner.align(oldLines: old, newLines: new, hideWhitespace: hideWhitespace, hints: DifftHints())
+    /// Aligns the texts as the engine does (no difft hints unless given) and detects moves.
+    private func moves(
+        _ old: [String], _ new: [String], hideWhitespace: Bool = false, hints: DifftHints = DifftHints()
+    ) -> (moves: [DiffMove], rows: [DiffRow]) {
+        let rows = DiffAligner.align(oldLines: old, newLines: new, hideWhitespace: hideWhitespace, hints: hints)
         return (detect(old, new, rows, hideWhitespace: hideWhitespace), rows)
     }
 
     private func detect(_ old: [String], _ new: [String], _ rows: [DiffRow], hideWhitespace: Bool = false)
         -> [DiffMove]
     {
-        MoveDetector.detect(
-            oldLines: old, newLines: new, rows: rows, changeBlocks: DiffDocument.changeBlocks(of: rows),
-            hideWhitespace: hideWhitespace)
+        MoveDetector.detect(oldLines: old, newLines: new, rows: rows, hideWhitespace: hideWhitespace)
     }
 
     private func row(old line: Int, in rows: [DiffRow]) -> Int { rows.firstIndex { $0.old?.lineIndex == line }! }
@@ -69,10 +67,60 @@ struct MoveDetectorTests {
     }
 
     @Test func inPlaceEditIsNotAMove() {
-        // Re-indenting in place changes every line, but old and new share one block.
+        // Re-indenting in place changes every line, but each old line sits beside its new one.
         let (found, rows) = moves(["// head"] + block + ["// foot"], ["// head"] + indented(block) + ["// foot"])
-        #expect(DiffDocument.changeBlocks(of: rows).count == 1)
+        #expect(rows.filter { $0.kind == .modified }.count == block.count)
         #expect(found.isEmpty)
+    }
+
+    @Test func swappedFunctionsMoveOnlyTheDisplacedOne() {
+        let receipt = [
+            "func receipt(for items: [Item]) -> String {",
+            "    var lines: [String] = []",
+            "    for item in items {",
+            "        lines.append(\"\\(item.name): \\(item.price)\")",
+            "    }",
+            "    let total = items.reduce(0) { $0 + $1.price }",
+            "    return lines.joined(separator: \"\\n\") + \"\\ntotal: \\(total)\"",
+            "}",
+        ]
+        let discount = [
+            "func discount(for total: Int) -> Int {",
+            "    if total > 10_000 { return total / 10 }",
+            "    return 0",
+            "}",
+        ]
+        let old = receipt + [""] + discount
+        let new = discount + [""] + receipt
+        // difft reports receipt as removed and re-added, so its lines align as modified rows
+        // side by side, while discount is deleted below and added above: one change block.
+        var hints = DifftHints()
+        for line in 0..<receipt.count {
+            hints.oldChanges[line] = [0..<old[line].utf8.count]
+            hints.newChanges[line + 5] = [0..<new[line + 5].utf8.count]
+        }
+        let (found, rows) = moves(old, new, hints: hints)
+        #expect(DiffDocument(oldLines: old, newLines: new, rows: rows, language: nil).changeBlocks.count == 1)
+        // Line for line, except receipt's closing brace, which Myers pairs with discount's.
+        for line in 0..<(receipt.count - 1) {
+            #expect(row(old: line, in: rows) == row(new: line + 5, in: rows))
+        }
+        #expect(
+            found == [
+                DiffMove(
+                    oldLineRange: 9..<13, newLineRange: 0..<4,
+                    oldRowRange: row(old: 9, in: rows)..<(row(old: 12, in: rows) + 1),
+                    newRowRange: row(new: 0, in: rows)..<(row(new: 3, in: rows) + 1))
+            ])
+    }
+
+    @Test func runIsSplitWhereAPairSharesARow() {
+        let lines = ["let alpha = makeAlphaValue()", "let bravo = makeBravoValue()", "let charlie = makeCharlie()"]
+        // Only bravo sits beside itself; alpha and charlie are each deleted and added apart.
+        let rows = [addedRow(0), deletedRow(0), modifiedRow(1, 1), addedRow(2), deletedRow(2)]
+        let found = detect(lines, lines, rows)
+        #expect(found.map(\.oldLineRange) == [0..<1, 2..<3])
+        #expect(found.map(\.newLineRange) == [0..<1, 2..<3])
     }
 
     @Test func movedTextInModifiedRowsIsFound() {

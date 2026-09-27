@@ -12,7 +12,7 @@ struct DiffMove: Sendable, Equatable {
 }
 
 /// Finds moved blocks among a diff's changed lines, in the spirit of `git diff
-/// --color-moved`: runs of consecutive lines removed in one change block and added, with
+/// --color-moved`: runs of consecutive changed lines removed in one place and added, with
 /// the same text up to indentation, in another.
 enum MoveDetector {
     /// A line this common among added lines (`}`, `return`) never starts a run, which keeps
@@ -22,26 +22,16 @@ enum MoveDetector {
     static let minAlphanumerics = 20
 
     static func detect(
-        oldLines: [String], newLines: [String], rows: [DiffRow], changeBlocks: [Range<Int>], hideWhitespace: Bool
+        oldLines: [String], newLines: [String], rows: [DiffRow], hideWhitespace: Bool
     ) -> [DiffMove] {
         let old = Side(lines: oldLines, rows: rows, cell: \.old, hideWhitespace: hideWhitespace)
         let new = Side(lines: newLines, rows: rows, cell: \.new, hideWhitespace: hideWhitespace)
-        var blockOfRow = [Int](repeating: -1, count: rows.count)
-        for (index, block) in changeBlocks.enumerated() {
-            for row in block { blockOfRow[row] = index }
-        }
 
         func makeRun(old i: Int, new j: Int, length: Int) -> Run {
             Run(old: i, new: j, length: length, alphanumerics: old.alphanumerics[i..<(i + length)].reduce(0, +))
         }
 
-        // Each side of a run sits in one block: its lines' rows are non-equal and only
-        // one-sided rows fall between them. So comparing the blocks of the first lines
-        // tells an in-place edit (one block) from a move.
-        func qualifies(_ run: Run) -> Bool {
-            run.alphanumerics >= minAlphanumerics
-                && blockOfRow[old.rowOf[run.old]] != blockOfRow[new.rowOf[run.new]]
-        }
+        func qualifies(_ run: Run) -> Bool { run.alphanumerics >= minAlphanumerics }
 
         var heap = RunHeap()
         for run in candidateRuns(old: old, new: new, makeRun: makeRun) where qualifies(run) {
@@ -84,8 +74,9 @@ enum MoveDetector {
     }
 
     /// Every maximal run of equal keys along a diagonal, started from lines that may start
-    /// one. A start already covered by an earlier run is skipped, so each (old, new) pair
-    /// is scanned at most once.
+    /// one. A pair whose lines share a row is already shown side by side, an in-place edit,
+    /// so it neither starts nor extends a run. A start already covered by an earlier run is
+    /// skipped, so each (old, new) pair is scanned at most once.
     private static func candidateRuns(
         old: Side, new: Side, makeRun: (_ old: Int, _ new: Int, _ length: Int) -> Run
     ) -> [Run] {
@@ -99,9 +90,10 @@ enum MoveDetector {
             guard let key, !key.isEmpty, let targets = starts[key], targets.count <= maxStartOccurrences else {
                 continue
             }
-            for j in targets where !scanned.contains(Pair(old: i, new: j)) {
+            for j in targets where old.rowOf[i] != new.rowOf[j] && !scanned.contains(Pair(old: i, new: j)) {
                 var length = 0
                 while i + length < old.keys.count, j + length < new.keys.count,
+                    old.rowOf[i + length] != new.rowOf[j + length],
                     let next = old.keys[i + length], next == new.keys[j + length]
                 {
                     scanned.insert(Pair(old: i + length, new: j + length))
