@@ -203,6 +203,132 @@ covers rename and path display.
 
 ---
 
+### R. Character-level diffs within a changed line (requested 2026-09-27)
+
+**Goal.** When a line is modified rather than replaced, show exactly which characters
+changed, the way Sublime Merge does. difft's highlights are per token, so a one-letter
+typo fix in a long string literal, comment or identifier lights up the whole token, and
+lines difft treats as text (unsupported languages, its fallback) get no highlight within
+the line at all.
+
+**Design.**
+- For each aligned row pair where both sides are changed, run a character diff of the
+  two lines (`LineDiff` is already a generic Myers diff) and draw the changed ranges in
+  a stronger tint on top of the row's change colour.
+- Where difft has highlighted a token, refine inside it: a token whose old and new text
+  mostly match shows only the characters that differ. Tokens that are wholly new keep
+  difft's highlight.
+- Skip the refinement when the two lines share too little (say under half their
+  characters), so a rewritten line doesn't turn into confetti. Snap ranges to word
+  boundaries when a change touches most of a word.
+- Cap the work per row (line length) so a minified file doesn't stall highlighting.
+
+**Tests.** Changed ranges for a typo fix, an inserted argument, a rewritten line (no
+refinement), and a tab-indented line (ranges survive `TabExpander`).
+
+---
+
+### S. Connection lines between the panes (requested 2026-09-27)
+
+**Goal.** Make it obvious which block on the left became which block on the right, as
+Kaleidoscope's Fluid layout and JuxtaCode's connectors do. Today alignment relies on
+padding rows alone, and when difft pairs tokens that sit on different rows (a moved
+argument, a reflowed expression) nothing links them. This absorbs the "Connector lines
+between panes" item from the Later list.
+
+**Design.**
+- A thin gutter between the panes draws a filled band from each change block's rows on
+  the left to its rows on the right, in the block's change colour (curved, as in
+  Kaleidoscope). Deletions and insertions taper to a line at the other side's position.
+- Structural pairs: for a difft token pair on different rows, a fine line joins the two
+  tokens on hover or keyboard highlight (all of them at once would be noise). This goes
+  with Twin Focus in the Later list; do them together.
+- Behind a View menu toggle at first; keep it on by default only if it reads better
+  than the padding rows. Works in single-file mode and in All changes.
+- The gutter scrolls with both panes, so it redraws on either pane's scroll and during
+  the scroll-sync, never a frame behind.
+
+**Tests.** The band geometry (top and bottom on each side) for a change block, an
+insertion, a deletion, and a block partly scrolled out of view.
+
+---
+
+### T. Compare any two commits or branches (requested 2026-09-27)
+
+**Goal.** Pick two refs (commit, branch, tag, or the working tree) and read the diff
+between them, e.g. a feature branch against `main` before opening a PR, or two commits
+of the same branch. Today the commit picker shows one commit against its parent, and
+the working tree against HEAD. This reverses the "Ref-range compare" entry under Not
+doing; README's Not doing list changes with it.
+
+**Design.**
+- A Compare… item (⇧⌘K or similar) opens a sheet with two fields, Base and Compare,
+  each a searchable list of branches (local and remote), recent commits and tags, plus
+  "Working tree" for Compare. Swap button between them.
+- A merge-base toggle: `base...compare` (what the branch adds, the PR view) by default,
+  `base..compare` (the two trees as they are) when off.
+- The title bar and the pinned row show the comparison (`main … feature/x`), with a
+  way back to the working tree. Staging and discarding are disabled while comparing,
+  as they are for a picked commit.
+- Reuses the commit picker's rows and the All changes loader; only the git arguments
+  and the diff's two sides differ.
+
+**Tests.** The git arguments for each pair (commit/commit, branch/branch with and
+without the merge base, branch/working tree), and name-status parsing of a comparison
+that includes renames.
+
+---
+
+### U. Hunk-level staging (requested 2026-09-27)
+
+**Goal.** Stage, unstage or discard one change block instead of the whole file, so a
+file with an unrelated edit can be committed in pieces. Sublime Merge has it on every
+hunk header. This reverses the "Hunk-level staging" entry under Not doing; README's Not
+doing list changes with it.
+
+**Design.**
+- Each change block gets a small action strip at its top edge on hover: Stage Hunk,
+  or Unstage Hunk for a staged change, and Discard Hunk (with the same confirmation as
+  a file discard). Keyboard: the change ⌘↓ / ⌘↑ lands on can be staged with ⇧S.
+- The patch comes from git, not from the display rows: read `git diff -U0` (or
+  `--cached` to unstage) for the file, pick the hunk overlapping the block's line
+  range, and pipe it to `git apply --cached --unidiff-zero` (with `-R` to unstage,
+  and without `--cached` plus `-R` to discard). Refuse and say why when the display
+  and git's hunks disagree (e.g. under Hide whitespace, where the display isn't what
+  git would apply).
+- Runs through `FileActionRunner` like the file actions, and the live refresh redraws
+  the file as partly staged.
+- Later: stage a selection of lines, as Sublime Merge's line staging does.
+
+**Tests.** Hunk selection from a block's line range, the patch text for a hunk in the
+middle of a file, and staging, unstaging and discarding one hunk in a temporary repo.
+
+---
+
+### V. Expand context a few lines at a time (requested 2026-09-27)
+
+**Goal.** Clicking a collapsed-lines separator should reveal a few lines, not the whole
+hidden run. Today the up and down chevrons reveal `FoldOptions.expansionStep` (20)
+lines, but they are small targets, and a click anywhere else on the separator falls
+back to `.expandRun`, which shows every hidden line
+(`DiffPaneView+Selection.swift` `mouseDown`). In All changes the separators do nothing.
+
+**Design.**
+- A click on the separator body expands by the step, toward the change it is closer
+  to (or down by default); the chevrons stay for choosing a direction. ⌥-click keeps
+  revealing the whole file, and a separate "show all N lines" control (or ⇧-click)
+  reveals one run.
+- Consider a smaller step (10) now that it's the main action, and make both chevron
+  hit areas the full half of the separator.
+- The same controls in All changes, which is the "click-to-expand context inside the
+  changeset" item from the Next list.
+- VoiceOver labels follow the new behaviour.
+
+**Tests.** The fold state after body clicks near either end of a run, a run shorter
+than the step, and an expansion inside an All changes section.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -221,8 +347,7 @@ Roughly in priority order.
   (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
-  the overview strip; click-to-expand context inside the changeset (separators are
-  inert today); tooltips for truncated header paths and notice text; section-aware
+  the overview strip (click-to-expand context is item V); tooltips for truncated header paths and notice text; section-aware
   scroll anchoring on a full replace; an aggregate source-byte budget with size
   preflight; an app-wide bound on concurrent git, difft and highlight work.
 - **Churn, remaining pieces.** The Changes header and the staging tray header show
@@ -293,11 +418,8 @@ Roughly in priority order.
   both, or a per-section Preview / Source toggle like the single-file header.
 - **Quick Look for other binaries** (Kaleidoscope, JuxtaCode): press Space on a binary
   file to preview the worktree version.
-- **Connector lines between panes** for modified rows, as in Kaleidoscope's Fluid layout
-  and JuxtaCode's scattered-word connectors. Purely visual; try it behind a toggle and keep
-  only if it reads better than the current padding rows.
 - **Twin Focus** (JuxtaCode): hovering a highlighted token highlights its counterpart on
-  the other side. difft gives us the pairing for free.
+  the other side. difft gives us the pairing for free. Goes with item S's token lines.
 - **Syntax colour themes and font choice.** Kaleidoscope ships several themes; we have
   one light/dark theme. Add a font family picker (monospaced only) and a couple of
   `TokenStyle` themes.
@@ -320,12 +442,11 @@ Roughly in priority order.
 
 - **Inline / unified text layout.** Side by side only (CLAUDE.md). Sublime Merge's
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
-- **Ref-range compare, folder compare, blame, file history.** Non-goals in CLAUDE.md.
-  Sublime Merge's blame and Kaleidoscope's two-commit Compare are git-client features, not
-  viewer features. Commit *browsing* is in scope and shipped as the commit picker.
-- **Hunk-level staging, discarding, or cherry-picking** from the changeset headers
-  (Sublime Merge). Whole-file stage / unstage / discard / delete is in scope via the
-  sidebar context menu; anything finer than a file is not.
+- **Folder compare, blame, file history.** Non-goals in CLAUDE.md. Sublime Merge's blame
+  is a git-client feature, not a viewer feature. Comparing two refs is now requested
+  (item T), and commit browsing shipped as the commit picker.
+- **Hunk cherry-picking** (Sublime Merge). Hunk-level staging and discarding are now
+  requested (item U); moving hunks between commits is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.
