@@ -228,28 +228,39 @@ refinement), and a tab-indented line (ranges survive `TabExpander`).
 
 ---
 
-### S. Connection lines between the panes (requested 2026-09-27)
+### S. Show where code moved (requested 2026-09-27)
 
-**Goal.** Make it obvious which block on the left became which block on the right, as
-Kaleidoscope's Fluid layout and JuxtaCode's connectors do. Today alignment relies on
-padding rows alone, and when difft pairs tokens that sit on different rows (a moved
-argument, a reflowed expression) nothing links them. This absorbs the "Connector lines
-between panes" item from the Later list.
+**Goal.** When a block is cut from one place and pasted in another, say so. Today a move
+reads as a deletion in one place and an unrelated insertion in another, and the reader
+has to spot that the two match. None of the three competitors does this; git's
+`--color-moved` does it in the terminal. Insertions, deletions and modifications keep
+their current look. This replaces the earlier plan for connector bands on every change
+block and absorbs "Moved-code detection" from the Later list.
 
 **Design.**
-- A thin gutter between the panes draws a filled band from each change block's rows on
-  the left to its rows on the right, in the block's change colour (curved, as in
-  Kaleidoscope). Deletions and insertions taper to a line at the other side's position.
-- Structural pairs: for a difft token pair on different rows, a fine line joins the two
-  tokens on hover or keyboard highlight (all of them at once would be noise). This goes
-  with Twin Focus in the Later list; do them together.
-- Behind a View menu toggle at first; keep it on by default only if it reads better
-  than the padding rows. Works in single-file mode and in All changes.
-- The gutter scrolls with both panes, so it redraws on either pane's scroll and during
-  the scroll-sync, never a frame behind.
+- Detection is ours: difft reports no moves. A `MoveDetector` in `DiffViewer/Diff` runs
+  after `DiffAligner` and matches runs of old-side lines in changed rows against runs of
+  new-side lines in changed rows, comparing lines with leading and trailing whitespace
+  trimmed so a re-indented move still counts. It keeps the longest runs first.
+- Match by each side's text, not the row kind: `DiffAligner.zip` pairs unrelated
+  deletions and insertions into modified rows, so moved text often sits in a modified
+  row.
+- A run is a move only if it is large enough (git's bar is 20 alphanumeric characters)
+  and its two ends are in different change blocks, so `}`, blank lines and in-place
+  edits never count. A block pasted twice matches its longest destination only.
+- `DiffDocument` carries the moves as old and new line ranges. In All changes,
+  `ChangesetBuilder` offsets each file's moves; moves across files are out of scope.
+- Moved lines get their own tint (purple, say) instead of red or green, and a small
+  marker in the line-number column. Clicking the marker scrolls to the other end
+  through `scroll(toRow:)`.
+- Second step, only if tint and jump are not enough: when both ends are on screen, a
+  band in a gutter between the panes joins the source rows to the destination rows,
+  with an up or down stub when the other end is off screen. The gutter redraws on
+  either pane's scroll and during the scroll sync, never a frame behind.
 
-**Tests.** The band geometry (top and bottom on each side) for a change block, an
-insertion, a deletion, and a block partly scrolled out of view.
+**Tests.** Moves found for a moved block, a moved and re-indented block, a block below
+the size bar (no move), a move beside an in-place edit, and a block pasted twice. The
+changeset offsets for moves in the second file.
 
 ---
 
@@ -326,6 +337,34 @@ back to `.expandRun`, which shows every hidden line
 
 **Tests.** The fold state after body clicks near either end of a run, a run shorter
 than the step, and an expansion inside an All changes section.
+
+---
+
+### W. Show the function or method a change is in (requested 2026-09-27)
+
+**Goal.** When reading a change, see which function, method or type it belongs to
+without scrolling up to find the signature. Today a change deep inside a long method,
+or just below a collapsed-lines separator, gives no hint of where it is.
+
+**Design.**
+- Take the enclosing scope from the tree-sitter parse the highlighter already runs,
+  not from git's regex-based hunk header: walk up from the change's first row to the
+  nearest function, method, class or similar node, and show its signature line
+  (`func adopt(_ repository:)`, `class WindowState`). Nested scopes read as a path
+  (`WindowState › adopt(_:)`). Which node kinds count is set per grammar in
+  `LanguageRegistry`.
+- Where it shows, to decide:
+  - on each collapsed-lines separator, after the hidden-line count, for the scope of
+    the change below it (the way GitHub puts it in the hunk header);
+  - a sticky line at the top of each pane naming the scope of the top visible row,
+    so it stays current while scrolling (VS Code's sticky scroll). Old and new sides
+    can differ when the change renames or moves the function.
+- Works in single-file mode and in All changes. Files without a grammar show nothing
+  rather than a guess.
+
+**Tests.** The enclosing scope for a row inside a method, inside a nested type, between
+two functions (none), and on a line where the old and new sides name different
+functions.
 
 ---
 
@@ -419,7 +458,7 @@ Roughly in priority order.
 - **Quick Look for other binaries** (Kaleidoscope, JuxtaCode): press Space on a binary
   file to preview the worktree version.
 - **Twin Focus** (JuxtaCode): hovering a highlighted token highlights its counterpart on
-  the other side. difft gives us the pairing for free. Goes with item S's token lines.
+  the other side. difft gives us the pairing for free.
 - **Syntax colour themes and font choice.** Kaleidoscope ships several themes; we have
   one light/dark theme. Add a font family picker (monospaced only) and a couple of
   `TokenStyle` themes.
@@ -429,9 +468,6 @@ Roughly in priority order.
   adds visible tabs and spaces on demand.
 - **Sidebar options**: show ignored files (Sublime Merge lacks it), hide untracked.
 - **Pause live refresh** button when a build churns the tree (Kaleidoscope 7.0).
-- **Moved-code detection** (git `--color-moved`-style): dim blocks that were cut from one
-  place and pasted elsewhere. None of the three does this; a real differentiator but
-  substantial alignment work.
 - **Delete N gone branches** from the branch picker footer, in one action.
 - **CLI and `git difftool` integration.** All three ship a CLI (`ksdiff`, `smerge`,
   `juxta`) and a difftool config. Deferred per the v1 decision; when it comes, a
