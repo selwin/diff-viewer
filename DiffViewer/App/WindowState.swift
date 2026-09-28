@@ -234,7 +234,7 @@ final class WindowState {
     private(set) var commitGenerationError: String?
 
     /// How many commits each history read asks for.
-    static let commitPageSize = 50
+    nonisolated static let commitPageSize = 50
 
     /// Called after every refresh that publishes `files`, whether or not the list changed.
     /// `inputsChanged` is whether the id set or any file's fingerprint moved since the

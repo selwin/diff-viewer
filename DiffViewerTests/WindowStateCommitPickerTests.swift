@@ -93,6 +93,10 @@ struct WindowStateCommitPickerTests {
         #expect(snapshot.displayedCommit == first)
         #expect(snapshot.commits == [first, second])
         #expect(!snapshot.historyLoadFailed)
+
+        let listSnapshot = state.commitPickerListSnapshot
+        #expect(listSnapshot.displayedCommit == first)
+        #expect(listSnapshot.commits == [second], "the page alone; the list gives the selection its own section")
     }
 
     @Test func snapshotReportsAFailedLoadMoreOverALoadedPage() async {

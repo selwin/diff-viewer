@@ -29,4 +29,20 @@ extension WindowState {
             historyLoadFailed: historyErrorMessage != nil,
             displayedScopeFileCount: displayedScopeFileCount)
     }
+
+    /// The displayed commit is the page's copy when the page carries it, the freshest
+    /// read, and otherwise the one held since it was selected.
+    var commitPickerListSnapshot: CommitPickerListSnapshot {
+        let displayedCommit: CommitSummary? =
+            if case let .commit(ref) = scope { history.commits.first { $0.ref == ref } ?? selectedCommit } else { nil }
+        return CommitPickerListSnapshot(
+            displayedScope: scope,
+            displayedCommit: displayedCommit,
+            commits: history.commits,
+            hasMore: history.hasMore,
+            isLoadingHistory: isLoadingHistory,
+            historyLoadFailed: historyErrorMessage != nil,
+            workingTreeChangeCount: workingTreeChangeCount,
+            unpushedShas: unpushedCommitShas)
+    }
 }
