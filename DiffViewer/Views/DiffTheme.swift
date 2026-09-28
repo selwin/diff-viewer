@@ -2,7 +2,7 @@ import AppKit
 
 /// Colors and metrics for the diff panes. All colors are dynamic (light/dark aware).
 enum DiffTheme {
-    private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+    static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
             appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
         }

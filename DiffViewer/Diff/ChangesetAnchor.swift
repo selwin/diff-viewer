@@ -28,9 +28,7 @@ enum ChangesetAnchor {
     private static func translate(
         documentRow: Int, from: ChangesetDocument, to: ChangesetDocument, headers: [ChangedFile.ID: Int]
     ) -> Int? {
-        guard let sectionIndex = from.sections.firstIndex(where: { $0.rowRange.contains(documentRow) }) else {
-            return nil
-        }
+        guard let sectionIndex = from.sectionIndex.sectionIndex(containingRow: documentRow) else { return nil }
         let section = from.sections[sectionIndex]
         let row = from.document.rows[documentRow]
 

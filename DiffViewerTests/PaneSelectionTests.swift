@@ -110,6 +110,13 @@ struct PaneSelectionTests {
         #expect(TabExpander.rawIndex(forExpanded: 6, map: map) == 3)
     }
 
+    @Test func expandedIndexFollowsTheTabMap() {
+        let map = TabExpander.expand("a\tb", tabWidth: 4).map
+        #expect(TabExpander.expandedIndex(forRaw: 3, map: nil) == 3)
+        #expect(TabExpander.expandedIndex(forRaw: 2, map: map) == 4)
+        #expect(TabExpander.expandedIndex(forRaw: 99, map: map) == 5)
+    }
+
     // MARK: - Copied text
 
     @Test func textOfOneRowIsASubstring() {

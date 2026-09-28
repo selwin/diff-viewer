@@ -31,11 +31,7 @@ extension WindowState {
 
     /// The branch picker's face: the current branch, or where a detached HEAD sits.
     var branchDisplayTitle: String {
-        switch headState {
-        case let .named(name)?: name
-        case let .detached(sha)?: "Detached " + sha.prefix(7)
-        case nil: ""
-        }
+        headState?.displayTitle ?? ""
     }
 
     /// The branch picker's suffix: how far the current branch is from its upstream, or
@@ -65,6 +61,16 @@ extension WindowState {
         switch scope {
         case .workingTree: "Working Tree"
         case .commit: selectedCommit?.subject ?? ""
+        }
+    }
+}
+
+extension HeadState {
+    /// The branch name, or "Detached" and a short sha; the picker's face and header share it.
+    var displayTitle: String {
+        switch self {
+        case let .named(name): name
+        case let .detached(sha): "Detached " + sha.prefix(7)
         }
     }
 }

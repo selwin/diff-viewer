@@ -1709,23 +1709,12 @@ extension WindowState {
         // the destination is read from the repository rather than from what the picker
         // showed. Read directly: a published read would be news for the picker before this
         // has decided whether it is acting at all.
-        let state: HeadState
-        let list: [LocalBranch]
-        do {
-            state = try await session.client.headState()
-            guard session === self.session, !isClosed else { return }
-            list = try await session.client.localBranches()
-        } catch {
-            guard session === self.session, !isClosed else { return }
-            errorMessage = error.localizedDescription
-            return
-        }
-        guard session === self.session, !isClosed else { return }
+        guard let read = await readHeadAndBranches(session: session) else { return }
 
         // Checked-out status decides between `git pull` and a fast-forward, so HEAD moving
         // onto or off the branch counts as a change too.
-        let isCurrent = state == .named(requested.branch)
-        let fresh = SyncPolicy.target(branch: requested.branch, readStatus: .loaded, branches: list)
+        let isCurrent = read.state == .named(requested.branch)
+        let fresh = SyncPolicy.target(branch: requested.branch, readStatus: .loaded, branches: read.branches)
         guard let fresh, fresh.destination == requested, isCurrent == wasCurrent else {
             // Somewhere else entirely now: say so, because the reader asked for this.
             // Every re-read here waits for a published one: the buttons stay in their
@@ -1779,6 +1768,24 @@ extension WindowState {
         guard session === self.session, !isClosed, let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+    }
+
+    /// HEAD and the local branches, read directly for a write revalidating its target.
+    /// Nil when the session went stale or a read failed; a failure is reported.
+    private func readHeadAndBranches(session: RepoSession) async -> (state: HeadState, branches: [LocalBranch])? {
+        let state: HeadState
+        let branches: [LocalBranch]
+        do {
+            state = try await session.client.headState()
+            guard session === self.session, !isClosed else { return nil }
+            branches = try await session.client.localBranches()
+        } catch {
+            guard session === self.session, !isClosed else { return nil }
+            errorMessage = error.localizedDescription
+            return nil
+        }
+        guard session === self.session, !isClosed else { return nil }
+        return (state, branches)
     }
 
     /// Revalidates against the repository, publishes, and re-reads the branches and the
@@ -1884,24 +1891,13 @@ extension WindowState {
 
         // Read directly, as `runSync` does: the branch may have moved, been checked out or
         // been recreated while this waited its turn.
-        let state: HeadState
-        let list: [LocalBranch]
-        do {
-            state = try await session.client.headState()
-            guard session === self.session, !isClosed else { return }
-            list = try await session.client.localBranches()
-        } catch {
-            guard session === self.session, !isClosed else { return }
-            errorMessage = error.localizedDescription
-            return
-        }
-        guard session === self.session, !isClosed else { return }
+        guard let read = await readHeadAndBranches(session: session) else { return }
 
-        guard Self.isDeletable(branch, in: list, headState: state) else {
+        guard Self.isDeletable(branch, in: read.branches, headState: read.state) else {
             await awaitBranchRead(session: session)
             guard session === self.session, !isClosed else { return }
             // Already gone is what the reader asked for; anything else is news.
-            if list.contains(where: { $0.name == branch.name }) {
+            if read.branches.contains(where: { $0.name == branch.name }) {
                 errorMessage = "Branch or upstream changed before the delete could start"
             }
             return
