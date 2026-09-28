@@ -187,6 +187,27 @@ struct DifftCacheTests {
         #expect(await probe.launches.count == 2)
     }
 
+    /// A result that can never fit the byte budget is dropped on its own, rather than
+    /// flushing every smaller result and then itself.
+    @Test func aResultLargerThanTheByteBudgetIsReturnedWithoutEvictingAnything() async {
+        let probe = RunnerProbe()
+        var limits = DifftCache.Limits()
+        limits.bytes = 300
+        let cache = makeCache(probe, limits: limits)
+        let small = await request(cache, "small")
+        #expect(small?.cost == 117)
+
+        await probe.changes(perLine: 10)
+        let large = await request(cache, "large")
+        #expect(large?.cost == 405, "above `bytes` but below `maxResultCost`")
+        #expect(await request(cache, "large") != nil)
+        #expect(await probe.launches.count == 3, "the large result was not stored")
+
+        #expect(await request(cache, "small") != nil)
+        #expect(await probe.launches.count == 3, "the small result still hits")
+        #expect(await cache.stats.evictions == 0)
+    }
+
     @Test func failureIsRememberedUntilExpiry() async {
         let probe = RunnerProbe()
         let clock = TestClock()

@@ -6,59 +6,34 @@ import Testing
 /// Which revisions a commit's file is read from. The sides that exist are decided from
 /// the change kind and whether the commit has a parent — never from a read that came
 /// back empty, which is how a missing commit used to masquerade as a wholesale addition.
+private let sha = String(repeating: "a", count: 40)
+private let parent = String(repeating: "b", count: 40)
+private let commit = CommitRef(sha: sha, shortSha: "aaaaaaa", firstParentSHA: parent)
+/// A root commit has no `^` to read: its old side is empty by construction, and no
+/// revision that cannot resolve is ever asked for.
+private let rootCommit = CommitRef(sha: sha, shortSha: "aaaaaaa", firstParentSHA: nil)
+
 struct DiffEngineSourcesTests {
-    private let sha = String(repeating: "a", count: 40)
-    private let parent = String(repeating: "b", count: 40)
-
-    private func ref(root: Bool = false) -> CommitRef {
-        CommitRef(sha: sha, shortSha: "aaaaaaa", firstParentSHA: root ? nil : parent)
-    }
-
-    private func file(_ kind: ChangedFile.Kind, root: Bool = false) -> ChangedFile {
-        ChangedFile(path: "src/a.swift", originalPath: nil, kind: kind, area: .commit(ref(root: root)))
-    }
-
-    @Test func modifiedReadsBothSides() async throws {
+    /// Each side that exists is read at its revision; a side that does not is never read.
+    @Test(arguments: [
+        (ChangedFile.Kind.modified, commit, [parent, sha]),
+        (.added, commit, [sha]),
+        (.deleted, commit, [parent]),
+        (.modified, rootCommit, [sha]),
+    ])
+    func aCommitsFileReadsOnlyTheSidesThatExist(kind: ChangedFile.Kind, ref: CommitRef, revisions: [String])
+        async throws
+    {
+        let file = ChangedFile(path: "src/a.swift", originalPath: nil, kind: kind, area: .commit(ref))
         let client = StubRepoClient(files: [])
-        let sources = try await DiffEngine.sources(for: file(.modified), client: client)
+        let sources = try await DiffEngine.sources(for: file, client: client)
         let reads = await client.contentRevisions
-        #expect(reads.map(\.revision) == [parent, sha])
+        #expect(reads.map(\.revision) == revisions)
         #expect(reads.allSatisfy { $0.path == "src/a.swift" })
-        #expect(sources.old == Data("\(parent):src/a.swift".utf8))
-        #expect(sources.new == Data("\(sha):src/a.swift".utf8))
-        #expect(sources.oldExists && sources.newExists)
-    }
-
-    @Test func addedReadsOnlyTheCommit() async throws {
-        let client = StubRepoClient(files: [])
-        let sources = try await DiffEngine.sources(for: file(.added), client: client)
-        let reads = await client.contentRevisions
-        #expect(reads.map(\.revision) == [sha])
-        #expect(sources.old.isEmpty)
-        #expect(!sources.oldExists)
-        #expect(sources.newExists)
-    }
-
-    @Test func deletedReadsOnlyTheParent() async throws {
-        let client = StubRepoClient(files: [])
-        let sources = try await DiffEngine.sources(for: file(.deleted), client: client)
-        let reads = await client.contentRevisions
-        #expect(reads.map(\.revision) == [parent])
-        #expect(sources.new.isEmpty)
-        #expect(sources.oldExists)
-        #expect(!sources.newExists)
-    }
-
-    /// A root commit has no `^` to read: its old side is empty by construction, and no
-    /// revision that cannot resolve is ever asked for.
-    @Test func rootCommitReadsNoParentRevision() async throws {
-        let client = StubRepoClient(files: [])
-        let sources = try await DiffEngine.sources(for: file(.added, root: true), client: client)
-        let reads = await client.contentRevisions
-        #expect(reads.map(\.revision) == [sha])
-        #expect(sources.old.isEmpty)
-        #expect(!sources.oldExists)
-        #expect(!sources.new.isEmpty)
+        #expect(sources.oldExists == revisions.contains(parent))
+        #expect(sources.newExists == revisions.contains(sha))
+        #expect(sources.old == (sources.oldExists ? Data("\(parent):src/a.swift".utf8) : Data()))
+        #expect(sources.new == (sources.newExists ? Data("\(sha):src/a.swift".utf8) : Data()))
     }
 
     @Test func workingTreeFilesStillReadTheIndexAndWorktree() async throws {

@@ -70,24 +70,18 @@ actor DiffResultCache {
         var rejected = 0
     }
 
-    private let limits: Limits
-    private var entries: [Key: Entry] = [:]
-    /// Keys of `entries`, oldest first.
-    private var order: [Key] = []
-    private var bytes = 0
+    private var table: CostBoundedFIFO<Key, Entry>
     private(set) var stats = Stats()
 
     init(limits: Limits = Limits()) {
-        precondition(
-            limits.entries >= 0 && limits.bytes >= 0 && limits.maxEntryCost >= 0, "limits must be non-negative")
-        self.limits = limits
+        table = CostBoundedFIFO(entries: limits.entries, bytes: limits.bytes, maxEntryCost: limits.maxEntryCost)
     }
 
-    var count: Int { entries.count }
-    var isEmpty: Bool { entries.isEmpty }
+    var count: Int { table.count }
+    var isEmpty: Bool { table.isEmpty }
 
     func entry(for key: Key) -> Entry? {
-        if let entry = entries[key] {
+        if let entry = table.value(for: key) {
             stats.hits += 1
             return entry
         }
@@ -95,26 +89,13 @@ actor DiffResultCache {
         return nil
     }
 
-    /// Idempotent: a key already stored keeps its existing entry (two builds of the same
-    /// content can overlap — a cancelled assembler's worker still inside `build`, or two
-    /// windows). Rejects cost over `min(maxEntryCost, bytes)` before evicting anything,
-    /// so a large entry never flushes the table only to be dropped itself; then evicts
-    /// oldest first past either budget.
+    /// Storing a key twice is expected: two builds of the same content can overlap — a
+    /// cancelled assembler's worker still inside `build`, or two windows.
     func store(_ entry: Entry, for key: Key) {
-        guard limits.entries > 0, limits.bytes > 0, entries[key] == nil else { return }
-        guard entry.cost <= min(limits.maxEntryCost, limits.bytes) else {
-            stats.rejected += 1
-            return
-        }
-        entries[key] = entry
-        order.append(key)
-        bytes += entry.cost
-        while entries.count > limits.entries || bytes > limits.bytes, !order.isEmpty {
-            let oldest = order.removeFirst()
-            if let evicted = entries.removeValue(forKey: oldest) {
-                bytes -= evicted.cost
-                stats.evictions += 1
-            }
+        switch table.insert(entry, cost: entry.cost, for: key) {
+        case let .stored(evicted): stats.evictions += evicted
+        case .rejected: stats.rejected += 1
+        case .skipped: break
         }
     }
 }

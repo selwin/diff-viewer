@@ -140,6 +140,19 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
         return copy
     }
 
+    /// The revision and path each side of a commit's diff reads, or nil outside a commit.
+    /// A side is nil when the change kind or a root commit says it does not exist, so no
+    /// reader has to guess.
+    var commitSides: (old: (revision: String, path: String)?, new: (revision: String, path: String)?)? {
+        guard case let .commit(commit) = area else { return nil }
+        var old: (revision: String, path: String)?
+        if kind != .added, let parent = commit.firstParentSHA {
+            old = (parent, originalPath ?? path)
+        }
+        let new: (revision: String, path: String)? = kind == .deleted ? nil : (commit.sha, path)
+        return (old, new)
+    }
+
     var fileName: String { (path as NSString).lastPathComponent }
     var directory: String {
         let dir = (path as NSString).deletingLastPathComponent

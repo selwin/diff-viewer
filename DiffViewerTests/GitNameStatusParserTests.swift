@@ -3,54 +3,49 @@ import Testing
 
 @testable import DiffViewer
 
+private let commit = CommitRef(
+    sha: String(repeating: "a", count: 40), shortSha: "aaaaaaa",
+    firstParentSHA: String(repeating: "b", count: 40))
+
+private func parse(_ fields: [String]) -> [ChangedFile] {
+    let data = fields.isEmpty ? Data() : Data((fields.joined(separator: "\0") + "\0").utf8)
+    return GitNameStatusParser.parse(data, area: .commit(commit))
+}
+
 struct GitNameStatusParserTests {
-    private let commit = CommitRef(
-        sha: String(repeating: "a", count: 40), shortSha: "aaaaaaa",
-        firstParentSHA: String(repeating: "b", count: 40))
-
-    private func data(_ fields: [String]) -> Data {
-        Data((fields.joined(separator: "\0") + "\0").utf8)
-    }
-
-    @Test func readsStatusAndPathPairs() {
-        let files = GitNameStatusParser.parse(
-            data(["M", "src/a.swift", "A", "src/b.swift", "D", "src/c.swift"]), area: .commit(commit))
-        #expect(files.map(\.path) == ["src/a.swift", "src/b.swift", "src/c.swift"])
-        #expect(files.map(\.kind) == [.modified, .added, .deleted])
+    /// Status and path pairs, sorted by path, with spaces and Unicode in paths preserved.
+    /// A trailing status without its path is dropped.
+    @Test(
+        arguments: [
+            (
+                ["M", "src/a.swift", "A", "src/b.swift", "D", "src/c.swift"],
+                [
+                    ("src/a.swift", ChangedFile.Kind.modified), ("src/b.swift", .added), ("src/c.swift", .deleted),
+                ]
+            ),
+            (["M", "z.swift", "M", "a.swift"], [("a.swift", .modified), ("z.swift", .modified)]),
+            (
+                ["T", "src/a file.swift", "M", "docs/ünïcode.md"],
+                [("docs/ünïcode.md", .modified), ("src/a file.swift", .typeChanged)]
+            ),
+            ([], []),
+            (["M", "a.swift", "M"], [("a.swift", .modified)]),
+        ] as [([String], [(String, ChangedFile.Kind)])])
+    func readsStatusAndPathPairs(fields: [String], expected: [(String, ChangedFile.Kind)]) {
+        let files = parse(fields)
+        #expect(files.map(\.path) == expected.map(\.0))
+        #expect(files.map(\.kind) == expected.map(\.1))
         #expect(files.allSatisfy { $0.area == .commit(commit) })
     }
 
     @Test func idsCarryTheCommit() {
-        let files = GitNameStatusParser.parse(data(["M", "src/a.swift"]), area: .commit(commit))
-        #expect(files.first?.id == "commit:\(commit.sha):src/a.swift")
-    }
-
-    @Test func sortsByPath() {
-        let files = GitNameStatusParser.parse(data(["M", "z.swift", "M", "a.swift"]), area: .commit(commit))
-        #expect(files.map(\.path) == ["a.swift", "z.swift"])
-    }
-
-    @Test func keepsPathsWithSpacesAndUnicode() {
-        let files = GitNameStatusParser.parse(
-            data(["T", "src/a file.swift", "M", "docs/ünïcode.md"]), area: .commit(commit))
-        #expect(files.map(\.path) == ["docs/ünïcode.md", "src/a file.swift"])
-        #expect(files.map(\.kind) == [.modified, .typeChanged])
+        #expect(parse(["M", "src/a.swift"]).first?.id == "commit:\(commit.sha):src/a.swift")
     }
 
     /// A rename carries two paths; reading only one would shift every record after it.
     @Test func renameConsumesBothPaths() {
-        let files = GitNameStatusParser.parse(
-            data(["R100", "old.swift", "new.swift", "M", "after.swift"]), area: .commit(commit))
+        let files = parse(["R100", "old.swift", "new.swift", "M", "after.swift"])
         #expect(files.map(\.path) == ["after.swift", "new.swift"])
         #expect(files.first(where: { $0.path == "new.swift" })?.originalPath == "old.swift")
-    }
-
-    @Test func emptyOutputIsNoFiles() {
-        #expect(GitNameStatusParser.parse(Data(), area: .commit(commit)).isEmpty)
-    }
-
-    @Test func trailingStatusWithoutAPathIsSkipped() {
-        let files = GitNameStatusParser.parse(data(["M", "a.swift", "M"]), area: .commit(commit))
-        #expect(files.map(\.path) == ["a.swift"])
     }
 }

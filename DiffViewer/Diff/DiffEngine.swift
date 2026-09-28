@@ -39,17 +39,20 @@ enum DiffEngine {
         case .staged:
             old = file.kind == .added ? nil : try await client.headContents(of: file.originalPath ?? file.path)
             new = file.kind == .deleted ? nil : try await client.indexContents(of: file.path)
-        case let .commit(ref):
-            // Which sides exist is decided here, from the change kind and whether the
-            // commit has a parent — never inferred from a read that came back empty.
-            if file.kind == .added {
-                old = nil
-            } else if let parent = ref.firstParentSHA {
-                old = try await client.contents(of: file.originalPath ?? file.path, at: parent)
+        case .commit:
+            // Which sides exist comes from the change kind and whether the commit has a
+            // parent — never inferred from a read that came back empty.
+            let sides = file.commitSides
+            if let side = sides?.old {
+                old = try await client.contents(of: side.path, at: side.revision)
             } else {
-                old = nil  // A root commit: nothing precedes it.
+                old = nil
             }
-            new = file.kind == .deleted ? nil : try await client.contents(of: file.path, at: ref.sha)
+            if let side = sides?.new {
+                new = try await client.contents(of: side.path, at: side.revision)
+            } else {
+                new = nil
+            }
         }
         return Sources(
             old: old ?? Data(), new: new ?? Data(), fileName: file.fileName,

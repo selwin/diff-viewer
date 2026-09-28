@@ -19,12 +19,6 @@ struct GitStatusParserTests {
             ])
     }
 
-    @Test func stagedAndUnstagedProducesTwoEntries() {
-        let files = GitStatusParser.parse(data(["1 MM N... 100644 100644 100644 abc def a.txt"]))
-        #expect(files.map(\.area) == [.staged, .unstaged])
-        #expect(files.allSatisfy { $0.path == "a.txt" && $0.kind == .modified })
-    }
-
     @Test func stagedAddition() {
         let files = GitStatusParser.parse(data(["1 A. N... 000000 100644 100644 000 def new.txt"]))
         let fingerprint = DiffInputFingerprint(
@@ -49,16 +43,6 @@ struct GitStatusParserTests {
             ])
     }
 
-    @Test func untrackedAndConflict() {
-        let files = GitStatusParser.parse(
-            data([
-                "? notes.md",
-                "u UU N... 100644 100644 100644 100644 a b c d conflict.txt",
-            ]))
-        #expect(files.map(\.kind) == [.untracked, .unmerged])
-        #expect(files.allSatisfy { $0.area == .unstaged })
-    }
-
     @Test func pathsWithSpacesSurvive() {
         let files = GitStatusParser.parse(data(["1 .M N... 100644 100644 100644 abc def dir with space/file name.txt"]))
         #expect(files.first?.path == "dir with space/file name.txt")
@@ -70,10 +54,12 @@ struct GitStatusParserTests {
 
     // MARK: Fingerprints
 
-    /// The staged entry reads HEAD against the index; the unstaged one reads the index
-    /// against a worktree the parser cannot stat.
+    /// One record changed in both areas is two entries. The staged one reads HEAD against
+    /// the index; the unstaged one reads the index against a worktree the parser cannot stat.
     @Test func aModifiedRecordFingerprintsBothAreas() {
         let files = GitStatusParser.parse(data(["1 MM N... 100644 100644 100644 abc def a.txt"]))
+        #expect(files.map(\.area) == [.staged, .unstaged])
+        #expect(files.allSatisfy { $0.path == "a.txt" && $0.kind == .modified })
         #expect(
             files[0].fingerprint
                 == DiffInputFingerprint(
@@ -109,11 +95,14 @@ struct GitStatusParserTests {
         #expect(files.map(\.kind) == [.modified, .deleted, .modified])
     }
 
-    /// A rename's fingerprint names the original path: the engine reads HEAD at that path.
+    /// A staged rename with worktree edits splits into a rename and an edit. The rename's
+    /// fingerprint names the original path: the engine reads HEAD at that path.
     @Test func aRenameRecordFingerprintsWithTheOriginalPath() {
         let files = GitStatusParser.parse(
             data(["2 RM N... 100644 100644 100644 abc def R100 new/name.txt", "old/name.txt"]))
         #expect(files.map(\.area) == [.staged, .unstaged])
+        #expect(files.map(\.kind) == [.renamed, .modified])
+        #expect(files.map(\.originalPath) == ["old/name.txt", nil])
         #expect(files[0].fingerprint?.originalPath == "old/name.txt")
         #expect(files[0].fingerprint?.old == .object("abc"))
         #expect(files[0].fingerprint?.new == .object("def"))
@@ -138,28 +127,21 @@ struct GitStatusParserTests {
             ])
     }
 
-    @Test func aStagedRenameWithWorktreeEditsSplitsIntoARenameAndAnEdit() {
+    /// An untracked file has no old side. A "u" record reports the conflict stages, not
+    /// HEAD, which is what the engine reads, so a conflict is never known.
+    @Test func untrackedAndConflictRecords() {
         let files = GitStatusParser.parse(
-            data(["2 RM N... 100644 100644 100644 abc abc R100 new/name.txt", "old/name.txt"]))
-        #expect(files.map(\.area) == [.staged, .unstaged])
-        #expect(files.map(\.kind) == [.renamed, .modified])
-        #expect(files.map(\.originalPath) == ["old/name.txt", nil])
-    }
-
-    /// A "u" record reports the conflict stages, not HEAD, which is what the engine reads.
-    @Test func aConflictIsNeverKnown() {
-        let files = GitStatusParser.parse(data(["u UU N... 100644 100644 100644 100644 a b c d conflict.txt"]))
-        #expect(files.first?.fingerprint?.old == .unknown)
-        #expect(files.first?.fingerprint?.new == .notApplicable)
-        #expect(files.first?.fingerprint?.kind == .unmerged)
-        #expect(files.first?.fingerprint?.isKnown == false)
-    }
-
-    @Test func anUntrackedFileHasNoOldSide() {
-        let files = GitStatusParser.parse(data(["? notes.md"]))
+            data(["? notes.md", "u UU N... 100644 100644 100644 100644 a b c d conflict.txt"]))
+        #expect(files.map(\.kind) == [.untracked, .unmerged])
+        #expect(files.allSatisfy { $0.area == .unstaged })
         #expect(
             files.first?.fingerprint
                 == DiffInputFingerprint(
                     old: .absent, new: .notApplicable, worktree: .unknown, kind: .untracked, originalPath: nil))
+        let conflict = files.last?.fingerprint
+        #expect(conflict?.old == .unknown)
+        #expect(conflict?.new == .notApplicable)
+        #expect(conflict?.kind == .unmerged)
+        #expect(conflict?.isKnown == false)
     }
 }

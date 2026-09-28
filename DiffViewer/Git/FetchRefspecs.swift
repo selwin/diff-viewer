@@ -8,14 +8,29 @@ enum FetchRefspecs {
     /// Negative and destination-less refspecs store nothing and are skipped; no mapping at
     /// all means no prune.
     static func prunesOnlyTrackingRefs(_ refspecs: [String]) -> Bool {
-        var destinations: [Substring] = []
-        for refspec in refspecs {
-            let spec = refspec.hasPrefix("+") ? refspec.dropFirst() : Substring(refspec)
-            guard !spec.hasPrefix("^"), let colon = spec.firstIndex(of: ":") else { continue }
-            let destination = spec[spec.index(after: colon)...]
-            if !destination.isEmpty { destinations.append(destination) }
-        }
+        let destinations = refspecs.compactMap { parse($0).destination }
         return !destinations.isEmpty && destinations.allSatisfy { $0.hasPrefix("refs/remotes/") }
+    }
+
+    /// One refspec with its force `+` dropped.
+    private struct Refspec {
+        let isNegative: Bool
+        let source: String
+        /// Nil when the refspec stores nothing: a negative one, or no destination after `:`.
+        let destination: String?
+    }
+
+    private static func parse(_ refspec: String) -> Refspec {
+        let spec = refspec.hasPrefix("+") ? String(refspec.dropFirst()) : refspec
+        if spec.hasPrefix("^") {
+            return Refspec(isNegative: true, source: String(spec.dropFirst()), destination: nil)
+        }
+        guard let colon = spec.firstIndex(of: ":") else {
+            return Refspec(isNegative: false, source: spec, destination: nil)
+        }
+        let destination = String(spec[spec.index(after: colon)...])
+        return Refspec(
+            isNegative: false, source: String(spec[..<colon]), destination: destination.isEmpty ? nil : destination)
     }
 }
 
@@ -35,16 +50,14 @@ extension FetchRefspecs {
         for (remote, refspecs) in refspecsByRemote {
             var negatives: [String] = []
             var candidates: [String] = []
-            for refspec in refspecs {
-                let spec = refspec.hasPrefix("+") ? String(refspec.dropFirst()) : refspec
-                if spec.hasPrefix("^") {
-                    negatives.append(String(spec.dropFirst()))
+            for text in refspecs {
+                let refspec = parse(text)
+                if refspec.isNegative {
+                    negatives.append(refspec.source)
                     continue
                 }
-                guard let colon = spec.firstIndex(of: ":") else { continue }
-                let source = String(spec[..<colon])
-                let destination = String(spec[spec.index(after: colon)...])
-                guard !destination.isEmpty, let mapped = invert(source: source, destination: destination, trackingRef)
+                guard let destination = refspec.destination,
+                    let mapped = invert(source: refspec.source, destination: destination, trackingRef)
                 else { continue }
                 candidates.append(mapped)
             }

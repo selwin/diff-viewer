@@ -49,19 +49,11 @@ struct LocalBranchParserTests {
         #expect(branches.first?.upstream?.tracking == .gone)
     }
 
-    @Test func anUnreadableDateThrows() {
-        #expect(throws: BranchParseError.self) {
-            try LocalBranchParser.parse(line(date: "not a date") + "\n")
-        }
-    }
-
-    @Test func aRecordWithoutNineFieldsThrows() {
-        #expect(throws: BranchParseError.self) {
-            try LocalBranchParser.parse("refs/heads/main\0origin/main\n")
-        }
+    /// An unreadable date, or a record without nine fields.
+    @Test func malformedRecordsThrow() {
         let eightFields = line().components(separatedBy: "\0").dropLast().joined(separator: "\0")
-        #expect(throws: BranchParseError.self) {
-            try LocalBranchParser.parse(eightFields + "\n")
+        for record in [line(date: "not a date"), "refs/heads/main\0origin/main", eightFields] {
+            #expect(throws: BranchParseError.self) { try LocalBranchParser.parse(record + "\n") }
         }
     }
 

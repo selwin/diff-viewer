@@ -51,7 +51,7 @@ actor DifftCache {
         var backgroundProcesses = 3
         var entries = 256
         var bytes = 8_000_000
-        /// Results costing more than this are returned but not stored.
+        /// Results costing more than this, or more than `bytes`, are returned but not stored.
         var maxResultCost = 1_000_000
         var failures = 64
         var failureExpiry: Duration = .seconds(30)
@@ -94,11 +94,6 @@ actor DifftCache {
         var promoted = false
     }
 
-    private struct Stored {
-        let result: DifftResult
-        let cost: Int
-    }
-
     private struct Failure {
         let reason: String
         let at: ContinuousClock.Instant
@@ -115,10 +110,7 @@ actor DifftCache {
     private let now: @Sendable () -> ContinuousClock.Instant
 
     private var inFlight: [Key: Entry] = [:]
-    private var results: [Key: Stored] = [:]
-    /// Keys of `results`, oldest first.
-    private var resultOrder: [Key] = []
-    private var resultBytes = 0
+    private var results: CostBoundedFIFO<Key, DifftResult>
     private var failures: [Key: Failure] = [:]
     /// Keys of `failures`, oldest first.
     private var failureOrder: [Key] = []
@@ -141,6 +133,7 @@ actor DifftCache {
         self.runner = runner
         self.limits = limits
         self.now = now
+        results = CostBoundedFIFO(entries: limits.entries, bytes: limits.bytes, maxEntryCost: limits.maxResultCost)
     }
 
     /// The bundled difft binary.
@@ -175,9 +168,9 @@ actor DifftCache {
     }
 
     private func lookup(_ key: Key, old: Data, new: Data, fileName: String, priority: Priority) async -> DifftResult? {
-        if let hit = results[key] {
+        if let hit = results.value(for: key) {
             stats.hits += 1
-            return hit.result
+            return hit
         }
         if let failure = failures[key] {
             if now() - failure.at < limits.failureExpiry {
@@ -286,17 +279,8 @@ actor DifftCache {
     // MARK: - Results
 
     private func store(_ key: Key, _ result: DifftResult) {
-        let cost = result.cost
-        guard cost <= limits.maxResultCost else { return }
-        results[key] = Stored(result: result, cost: cost)
-        resultOrder.append(key)
-        resultBytes += cost
-        while results.count > limits.entries || resultBytes > limits.bytes, !resultOrder.isEmpty {
-            let oldest = resultOrder.removeFirst()
-            if let evicted = results.removeValue(forKey: oldest) {
-                resultBytes -= evicted.cost
-                stats.evictions += 1
-            }
+        if case let .stored(evicted) = results.insert(result, cost: result.cost, for: key) {
+            stats.evictions += evicted
         }
     }
 }

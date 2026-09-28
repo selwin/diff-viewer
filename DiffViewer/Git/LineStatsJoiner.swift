@@ -143,14 +143,12 @@ enum LineStatsJoiner {
         case .unstaged:
             guard let fingerprint = file.fingerprint else { return (.unknown, .unknown) }
             return (source(of: fingerprint.old), source(of: fingerprint.worktree))
-        case let .commit(ref):
-            let old: BinarySizeSource =
-                switch (file.kind, ref.firstParentSHA) {
-                case (.added, _), (_, nil): .absent
-                case let (_, parent?): spec(parent, file.originalPath ?? file.path)
-                }
-            let new: BinarySizeSource = file.kind == .deleted ? .absent : spec(ref.sha, file.path)
-            return (old, new)
+        case .commit:
+            let sides = file.commitSides
+            return (
+                sides?.old.map { spec($0.revision, $0.path) } ?? .absent,
+                sides?.new.map { spec($0.revision, $0.path) } ?? .absent
+            )
         }
     }
 
