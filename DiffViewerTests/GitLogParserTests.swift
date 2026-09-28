@@ -83,11 +83,6 @@ struct GitLogParserTests {
         #expect(try GitLogParser.parse(Data()).isEmpty)
     }
 
-    @Test func truncatedRecordThrowsRatherThanGuessing() {
-        let partial = logStream([[shaA, "aaaaaaa", shaB]])
-        #expect(throws: GitLogParseError.self) { try GitLogParser.parse(partial) }
-    }
-
     /// `CommitRef` equality is identity only, but the summary must notice when git
     /// lengthens the abbreviation so a refreshed row is redrawn.
     @Test func aLongerAbbreviationChangesTheSummaryButNotTheRef() {
@@ -101,13 +96,14 @@ struct GitLogParserTests {
         #expect(short != long)
     }
 
-    @Test func aRecordNotStartingWithAnObjectIDThrows() {
-        let bogus = logStream([["not-a-sha", "aaaaaaa", shaB, "2026-09-13T11:34:09+07:00", "Tester", "Subject"]])
-        #expect(throws: GitLogParseError.self) { try GitLogParser.parse(bogus) }
-    }
-
-    @Test func anUnreadableDateThrows() {
-        let bogus = logStream([[shaA, "aaaaaaa", shaB, "yesterday", "Tester", "Subject"]])
-        #expect(throws: GitLogParseError.self) { try GitLogParser.parse(bogus) }
+    /// A truncated record, one not starting with an object id, or an unreadable date throws
+    /// rather than guessing.
+    @Test(arguments: [
+        [shaA, "aaaaaaa", shaB],
+        ["not-a-sha", "aaaaaaa", shaB, "2026-09-13T11:34:09+07:00", "Tester", "Subject"],
+        [shaA, "aaaaaaa", shaB, "yesterday", "Tester", "Subject"],
+    ])
+    func aMalformedRecordThrows(record: [String]) {
+        #expect(throws: GitLogParseError.self) { try GitLogParser.parse(logStream([record])) }
     }
 }

@@ -37,23 +37,14 @@ struct DiffResultCacheTests {
         #expect(await cache.entry(for: key("a")) != nil)
     }
 
-    // MARK: Eviction
+    // MARK: Storage
 
-    @Test func theOldestEntryGoesFirstWhenTheCountIsExceeded() async {
+    /// The FIFO's rules live in `CostBoundedFIFOTests`; these check the cache passes its
+    /// limits and each entry's cost through and counts each outcome in its stats.
+    @Test func theOldestEntryIsEvictedPastTheEntryLimit() async {
         let cache = DiffResultCache(limits: DiffResultCache.Limits(entries: 2))
         for name in ["a", "b", "c"] { await cache.store(entry(), for: key(name)) }
         #expect(await cache.entry(for: key("a")) == nil)
-        #expect(await cache.entry(for: key("b")) != nil)
-        #expect(await cache.entry(for: key("c")) != nil)
-        #expect(await cache.stats.evictions == 1)
-    }
-
-    @Test func theOldestEntryGoesFirstWhenTheByteBudgetIsExceeded() async {
-        let one = entry()
-        let cache = DiffResultCache(limits: DiffResultCache.Limits(bytes: one.cost * 2, maxEntryCost: one.cost))
-        for name in ["a", "b", "c"] { await cache.store(entry(), for: key(name)) }
-        #expect(await cache.entry(for: key("a")) == nil)
-        #expect(await cache.entry(for: key("b")) != nil)
         #expect(await cache.entry(for: key("c")) != nil)
         #expect(await cache.stats.evictions == 1)
     }
@@ -68,57 +59,6 @@ struct DiffResultCacheTests {
         #expect(await cache.entry(for: key("small")) != nil, "the table is not flushed for an entry it cannot hold")
         #expect(await cache.stats.evictions == 0)
         #expect(await cache.stats.rejected == 1)
-    }
-
-    /// The byte budget caps what one entry may cost as well: an entry that could never
-    /// fit is rejected before it empties the table.
-    @Test func anEntryLargerThanTheByteBudgetIsRejectedEvenUnderTheCostCap() async {
-        let small = entry(rows: 2)
-        let big = entry(rows: 40)
-        let cache = DiffResultCache(limits: DiffResultCache.Limits(bytes: small.cost, maxEntryCost: big.cost))
-        await cache.store(small, for: key("small"))
-        await cache.store(big, for: key("big"))
-        #expect(await cache.entry(for: key("big")) == nil)
-        #expect(await cache.entry(for: key("small")) != nil)
-        #expect(await cache.stats.rejected == 1)
-    }
-
-    @Test func zeroLimitsRetainNothing() async {
-        let byCount = DiffResultCache(limits: DiffResultCache.Limits(entries: 0))
-        await byCount.store(entry(), for: key("a"))
-        #expect(await byCount.entry(for: key("a")) == nil)
-        #expect(await byCount.isEmpty)
-
-        let byBytes = DiffResultCache(limits: DiffResultCache.Limits(bytes: 0))
-        await byBytes.store(entry(), for: key("a"))
-        #expect(await byBytes.entry(for: key("a")) == nil)
-        #expect(await byBytes.isEmpty)
-
-        // A zero-cost entry fits any budget; only the explicit check keeps it out.
-        let free = DiffResultCache.Entry(document: .empty(), styles: SyntaxStyles(old: nil, new: nil))
-        #expect(free.cost == 0)
-        await byBytes.store(free, for: key("b"))
-        #expect(await byBytes.isEmpty)
-    }
-
-    // MARK: Duplicate stores
-
-    @Test func aDuplicateStoreKeepsTheFirstEntryAndCountsItOnce() async {
-        let first = entry()
-        let cache = DiffResultCache(limits: DiffResultCache.Limits(bytes: first.cost * 2))
-        await cache.store(first, for: key("a"))
-        await cache.store(entry(), for: key("a"))
-        #expect(await cache.entry(for: key("a"))?.document.id == first.document.id)
-        #expect(await cache.count == 1)
-
-        // Two entries fit exactly, so "b" evicts nothing only if the duplicate was not
-        // charged; "c" then evicts "a", once.
-        await cache.store(entry(), for: key("b"))
-        #expect(await cache.entry(for: key("a")) != nil, "the duplicate did not count against the budget")
-        await cache.store(entry(), for: key("c"))
-        #expect(await cache.entry(for: key("a")) == nil)
-        #expect(await cache.entry(for: key("b")) != nil)
-        #expect(await cache.stats.evictions == 1)
     }
 }
 

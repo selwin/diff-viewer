@@ -8,29 +8,26 @@ import Testing
 /// is written by git, `--cleanup=strip` follows `core.commentChar`, and a template path is
 /// resolved against the repository rather than the process's working directory.
 @Suite(.serialized) struct GitCommitCommandTests {
+    private typealias Repo = GitCommandTests.Repo
+
     // MARK: Building repositories
 
     /// Runs a git command that is expected to fail, since `Repo.git` throws on a non-zero
     /// exit and a conflicting merge exits non-zero by design.
-    private func gitExpectingFailure(_ arguments: [String], in repo: GitCommandTests.Repo) async throws {
+    private func gitExpectingFailure(_ arguments: [String], in repo: Repo) async throws {
         let result = try await ProcessRunner.run(
             GitClient.executable,
             arguments: arguments,
             currentDirectory: repo.url,
-            environment: GitCommandTests.Repo.environment
+            environment: Repo.environment
         )
         #expect(result.status != 0, "`git \(arguments.joined(separator: " "))` was expected to fail")
     }
 
     /// A repository stopped mid-merge with its one conflict resolved and staged: MERGE_HEAD
     /// and MERGE_MSG both exist, and the message carries git's commented Conflicts block.
-    private func conflictedMerge(commentChar: String? = nil) async throws -> GitCommandTests.Repo {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("file.txt", "base\n")
-        try repo.write("other.txt", "untouched\n")
-        try await repo.commit("Root commit")
+    private func conflictedMerge(commentChar: String? = nil) async throws -> Repo {
+        let repo = try await committableRepo(committing: ["file.txt": "base\n", "other.txt": "untouched\n"])
 
         // Git writes the Conflicts block with the comment character in force at the time
         // of the merge, so this has to be configured before it runs.
@@ -55,12 +52,7 @@ import Testing
     // MARK: Committing
 
     @Test func commitRecordsTheIndexAndLeavesUnstagedWorkAlone() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("a.txt", "one\n")
-        try repo.write("b.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committableRepo(committing: ["a.txt": "one\n", "b.txt": "one\n"])
         let before = try await repo.git(["rev-parse", "HEAD"])
 
         try repo.write("a.txt", "two\n")
@@ -77,17 +69,16 @@ import Testing
     }
 
     /// Git refuses an empty commit outside a merge, and the refusal has to reach the caller
-    /// rather than passing for a commit that was made.
+    /// rather than passing for a commit that was made. Git explains it on stdout, and the
+    /// label must not leak the temporary message file's path.
     @Test func committingWithNothingStagedThrows() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committableRepo(committing: ["a.txt": "one\n"])
 
-        await #expect(throws: (any Error).self) {
-            try await repo.client.commit(message: "Nothing")
-        }
+        var message: String?
+        do { try await repo.client.commit(message: "Nothing") } catch { message = error.localizedDescription }
+        let text = try #require(message)
+        #expect(text.hasPrefix("git commit exited with status 1: "), "\(text)")
+        #expect(text.contains("nothing to commit"), "\(text)")
     }
 
     // MARK: Merges
@@ -151,11 +142,7 @@ import Testing
     }
 
     @Test func aSquashMergeSuggestsTheSquashMessage() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("file.txt", "base\n")
-        try await repo.commit("Root commit")
+        let repo = try await committableRepo(committing: ["file.txt": "base\n"])
         try await repo.git(["checkout", "-b", "side"])
         try repo.write("side.txt", "from the side\n")
         try await repo.commit("Side commit")
@@ -172,9 +159,7 @@ import Testing
     // MARK: Templates
 
     @Test func anAbsoluteCommitTemplateIsTheSuggestion() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
+        let repo = try await committableRepo()
         try repo.write("tmpl.txt", "Subject line\n\n")
         try await repo.git(["config", "commit.template", repo.url.appendingPathComponent("tmpl.txt").path])
 
@@ -201,9 +186,7 @@ import Testing
     /// A relative template is relative to the repository, never to the process's working
     /// directory, which here is not the repository under test.
     @Test func aRelativeCommitTemplateResolvesAgainstTheRoot() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
+        let repo = try await committableRepo()
         try repo.write("tmpl.txt", "Subject line\n\n")
         try await repo.git(["config", "commit.template", "tmpl.txt"])
 
@@ -216,9 +199,7 @@ import Testing
     /// A template path is git's value verbatim, so a name that begins with a space is still
     /// the file it names.
     @Test func aTemplatePathKeepsItsWhitespace() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
+        let repo = try await committableRepo()
         try repo.write(" tmpl.txt", "Subject line\n\n")
         try await repo.git(["config", "commit.template", " tmpl.txt"])
 
@@ -231,9 +212,7 @@ import Testing
     /// The dependency is whether the key is set, not whether the file is readable: a
     /// missing template is still one a later worktree write can create.
     @Test func theTemplateDependencyFollowsTheConfiguration() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
+        let repo = try await committableRepo()
         #expect(try await repo.client.commitDefaults().templateDependency == .none)
 
         try await repo.git(["config", "commit.template", "tmpl.txt"])
@@ -249,11 +228,7 @@ import Testing
     }
 
     @Test func aCleanRepositorySuggestsNothing() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committableRepo(committing: ["a.txt": "one\n"])
 
         #expect(try await repo.client.commitDefaults() == CommitDefaults.none)
     }
@@ -263,11 +238,7 @@ import Testing
     /// The whole point of resolving an environment for commits: a hook sees the login
     /// shell's PATH, and a caller's own overrides still beat it.
     @Test func aHookSeesTheResolvedPathAndTheClientsOverrides() async throws {
-        let repo = try GitCommandTests.Repo()
-        try await repo.initialize()
-        try await repo.prepareForCommits()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committableRepo(committing: ["a.txt": "one\n"])
         try repo.write("a.txt", "two\n")
         try await repo.git(["add", "a.txt"])
 
@@ -287,7 +258,7 @@ import Testing
         let resolvedPath = "/diffviewer-test/bin:/usr/bin:/bin"
         let client = GitClient(
             repoRoot: repo.url,
-            environment: GitCommandTests.Repo.environment.merging(
+            environment: Repo.environment.merging(
                 ["DIFFVIEWER_PROBE": "override", "DIFFVIEWER_PROBE_FILE": probe.path]
             ) { $1 },
             resolveHookEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_PROBE": "resolved"] }

@@ -457,59 +457,27 @@ struct GitClient: RepoClient {
         try message.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
 
-        let result = try await ProcessRunner.run(
-            Self.executable,
-            arguments: ["commit", "--cleanup=strip", "-F", file.path],
-            currentDirectory: repoRoot,
-            environment: await hookEnvironment()
-        )
-        // Not `check`: its label would echo the temp file's path into the alert.
-        guard result.status == 0 else {
-            throw ProcessError.failed(
-                command: "git commit", status: result.status, stderr: Self.commandDiagnostics(result))
-        }
+        // The label is fixed so the alert never shows the temp file's path.
+        try await runReportingDiagnostics(
+            ["commit", "--cleanup=strip", "-F", file.path], command: "git commit", environment: await hookEnvironment())
     }
 
     /// Switches to an existing local branch. Runs the user's post-checkout hook, so it
     /// takes the hook environment.
     func switchBranch(to branch: String) async throws {
-        // Git itself would read a leading dash as an option.
-        guard !branch.hasPrefix("-") else {
-            throw ProcessError.failed(
-                command: "git switch", status: 128, stderr: "'\(branch)' is not a branch name")
-        }
+        try Self.rejectOption(branch, kind: "branch name", command: "git switch")
         // `--no-guess`: a stale menu entry whose local branch was deleted must not create
         // a tracking branch from a matching remote.
-        let result = try await ProcessRunner.run(
-            Self.executable,
-            arguments: ["switch", "--no-guess", branch],
-            currentDirectory: repoRoot,
-            environment: await hookEnvironment()
-        )
-        guard result.status == 0 else {
-            throw ProcessError.failed(
-                command: "git switch", status: result.status, stderr: Self.commandDiagnostics(result))
-        }
+        try await runReportingDiagnostics(
+            ["switch", "--no-guess", branch], command: "git switch", environment: await hookEnvironment())
     }
 
     /// Deletes a local branch. `-D`, because a squash-merged branch never reads as merged
     /// and `-d` would refuse it.
     func deleteBranch(_ name: String) async throws {
-        // Git itself would read a leading dash as an option.
-        guard !name.hasPrefix("-") else {
-            throw ProcessError.failed(
-                command: "git branch -D", status: 128, stderr: "'\(name)' is not a branch name")
-        }
-        let result = try await ProcessRunner.run(
-            Self.executable,
-            arguments: ["branch", "-D", name],
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
-        guard result.status == 0 else {
-            throw ProcessError.failed(
-                command: "git branch -D", status: result.status, stderr: Self.commandDiagnostics(result))
-        }
+        try Self.rejectOption(name, kind: "branch name", command: "git branch -D")
+        try await runReportingDiagnostics(
+            ["branch", "-D", name], command: "git branch -D", environment: callEnvironment)
     }
 
     /// Combines stderr and stdout, because git and hooks may report failures on either.
@@ -519,22 +487,49 @@ struct GitClient: RepoClient {
             .joined(separator: "\n")
     }
 
-    /// Where `commit.template` points, or nil when it is not set.
-    private func templatePath() async throws -> URL? {
+    /// Runs a command that changes the repository. Not `check`: its label echoes every
+    /// argument, such as a temporary file's path, and it drops stdout, where hooks often report.
+    func runReportingDiagnostics(_ arguments: [String], command: String, environment: [String: String]) async throws {
         let result = try await ProcessRunner.run(
             Self.executable,
-            arguments: ["config", "-z", "--path", "--get", "commit.template"],
+            arguments: arguments,
+            currentDirectory: repoRoot,
+            environment: environment
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(command: command, status: result.status, stderr: Self.commandDiagnostics(result))
+        }
+    }
+
+    /// Refuses a name that git itself would read as an option.
+    static func rejectOption(_ value: String, kind: String, command: String) throws {
+        guard !value.hasPrefix("-") else {
+            throw ProcessError.failed(command: command, status: 128, stderr: "'\(value)' is not a \(kind)")
+        }
+    }
+
+    /// Stdout of `git config` with `arguments`, or nil when the key is not set.
+    func configOutput(_ arguments: [String], command: String) async throws -> String? {
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["config"] + arguments,
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
         // Status 1 is "no such key"; any other non-zero is a real config failure.
         if result.status == 1 { return nil }
         guard result.status == 0 else {
-            throw ProcessError.failed(
-                command: "git config commit.template", status: result.status, stderr: result.stderrString)
+            throw ProcessError.failed(command: command, status: result.status, stderr: result.stderrString)
         }
+        return result.stdoutString
+    }
+
+    /// Where `commit.template` points, or nil when it is not set.
+    private func templatePath() async throws -> URL? {
+        let output = try await configOutput(
+            ["-z", "--path", "--get", "commit.template"], command: "git config commit.template")
+        guard var path = output else { return nil }
         // `-z` and a single NUL stripped, not trimming: whitespace in a filename is meaningful.
-        var path = result.stdoutString
         if path.hasSuffix("\0") { path.removeLast() }
         guard !path.isEmpty else { return nil }
         return gitPath(path)

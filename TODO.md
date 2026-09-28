@@ -157,25 +157,6 @@ sidebar, the single-file view and the All changes view, and make the three consi
 
 ---
 
-### O. Manual fetch in the branch picker (requested 2026-09-25)
-
-**Goal.** Right after merging a PR on GitHub, the picker sometimes doesn't show that the
-remote tracking branch has new commits. Opening the picker fetches automatically, but
-within `WindowState.fetchCooldown` (60 s) of the last successful fetch it shows that
-fetch's result instead of running another, so the merge isn't seen yet. A Fetch button
-lets the reader ask for fresh counts.
-
-**Design.**
-- A fetch button (`arrow.clockwise`) in the picker, next to the "fetched …" time. It
-  skips the cooldown and fetches the current branch's remote and the other remotes, the
-  same way the automatic fetch does.
-- While a fetch runs it shows the existing spinner and is disabled; a failure shows the
-  way an automatic fetch failure does.
-
-**Tests.** A manual fetch runs within the cooldown, where an automatic one doesn't.
-
----
-
 ### Q. Rework the All changes file header (requested 2026-09-26)
 
 **Goal.** The per-file section header in All changes needs a redesign. The

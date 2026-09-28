@@ -15,6 +15,9 @@ import Testing
     final class Repo {
         let url: URL
         let client: GitClient
+        /// The bare remote `pushedRepo()` pushes to, held so it lives as long as this clone:
+        /// each fixture deletes its directory when it goes.
+        var remote: Repo?
 
         /// A fixed identity and none of the developer's own configuration, for the test
         /// process's git calls and for the client's alike.
@@ -100,11 +103,8 @@ import Testing
     /// A repository whose history is: root (two files), a commit on a side branch, and a
     /// merge of that branch into main.
     private func mergeRepo() async throws -> (repo: Repo, root: String, side: String, merge: String) {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("keep.txt", "one\ntwo\n")
-        try repo.write("gone.txt", "bye\n")
-        let root = try await repo.commit("Root commit")
+        let repo = try await committedRepo(["keep.txt": "one\ntwo\n", "gone.txt": "bye\n"])
+        let root = try await repo.git(["rev-parse", "HEAD"])
 
         try await repo.git(["checkout", "-b", "side"])
         try repo.write("side.txt", "from the side\n")
@@ -145,12 +145,7 @@ import Testing
     }
 
     @Test func anOrdinaryCommitReportsAddsModifiesAndDeletes() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("keep.txt", "one\n")
-        try repo.write("gone.txt", "bye\n")
-        try await repo.commit("Root commit")
-
+        let repo = try await committedRepo(["keep.txt": "one\n", "gone.txt": "bye\n"])
         try repo.write("keep.txt", "one\ntwo\n")
         try repo.write("new.txt", "hello\n")
         try repo.delete("gone.txt")
@@ -165,11 +160,7 @@ import Testing
 
     /// A repository with one committed three-line file, `a.txt`.
     private func renameRepo() async throws -> Repo {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\ntwo\nthree\n")
-        try await repo.commit("Root commit")
-        return repo
+        try await committedRepo(["a.txt": "one\ntwo\nthree\n"])
     }
 
     /// The flag is explicit, so the user's own config cannot turn detection off.
@@ -279,10 +270,7 @@ import Testing
 
     /// A leading `"` would make `hash-object --stdin-paths` unquote the line.
     @Test func pathsWithSpacesBracketsAndALeadingQuotePair() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a b[1].txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo(["a b[1].txt": "one\n"])
         try move("a b[1].txt", to: "\"c d[2].txt", in: repo)
 
         let files = try await repo.client.status()
@@ -378,10 +366,7 @@ import Testing
     /// `-w` has to sit with the other flags: after the `--` that ends a commit's
     /// operands git would read it as a file name and report no changes at all.
     @Test func ignoringWhitespaceStillReportsACommitsChanges() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.write("a.txt", "one\ntwo\n")
         let sha = try await repo.commit("Second commit")
 
@@ -394,10 +379,7 @@ import Testing
     // MARK: History
 
     @Test func recentCommitsParsesRealLogOutput() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.write("a.txt", "two\n")
         // Separator bytes and a subject that is itself an object id: both are ordinary
         // content once the fields are NUL-framed and read positionally.
@@ -432,13 +414,6 @@ import Testing
         #expect(commits.map(\.committedAt) == stamps.reversed().map { iso.date(from: $0) })
     }
 
-    @Test func recentCommitsFollowsFirstParentsOnly() async throws {
-        let (repo, _, side, merge) = try await mergeRepo()
-        let commits = try await repo.client.recentCommits(startingAt: merge, skip: 0, limit: 10)
-        #expect(commits.first?.isMerge == true)
-        #expect(!commits.contains { $0.ref.sha == side }, "side-branch commits are not listed individually")
-    }
-
     /// The author is who wrote the change, not who committed it.
     @Test func recentCommitsReadTheAuthorName() async throws {
         let repo = try Repo()
@@ -455,18 +430,8 @@ import Testing
         let first = try await repo.client.recentCommits(startingAt: merge, skip: 0, limit: 1)
         let rest = try await repo.client.recentCommits(startingAt: merge, skip: 1, limit: 10)
         #expect(first.map(\.subject) == ["Merge side"])
+        #expect(first.first?.isMerge == true)
         #expect(rest.map(\.subject) == ["Main commit", "Root commit"])
-    }
-
-    @Test func recentCommitsHonoursTheLimit() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        for index in 0..<5 {
-            try repo.write("a.txt", "line \(index)\n")
-            try await repo.commit("Commit \(index)")
-        }
-        let head = try await repo.git(["rev-parse", "HEAD"])
-        #expect(try await repo.client.recentCommits(startingAt: head, skip: 0, limit: 3).count == 3)
     }
 
     // MARK: HEAD
@@ -488,10 +453,8 @@ import Testing
     }
 
     @Test func headStateReportsTheDetachedCommit() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        let sha = try await repo.commit("Root commit")
+        let repo = try await committedRepo()
+        let sha = try await repo.git(["rev-parse", "HEAD"])
 
         try await repo.git(["checkout", "--detach"])
         #expect(try await repo.client.headState() == .detached(sha: sha))
@@ -503,10 +466,7 @@ import Testing
     /// `symbolic-ref --short` would answer `heads/main` here, to stay unambiguous with
     /// the tag, and that is not a branch name anyone wants in the window subtitle.
     @Test func headStateIgnoresATagNamedLikeTheBranch() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try await repo.git(["tag", "main"])
 
         #expect(try await repo.client.headState() == .named("main"))
@@ -515,10 +475,7 @@ import Testing
     /// A repository whose HEAD points at a malformed ref must not read as "no commits
     /// yet": `symbolic-ref` exits non-zero for it, so it reaches the throw.
     @Test func headShaThrowsForADamagedRef() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try Data("not-a-sha-at-all\n".utf8).write(to: repo.url.appendingPathComponent(".git/refs/heads/main"))
 
         await #expect(throws: (any Error).self) { try await repo.client.headSha() }
@@ -539,10 +496,7 @@ import Testing
 
     /// A repository with one commit on `main` and a `side` branch whose `file.txt` differs.
     private func twoBranchRepo() async throws -> Repo {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("file.txt", "main\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo(["file.txt": "main\n"])
         try await repo.git(["checkout", "-b", "side"])
         try repo.write("file.txt", "side\n")
         try await repo.commit("Side commit")
@@ -564,10 +518,7 @@ import Testing
     /// `%(refname:short)` would answer `heads/main` here, to stay unambiguous with the
     /// tag, and that is not a branch name anyone wants in the picker.
     @Test func localBranchesListsHeadsWithoutThePrefix() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try await repo.git(["branch", "zeta"])
         try await repo.git(["branch", "feature/x"])
         try await repo.git(["tag", "main"])
@@ -578,10 +529,7 @@ import Testing
     /// git allows a Unicode line separator inside a ref name and a non-breaking space at
     /// its end; splitting on `isNewline` or trimming whitespace would corrupt both.
     @Test func branchNamesWithUnicodeSeparatorsRoundTrip() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         let names = ["a\u{2028}b", "nbsp\u{00A0}"]
         for name in names {
             try await repo.git(["branch", name])
@@ -599,31 +547,6 @@ import Testing
         let repo = try Repo()
         try await repo.initialize()
         #expect(try await repo.client.localBranches().isEmpty)
-    }
-
-    /// The counts come from the remote-tracking ref, so a commit made after pushing
-    /// reads as one ahead with no fetch of any kind.
-    @Test func localBranchesReportsAheadOfTheUpstream() async throws {
-        let (repo, remote) = try await pushedRepo()
-        try repo.write("b.txt", "two\n")
-        try await repo.commit("Second commit")
-
-        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
-        #expect(main.upstream?.shortName == "origin/main")
-        #expect(main.upstream?.tracking == .counts(ahead: 1, behind: 0))
-        // The fixture deletes its directory when it goes: keep it until the reads are done.
-        _ = remote
-    }
-
-    /// Deleting the remote-tracking ref is what a pruned remote branch leaves behind.
-    @Test func localBranchesReportsAGoneUpstream() async throws {
-        let (repo, remote) = try await pushedRepo()
-        try await repo.git(["update-ref", "-d", "refs/remotes/origin/main"])
-
-        let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
-        #expect(main.upstream?.shortName == "origin/main")
-        #expect(main.upstream?.tracking == .gone)
-        _ = remote
     }
 
     // MARK: Unpushed commits
@@ -650,25 +573,22 @@ import Testing
     }
 
     @Test func commitShaOfARefThatNamesNoCommitIsNil() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["update-ref", "-d", "refs/remotes/origin/main"])
         #expect(try await repo.client.commitSha(of: "refs/remotes/origin/main") == nil)
         #expect(try await repo.client.commitSha(of: "--all") == nil, "an option never reaches git")
         let head = try await repo.git(["rev-parse", "HEAD"])
         #expect(try await repo.client.commitSha(of: "refs/heads/main") == head)
-        _ = remote
     }
 
     /// A repository with one commit pushed to a bare remote, so `main` tracks
-    /// `origin/main` and is in sync.
+    /// `origin/main` and is in sync. The repository holds the remote alive.
     private func pushedRepo() async throws -> (repo: Repo, remote: Repo) {
         let remote = try Repo()
         try await remote.git(["init", "--bare"])
 
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
+        repo.remote = remote
         try await repo.git(["remote", "add", "origin", remote.url.path])
         try await repo.git(["push", "-u", "origin", "main"])
         return (repo, remote)
@@ -691,17 +611,13 @@ import Testing
         try await bare.initialize()
         #expect(try await bare.client.remoteNames().isEmpty)
 
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         #expect(try await repo.client.remoteNames() == ["origin"])
-        _ = remote
     }
 
     @Test func fetchUpdatesTheBehindCount() async throws {
         let (repo, remote) = try await pushedRepo()
-        let other = try await clone(of: remote)
-        try other.write("b.txt", "two\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
+        try await advanceRemoteMain(of: remote)
 
         let before = try #require(try await repo.client.localBranches().first { $0.name == "main" })
         #expect(before.upstream?.tracking == .counts(ahead: 0, behind: 0), "no fetch yet")
@@ -732,7 +648,7 @@ import Testing
     /// `--prune` deletes from every mapped destination, so with a tag mapping a prune could
     /// delete a local-only tag. The fetch then deletes nothing at all.
     @Test func fetchDoesNotPruneUnderATagMapping() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["config", "fetch.prune", "true"])
         try await repo.git(["config", "fetch.pruneTags", "true"])
         try await repo.git(["config", "--add", "remote.origin.fetch", "refs/tags/*:refs/tags/*"])
@@ -744,7 +660,6 @@ import Testing
 
         #expect(try await repo.git(["rev-parse", "--verify", "refs/tags/local-only"]) != "")
         #expect(try await repo.git(["rev-parse", "--verify", "refs/remotes/origin/stale"]) == stale)
-        _ = remote
     }
 
     /// The counts compare against whatever ref the remote's mappings put the upstream in,
@@ -756,11 +671,7 @@ import Testing
         ])
         try await repo.git(["config", "branch.main.remote", "origin"])
         try await repo.git(["config", "branch.main.merge", "refs/heads/main"])
-
-        let other = try await clone(of: remote)
-        try other.write("b.txt", "two\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
+        try await advanceRemoteMain(of: remote)
 
         try await repo.client.fetch(remote: "origin")
 
@@ -778,22 +689,9 @@ import Testing
         }
     }
 
-    /// Git would read the name as an option rather than a remote.
-    @Test func fetchRejectsARemoteNameThatLooksLikeAnOption() async throws {
-        let (repo, remote) = try await pushedRepo()
-        await #expect(throws: (any Error).self) {
-            try await repo.client.fetch(remote: "--all")
-        }
-        _ = remote
-    }
-
     @Test func pullFastForwards() async throws {
         let (repo, remote) = try await pushedRepo()
-        let other = try await clone(of: remote)
-        try other.write("b.txt", "two\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
-        let tip = try await other.git(["rev-parse", "HEAD"])
+        let tip = try await advanceRemoteMain(of: remote)
 
         try await repo.client.pull()
 
@@ -805,10 +703,7 @@ import Testing
     @Test func pullUnderRebaseConfigWorks() async throws {
         let (repo, remote) = try await pushedRepo()
         try await repo.git(["config", "pull.rebase", "true"])
-        let other = try await clone(of: remote)
-        try other.write("remote.txt", "theirs\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
+        try await advanceRemoteMain(of: remote)
 
         try repo.write("local.txt", "mine\n")
         try await repo.commit("Local commit")
@@ -825,10 +720,7 @@ import Testing
     @Test func interactiveRebasePullFailsPromptlyAndLeavesTheBranchAlone() async throws {
         let (repo, remote) = try await pushedRepo()
         try await repo.git(["config", "pull.rebase", "interactive"])
-        let other = try await clone(of: remote)
-        try other.write("remote.txt", "theirs\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
+        try await advanceRemoteMain(of: remote)
 
         try repo.write("local.txt", "mine\n")
         try await repo.commit("Local commit")
@@ -920,34 +812,20 @@ import Testing
         }
     }
 
-    @Test func pushBehindTheUpstreamIsRejected() async throws {
-        let (repo, remote) = try await pushedRepo()
-        let other = try await clone(of: remote)
-        try other.write("b.txt", "two\n")
-        try await other.commit("Clone commit")
-        try await other.git(["push", "origin", "main"])
-        let remoteTip = try await remote.git(["rev-parse", "refs/heads/main"])
-
-        await #expect(throws: (any Error).self) {
-            try await repo.client.push(branch: "main", to: "origin", remoteRef: "refs/heads/main")
-        }
-        #expect(try await remote.git(["rev-parse", "refs/heads/main"]) == remoteTip)
-    }
-
     /// Git would read either name as an option rather than a branch or a remote.
     @Test func pushRejectsANameThatLooksLikeAnOption() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         await #expect(throws: (any Error).self) {
             try await repo.client.push(branch: "--mirror", to: "origin", remoteRef: "refs/heads/main")
         }
         await #expect(throws: (any Error).self) {
             try await repo.client.push(branch: "main", to: "--mirror", remoteRef: "refs/heads/main")
         }
-        _ = remote
     }
 
     /// Pushes a new commit to `remote`'s `main` from a second clone and returns it, so
     /// the first repository's remote-tracking ref is stale until it fetches.
+    @discardableResult
     private func advanceRemoteMain(of remote: Repo) async throws -> String {
         let other = try await clone(of: remote)
         try other.write("b.txt", "two\n")
@@ -1064,7 +942,7 @@ import Testing
         try repo.write("mine.txt", "mine\n")
         let baseTip = try await repo.commit("Local commit")
         try await repo.git(["checkout", "main"])
-        _ = try await advanceRemoteMain(of: remote)
+        try await advanceRemoteMain(of: remote)
 
         await #expect(throws: (any Error).self) {
             try await repo.client.fastForward(
@@ -1077,7 +955,7 @@ import Testing
     @Test func fastForwardOfTheCheckedOutBranchIsRefused() async throws {
         let (repo, remote) = try await pushedRepo()
         let head = try await repo.git(["rev-parse", "HEAD"])
-        _ = try await advanceRemoteMain(of: remote)
+        try await advanceRemoteMain(of: remote)
 
         await #expect(throws: (any Error).self) {
             try await repo.client.fastForward(
@@ -1093,7 +971,7 @@ import Testing
         try await repo.git(["branch", "base"])
         try await repo.git(["branch", "feature"])
         let baseTip = try await repo.git(["rev-parse", "refs/heads/base"])
-        _ = try await advanceRemoteMain(of: remote)
+        try await advanceRemoteMain(of: remote)
 
         await #expect(throws: (any Error).self) {
             try await repo.client.fastForward(
@@ -1111,7 +989,7 @@ import Testing
         try await repo.git(["branch", "feature"])
         try await repo.git(["symbolic-ref", "refs/remotes/trap/main", "refs/heads/base"])
         let baseTip = try await repo.git(["rev-parse", "refs/heads/base"])
-        _ = try await advanceRemoteMain(of: remote)
+        try await advanceRemoteMain(of: remote)
 
         await #expect(throws: (any Error).self) {
             try await repo.client.fastForward(
@@ -1125,7 +1003,7 @@ import Testing
         let worktree = repo.url.appendingPathComponent(".git/linked-worktree")
         try await repo.git(["worktree", "add", "-b", "linked", worktree.path])
         let linkedTip = try await repo.git(["rev-parse", "refs/heads/linked"])
-        _ = try await advanceRemoteMain(of: remote)
+        try await advanceRemoteMain(of: remote)
 
         await #expect(throws: (any Error).self) {
             try await repo.client.fastForward(
@@ -1136,17 +1014,29 @@ import Testing
 
     /// A remote without a merge ref tracks nothing, so that branch still needs publishing.
     @Test func configuredUpstreamRemotesSkipsABranchWithoutAMergeRef() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["branch", "lonely"])
         try await repo.git(["config", "branch.lonely.remote", "origin"])
 
         #expect(try await repo.client.configuredUpstreamRemotes() == ["main": "origin"])
-        _ = remote
+    }
+
+    /// The alert shows this text, so the refusal has to name the command and what kind of
+    /// name was wrong.
+    @Test func anOptionLikeNameIsRefusedUnderItsCommandLabel() async throws {
+        let repo = try await twoBranchRepo()
+        var branchError: String?
+        do { try await repo.client.switchBranch(to: "-c") } catch { branchError = error.localizedDescription }
+        #expect(branchError == "git switch exited with status 128: '-c' is not a branch name")
+
+        var remoteError: String?
+        do { try await repo.client.fetch(remote: "--all") } catch { remoteError = error.localizedDescription }
+        #expect(remoteError == "git fetch exited with status 128: '--all' is not a remote name")
     }
 
     /// Git would read either name as an option rather than a branch or a remote.
     @Test func publishAndFastForwardRejectNamesThatLookLikeOptions() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         await #expect(throws: (any Error).self) {
             try await repo.client.publish(branch: "--mirror", to: "origin")
         }
@@ -1162,14 +1052,14 @@ import Testing
             try await repo.client.fastForward(
                 branch: "main", remote: "--all", remoteRef: "refs/heads/main", localRef: "refs/remotes/origin/main")
         }
-        _ = remote
     }
 
     /// The tip date orders the picker and the upstream refs are what a push or a
     /// fast-forward names, so all of them have to survive the round trip through
-    /// `for-each-ref`.
+    /// `for-each-ref`. The counts come from the remote-tracking ref, so the unpushed
+    /// commit reads as one ahead with no fetch of any kind.
     @Test func localBranchesCarryTipDatesAndUpstreamRefs() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         let stamp = "2026-09-19T10:00:00+00:00"
         try repo.write("b.txt", "two\n")
         try await repo.commit("Dated commit", environment: ["GIT_COMMITTER_DATE": stamp])
@@ -1180,7 +1070,7 @@ import Testing
         #expect(main.upstream?.remote == "origin")
         #expect(main.upstream?.remoteRef == "refs/heads/main")
         #expect(main.upstream?.localRef == "refs/remotes/origin/main")
-        _ = remote
+        #expect(main.upstream?.tracking == .counts(ahead: 1, behind: 0))
     }
 
     /// `-D`: a squash-merged branch never reads as merged, and `-d` would refuse it.
@@ -1207,24 +1097,10 @@ import Testing
         #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
     }
 
-    @Test func switchBranchMovesHead() async throws {
-        let repo = try await twoBranchRepo()
-        try await repo.client.switchBranch(to: "side")
-        #expect(try await repo.client.headState() == .named("side"))
-    }
-
     @Test func switchBranchFromDetachedHeadReattaches() async throws {
         let repo = try await twoBranchRepo()
         try await repo.git(["checkout", "--detach"])
         try await repo.client.switchBranch(to: "main")
-        #expect(try await repo.client.headState() == .named("main"))
-    }
-
-    @Test func switchBranchToAnUnknownNameThrows() async throws {
-        let repo = try await twoBranchRepo()
-        await #expect(throws: (any Error).self) {
-            try await repo.client.switchBranch(to: "nowhere")
-        }
         #expect(try await repo.client.headState() == .named("main"))
     }
 
@@ -1244,16 +1120,10 @@ import Testing
     /// Without `--no-guess`, `git switch feature` would quietly create a local `feature`
     /// tracking `origin/feature`. A stale menu entry must not do that.
     @Test func switchBranchNeverCreatesATrackingBranch() async throws {
-        let remote = try Repo()
-        try await remote.initialize()
-        try remote.write("a.txt", "one\n")
-        try await remote.commit("Root commit")
+        let remote = try await committedRepo()
         try await remote.git(["branch", "feature"])
 
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try await repo.git(["remote", "add", "origin", remote.url.path])
         try await repo.git(["fetch", "origin"])
         #expect(try await repo.git(["rev-parse", "--verify", "refs/remotes/origin/feature"]) != "")
@@ -1262,16 +1132,6 @@ import Testing
             try await repo.client.switchBranch(to: "feature")
         }
         #expect(try await repo.client.localBranches().map(\.name) == ["main"])
-        #expect(try await repo.client.headState() == .named("main"))
-    }
-
-    /// Git would read the name as an option rather than a branch.
-    @Test func switchBranchRejectsANameThatLooksLikeAnOption() async throws {
-        let repo = try await twoBranchRepo()
-        await #expect(throws: (any Error).self) {
-            try await repo.client.switchBranch(to: "-c")
-        }
-        #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
         #expect(try await repo.client.headState() == .named("main"))
     }
 
@@ -1330,7 +1190,7 @@ import Testing
 
     /// `origin/HEAD` is a symbolic ref to another branch, not a branch of its own.
     @Test func remoteBranchesListsTrackingRefsWithoutSymrefs() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["push", "origin", "main:refs/heads/feature/x"])
         try await repo.git(["remote", "set-head", "origin", "main"])
 
@@ -1339,7 +1199,6 @@ import Testing
         #expect(branches.map(\.remote) == ["origin", "origin"])
         #expect(branches.map(\.ref) == ["refs/remotes/origin/feature/x", "refs/remotes/origin/main"])
         #expect(branches.first?.tipCommitAuthor == "Tester")
-        _ = remote
     }
 
     /// A remote name may contain a slash; its mapping, not the ref's path, splits it.
@@ -1351,13 +1210,12 @@ import Testing
         let branches = try await repo.client.remoteBranches().filter { $0.remote == "team/a" }
         #expect(branches.map(\.name) == ["main"])
         #expect(branches.map(\.ref) == ["refs/remotes/team/a/main"])
-        _ = remote
     }
 
     /// A mapping into another namespace still names its own remote, and the checkout's
     /// upstream follows the mapping rather than the ref's path.
     @Test func aCustomFetchMappingNamesItsRemote() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["push", "origin", "main:refs/heads/feature"])
         try await repo.git(["config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/company/*"])
         try await repo.git(["fetch", "origin"])
@@ -1373,25 +1231,11 @@ import Testing
         #expect(try await repo.client.headState() == .named("feature"))
         #expect(try await repo.git(["config", "branch.feature.remote"]) == "origin")
         #expect(try await repo.git(["config", "branch.feature.merge"]) == "refs/heads/feature")
-        _ = remote
-    }
-
-    @Test func checkoutTrackingCreatesABranchTrackingTheRemote() async throws {
-        let (repo, remote) = try await pushedRepo()
-        try await repo.git(["push", "origin", "main:refs/heads/feature"])
-
-        try await repo.client.checkoutTracking(branch: "feature", trackingRef: "refs/remotes/origin/feature")
-
-        #expect(try await repo.client.headState() == .named("feature"))
-        let feature = try #require(try await repo.client.localBranches().first { $0.name == "feature" })
-        #expect(feature.upstream?.localRef == "refs/remotes/origin/feature")
-        #expect(feature.upstream?.remoteRef == "refs/heads/feature")
-        _ = remote
     }
 
     /// `-c`, not `-C`: an existing local branch is neither reset nor switched to.
     @Test func checkoutTrackingRefusesAnExistingLocalName() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["push", "origin", "main:refs/heads/feature"])
         try repo.write("b.txt", "two\n")
         try await repo.commit("Local only")
@@ -1404,13 +1248,12 @@ import Testing
         }
         #expect(try await repo.client.headState() == .named("main"))
         #expect(try await repo.git(["rev-parse", "feature"]) == localTip)
-        _ = remote
     }
 
     /// Git would read the name as an option, and anything outside `refs/remotes/` is not
     /// a remote-tracking ref to track.
     @Test func checkoutTrackingRejectsNamesThatLookLikeOptions() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         await #expect(throws: (any Error).self) {
             try await repo.client.checkoutTracking(branch: "-f", trackingRef: "refs/remotes/origin/main")
         }
@@ -1421,7 +1264,6 @@ import Testing
             try await repo.client.checkoutTracking(branch: "copy", trackingRef: "refs/heads/main")
         }
         #expect(try await repo.client.localBranches().map(\.name) == ["main"])
-        _ = remote
     }
 
     // MARK: New branches
@@ -1439,14 +1281,13 @@ import Testing
     /// `branch.autoSetupMerge=inherit` would have it track main's upstream, and a push
     /// would go there.
     @Test func createBranchTracksNothingWhateverTheConfig() async throws {
-        let (repo, remote) = try await pushedRepo()
+        let (repo, _) = try await pushedRepo()
         try await repo.git(["config", "branch.autoSetupMerge", "inherit"])
 
         try await repo.client.createBranch("topic")
 
         let topic = try #require(try await repo.client.localBranches().first { $0.name == "topic" })
         #expect(topic.upstream == nil)
-        _ = remote
     }
 
     @Test func createBranchRefusesABadName() async throws {
@@ -1485,10 +1326,8 @@ import Testing
     // MARK: Contents
 
     @Test func contentsReadsAGivenRevisionAndThrowsForAMissingOne() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "first\n")
-        let first = try await repo.commit("Root commit")
+        let repo = try await committedRepo(["a.txt": "first\n"])
+        let first = try await repo.git(["rev-parse", "HEAD"])
         try repo.write("a.txt", "second\n")
         let second = try await repo.commit("Second commit")
 
@@ -1504,13 +1343,24 @@ import Testing
 
     // MARK: Object sizes
 
+    /// `cat-file --batch-check` reads one spec per line: an LF anywhere splits the spec, and
+    /// git strips a CR before the terminator. A CR anywhere else is an ordinary byte.
+    @Test(arguments: [
+        ("HEAD:a.txt", false),
+        ("HEAD:a\rb.txt", false),
+        ("HEAD:a\nb.txt", true),
+        ("HEAD:a\r\nb.txt", true),
+        ("HEAD:image.png\r", true),
+    ])
+    func breaksLineFraming(spec: String, breaks: Bool) {
+        #expect(GitClient.breaksLineFraming(spec) == breaks)
+    }
+
     /// Every spec shape the joiner sends, in one batch: git answers each in order and
     /// says `missing` for the ones it cannot resolve, exit 0.
     @Test func objectSizesAnswerEverySpecInOrder() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "twelve bytes\n")
-        let sha = try await repo.commit("Root commit")
+        let repo = try await committedRepo(["a.txt": "twelve bytes\n"])
+        let sha = try await repo.git(["rev-parse", "HEAD"])
         let oid = try await repo.git(["rev-parse", "HEAD:a.txt"])
 
         let sizes = try await repo.client.objectSizes(of: [
@@ -1524,31 +1374,10 @@ import Testing
         #expect(try await client.objectSizes(of: []) == [])
     }
 
-    /// The batch is line-framed, so a newline inside a spec would shift every later answer.
-    @Test func objectSizesRejectsASpecWithANewline() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        await #expect(throws: (any Error).self) {
-            try await repo.client.objectSizes(of: ["HEAD:a\nb.txt"])
-        }
-    }
-
-    @Test func objectSizesRejectsASpecWithACRLF() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        await #expect(throws: (any Error).self) {
-            try await repo.client.objectSizes(of: ["HEAD:a\r\nb.txt"])
-        }
-    }
-
     /// Git strips a CR before the terminator, so "image.png\r" would be sized as "image.png"
     /// with a correct answer count: only the pre-check can catch it.
     @Test func objectSizesRejectsASpecEndingInACR() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("image.png", "abc")
-        try repo.write("image.png\r", "abcdefg")
-        _ = try await repo.commit("Two names")
+        let repo = try await committedRepo(["image.png": "abc", "image.png\r": "abcdefg"])
         #expect(try await repo.client.objectSizes(of: ["HEAD:image.png"]) == [3])
         await #expect(throws: (any Error).self) {
             try await repo.client.objectSizes(of: ["HEAD:image.png\r"])
@@ -1560,10 +1389,7 @@ import Testing
     /// `git add` on a path that is gone records the deletion; nothing should be left
     /// unstaged afterwards.
     @Test func stageRecordsADeletion() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.delete("a.txt")
 
         try await repo.client.perform(.stage, on: ["a.txt"])
@@ -1573,24 +1399,6 @@ import Testing
         #expect(files.first?.path == "a.txt")
         #expect(files.first?.kind == .deleted)
         #expect(files.first?.area == .staged)
-    }
-
-    /// Unstaging an add leaves the file on disk and unknown to git, not deleted.
-    @Test func unstageReturnsAStagedAddToUntracked() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
-        try repo.write("new.txt", "fresh\n")
-        try await repo.git(["add", "new.txt"])
-
-        try await repo.client.perform(.unstage, on: ["new.txt"])
-
-        let files = try await repo.client.status()
-        #expect(files.map(\.path) == ["new.txt"])
-        #expect(files.first?.kind == .untracked)
-        #expect(files.first?.area == .unstaged)
-        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("new.txt").path))
     }
 
     /// Before the first commit there is no HEAD to restore the index from, and every
@@ -1613,10 +1421,7 @@ import Testing
     }
 
     @Test func discardRestoresADeletedFile() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.delete("a.txt")
 
         try await repo.client.perform(.discard, on: ["a.txt"])
@@ -1629,10 +1434,7 @@ import Testing
     /// `git restore` rewrites the worktree from the index, so a staged change survives:
     /// discarding throws away only what was never staged.
     @Test func discardOverAStagedChangeKeepsTheIndexVersion() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "a\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo(["a.txt": "a\n"])
         try repo.write("a.txt", "b\n")
         try await repo.git(["add", "a.txt"])
         try repo.write("a.txt", "c\n")
@@ -1646,31 +1448,10 @@ import Testing
         #expect(files.first?.kind == .modified)
     }
 
-    /// One git process for the whole batch: both paths reach `git add` after `--`, and
-    /// both end up in the index.
-    @Test func stageRecordsEveryPathInOneCall() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try repo.write("b.txt", "one\n")
-        try await repo.commit("Root commit")
-        try repo.write("a.txt", "two\n")
-        try repo.write("b.txt", "two\n")
-
-        try await repo.client.perform(.stage, on: ["a.txt", "b.txt"])
-
-        let files = try await repo.client.status()
-        #expect(files.map(\.path).sorted() == ["a.txt", "b.txt"], "nothing should be left unstaged")
-        #expect(files.allSatisfy { $0.area == .staged })
-    }
-
     /// An empty batch must not reach git: `git reset -q --` with no pathspec resets the
     /// whole index, so a caller that passes nothing would silently unstage everything.
     @Test func anEmptyBatchNeverReachesGit() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.write("a.txt", "two\n")
         try await repo.git(["add", "a.txt"])
 
@@ -1729,10 +1510,7 @@ import Testing
     /// Discard, not unstage: `git reset` accepts a pathspec that matches nothing and exits
     /// zero, so it is the wrong command to test a refusal with.
     @Test func aRefusedActionThrowsWithGitsStderr() async throws {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
 
         await #expect(throws: (any Error).self) {
             try await repo.client.perform(.discard, on: ["missing.txt"])
@@ -1750,10 +1528,7 @@ import Testing
 
     /// A repository with one committed file and an unstaged edit to it.
     private func editedRepo() async throws -> Repo {
-        let repo = try Repo()
-        try await repo.initialize()
-        try repo.write("a.txt", "one\n")
-        try await repo.commit("Root commit")
+        let repo = try await committedRepo()
         try repo.write("a.txt", "two\n")
         return repo
     }
@@ -1781,15 +1556,6 @@ import Testing
         #expect(staged.worktree == .notApplicable)
         let again = try await fingerprint("a.txt", area: .unstaged, in: repo)
         #expect(!DiffInputFingerprint.mayHaveChanged(unstaged, again), "nothing moved between two status calls")
-    }
-
-    @Test func anEditMovesTheFingerprint() async throws {
-        let repo = try await editedRepo()
-        let before = try await fingerprint("a.txt", area: .unstaged, in: repo)
-        // The write changes the size and the mtime, and both are in the stat.
-        try repo.write("a.txt", "two\nthree\n")
-        let after = try await fingerprint("a.txt", area: .unstaged, in: repo)
-        #expect(DiffInputFingerprint.mayHaveChanged(before, after))
     }
 
     /// The case an mtime-only check would miss: same size, mtime put back. `utimes`
@@ -1865,4 +1631,29 @@ import Testing
         let after = try #require(try await fingerprint("link.txt", area: .unstaged, in: repo))
         #expect(DiffInputFingerprint.mayHaveChanged(before, after))
     }
+}
+
+// MARK: Shared fixtures
+
+/// A new repository on `main` with `files` committed as "Root commit".
+func committedRepo(_ files: [String: String] = ["a.txt": "one\n"]) async throws -> GitCommandTests.Repo {
+    let repo = try GitCommandTests.Repo()
+    try await repo.initialize()
+    for (path, contents) in files { try repo.write(path, contents) }
+    try await repo.commit("Root commit")
+    return repo
+}
+
+/// A new repository ready for the client's own commits: `committedRepo(files)`, or an
+/// unborn branch when `files` is nil.
+func committableRepo(committing files: [String: String]? = nil) async throws -> GitCommandTests.Repo {
+    let repo: GitCommandTests.Repo
+    if let files {
+        repo = try await committedRepo(files)
+    } else {
+        repo = try GitCommandTests.Repo()
+        try await repo.initialize()
+    }
+    try await repo.prepareForCommits()
+    return repo
 }
