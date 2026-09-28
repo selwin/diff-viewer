@@ -619,7 +619,9 @@ final class WindowState {
             // `selectedFile` is nil for `.nothing`, and for a file that has left the list;
             // either way the loader is told to show nothing, which also cancels its work.
             changesetRequest = nil
-            diffLoader.load(file: selectedFile, client: session?.client, hideWhitespace: preferences.hideWhitespace)
+            diffLoader.load(
+                file: selectedFile, client: session?.client, repository: session?.root,
+                hideWhitespace: preferences.hideWhitespace)
         }
     }
 
@@ -628,7 +630,8 @@ final class WindowState {
     private func loadChangeset(_ files: [ChangedFile]) {
         let request = ChangesetRequest(identity: detailIdentity)
         diffLoader.load(
-            changeset: files, client: session?.client, hideWhitespace: preferences.hideWhitespace,
+            changeset: files, client: session?.client, repository: session?.root,
+            hideWhitespace: preferences.hideWhitespace,
             foldOptions: preferences.foldOptions, preserveCurrentContent: request.isReload(of: changesetRequest))
         changesetRequest = request
     }

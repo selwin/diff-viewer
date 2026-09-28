@@ -35,6 +35,14 @@ actor StubRepoClient: RepoClient {
     private var worktree: [String: Data?] = [:]
     /// Index bytes by path; an unlisted path gets the stub's fixed text.
     private var index: [String: Data] = [:]
+    /// Blob bytes by object id. An unlisted id is one git cannot produce, so the engine
+    /// falls back to the path read and never registers the result.
+    private var blobs: [String: Data] = [:]
+    /// Every `blobContents` call, in order. Kept out of `contentReads`, which counts path reads.
+    private(set) var blobReads: [String] = []
+    /// What `worktreeState` answers by path. Unlisted is `.unknown`, which matches no
+    /// fingerprint, so a worktree read is never registered unless a test says so.
+    private var worktreeStates: [String: DiffInputFingerprint.Worktree] = [:]
     /// Object sizes by spec; an unlisted spec is one git has no object for.
     private var objectSizesBySpec: [String: Int64] = [:]
     private var failsObjectSizes = false
@@ -189,6 +197,8 @@ actor StubRepoClient: RepoClient {
     }
     func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
     func set(index data: Data, for path: String) { index[path] = data }
+    func set(blob data: Data?, for oid: String) { blobs[oid] = data }
+    func set(worktreeState state: DiffInputFingerprint.Worktree, for path: String) { worktreeStates[path] = state }
     /// The size `objectSizes` answers for `spec`; nil is what git says for a missing object.
     func set(objectSize size: Int64?, for spec: String) { objectSizesBySpec[spec] = size }
     /// Makes `objectSizes` throw, after recording the call.
@@ -649,6 +659,15 @@ actor StubRepoClient: RepoClient {
         }
         if let override = worktree[path] { return override }
         return Data("new \(path)".utf8)
+    }
+
+    func blobContents(_ oid: String) async throws -> Data? {
+        blobReads.append(oid)
+        return blobs[oid]
+    }
+
+    func worktreeState(of path: String) async -> DiffInputFingerprint.Worktree {
+        worktreeStates[path] ?? .unknown
     }
 
     func perform(_ action: GitFileAction, on paths: [String]) async throws {
@@ -1825,10 +1844,11 @@ struct WindowStateTests {
         let before = await Reads(repo.client)
 
         state.isVisible = true
-        // A commit's files cannot change, so no status read; the owed load runs once.
+        // A commit's files cannot change, so no status read. The owed load runs and reuses
+        // the result the changeset registered, so it reads nothing.
         #expect(await eventually { await self.hasContent(state, for: file) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
-        let expected = before.plus(head: 1, headState: 1, content: 2)
+        let expected = before.plus(head: 1, headState: 1)
         #expect(await eventually { await Reads(repo.client) == expected })
         #expect(!state.diffStale)
         try? await Task.sleep(for: .milliseconds(50))

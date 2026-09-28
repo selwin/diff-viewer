@@ -110,7 +110,7 @@ actor DifftCache {
     private let now: @Sendable () -> ContinuousClock.Instant
 
     private var inFlight: [Key: Entry] = [:]
-    private var results: CostBoundedFIFO<Key, DifftResult>
+    private var results: CostBoundedLRU<Key, DifftResult>
     private var failures: [Key: Failure] = [:]
     /// Keys of `failures`, oldest first.
     private var failureOrder: [Key] = []
@@ -133,7 +133,7 @@ actor DifftCache {
         self.runner = runner
         self.limits = limits
         self.now = now
-        results = CostBoundedFIFO(entries: limits.entries, bytes: limits.bytes, maxEntryCost: limits.maxResultCost)
+        results = CostBoundedLRU(entries: limits.entries, bytes: limits.bytes, maxEntryCost: limits.maxResultCost)
     }
 
     /// The bundled difft binary.

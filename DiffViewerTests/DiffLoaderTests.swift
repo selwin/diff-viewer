@@ -24,11 +24,14 @@ struct DiffLoaderTests {
         await client.hold(worktree: ["a.swift"])
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(changeset: [changedFile("a.swift"), changedFile("b.swift")], client: client, hideWhitespace: true)
+        loader.load(
+            changeset: [changedFile("a.swift"), changedFile("b.swift")], client: client, repository: testRepository,
+            hideWhitespace: true)
         #expect(await eventually { await client.waitingWorktreePaths.contains("a.swift") })
         #expect(loader.content == nil, "the held first file holds the whole prefix back")
 
-        loader.load(changeset: [changedFile("c.swift")], client: client, hideWhitespace: true)
+        loader.load(
+            changeset: [changedFile("c.swift")], client: client, repository: testRepository, hideWhitespace: true)
         #expect(
             await eventually { await changesetDocument(loader.content)?.sections.map(\.file.path) == ["c.swift"] })
         #expect(await eventually { await !loader.hasActiveWork })
@@ -51,14 +54,16 @@ struct DiffLoaderTests {
         let loader = DiffLoader(cache: plainDifftCache())
         let files = [changedFile("a.swift"), changedFile("b.swift")]
 
-        loader.load(changeset: files, client: client, hideWhitespace: true)
+        loader.load(changeset: files, client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await !loader.hasActiveWork })
         let first = changesetDocument(loader.content)?.loadID
         let styles = loader.styles?.id
         #expect(first != nil && styles != nil)
 
         await client.hold(worktree: ["a.swift"])
-        loader.load(changeset: files, client: client, hideWhitespace: true, preserveCurrentContent: true)
+        loader.load(
+            changeset: files, client: client, repository: testRepository, hideWhitespace: true,
+            preserveCurrentContent: true)
         #expect(await eventually { await client.waitingWorktreePaths.contains("a.swift") })
         #expect(changesetDocument(loader.content)?.loadID == first, "the previous document stays on screen")
         #expect(loader.styles?.id == styles, "with its styles")
@@ -77,10 +82,13 @@ struct DiffLoaderTests {
     @Test func aPreservedReloadOfAnEmptyListShowsNoChanges() async {
         let client = StubRepoClient(files: [])
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(changeset: [changedFile("a.swift")], client: client, hideWhitespace: true)
+        loader.load(
+            changeset: [changedFile("a.swift")], client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await !loader.hasActiveWork })
 
-        loader.load(changeset: [], client: client, hideWhitespace: true, preserveCurrentContent: true)
+        loader.load(
+            changeset: [], client: client, repository: testRepository, hideWhitespace: true,
+            preserveCurrentContent: true)
         #expect(loader.content == nil)
         #expect(await eventually { await !loader.isLoading })
         #expect(loader.content == nil)
@@ -92,11 +100,13 @@ struct DiffLoaderTests {
         let client = StubRepoClient(files: [])
         let loader = DiffLoader(cache: plainDifftCache())
         let a = changedFile("a.swift")
-        loader.load(file: a, client: client, hideWhitespace: true)
+        loader.load(file: a, client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await loader.content != nil })
 
         await client.hold(worktree: ["a.swift"])
-        loader.load(changeset: [a], client: client, hideWhitespace: true, preserveCurrentContent: true)
+        loader.load(
+            changeset: [a], client: client, repository: testRepository, hideWhitespace: true,
+            preserveCurrentContent: true)
         #expect(loader.content == nil, "the file's document is not kept")
         #expect(loader.isLoading)
 
@@ -111,7 +121,9 @@ struct DiffLoaderTests {
     /// the rows uncoloured or the previous file's colours.
     @Test func contentAndStylesArePublishedTogether() async {
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("a.swift"), client: StubRepoClient(files: []), hideWhitespace: true)
+        loader.load(
+            file: changedFile("a.swift"), client: StubRepoClient(files: []), repository: testRepository,
+            hideWhitespace: true)
 
         #expect(await eventually { await loader.content != nil })
         guard case let .text(document)? = loader.content else {
@@ -134,10 +146,10 @@ struct DiffLoaderTests {
         let client = StubRepoClient(files: [])
         let loader = DiffLoader(cache: cache, resultCache: resultCache)
 
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await loader.styles != nil })
         let first = loader.styles?.id
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await resultCache.stats.hits == 1 })
         #expect(await eventually { await !loader.isLoading })
         guard case let .text(document)? = loader.content else {
@@ -148,7 +160,7 @@ struct DiffLoaderTests {
         #expect(loader.styles?.id == first, "the snapshot on screen is kept")
 
         await client.set(worktree: Data([0, 1, 2]), for: "a.swift")
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await !loader.isLoading })
         guard case .binary? = loader.content else {
             Issue.record("binary expected")
@@ -186,7 +198,7 @@ struct DiffLoaderTests {
         await client.set(worktree: Data([0, 1, 2]), for: "blob.bin")
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         #expect(decodedWidth(loader.imagePreview?.new) == 7)
         guard case .undecodable? = loader.imagePreview?.old else {
@@ -195,7 +207,7 @@ struct DiffLoaderTests {
         }
         #expect(loader.styles == nil)
 
-        loader.load(file: changedFile("blob.bin"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("blob.bin"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         #expect(loader.imagePreview == nil)
     }
@@ -208,7 +220,7 @@ struct DiffLoaderTests {
         let renamed = ChangedFile(
             path: "logo.bin", originalPath: "logo.png", kind: .renamed, area: .unstaged, fingerprint: nil)
 
-        loader.load(file: renamed, client: client, hideWhitespace: true)
+        loader.load(file: renamed, client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         #expect(loader.imagePreview != nil)
     }
@@ -219,7 +231,9 @@ struct DiffLoaderTests {
         await client.set(worktree: try imageData(width: 7, height: 5), for: "new.png")
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(file: changedFile("new.png", kind: .untracked), client: client, hideWhitespace: true)
+        loader.load(
+            file: changedFile("new.png", kind: .untracked), client: client, repository: testRepository,
+            hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         #expect(loader.imagePreview?.old == nil)
         #expect(decodedWidth(loader.imagePreview?.new) == 7)
@@ -231,13 +245,13 @@ struct DiffLoaderTests {
         let client = try await clientWithLogo()
         let loader = DiffLoader(cache: plainDifftCache())
         let loadLogo = {
-            loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+            loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
             try #require(await waitUntilSettledOnBinary(loader))
             #expect(loader.imagePreview != nil)
         }
 
         try await loadLogo()
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(loader.imagePreview == nil, "cleared before the other file loads")
         #expect(await eventually { await !loader.isLoading })
         guard case .text? = loader.content else {
@@ -247,11 +261,12 @@ struct DiffLoaderTests {
         #expect(loader.imagePreview == nil)
 
         try await loadLogo()
-        loader.load(file: nil, client: client, hideWhitespace: true)
+        loader.load(file: nil, client: client, repository: testRepository, hideWhitespace: true)
         #expect(loader.imagePreview == nil)
 
         try await loadLogo()
-        loader.load(changeset: [changedFile("a.swift")], client: client, hideWhitespace: true)
+        loader.load(
+            changeset: [changedFile("a.swift")], client: client, repository: testRepository, hideWhitespace: true)
         #expect(loader.imagePreview == nil)
         #expect(await eventually { await !loader.hasActiveWork })
     }
@@ -261,11 +276,11 @@ struct DiffLoaderTests {
     @Test func aSameFileReloadKeepsThePreviewUntilTheReplacementIsPublished() async throws {
         let client = try await clientWithLogo()
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
 
         await client.set(worktree: try imageData(width: 3, height: 9), for: "logo.png")
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(loader.isLoading)
         #expect(decodedWidth(loader.imagePreview?.new) == 7, "the previous preview stays while reloading")
         try #require(await waitUntilSettledOnBinary(loader))
@@ -277,11 +292,11 @@ struct DiffLoaderTests {
     @Test func aSameFileReloadThatIsNoLongerAnImageDropsThePreview() async throws {
         let client = try await clientWithLogo()
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
 
         await client.set(worktree: Data("text".utf8), for: "logo.png")
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await !loader.isLoading })
         guard case .text? = loader.content else {
             Issue.record("text expected")
@@ -290,7 +305,7 @@ struct DiffLoaderTests {
         #expect(loader.imagePreview == nil)
 
         await client.set(worktree: Data([0, 1, 2]), for: "logo.png")
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         #expect(loader.imagePreview == nil)
     }
@@ -301,10 +316,10 @@ struct DiffLoaderTests {
         let client = try await clientWithLogo()
         await client.hold(worktree: ["logo.png"])
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("logo.png"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("logo.png"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await client.waitingWorktreePaths.contains("logo.png") })
 
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(await eventually { await !loader.isLoading })
         await client.release(worktree: "logo.png")
         try? await Task.sleep(for: .milliseconds(100))
@@ -335,7 +350,7 @@ struct DiffLoaderTests {
         await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("icon.svg"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnText(loader))
         guard case let .text(document)? = loader.content else {
             Issue.record("text expected")
@@ -351,7 +366,7 @@ struct DiffLoaderTests {
         await client.set(worktree: Data("not svg at all".utf8), for: "icon.svg")
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("icon.svg"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnText(loader))
         #expect(loader.imagePreview == nil)
     }
@@ -366,7 +381,7 @@ struct DiffLoaderTests {
         let renamed = ChangedFile(
             path: "icon.svg", originalPath: "a.png", kind: .renamed, area: .unstaged, fingerprint: nil)
 
-        loader.load(file: renamed, client: client, hideWhitespace: true)
+        loader.load(file: renamed, client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnBinary(loader))
         guard case let .decoded(old)? = loader.imagePreview?.old, case let .decoded(new)? = loader.imagePreview?.new
         else {
@@ -386,7 +401,7 @@ struct DiffLoaderTests {
         let renamed = ChangedFile(
             path: "icon.bin", originalPath: "icon.svg", kind: .renamed, area: .unstaged, fingerprint: nil)
 
-        loader.load(file: renamed, client: client, hideWhitespace: true)
+        loader.load(file: renamed, client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnText(loader))
         #expect(decodedWidth(loader.imagePreview?.new) == 40)
     }
@@ -397,10 +412,45 @@ struct DiffLoaderTests {
         await client.set(worktree: svgData(width: 12, height: 8), for: "new.svg")
         let loader = DiffLoader(cache: plainDifftCache())
 
-        loader.load(file: changedFile("new.svg", kind: .untracked), client: client, hideWhitespace: true)
+        loader.load(
+            file: changedFile("new.svg", kind: .untracked), client: client, repository: testRepository,
+            hideWhitespace: true)
         try #require(await waitUntilSettledOnText(loader))
         #expect(loader.imagePreview?.old == nil)
         #expect(decodedWidth(loader.imagePreview?.new) == 12)
+    }
+
+    /// An SVG is never served from a reused result, so its text and preview both come
+    /// from the bytes read now, not from the blob the registered result was built from.
+    @Test func aRegisteredSVGIsReadAgainSoTextAndPreviewMatch() async throws {
+        let probe = RunnerProbe()
+        let cache = DifftCache(runner: { old, new, fileName, qos in
+            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
+        })
+        let resultCache = DiffResultCache()
+        let client = StubRepoClient(files: [])
+        let file = changedFile("icon.svg", area: .staged)
+        await client.set(blob: Data("head icon.svg".utf8), for: objectID("head-icon.svg"))
+        await client.set(blob: svgData(width: 40, height: 20), for: objectID("index-icon.svg"))
+        _ = try await DiffEngine.load(
+            file, repository: testRepository, client: client, hideWhitespace: true, cache: cache,
+            resultCache: resultCache, priority: .foreground, highlight: { _, _ in nil })
+        let inputs = DiffResultCache.InputKey(
+            repository: testRepository, fileID: file.id, fingerprint: file.fingerprint, hideWhitespace: true)
+        try #require(await resultCache.entry(forInputs: inputs) != nil)
+
+        // The index moves on while status still reports the old blob.
+        let current = svgData(width: 60, height: 30)
+        await client.set(index: current, for: "icon.svg")
+        let loader = DiffLoader(cache: cache, resultCache: resultCache)
+        loader.load(file: file, client: client, repository: testRepository, hideWhitespace: true)
+        try #require(await waitUntilSettledOnText(loader))
+        guard case let .text(document)? = loader.content else {
+            Issue.record("text expected")
+            return
+        }
+        #expect(document.newLines == [String(decoding: current, as: UTF8.self)])
+        #expect(decodedWidth(loader.imagePreview?.new) == 60)
     }
 
     /// Selecting a source file after an SVG clears the preview, as for any other selection.
@@ -408,11 +458,11 @@ struct DiffLoaderTests {
         let client = StubRepoClient(files: [])
         await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
         let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("icon.svg"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("icon.svg"), client: client, repository: testRepository, hideWhitespace: true)
         try #require(await waitUntilSettledOnText(loader))
         #expect(loader.imagePreview != nil)
 
-        loader.load(file: changedFile("a.swift"), client: client, hideWhitespace: true)
+        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
         #expect(loader.imagePreview == nil)
         try #require(await waitUntilSettledOnText(loader))
         #expect(loader.imagePreview == nil)

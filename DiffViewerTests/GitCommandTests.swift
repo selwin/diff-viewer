@@ -1487,6 +1487,23 @@ import Testing
         #expect(try await repo.client.worktreeContents(of: "gone.txt") == nil)
     }
 
+    /// Nil for an id git has no blob for, whether no object has it or it names a commit,
+    /// as a gitlink's does.
+    @Test func blobContentsReadsABlobByIDAndIsNilForAnythingElse() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        try await repo.prepareForCommits()
+        try repo.write("a.txt", "one\n")
+        try await repo.git(["add", "a.txt"])
+        let blob = try await repo.git(["rev-parse", ":a.txt"])
+        try await repo.git(["commit", "-q", "-m", "One"])
+        let commit = try await repo.git(["rev-parse", "HEAD"])
+
+        #expect(try await repo.client.blobContents(blob) == Data("one\n".utf8))
+        #expect(try await repo.client.blobContents(String(repeating: "1", count: 40)) == nil)
+        #expect(try await repo.client.blobContents(commit) == nil)
+    }
+
     @Test func worktreeContentsThrowsForAFileItCannotRead() async throws {
         let repo = try Repo()
         try await repo.initialize()

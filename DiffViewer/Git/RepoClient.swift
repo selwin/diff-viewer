@@ -58,6 +58,12 @@ protocol RepoClient: Sendable {
     /// other read failure throws: reporting an unreadable file as absent would draw a
     /// modified file as deleted.
     func worktreeContents(of path: String) async throws -> Data?
+    /// The bytes of the blob `oid`, or nil when git has no blob by that id (missing, or
+    /// another kind of object such as a gitlink's commit). Every other failure throws.
+    func blobContents(_ oid: String) async throws -> Data?
+    /// How `stat` describes `path` in the working tree, for checking that a file did not
+    /// change while it was read.
+    func worktreeState(of path: String) async -> DiffInputFingerprint.Worktree
     /// Runs `action` over every path in one git process, throwing git's stderr if it
     /// refuses. An empty list does nothing. All whole-file: nothing here edits contents.
     func perform(_ action: GitFileAction, on paths: [String]) async throws

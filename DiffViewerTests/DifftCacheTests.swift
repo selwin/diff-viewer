@@ -143,7 +143,7 @@ struct DifftCacheTests {
         #expect(await again.value != nil)
     }
 
-    @Test func entryBoundEvictsOldestCompletedResult() async {
+    @Test func entryBoundEvictsLeastRecentlyUsedResult() async {
         let probe = RunnerProbe()
         var limits = DifftCache.Limits()
         limits.entries = 2
@@ -158,7 +158,7 @@ struct DifftCacheTests {
         #expect(await cache.stats.evictions == 2)
     }
 
-    @Test func byteBudgetEvictsOldestCompletedResults() async {
+    @Test func byteBudgetEvictsLeastRecentlyUsedResults() async {
         let probe = RunnerProbe()
         await probe.changes(perLine: 10)
         var limits = DifftCache.Limits()

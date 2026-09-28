@@ -38,10 +38,10 @@ Where DiffViewer stands versus the bar:
 ## Requested
 
 Items Selwin asked for. They take priority over the "Next" list below. Earlier requests
-(per-file churn, the sidebar context menu, multi-selection with bulk actions) have
-shipped and are gone from here.
+(per-file churn, the sidebar context menu, multi-selection with bulk actions, the copy
+button on git error alerts, moved-code detection) have shipped and are gone from here.
 
-### C. Branch state in the title bar (remainder)
+### A. Branch state in the title bar (remainder)
 
 The branch picker landed on 2026-09-18. Still open from the original request:
 
@@ -56,7 +56,7 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 
 ---
 
-### G. Keyboard shortcuts for staging and committing (requested 2026-09-23)
+### B. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. The
 Changes menu (Stage S, Unstage U, Discard Changes…, Move to Trash…, active while the
@@ -74,39 +74,26 @@ file after staging or unstaging have landed; what remains is below.
 
 ---
 
-### I. Copy from the commit and branch pickers (requested 2026-09-24)
+### C. Copy from the branch picker (requested 2026-09-24)
 
-**Goal.** Hovering over a commit or branch row offers a way to copy it, so a hash or
-branch name can go into a terminal, review, or chat without retyping. Neither picker
-has any copy today.
+**Goal.** Hovering over a branch row offers a way to copy its name, so it can go into a
+terminal, review, or chat without retyping. The commit picker's copy button has landed;
+the branch picker has no copy yet.
 
 **Design.**
-- On hover (and keyboard highlight), a small copy button appears on the row. In the
-  commit picker it copies the full hash; in the branch picker it copies the branch name.
-  It sits in the row's accessory slot next to the branch sync buttons, and a click never
-  activates the row.
-- A right-click menu offers the same, plus Copy Short Hash and Copy Subject for commits.
-- ⌘C copies the highlighted row's hash or name.
-- Brief "Copied" feedback on the button; an accessibility custom action ("Copy hash",
-  "Copy branch name").
-
-**Tests.** None beyond what the pasteboard string is for each row kind; UI, checked by
-screenshot.
-
----
-
-### K. Copy button on every git error alert (requested 2026-09-24)
-
-**Goal.** The Commit Failed alert has a copy button in the corner of its output. Other
-git errors (stage, discard, sync) still show a plain "Error" alert with no copy button,
-where a short message sits in informative text that can't be selected. Give them the same
-button (`ErrorAlert`, `.generic` style).
+- On hover (and keyboard highlight), a small copy button appears on the row, as it does
+  on a commit row, and copies the branch name. It sits in the row's accessory slot next
+  to the sync buttons, and a click never activates the row.
+- A right-click menu offers the same.
+- ⌘C copies the highlighted row's name.
+- Brief "Copied" feedback on the button; an accessibility custom action ("Copy branch
+  name").
 
 **Tests.** None; UI, checked by screenshot.
 
 ---
 
-### L. Tab indicator when a repository has changes (requested 2026-09-24)
+### D. Tab indicator when a repository has changes (requested 2026-09-24)
 
 **Goal.** With several repositories open as tabs, you can see from the tab bar which
 ones have diffs to read without switching to each. Sublime Merge does this, and it's
@@ -129,7 +116,7 @@ windows, if one is added, gets tests for when it runs.
 
 ---
 
-### M. Redesign how renames and file paths look (requested 2026-09-24)
+### E. Redesign how renames and file paths look (requested 2026-09-24)
 
 **Goal.** Make moved and renamed files, and file paths in general, read clearly in the
 sidebar, the single-file view and the All changes view, and make the three consistent.
@@ -157,10 +144,10 @@ sidebar, the single-file view and the All changes view, and make the three consi
 
 ---
 
-### Q. Rework the All changes file header (requested 2026-09-26)
+### F. Rework the All changes file header (requested 2026-09-26)
 
 **Goal.** The per-file section header in All changes needs a redesign. The
-"Renamed without changes" sections look especially bad. Goes with item M, which
+"Renamed without changes" sections look especially bad. Goes with item E, which
 covers rename and path display.
 
 **Today** (screenshot of an Android repo, 2026-09-26).
@@ -173,7 +160,7 @@ covers rename and path display.
   nothing to read.
 - A binary rename says "Binary file" and doesn't mention the rename; only the `R` badge
   shows it (`DiffPaneView+Changeset.swift` `notice`).
-- The old path truncates at the tail, so it loses the file name (see M).
+- The old path truncates at the tail, so it loses the file name (see E).
 
 **To decide.**
 - Whether the header spans both panes as one bar instead of being split at the divider.
@@ -185,43 +172,7 @@ covers rename and path display.
 
 ---
 
-### S. Show where code moved (requested 2026-09-27)
-
-**Goal.** When a block is cut from one place and pasted in another, say so. Today a move
-reads as a deletion in one place and an unrelated insertion in another, and the reader
-has to spot that the two match. None of the three competitors does this; git's
-`--color-moved` does it in the terminal. Insertions, deletions and modifications keep
-their current look. This replaces the earlier plan for connector bands on every change
-block and absorbs "Moved-code detection" from the Later list.
-
-**Design.**
-- Detection is ours: difft reports no moves. A `MoveDetector` in `DiffViewer/Diff` runs
-  after `DiffAligner` and matches runs of old-side lines in changed rows against runs of
-  new-side lines in changed rows, comparing lines with leading and trailing whitespace
-  trimmed so a re-indented move still counts. It keeps the longest runs first.
-- Match by each side's text, not the row kind: `DiffAligner.zip` pairs unrelated
-  deletions and insertions into modified rows, so moved text often sits in a modified
-  row.
-- A run is a move only if it is large enough (git's bar is 20 alphanumeric characters)
-  and its two ends are in different change blocks, so `}`, blank lines and in-place
-  edits never count. A block pasted twice matches its longest destination only.
-- `DiffDocument` carries the moves as old and new line ranges. In All changes,
-  `ChangesetBuilder` offsets each file's moves; moves across files are out of scope.
-- Moved lines get their own tint (purple, say) instead of red or green, and a small
-  marker in the line-number column. Clicking the marker scrolls to the other end
-  through `scroll(toRow:)`.
-- Second step, only if tint and jump are not enough: when both ends are on screen, a
-  band in a gutter between the panes joins the source rows to the destination rows,
-  with an up or down stub when the other end is off screen. The gutter redraws on
-  either pane's scroll and during the scroll sync, never a frame behind.
-
-**Tests.** Moves found for a moved block, a moved and re-indented block, a block below
-the size bar (no move), a move beside an in-place edit, and a block pasted twice. The
-changeset offsets for moves in the second file.
-
----
-
-### T. Compare any two commits or branches (requested 2026-09-27)
+### G. Compare any two commits or branches (requested 2026-09-27)
 
 **Goal.** Pick two refs (commit, branch, tag, or the working tree) and read the diff
 between them, e.g. a feature branch against `main` before opening a PR, or two commits
@@ -247,7 +198,7 @@ that includes renames.
 
 ---
 
-### U. Hunk-level staging (requested 2026-09-27)
+### H. Hunk-level staging (requested 2026-09-27)
 
 **Goal.** Stage, unstage or discard one change block instead of the whole file, so a
 file with an unrelated edit can be committed in pieces. Sublime Merge has it on every
@@ -273,7 +224,7 @@ middle of a file, and staging, unstaging and discarding one hunk in a temporary 
 
 ---
 
-### W. Show the function or method a change is in (requested 2026-09-27)
+### I. Show the function or method a change is in (requested 2026-09-27)
 
 **Goal.** When reading a change, see which function, method or type it belongs to
 without scrolling up to find the signature. Today a change deep inside a long method,
@@ -301,7 +252,7 @@ functions.
 
 ---
 
-### X. Don't highlight unchanged lines for difft's re-nested delimiters (requested 2026-09-27)
+### J. Don't highlight unchanged lines for difft's re-nested delimiters (requested 2026-09-27)
 
 **Goal.** A line whose text didn't change shouldn't light up as a change just because
 difftastic re-paired its brackets. Found in a scratch repo where a top-level
@@ -337,7 +288,7 @@ a non-delimiter token (unchanged behaviour).
 
 ---
 
-### Y. Title bar pickers and commit picker design (requested 2026-09-28)
+### K. Title bar pickers and commit picker design (requested 2026-09-28)
 
 **Goal.** Refine how the branch and commit pickers look in the title bar, and redesign
 the commit picker popover to match the branch picker.
@@ -358,7 +309,7 @@ screenshot.
 
 ---
 
-### Z. Explain a resolved conflict that matches HEAD (requested 2026-09-28)
+### L. Explain a resolved conflict that matches HEAD (requested 2026-09-28)
 
 **Goal.** A conflicted file whose resolution equals HEAD shouldn't read as a
 contradiction. Found while merging `main` into `consolidate-quick-wins` (PR #41): the
@@ -416,7 +367,7 @@ Roughly in priority order.
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
 - **Sidebar action follow-ups.** Stage All / Unstage All and next-file selection are
-  item G under "Requested". Still open: Stage All / Unstage All buttons on the Changes
+  item B under "Requested". Still open: Stage All / Unstage All buttons on the Changes
   header and the staging tray header; one-step discard of a staged change
   (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
@@ -516,9 +467,9 @@ Roughly in priority order.
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
 - **Folder compare, blame, file history.** Non-goals in CLAUDE.md. Sublime Merge's blame
   is a git-client feature, not a viewer feature. Comparing two refs is now requested
-  (item T), and commit browsing shipped as the commit picker.
+  (item G), and commit browsing shipped as the commit picker.
 - **Hunk cherry-picking** (Sublime Merge). Hunk-level staging and discarding are now
-  requested (item U); moving hunks between commits is not.
+  requested (item H); moving hunks between commits is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.

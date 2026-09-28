@@ -14,6 +14,9 @@ func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
     return await condition()
 }
 
+/// The repository loads in tests belong to; only its identity matters.
+let testRepository = RepositoryRoot(path: "/repo")
+
 /// A working-tree file carries a deterministic fingerprint derived from its path, area and
 /// kind, known for every kind but `.unmerged`, whose `old` is `.unknown` as the parser
 /// leaves it. A commit-scope file has none, as the real client produces.

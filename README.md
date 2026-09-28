@@ -172,6 +172,8 @@ make hooks
 **Data flow.** Open request → `WindowCoordinator` → `WindowState` → file list. A selection
 goes to `DiffLoader` → `DiffEngine` (git sources) → difft and `LineDiff` → `DiffAligner` →
 `DiffDocument` rows → two `DiffPaneView`s. Highlighting arrives later as `DocumentStyles`.
+`DiffEngine` reuses a finished text diff without reading its sources when git status shows
+the file unchanged.
 With All changes selected, a `ChangesetAssembler` diffs and highlights files in sidebar
 order on three workers and publishes a growing `ChangesetDocument` that the panes append
 in place. Only visible windows load diffs, and only the key window is prefetched.

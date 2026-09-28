@@ -318,6 +318,26 @@ struct GitClient: RepoClient {
         }
     }
 
+    /// Reads a blob by id, so a read cannot see an index or HEAD that moved after status.
+    func blobContents(_ oid: String) async throws -> Data? {
+        try Self.rejectOption(oid, kind: "object id", command: "git cat-file blob")
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["cat-file", "blob", oid],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        if result.status == 0 { return result.stdout }
+        // "bad file" covers both a missing object and one that is not a blob.
+        let stderr = result.stderrString
+        if stderr.contains("bad file") || stderr.contains("Not a valid object name") { return nil }
+        throw ProcessError.failed(command: "git cat-file blob \(oid)", status: result.status, stderr: stderr)
+    }
+
+    func worktreeState(of path: String) async -> DiffInputFingerprint.Worktree {
+        DiffInputFingerprint.worktree(at: repoRoot.appendingPathComponent(path))
+    }
+
     /// Whether an error from a file read means "not there". `Data(contentsOf:)` reports it
     /// as a Cocoa error; the POSIX spelling is kept for reads that come up from lower down.
     private static func isMissingFile(_ error: Error) -> Bool {
