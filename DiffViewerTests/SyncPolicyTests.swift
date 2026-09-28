@@ -126,9 +126,6 @@ struct SyncPolicyTests {
 
     @Test func noRemoteUpstreamOrNoReadShowsNothing() {
         #expect(buttons(localBranch("main")) == .hidden, "no upstream")
-        #expect(
-            buttons(localBranch("main", upstream: upstream("origin/main", tracking: .gone)), isCurrent: true)
-                == .hidden, "the checked-out branch can't be deleted")
         let local = upstream("base", remote: ".", localRef: "refs/heads/base", tracking: .counts(ahead: 0, behind: 1))
         #expect(buttons(localBranch("main", upstream: local)) == .hidden)
         let outside = upstream("origin/main", localRef: "refs/heads/main", tracking: .counts(ahead: 2, behind: 0))

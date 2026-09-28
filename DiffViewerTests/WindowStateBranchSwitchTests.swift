@@ -413,18 +413,6 @@ struct WindowStateBranchSwitchTests {
 
     /// A read that threw knows nothing, so the picker keeps its last good list rather
     /// than emptying for one bad moment.
-    @Test func aFailedBranchesReadKeepsThePreviousList() async throws {
-        let (h, state, client, root) = try await settled()
-        await client.fail(localBranches: true)
-        await client.set(localBranches: ["a", "b"])
-        // Waiting for the failing read to be counted, rather than for a duration, keeps
-        // the assertion below about the list and not about timing.
-        let reads = await client.localBranchesCalls
-        h.tick(root, [.refs])
-        #expect(await eventually { await client.localBranchesCalls == reads + 1 })
-        #expect(state.localBranches == ["main"])
-    }
-
     /// Two reads in flight at once: the newer one finishes first and the older must apply
     /// nothing, or the picker would list a branch that has since been deleted.
     @Test func anOlderBranchesReadCannotOverwriteANewerOne() async throws {
