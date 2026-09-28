@@ -54,8 +54,8 @@ final class BranchPickerContainerView: NSView {
     private var scrollObserver: (any NSObjectProtocol)?
     /// Refreshes the header's fetch text so its relative time doesn't stay "just now".
     private var fetchTimeTimer: Timer?
-    /// The height the popover asks for: the full list's, up to the maximum. Held while a
-    /// query filters the list, so the popover doesn't shrink under the reader's typing.
+    /// The height the popover asks for: the full list's, up to the maximum. It only grows
+    /// while the popover is up, so neither a query nor a removed row makes it shrink.
     private(set) var preferredHeight: CGFloat = 0
 
     init(state: BranchPickerState) {
@@ -158,12 +158,14 @@ final class BranchPickerContainerView: NSView {
         // A reload can move or drop the table's selection; none of that is the reader's.
         isApplyingSelection = true
         let change = state.apply(snapshot)
+        var isAnimatingRows = false
         switch change.rows {
         case .none:
             break
-        case let .incremental(inserted, refreshed):
-            if let inserted {
-                tableView.insertRows(at: IndexSet(integersIn: inserted), withAnimation: [])
+        case let .update(removed, inserted, refreshed):
+            if !removed.isEmpty || !inserted.isEmpty {
+                animateRows(removed: removed, inserted: inserted)
+                isAnimatingRows = true
             }
             if !refreshed.isEmpty {
                 tableView.reloadData(forRowIndexes: refreshed, columnIndexes: [0])
@@ -173,18 +175,40 @@ final class BranchPickerContainerView: NSView {
             tableView.reloadData()
         }
         isApplyingSelection = false
+        // Before the restyle below, so a highlight that moved eases its pills in.
+        syncSelection()
         // Reloaded cells configured their buttons already; the others are restyled here.
         if change.buttonsChanged {
             let visible = tableView.rows(in: tableView.visibleRect)
             updateRows(visible.lowerBound..<visible.upperBound, animated: false)
         }
-        syncSelection()
         renderChrome()
         updatePreferredHeight()
         // Rows that arrive after the first layout get the initial reveal here: layout
         // may not run again.
         revealInitialHighlightIfReady()
-        tableView.refreshHover()
+        // Rows still sliding are re-read once they settle.
+        if !isAnimatingRows { tableView.refreshHover() }
+    }
+
+    /// Rows that go fade out as the rows below slide up over them; new rows fade in as the
+    /// rows below make room. Reduce Motion snaps instead.
+    private func animateRows(removed: IndexSet, inserted: IndexSet) {
+        // A press in flight names a row by index, and the indices are about to shift.
+        tableView.cancelPress()
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        NSAnimationContext.runAnimationGroup { context in
+            if reduceMotion { context.duration = 0 }
+            // Fades only: a slide effect collapses the row's frame, and with it the cell's
+            // content and selection fill, before the animation starts.
+            let effect: NSTableView.AnimationOptions = reduceMotion ? [] : .effectFade
+            tableView.beginUpdates()
+            tableView.removeRows(at: removed, withAnimation: effect)
+            tableView.insertRows(at: inserted, withAnimation: effect)
+            tableView.endUpdates()
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated { self?.tableView.refreshHover() }
+        }
     }
 
     /// Moves the table's selection to the highlight without scrolling. The rows' colours
@@ -366,6 +390,8 @@ final class BranchPickerContainerView: NSView {
     }
 
     /// Recomputed from the unfiltered list only; SwiftUI reads it through `sizeThatFits`.
+    /// It never shrinks while the popover is up: SwiftUI resizes a popover without
+    /// animation, so a shorter list would snap the footer up over rows still fading out.
     private func updatePreferredHeight() {
         guard state.query.isEmpty else { return }
         let list = state.items.reduce(CGFloat(0)) { total, item in
@@ -373,7 +399,7 @@ final class BranchPickerContainerView: NSView {
         }
         let chrome = header.fittingHeight + Self.gap + Self.searchHeight + Self.listGap + Self.footerHeight
         let height = min(chrome + max(list, Self.emptyListHeight), BranchPickerMetrics.maximumHeight).rounded(.up)
-        guard height != preferredHeight else { return }
+        guard height > preferredHeight else { return }
         preferredHeight = height
         invalidateIntrinsicContentSize()
     }
@@ -515,83 +541,5 @@ extension BranchPickerContainerView: NSSearchFieldDelegate {
         default: return false
         }
         return true
-    }
-}
-
-/// A search field without a bezel, drawn over a `RoundedFillView`.
-final class FilledSearchField: NSSearchField {
-    override static var cellClass: AnyClass? {
-        get { FilledSearchFieldCell.self }
-        set {}
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        isBezeled = false
-        isBordered = false
-        drawsBackground = false
-        focusRingType = .none
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-}
-
-/// Without a bezel the cell no longer keeps its text clear of the magnifier and the clear
-/// button, so it is told where each goes, and the drawn text and the field editor are
-/// both put in the text's place.
-final class FilledSearchFieldCell: NSSearchFieldCell {
-    private static let buttonWidth: CGFloat = 22
-
-    override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        searchTextRect(forBounds: rect)
-    }
-
-    override func select(
-        withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int,
-        length selLength: Int
-    ) {
-        super.select(
-            withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate,
-            start: selStart, length: selLength)
-    }
-
-    override func edit(
-        withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?
-    ) {
-        super.edit(
-            withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate,
-            event: event)
-    }
-
-    override func searchButtonRect(forBounds rect: NSRect) -> NSRect {
-        NSRect(x: rect.minX, y: rect.minY, width: Self.buttonWidth, height: rect.height)
-    }
-
-    override func searchTextRect(forBounds rect: NSRect) -> NSRect {
-        let inset = Self.buttonWidth + 2
-        return NSRect(x: rect.minX + inset, y: rect.minY, width: max(rect.width - inset * 2, 0), height: rect.height)
-    }
-
-    override func cancelButtonRect(forBounds rect: NSRect) -> NSRect {
-        NSRect(x: rect.maxX - Self.buttonWidth, y: rect.minY, width: Self.buttonWidth, height: rect.height)
-    }
-}
-
-/// A quiet capsule fill, behind a borderless control.
-final class RoundedFillView: NSView {
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        clipsToBounds = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func draw(_ dirtyRect: NSRect) {
-        // Tuned to read as #F1F1F2 on the light popover; labelColor keeps dark mode in step.
-        NSColor.labelColor.withAlphaComponent(0.05).setFill()
-        let radius = bounds.height / 2
-        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 }

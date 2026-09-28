@@ -224,10 +224,24 @@ struct BranchPickerHeaderText: Equatable {
     }
 }
 
+/// What the branch table must do after a snapshot or a query.
+enum BranchTableChange: Equatable {
+    case none
+    /// `removed` indexes the old items; `inserted` and `refreshed` the new ones. Rows that
+    /// stay keep their cells, so the table can slide them into place.
+    case update(removed: IndexSet, inserted: IndexSet, refreshed: IndexSet)
+    case reloadAll
+
+    /// Rows whose content changed, with none coming or going.
+    static func refresh(_ rows: IndexSet) -> BranchTableChange {
+        .update(removed: [], inserted: [], refreshed: rows)
+    }
+}
+
 /// What the table must do after a snapshot. Row buttons change apart from the rows, so a
 /// busy state coming and going restyles buttons without reloading any row.
 struct BranchPickerChange: Equatable {
-    var rows: PickerTableChange
+    var rows: BranchTableChange
     var buttonsChanged: Bool
 }
 
@@ -450,29 +464,62 @@ struct BranchPickerState {
     mutating func apply(_ new: BranchPickerSnapshot) -> BranchPickerChange {
         guard new != snapshot else { return BranchPickerChange(rows: .none, buttonsChanged: false) }
         let old = snapshot
-        let oldButtons = rows.map { Self.syncButtons(for: $0, snapshot: old) }
+        // By branch, since rows can come and go: only rows that stay can have changed buttons.
+        let oldButtons = Dictionary(
+            rows.map { ($0.id, Self.syncButtons(for: $0, snapshot: old)) }, uniquingKeysWith: { first, _ in first })
         snapshot = new
         let rowChange = applyItems(new, old: old)
-        let buttonsChanged = rows.map { Self.syncButtons(for: $0, snapshot: new) } != oldButtons
+        let buttonsChanged = rows.contains { row in
+            oldButtons[row.id].map { $0 != Self.syncButtons(for: row, snapshot: new) } ?? false
+        }
         return BranchPickerChange(rows: rowChange, buttonsChanged: buttonsChanged)
     }
 
-    private mutating func applyItems(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
+    private mutating func applyItems(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> BranchTableChange {
         let oldItems = items
         items = Self.makeItems(snapshot: new, grouping: grouping, query: query)
-        // Keep the highlight by identity across list reloads.
-        if !items.contains(where: { $0.row?.id == highlightedRow }) {
-            highlightedRow = Self.initialHighlight(items: items, query: query)
-        }
-        guard oldItems.map(\.key) == items.map(\.key) else { return .reloadAll }
+        keepHighlight(oldItems: oldItems)
+        // A list appearing or emptying swaps with the empty state: there is nothing to slide.
+        guard oldItems.isEmpty == items.isEmpty else { return .reloadAll }
+        // A moved row is a removal and an insertion; the rows between slide.
+        let difference = items.map(\.key).difference(from: oldItems.map(\.key))
+        let removed = IndexSet(difference.removals.map(Self.offset))
+        let inserted = IndexSet(difference.insertions.map(Self.offset))
+        let stayed = zip(
+            oldItems.indices.filter { !removed.contains($0) }, items.indices.filter { !inserted.contains($0) })
         // The cells hold whether a row can activate: a switch flag changing reaches every
         // row, and a delete starting or ending reaches its own.
-        if new.isSwitchingBranch != old.isSwitchingBranch {
-            return .incremental(inserted: nil, refreshed: IndexSet(items.indices))
+        let switchChanged = new.isSwitchingBranch != old.isSwitchingBranch
+        var refreshed = IndexSet(stayed.filter { switchChanged || oldItems[$0] != items[$1] }.map { $1 })
+        refreshed.formUnion(deleteChangedRows(new, old: old).subtracting(inserted))
+        guard !removed.isEmpty || !inserted.isEmpty || !refreshed.isEmpty else { return .none }
+        return .update(removed: removed, inserted: inserted, refreshed: refreshed)
+    }
+
+    private static func offset(of change: CollectionDifference<BranchPickerItem.Key>.Change) -> Int {
+        switch change {
+        case let .insert(offset, _, _), let .remove(offset, _, _): offset
         }
-        var refreshed = IndexSet(items.indices.filter { oldItems[$0] != items[$0] })
-        refreshed.formUnion(deleteChangedRows(new, old: old))
-        return refreshed.isEmpty ? .none : .incremental(inserted: nil, refreshed: refreshed)
+    }
+
+    /// Keeps the highlight by identity. When its row goes, a neighbour takes it, so the
+    /// highlight stays where the reader was looking rather than jumping to the top.
+    private mutating func keepHighlight(oldItems: [BranchPickerItem]) {
+        let listed = Set(rows.map(\.id))
+        if let highlightedRow, listed.contains(highlightedRow) { return }
+        highlightedRow =
+            highlightedRow.flatMap { Self.neighbour(of: $0, in: oldItems, listed: listed) }
+            ?? Self.initialHighlight(items: items, query: query)
+    }
+
+    /// The branch after `id` in `oldItems` that is still listed, else the one before it.
+    private static func neighbour(
+        of id: BranchRowID, in oldItems: [BranchPickerItem], listed: Set<BranchRowID>
+    ) -> BranchRowID? {
+        guard let index = oldItems.firstIndex(where: { $0.row?.id == id }) else { return nil }
+        let after = oldItems[(index + 1)...].lazy.compactMap(\.row?.id).first { listed.contains($0) }
+        let before = oldItems[..<index].reversed().lazy.compactMap(\.row?.id).first { listed.contains($0) }
+        return after ?? before
     }
 
     /// The rows of the branches whose delete started or ended between `old` and `new`.
@@ -491,7 +538,7 @@ struct BranchPickerState {
 
     /// Takes the search field's text. Lists are small, so any change reloads every row
     /// rather than diffing them.
-    mutating func setQuery(_ text: String) -> PickerTableChange {
+    mutating func setQuery(_ text: String) -> BranchTableChange {
         let normalized = FuzzyMatch.normalized(text)
         guard normalized != query else { return .none }
         query = normalized

@@ -279,13 +279,24 @@ final class SyncPillButton: NSButton {
         toolTip = if case let .disabled(reason) = state { reason } else { nil }
         isRunning = state == .running
         setAccessibilityLabel(isRunning ? "\(title), in progress" : title)
-        if isRunning {
+        updateSpinner()
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    /// Spins only while running and on screen: a row removed mid-operation leaves the
+    /// window once its fade ends, and its spinner must not keep going in the reuse queue.
+    private func updateSpinner() {
+        if isRunning, window != nil {
             spinner.startAnimation(nil)
         } else {
             spinner.stopAnimation(nil)
         }
-        needsLayout = true
-        needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateSpinner()
     }
 
     override var isHighlighted: Bool {

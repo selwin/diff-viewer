@@ -1,8 +1,8 @@
 import AppKit
 
 /// The branch picker's header: where HEAD is, a detail line for how far that branch is from
-/// its upstream and how the fetch went, the current branch's Pull and Push, and a round
-/// Fetch button that spins while a round runs. It draws no background of its own, so the
+/// its upstream and how the fetch went, a round Fetch button that spins while a round runs,
+/// and the current branch's Pull and Push after it. It draws no background of its own, so the
 /// header and the list share the popover's one surface.
 final class BranchPickerHeaderView: NSView {
     private static let topPadding: CGFloat = 13
@@ -97,11 +97,7 @@ final class BranchPickerHeaderView: NSView {
         var trailing = bounds.width - Self.sidePadding
         // Both controls carry a margin for their focus rings; the gaps are between the shapes.
         let margin = SyncPillButton.focusRingMargin
-        let fetchSide = FetchButton.frameSide
-        fetchButton.frame = NSRect(
-            x: trailing - fetchSide + margin, y: (centerY - fetchSide / 2).rounded(), width: fetchSide,
-            height: fetchSide)
-        trailing = fetchButton.frame.minX + margin - Self.controlGap
+        // Fetch comes first, left of Pull and Push, in the order Tab visits them.
         if !syncButtons.isHidden {
             let size = syncButtons.intrinsicContentSize
             syncButtons.frame = NSRect(
@@ -109,6 +105,11 @@ final class BranchPickerHeaderView: NSView {
                 height: size.height)
             trailing = syncButtons.frame.minX + margin - Self.controlGap
         }
+        let fetchSide = FetchButton.frameSide
+        fetchButton.frame = NSRect(
+            x: trailing - fetchSide + margin, y: (centerY - fetchSide / 2).rounded(), width: fetchSide,
+            height: fetchSide)
+        trailing = fetchButton.frame.minX + margin - Self.controlGap
         let textWidth = max(trailing - Self.sidePadding, 0)
         title.frame = NSRect(x: Self.sidePadding, y: Self.topPadding, width: textWidth, height: titleHeight)
         detail.frame = NSRect(
