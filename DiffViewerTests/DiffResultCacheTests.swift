@@ -14,7 +14,7 @@ private func key(_ name: String, fileName: String = "a.swift", hideWhitespace: B
 private func entry(rows: Int = 4) -> DiffResultCache.Entry {
     guard case let .text(document) = textContent(rows: rows, modified: [0..<1]) else { fatalError("text expected") }
     let runs = document.newLines.map { _ in [StyleRun(range: 0..<1, style: .keyword)] }
-    return DiffResultCache.Entry(document: document, styles: SyntaxStyles(old: runs, new: runs))
+    return DiffResultCache.Entry(document: document, styles: SyntaxStyles(old: runs, new: runs), sourceByteCount: 0)
 }
 
 struct DiffResultCacheTests {
@@ -39,9 +39,9 @@ struct DiffResultCacheTests {
 
     // MARK: Storage
 
-    /// The FIFO's rules live in `CostBoundedFIFOTests`; these check the cache passes its
+    /// The LRU's rules live in `CostBoundedLRUTests`; these check the cache passes its
     /// limits and each entry's cost through and counts each outcome in its stats.
-    @Test func theOldestEntryIsEvictedPastTheEntryLimit() async {
+    @Test func theLeastRecentlyUsedEntryIsEvictedPastTheEntryLimit() async {
         let cache = DiffResultCache(limits: DiffResultCache.Limits(entries: 2))
         for name in ["a", "b", "c"] { await cache.store(entry(), for: key(name)) }
         #expect(await cache.entry(for: key("a")) == nil)

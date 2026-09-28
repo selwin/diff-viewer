@@ -58,7 +58,7 @@ final class DiffLoader {
         return wasActive
     }
 
-    func load(file: ChangedFile?, client: (any RepoClient)?, hideWhitespace: Bool) {
+    func load(file: ChangedFile?, client: (any RepoClient)?, repository: RepositoryRoot?, hideWhitespace: Bool) {
         cancelActiveWork()
         let gen = generation
         changesetProgress = nil
@@ -69,7 +69,7 @@ final class DiffLoader {
             imagePreview = nil
             contentFileID = nil
         }
-        guard let file, let client else {
+        guard let file, let client, let repository else {
             content = nil
             imagePreview = nil
             contentFileID = nil
@@ -87,15 +87,26 @@ final class DiffLoader {
         errorMessage = nil
         task = Task {
             do {
-                let sources = try await DiffEngine.sources(for: file, client: client)
-                try Task.checkCancellation()
-                let output = try await DiffEngine.build(
-                    sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
-                    priority: .foreground)
-                try Task.checkCancellation()
-                // SVG stays a text diff, so it is previewed on its text content too.
                 let oldFormat = ImagePreview.format(for: file.originalPath ?? file.path)
                 let newFormat = ImagePreview.format(for: file.path)
+                // A file with a preview is always read, never reused, so its preview and its
+                // diff come from the same bytes.
+                let output: DiffEngine.Output
+                var imageSources: DiffEngine.Sources?
+                if oldFormat != nil || newFormat != nil {
+                    let sources = try await DiffEngine.sources(for: file, client: client)
+                    try Task.checkCancellation()
+                    output = try await DiffEngine.build(
+                        sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
+                        priority: .foreground)
+                    imageSources = sources
+                } else {
+                    output = try await DiffEngine.load(
+                        file, repository: repository, client: client, hideWhitespace: hideWhitespace, cache: cache,
+                        resultCache: resultCache, priority: .foreground)
+                }
+                try Task.checkCancellation()
+                // SVG stays a text diff, so it is previewed on its text content too.
                 let wantsPreview =
                     switch output.content {
                     case .binary: oldFormat != nil || newFormat != nil
@@ -103,7 +114,7 @@ final class DiffLoader {
                     default: false
                     }
                 var preview: ImagePreview?
-                if wantsPreview {
+                if wantsPreview, let sources = imageSources {
                     // A rename may name an image on one side only; that side's decoder
                     // is the best guess for the other's bytes.
                     let oldInput = (oldFormat ?? newFormat).flatMap { format in
@@ -144,13 +155,13 @@ final class DiffLoader {
     /// `preserveCurrentContent`, a changeset already on screen stays there and the
     /// replacement is published whole, in one step; an empty list still shows nothing.
     func load(
-        changeset files: [ChangedFile], client: (any RepoClient)?, hideWhitespace: Bool,
+        changeset files: [ChangedFile], client: (any RepoClient)?, repository: RepositoryRoot?, hideWhitespace: Bool,
         foldOptions: FoldOptions = FoldOptions(), preserveCurrentContent: Bool = false
     ) {
         cancelActiveWork()
         let gen = generation
         let onScreen = if case .changeset = content { true } else { false }
-        let preserved = preserveCurrentContent && client != nil && !files.isEmpty && onScreen
+        let preserved = preserveCurrentContent && client != nil && repository != nil && !files.isEmpty && onScreen
         imagePreview = nil
         if !preserved {
             content = nil
@@ -159,10 +170,11 @@ final class DiffLoader {
         }
         errorMessage = nil
         changesetProgress = nil
-        guard let client else { return }
+        guard let client, let repository else { return }
         isLoading = true
         let assembler = ChangesetAssembler(
-            files: files, client: client, hideWhitespace: hideWhitespace, foldOptions: foldOptions,
+            files: files, repository: repository, client: client, hideWhitespace: hideWhitespace,
+            foldOptions: foldOptions,
             publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache)
         task = Task { [weak self] in
             guard let self else { return }

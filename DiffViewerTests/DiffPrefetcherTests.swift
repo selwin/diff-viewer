@@ -68,6 +68,8 @@ struct TaggedClient: RepoClient {
     func headContents(of path: String) async throws -> Data? { nil }
     func contents(of path: String, at revision: String) async throws -> Data { Data() }
     func worktreeContents(of path: String) async throws -> Data? { nil }
+    func blobContents(_ oid: String) async throws -> Data? { nil }
+    func worktreeState(of path: String) async -> DiffInputFingerprint.Worktree { .unknown }
     func perform(_ action: GitFileAction, on paths: [String]) async throws {}
     func trash(_ paths: [String]) async throws {}
     func commitDefaults() async throws -> CommitDefaults { .none }

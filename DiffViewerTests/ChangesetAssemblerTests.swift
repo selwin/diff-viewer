@@ -70,7 +70,8 @@ struct ChangesetAssemblerTests {
     ) -> (assembler: ChangesetAssembler, log: PublicationLog, run: () -> Task<Void, Never>) {
         let log = PublicationLog()
         let assembler = ChangesetAssembler(
-            files: files(names), client: client, hideWhitespace: true, publication: publication, cache: cache,
+            files: files(names), repository: testRepository, client: client, hideWhitespace: true,
+            publication: publication, cache: cache,
             resultCache: resultCache, clock: clock, highlight: highlighter.callback())
         return (assembler, log, { Task { await assembler.run { await log.append($0) } } })
     }
@@ -198,6 +199,33 @@ struct ChangesetAssemblerTests {
         #expect(document?.sections.first?.rowRange.isEmpty == true)
         // Two calls per file, one per side, so the set is what matters.
         #expect(await eventually { await Set(highlighter.fileNames) == ["small.swift"] }, "the big file is skipped")
+    }
+
+    /// A reused result skips the read, so the byte cap applies to the size it recorded.
+    @Test func aReusedResultOverTheByteCapIsTooLarge() async {
+        let client = StubRepoClient(files: [])
+        let resultCache = DiffResultCache()
+        let file = changedFile("big.swift")
+        guard case let .text(document) = textContent(rows: 1, modified: [0..<1]) else { return }
+        let key = DiffResultCache.Key(
+            difftKey: DifftCache.key(old: Data(), new: Data("x".utf8), fileName: file.fileName), hideWhitespace: true)
+        await resultCache.store(
+            DiffResultCache.Entry(
+                document: document, styles: SyntaxStyles(old: nil, new: nil),
+                sourceByteCount: ChangesetLimits.maxSourceBytesPerFile + 1),
+            for: key)
+        await resultCache.register(
+            key,
+            forInputs: DiffResultCache.InputKey(
+                repository: testRepository, fileID: file.id, fingerprint: file.fingerprint, hideWhitespace: true))
+        if let worktree = file.fingerprint?.worktree {
+            await client.set(worktreeState: worktree, for: file.path)
+        }
+
+        let (_, log, run) = assemble(["big.swift"], client: client, resultCache: resultCache)
+        await run().value
+        #expect(await log.lastDocument?.sections.first?.outcome == .tooLarge)
+        #expect(await client.contentReads == 0, "nothing is read")
     }
 
     /// The file cap is applied in sidebar order before anything is read, so completion

@@ -36,6 +36,7 @@ actor ChangesetAssembler {
     static let publishInterval: Duration = .milliseconds(150)
 
     private let files: [ChangedFile]
+    private let repository: RepositoryRoot
     private let client: any RepoClient
     private let hideWhitespace: Bool
     /// The fold options every published revision is projected with, so the view installs
@@ -119,6 +120,7 @@ actor ChangesetAssembler {
 
     init(
         files: [ChangedFile],
+        repository: RepositoryRoot,
         client: any RepoClient,
         hideWhitespace: Bool,
         foldOptions: FoldOptions = FoldOptions(),
@@ -130,6 +132,7 @@ actor ChangesetAssembler {
         loadID: UUID = UUID()
     ) {
         self.files = files
+        self.repository = repository
         self.client = client
         self.hideWhitespace = hideWhitespace
         self.foldOptions = foldOptions
@@ -213,26 +216,20 @@ actor ChangesetAssembler {
     /// One file's outcome and its styles. Published results do not retain the source
     /// buffers.
     private func diff(_ file: ChangedFile) async throws -> (ChangesetBuilder.FileResult, SyntaxStyles?) {
-        let sources: DiffEngine.Sources
         do {
-            sources = try await DiffEngine.sources(for: file, client: client)
+            let output = try await DiffEngine.load(
+                file, repository: repository, client: client, hideWhitespace: hideWhitespace, cache: cache,
+                resultCache: resultCache, priority: .foreground,
+                maxSourceBytes: ChangesetLimits.maxSourceBytesPerFile, highlight: highlight)
+            return (.content(output.content), output.styles)
         } catch is CancellationError {
             throw CancellationError()
+        } catch is DiffEngine.SourcesTooLarge {
+            return (.tooLarge, nil)
         } catch {
             try Task.checkCancellation()
             return (.failed(error.localizedDescription), nil)
         }
-        try Task.checkCancellation()
-
-        // A computation-admission limit, not a memory one: the read has happened, but a
-        // huge file costs no diff and no highlighting.
-        guard sources.old.count + sources.new.count <= ChangesetLimits.maxSourceBytesPerFile else {
-            return (.tooLarge, nil)
-        }
-        let output = try await DiffEngine.build(
-            sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache, priority: .foreground,
-            highlight: highlight)
-        return (.content(output.content), output.styles)
     }
 
     // MARK: - Publishing
