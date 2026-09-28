@@ -21,8 +21,8 @@ final class BranchPickerNewBranchRow: NSView {
     }
 
     private let icon = NSImageView()
-    private let title = CommitPickerMetrics.label(font: .systemFont(ofSize: 13), color: .labelColor)
-    private let shortcut = CommitPickerMetrics.label(
+    private let title = PickerLabel.make(font: .systemFont(ofSize: 13), color: .labelColor)
+    private let shortcut = PickerLabel.make(
         font: .systemFont(ofSize: 13), color: .tertiaryLabelColor, alignment: .right)
     private var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
@@ -102,28 +102,27 @@ final class BranchPickerNewBranchRow: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard isEnabled, isHovered || isPressed else { return }
-        let fill = isPressed ? CommitPickerMetrics.highlightColor : CommitPickerMetrics.hoverColor
-        fill.setFill()
-        let rect = bounds.insetBy(dx: BranchPickerMetrics.rowInset, dy: 0)
+        (isPressed ? NSColor.secondarySystemFill : NSColor.quaternarySystemFill).setFill()
+        let rect = bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0)
         NSBezierPath(
-            roundedRect: rect, xRadius: CommitPickerMetrics.cornerRadius, yRadius: CommitPickerMetrics.cornerRadius
+            roundedRect: rect, xRadius: PickerMetrics.cornerRadius, yRadius: PickerMetrics.cornerRadius
         ).fill()
     }
 
     /// Lined up with the rows above: the icon over theirs, the text over their names.
     override func layout() {
         super.layout()
-        let leading = BranchPickerMetrics.rowInset + BranchPickerMetrics.contentInset
+        let leading = PickerMetrics.rowInset + PickerMetrics.contentInset
         let trailing = bounds.width - leading
         icon.frame = NSRect(
             x: leading, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
             height: Self.iconSize)
-        let shortcutSize = CommitPickerMetrics.naturalSize(of: shortcut)
+        let shortcutSize = PickerViewGeometry.naturalSize(of: shortcut)
         shortcut.frame = NSRect(
             x: trailing - shortcutSize.width, y: ((bounds.height - shortcutSize.height) / 2).rounded(),
             width: shortcutSize.width, height: shortcutSize.height)
         let textX = icon.frame.maxX + Self.iconGap
-        let titleHeight = CommitPickerMetrics.naturalSize(of: title).height
+        let titleHeight = PickerViewGeometry.naturalSize(of: title).height
         title.frame = NSRect(
             x: textX, y: ((bounds.height - titleHeight) / 2).rounded(),
             width: max(shortcut.frame.minX - 8 - textX, 0), height: titleHeight)

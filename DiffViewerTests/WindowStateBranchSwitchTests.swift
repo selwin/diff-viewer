@@ -240,9 +240,9 @@ struct WindowStateBranchSwitchTests {
         #expect(!state.isSwitchingBranch)
     }
 
-    /// A page count built up by Load More belongs to the branch it was read from: a
-    /// different HEAD starts again from one page.
-    @Test func switchAfterManyPagesResetsTheLimit() async throws {
+    /// Pages built up by Load More belong to the branch they were read from: a different
+    /// HEAD starts again from page one.
+    @Test func switchAfterManyPagesStartsAgainAtPageOne() async throws {
         // Two pages and one more, so `hasMore` holds through two Load Mores.
         let commits = (0...WindowState.commitPageSize * 2).map { commitSummary("c\($0)") }
         let (_, state, client, _) = try await settled(commits: commits)
@@ -252,15 +252,15 @@ struct WindowStateBranchSwitchTests {
             let load = try #require(state.session?.historyTask)
             await load.value
         }
-        #expect(state.commitLimit == WindowState.commitPageSize * 3)
-        #expect(await client.lastHistoryLimit == WindowState.commitPageSize * 3 + 1)
+        #expect(state.history.commits.count == WindowState.commitPageSize * 2 + 1)
+        #expect(await client.lastHistorySkip == WindowState.commitPageSize * 2)
         await stubSwitch(client, to: "side")
 
         await state.switchBranch(to: "side")
 
         #expect(await eventually { await state.history.revision == objectID("side") })
-        #expect(state.commitLimit == WindowState.commitPageSize)
-        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
+        #expect(state.history.commits.count == WindowState.commitPageSize)
+        #expect(await client.lastHistorySkip == 0)
         #expect(await client.lastHistoryRevision == objectID("side"))
     }
 
@@ -515,7 +515,7 @@ struct WindowStateBranchSwitchTests {
         #expect(state.scopeDisplayTitle == "Working Tree")
 
         state.select(commit: commit)
-        #expect(state.scopeDisplayTitle == "Add the picker · \(commit.ref.shortSha)")
+        #expect(state.scopeDisplayTitle == "Add the picker", "the subject alone, never the hash")
         #expect(await eventually { await h.published.last?.cause == .scope })
     }
 }

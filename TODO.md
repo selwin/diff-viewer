@@ -356,6 +356,27 @@ a non-delimiter token (unchanged behaviour).
 
 ---
 
+### Y. Title bar pickers and commit picker design (requested 2026-09-28)
+
+**Goal.** Refine how the branch and commit pickers look in the title bar, and redesign
+the commit picker popover to match the branch picker.
+
+**Title bar faces.** On 2026-09-28 both became 36pt capsules (`TitleBarPickerLabel`):
+white with a thin outline at rest, tinted on hover, filled grey while open. Still to
+refine:
+- Dark mode: the capsule is darker than the title bar and its outline barely shows.
+- Hover has not been checked on screen.
+
+**Commit picker popover.** Make it resemble the branch picker: header with the current
+scope and a status line, a search field, rows grouped by day (Today, Yesterday, This
+week, Older) with two-line rows and a right-aligned accessory. The search field's
+behaviour is spelled out under "Commit picker search" in the Next list.
+
+**Tests.** Grouping commits by day, if that logic is new. The rest is UI, checked by
+screenshot.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.

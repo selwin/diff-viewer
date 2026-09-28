@@ -59,13 +59,12 @@ extension WindowState {
         return nil
     }
 
-    /// The scope picker's face: the working tree, or the selected commit's subject and
-    /// short SHA. The SHA alone when the commit's summary is not held.
+    /// The scope picker's face: the working tree, or the selected commit's subject. Never
+    /// the hash; a commit scope always holds its summary.
     var scopeDisplayTitle: String {
         switch scope {
         case .workingTree: "Working Tree"
-        case let .commit(ref):
-            if let subject = selectedCommit?.subject { "\(subject) · \(ref.shortSha)" } else { ref.shortSha }
+        case .commit: selectedCommit?.subject ?? ""
         }
     }
 }

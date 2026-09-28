@@ -199,7 +199,7 @@ struct WindowStateScopeTests {
         h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.history.commits.first?.ref == later.ref })
         #expect(state.history.revision == later.ref.sha)
-        #expect(state.commitLimit == WindowState.commitPageSize)
+        #expect(await client.lastHistorySkip == 0)
     }
 
     @Test func anUnreadableCommitFallsBackToTheWorkingTreeKeepingItsError() async {
@@ -218,7 +218,7 @@ struct WindowStateScopeTests {
         #expect(state.errorMessage?.contains(commit.ref.shortSha) == true)
     }
 
-    @Test func historyPaginationAsksForOneExtraAndRaisesTheLimit() async {
+    @Test func historyPaginationAsksForOneExtraAndReadsOnlyTheNextPage() async {
         let h = Harness()
         let state = h.makeState()
         let first = commitSummary("c1")
@@ -234,9 +234,11 @@ struct WindowStateScopeTests {
         #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
 
         state.loadMoreCommits()
-        #expect(await eventually { await client.lastHistoryLimit == WindowState.commitPageSize * 2 + 1 })
-        #expect(state.commitLimit == WindowState.commitPageSize * 2)
+        #expect(await eventually { await state.history.commits.count == WindowState.commitPageSize + 1 })
+        #expect(await client.lastHistorySkip == WindowState.commitPageSize)
+        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
         #expect(await client.lastHistoryRevision == objectID("moved"), "paging stays on the loaded revision")
+        #expect(!state.history.hasMore)
     }
 
     @Test func anUnbornHeadLeavesAnEmptyHistoryAndNoError() async {

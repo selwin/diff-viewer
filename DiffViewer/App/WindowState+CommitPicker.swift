@@ -9,24 +9,19 @@ extension WindowState {
             && !isNewBranchSheetPresented
     }
 
-    /// Distinct paths in the displayed scope: a file both staged and unstaged counts once.
-    /// Nil while the list is being read or the last read failed, when an empty list means
-    /// unread, not clean.
-    var displayedScopeFileCount: Int? {
-        guard !isLoadingScope, !listReadFailed else { return nil }
-        return Set(files.map(\.path)).count
-    }
-
+    /// The displayed commit is the page's copy when the page carries it, the freshest
+    /// read, and otherwise the one held since it was selected.
     var commitPickerSnapshot: CommitPickerSnapshot {
         let displayedCommit: CommitSummary? =
-            if case let .commit(ref) = scope { selectableCommits.first { $0.ref == ref } } else { nil }
+            if case let .commit(ref) = scope { history.commits.first { $0.ref == ref } ?? selectedCommit } else { nil }
         return CommitPickerSnapshot(
             displayedScope: scope,
             displayedCommit: displayedCommit,
-            commits: selectableCommits,
+            commits: history.commits,
             hasMore: history.hasMore,
             isLoadingHistory: isLoadingHistory,
             historyLoadFailed: historyErrorMessage != nil,
-            displayedScopeFileCount: displayedScopeFileCount)
+            workingTreeChangeCount: workingTreeChangeCount,
+            unpushedShas: unpushedCommitShas)
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 
-/// The branch picker's recency sections, newest first.
-enum BranchDateGroup: CaseIterable, Sendable {
+/// Recency sections, newest first.
+enum RecencyGroup: CaseIterable, Sendable {
     case today
     case yesterday
     /// Two to six days ago.
@@ -18,23 +18,19 @@ enum BranchDateGroup: CaseIterable, Sendable {
     }
 }
 
-/// How the commit picker names days: relative for today and yesterday, by weekday
-/// after that, with the year only when it is not this one.
+/// How the pickers date commits and group them by recency: relative for today and
+/// yesterday, by weekday within the week, with the year only when it is not this one.
 ///
 /// Every input is injected so tests can pin the calendar, the zone and "now".
 struct CommitDayGrouping {
-    struct DayLabel: Equatable, Sendable {
-        let title: String
-        let subtitle: String
-    }
-
     private let calendar: Calendar
     private let now: Date
-    private let weekday: DateFormatter
     private let dayMonth: DateFormatter
     private let dayMonthYear: DateFormatter
     private let time: DateFormatter
     private let shortWeekday: DateFormatter
+    private let weekdayDayMonth: DateFormatter
+    private let weekdayDayMonthYear: DateFormatter
 
     init(
         calendar: Calendar = .current, locale: Locale = .current, timeZone: TimeZone = .current, now: Date = .now
@@ -54,49 +50,16 @@ struct CommitDayGrouping {
             formatter.dateFormat = pattern
             return formatter
         }
-        weekday = formatter("EEEE")
         dayMonth = formatter("d MMM")
         dayMonthYear = formatter("d MMM yyyy")
         time = formatter("HH:mm")
         shortWeekday = formatter("EEE")
-    }
-
-    func dayLabel(for date: Date) -> DayLabel {
-        let title =
-            switch daysAgo(date) {
-            case 0: "Today"
-            case 1: "Yesterday"
-            default: weekday.string(from: date)
-            }
-        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        return DayLabel(title: title, subtitle: (sameYear ? dayMonth : dayMonthYear).string(from: date))
-    }
-
-    // Group adjacent commits by local day without reordering git's traversal.
-    func gutterLabels(for dates: [Date]) -> [DayLabel?] {
-        var labels: [DayLabel?] = []
-        labels.reserveCapacity(dates.count)
-        var previousDay: Date?
-        for date in dates {
-            let day = calendar.startOfDay(for: date)
-            labels.append(day == previousDay ? nil : dayLabel(for: date))
-            previousDay = day
-        }
-        return labels
-    }
-
-    func dateTimeText(for date: Date) -> String {
-        let day =
-            switch daysAgo(date) {
-            case 0: "Today"
-            case 1: "Yesterday"
-            default: dayMonthYear.string(from: date)
-            }
-        return "\(day) at \(time.string(from: date))"
+        weekdayDayMonth = formatter("EEE d MMM")
+        weekdayDayMonthYear = formatter("EEE d MMM yyyy")
     }
 
     /// A tip dated after now counts as today.
-    func branchGroup(for date: Date) -> BranchDateGroup {
+    func recencyGroup(for date: Date) -> RecencyGroup {
         switch daysAgo(date) {
         case ...0: .today
         case 1: .yesterday
@@ -107,13 +70,27 @@ struct CommitDayGrouping {
 
     /// Short enough for a row's subtitle; the section header says which day.
     func branchTimeText(for date: Date) -> String {
-        switch branchGroup(for: date) {
+        switch recencyGroup(for: date) {
         case .today, .yesterday: return time.string(from: date)
         case .thisWeek: return shortWeekday.string(from: date)
-        case .older:
-            let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-            return (sameYear ? dayMonth : dayMonthYear).string(from: date)
+        case .older: return (isInCurrentYear(date) ? dayMonth : dayMonthYear).string(from: date)
         }
+    }
+
+    /// A commit row's date: the day and time for today and yesterday, the weekday and date
+    /// for two to six days ago, the date after that. The year only outside this one.
+    func commitDateText(for date: Date) -> String {
+        let sameYear = isInCurrentYear(date)
+        switch recencyGroup(for: date) {
+        case .today: return "Today \(time.string(from: date))"
+        case .yesterday: return "Yesterday \(time.string(from: date))"
+        case .thisWeek: return (sameYear ? weekdayDayMonth : weekdayDayMonthYear).string(from: date)
+        case .older: return (sameYear ? dayMonth : dayMonthYear).string(from: date)
+        }
+    }
+
+    private func isInCurrentYear(_ date: Date) -> Bool {
+        calendar.component(.year, from: date) == calendar.component(.year, from: now)
     }
 
     /// Whole local days between `date` and `now`; negative for a date after `now`.

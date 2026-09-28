@@ -119,6 +119,16 @@ actor StubRepoClient: RepoClient {
     private(set) var historyCalls = 0
     private(set) var lastHistoryRevision: String?
     private(set) var lastHistoryLimit: Int?
+    private(set) var lastHistorySkip: Int?
+    /// What `commitSha(of:)` answers per ref; an unlisted ref names no commit.
+    private var stubbedCommitShas: [String: String] = [:]
+    private var failsCommitSha = false
+    /// Every ref `commitSha(of:)` was asked to resolve, in order.
+    private(set) var commitShaCalls: [String] = []
+    private var stubbedUnpushed: Set<String> = []
+    private var failsUnpushed = false
+    /// Every `unpushedCommits` read, in order.
+    private(set) var unpushedCalls: [(tip: String, upstreamTip: String)] = []
     private(set) var commitFileCalls = 0
     /// Every `(path, revision)` pair `contents(of:at:)` was asked for, in order.
     private(set) var contentRevisions: [(path: String, revision: String)] = []
@@ -563,16 +573,36 @@ actor StubRepoClient: RepoClient {
         return stubbedUpstreamRemotes
     }
 
-    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
+    func recentCommits(startingAt revision: String, skip: Int, limit: Int) async throws -> [CommitSummary] {
         historyCalls += 1
         lastHistoryRevision = revision
+        lastHistorySkip = skip
         lastHistoryLimit = limit
         let snapshot = commits
         if holdsHistory {
             await withCheckedContinuation { heldHistory.append($0) }
         }
         if failsHistory { throw ProcessError.failed(command: "git log", status: 128, stderr: "gone") }
-        return Array(snapshot.prefix(limit))
+        return Array(snapshot.dropFirst(skip).prefix(limit))
+    }
+
+    // MARK: Unpushed commits
+
+    func set(commitSha sha: String?, for ref: String) { stubbedCommitShas[ref] = sha }
+    func fail(commitSha on: Bool) { failsCommitSha = on }
+    func set(unpushed shas: Set<String>) { stubbedUnpushed = shas }
+    func fail(unpushed on: Bool) { failsUnpushed = on }
+
+    func commitSha(of ref: String) async throws -> String? {
+        commitShaCalls.append(ref)
+        if failsCommitSha { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
+        return stubbedCommitShas[ref]
+    }
+
+    func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {
+        unpushedCalls.append((tip: tip, upstreamTip: upstreamTip))
+        if failsUnpushed { throw ProcessError.failed(command: "git rev-list", status: 128, stderr: "gone") }
+        return stubbedUnpushed
     }
 
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {
