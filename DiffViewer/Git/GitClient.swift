@@ -98,12 +98,7 @@ struct GitClient: RepoClient {
         // exits 128 when HEAD's target is malformed, so it reaches the throw below.
         // (`show-ref --verify` cannot sharpen this — it exits non-zero for an absent ref
         // and a corrupt one alike, so it would separate nothing.)
-        let symbolic = try await ProcessRunner.run(
-            Self.executable,
-            arguments: ["symbolic-ref", "--quiet", "HEAD"],
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
+        let symbolic = try await readSymbolicHead()
         guard symbolic.status == 0 else {
             throw ProcessError.failed(
                 command: "git rev-parse --verify HEAD", status: result.status, stderr: result.stderrString)
@@ -189,8 +184,8 @@ struct GitClient: RepoClient {
         return try LocalBranchParser.parse(result.stdoutString)
     }
 
-    /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headState()`
-    /// reads it twice and treats the statuses differently each time.
+    /// Reads HEAD's symbolic ref, leaving the exit status to the caller: `headSha()` and
+    /// `headState()` each treat a failing status differently.
     private func readSymbolicHead() async throws -> ProcessResult {
         // Deliberately not `--short`: when a tag and a branch share a name, git shortens
         // `refs/heads/main` only as far as `heads/main` to stay unambiguous, and the

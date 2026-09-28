@@ -93,6 +93,13 @@ extension TabExpander {
         guard low > 0, map[low] != target else { return low }
         return (target - map[low - 1]) < (map[low] - target) ? low - 1 : low
     }
+
+    /// Maps a nonnegative raw UTF-16 offset to an expanded offset. With a map (never
+    /// empty from `expand`), offsets past the end use its last entry.
+    static func expandedIndex(forRaw raw: Int, map: [Int]?) -> Int {
+        guard let map else { return raw }
+        return map[min(raw, map.count - 1)]
+    }
 }
 
 extension PaneModel {

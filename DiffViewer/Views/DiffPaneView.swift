@@ -340,8 +340,8 @@ final class DiffPaneView: NSView {
     /// edge first. Right-to-left text puts the logical start on the right. A range that mixes
     /// directions still gets one span, between its two ends.
     func horizontalBounds(_ range: Range<Int>, in cached: CachedLine) -> (x0: CGFloat, x1: CGFloat) {
-        let start = cached.map.map { $0[min(range.lowerBound, $0.count - 1)] } ?? range.lowerBound
-        let end = cached.map.map { $0[min(range.upperBound, $0.count - 1)] } ?? range.upperBound
+        let start = TabExpander.expandedIndex(forRaw: range.lowerBound, map: cached.map)
+        let end = TabExpander.expandedIndex(forRaw: range.upperBound, map: cached.map)
         let x0 = CTLineGetOffsetForStringIndex(cached.line, start, nil)
         let x1 = CTLineGetOffsetForStringIndex(cached.line, end, nil)
         return (min(x0, x1), max(x0, x1))
@@ -502,8 +502,8 @@ final class DiffPaneView: NSView {
             let runs = styles[lineIndex]
             let length = attributed.length
             for run in runs {
-                let lower = expanded.map.map { $0[min(run.range.lowerBound, $0.count - 1)] } ?? run.range.lowerBound
-                let upper = expanded.map.map { $0[min(run.range.upperBound, $0.count - 1)] } ?? run.range.upperBound
+                let lower = TabExpander.expandedIndex(forRaw: run.range.lowerBound, map: expanded.map)
+                let upper = TabExpander.expandedIndex(forRaw: run.range.upperBound, map: expanded.map)
                 let clampedLower = min(max(lower, 0), length)
                 let clampedUpper = min(max(upper, clampedLower), length)
                 guard clampedUpper > clampedLower else { continue }

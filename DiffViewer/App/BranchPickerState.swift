@@ -207,8 +207,8 @@ struct BranchPickerHeaderText: Equatable {
             return BranchPickerHeaderText(title: title, showsSpinner: spinner, canFetch: canFetch)
         }
         switch headState {
-        case let .detached(sha):
-            return BranchPickerHeaderText(title: "Detached " + sha.prefix(7), showsSpinner: spinner, canFetch: canFetch)
+        case .detached:
+            return BranchPickerHeaderText(title: headState.displayTitle, showsSpinner: spinner, canFetch: canFetch)
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
             guard let branch = snapshot.branches.first(where: { $0.name == name }) else {

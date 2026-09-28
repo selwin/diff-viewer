@@ -377,6 +377,51 @@ screenshot.
 
 ---
 
+### Z. Explain a resolved conflict that matches HEAD (requested 2026-09-28)
+
+**Goal.** A conflicted file whose resolution equals HEAD shouldn't read as a
+contradiction. Found while merging `main` into `consolidate-quick-wins` (PR #41): the
+conflict was resolved by keeping the branch's side, and selecting the file showed
+"No differences / Both versions have identical content." next to a popover offering
+"Stage". Both are correct, but together they look like the app wants you to stage
+nothing.
+
+**Cause.**
+- For an unmerged file, `DiffEngine.sources` diffs HEAD against the working tree. A
+  resolution that keeps HEAD's side is therefore identical, and `DiffDetailView` (single
+  file) and `DiffPaneView+Changeset` (All changes) show the generic "No differences".
+- Staging is how git marks a conflict resolved, and Commit Merge stays disabled until it
+  is. The context menu says so ("Mark Resolved", `FileAction.title(for:)`), but the
+  selection popover uses `FileAction.compactTitle(for:)`, which says "Stage", and its
+  accessibility label says "Stage 1 file".
+
+**Reproduce.**
+```bash
+rm -rf /tmp/conflict-demo && mkdir /tmp/conflict-demo && cd /tmp/conflict-demo
+git init -q -b main
+printf 'base\n' > f.txt && git add f.txt && git commit -qm base
+git checkout -qb other && printf 'other\n' > f.txt && git commit -qam other
+git checkout -q main && printf 'main\n' > f.txt && git commit -qam main
+git merge other           # CONFLICT in f.txt
+git checkout --ours f.txt # resolve by keeping main's side, still unmerged
+```
+Then `scripts/snapshot.sh /tmp/out.png /tmp/conflict-demo` (or `make run` and open the
+repo) and select `f.txt`: purple **U**, "No differences", popover "Stage", tray button
+"Commit Merge" disabled. Resolving with `git checkout --theirs f.txt` instead shows a
+real diff, so only the matches-HEAD case needs new wording.
+
+**Design.**
+- Popover: "Mark Resolved" when every selected file is unmerged ("Mark N Resolved" for a
+  batch, or whatever matches the popover's short style); accessibility label to match.
+- Empty diff for an unmerged file: say what it was compared with, e.g. "Resolution
+  matches HEAD", in both the single-file view and the All changes section line.
+
+**Tests.** `compactTitle` for an unmerged file, a batch of unmerged files, and a mix
+with a modified file (falls back to "Stage N files"). The empty-state text is UI,
+checked by screenshot with the repro above.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
