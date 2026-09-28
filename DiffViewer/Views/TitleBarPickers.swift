@@ -18,7 +18,8 @@ struct BranchPickerView: View {
                 TitleBarPickerLabel(
                     icon: .gitBranch,
                     title: windowState.branchDisplayTitle,
-                    subtitle: windowState.branchTrackingSummary)
+                    subtitle: windowState.branchTrackingSummary,
+                    isOpen: windowState.isBranchPickerPresented)
             }
             .buttonStyle(.plain)
             .disabled(!windowState.canOpenBranchPicker)
@@ -43,7 +44,10 @@ struct ScopePickerView: View {
             Button {
                 windowState.isCommitPickerPresented = true
             } label: {
-                TitleBarPickerLabel(icon: .gitCommit, title: windowState.scopeDisplayTitle)
+                TitleBarPickerLabel(
+                    icon: .gitCommit,
+                    title: windowState.scopeDisplayTitle,
+                    isOpen: windowState.isCommitPickerPresented)
             }
             .buttonStyle(.plain)
             .disabled(!windowState.canOpenCommitPicker)
@@ -63,15 +67,18 @@ struct ScopePickerView: View {
     }
 }
 
-/// The face both title bar pickers wear: an outlined one-line box at toolbar control
-/// height with no fill, so it sits flat on the title bar. Plain data in, so it does not depend on
-/// `WindowState`.
+/// The face both title bar pickers wear: a one-line outlined capsule at toolbar control
+/// height, tinted on hover and filled grey while its popover is open. Plain data in, so it
+/// does not depend on `WindowState`.
 private struct TitleBarPickerLabel: View {
     let icon: ImageResource
     let title: String
     /// Follows the title after a separator, in secondary colour. Nil draws nothing.
     var subtitle: String?
+    /// Whether the picker's popover is showing.
+    var isOpen = false
 
+    @State private var isHovering = false
     // A plain-style menu or button draws no disabled state of its own, so the face dims itself.
     @Environment(\.isEnabled) private var isEnabled
 
@@ -83,31 +90,50 @@ private struct TitleBarPickerLabel: View {
                 .resizable()
                 .frame(width: 14, height: 14)
                 .foregroundStyle(.secondary)
-            Text(title)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-            if let subtitle {
-                // Its own element, so the stack's spacing pads the dot evenly on both sides.
-                Text("·")
-                    .foregroundStyle(.secondary)
-                Text(subtitle)
+            HStack(spacing: 6) {
+                Text(title)
+                    .fontWeight(.medium)
                     .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    // Keeps the counts whole: a long title ellipsizes in front of them.
-                    .layoutPriority(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                if let subtitle {
+                    // Its own element, so the stack's spacing pads the dot evenly on both sides.
+                    Text("·")
+                        .foregroundStyle(.secondary)
+                    Text(subtitle)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                        // Keeps the counts whole: a long title ellipsizes in front of them.
+                        .layoutPriority(1)
+                }
             }
-            // Small, medium-weight chevrons match a native pop-up button's indicator.
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 9, weight: .medium))
-                .imageScale(.medium)
+            // Centred by its line box, the text reads low against the icons; lift it to the eye.
+            .offset(y: -1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8)
+        // Wider than the height needs, so the text clears the capsule's round ends.
+        .padding(.horizontal, 12)
         .frame(height: 26)
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.separator))
-        // The whole box opens the picker, not only the text.
+        .background {
+            if isOpen {
+                Capsule().fill(.quaternary)
+            } else {
+                Capsule()
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay {
+                        if isHovering && isEnabled { Capsule().fill(.quinary) }
+                    }
+                    .overlay(Capsule().strokeBorder(.separator))
+            }
+        }
+        // The whole capsule opens the picker, not only the text.
         .contentShape(Rectangle())
+        // Not `onHover`: in a toolbar item that makes AppKit draw its own bezel at rest.
+        .onContinuousHover { phase in
+            if case .active = phase { isHovering = true } else { isHovering = false }
+        }
     }
 }
 

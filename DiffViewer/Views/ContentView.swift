@@ -62,7 +62,7 @@ struct ContentView: View {
             // A bare name, not a glass pill.
             .sharedBackgroundVisibility(.hidden)
             // One item, so the two pickers stay side by side; the shared background is
-            // hidden because each one draws its own bordered box.
+            // hidden because each one draws its own capsule.
             ToolbarItem(placement: .navigation) {
                 HStack(spacing: 8) {
                     BranchPickerView()
