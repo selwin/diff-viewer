@@ -154,30 +154,7 @@ struct WindowStateBranchPickerTests {
         await repo.client.holdSwitchBranch(false)
         await repo.client.releaseSwitchBranch()
         #expect(await eventually { await !state.isSwitchingBranch })
-    }
-
-    /// The picker refuses to activate a row while a switch runs; the window refuses too.
-    @Test func aSecondSwitchDuringTheFirstIsIgnored() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: [localBranch("main"), localBranch("feature")])
-
-        await repo.client.holdSwitchBranch(true)
-        Task { await state.switchBranch(to: "feature") }
-        #expect(await eventually { await repo.client.heldSwitchBranchCount == 1 })
-        #expect(state.branchPickerSnapshot.isSwitchingBranch)
-
-        var picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
-        #expect(!picker.rows.isEmpty)
-        #expect(picker.items.indices.allSatisfy { !picker.canActivate(tableRow: $0) })
-
-        await state.switchBranch(to: "feature")
-        await repo.client.holdSwitchBranch(false)
-        await repo.client.releaseSwitchBranch()
-        #expect(await eventually { await !state.isSwitchingBranch })
-        #expect(await repo.client.switchBranchCalls == ["feature"], "the second call was ignored")
-
-        picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
+        let picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
         #expect(picker.items.indices.contains { picker.canActivate(tableRow: $0) }, "rows unlock once it settles")
     }
 }

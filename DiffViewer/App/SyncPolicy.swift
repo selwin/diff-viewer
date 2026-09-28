@@ -8,6 +8,16 @@ enum SyncOperation: Equatable, Sendable {
     case push
     case publish
     case delete
+
+    /// The alert shown when the branch or its upstream moved while the operation waited.
+    var changedBeforeStartMessage: String {
+        switch self {
+        case .pull: "Branch or upstream changed before the pull could start"
+        case .push: "Branch or upstream changed before the push could start"
+        case .publish: "Branch or upstream changed before the publish could start"
+        case .delete: "Branch or upstream changed before the delete could start"
+        }
+    }
 }
 
 /// The operation in flight, and the branch it was started on.
@@ -151,13 +161,14 @@ enum SyncPolicy {
         return branch.upstream == nil && configuredRemote == nil && remotes.contains(request.remote)
     }
 
-    /// Whether a fetch may still move `target`'s counts: remote discovery (it may pick
-    /// that remote) or a fetch of its remote. Other remotes' fetches don't count. Only
-    /// a pull is refused during one; a push waits it out instead.
-    static func isFetching(target: SyncTarget?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
+    /// Whether a fetch may still change the outcome for `remote`: discovery, which may add
+    /// or pick any remote, or a fetch of `remote` itself. Nil means no remote is chosen yet,
+    /// so only discovery counts. Pull, Publish and Delete check this for both the button
+    /// and the action, so the two agree. Push has its own wait rule.
+    static func isFetching(remote: String?, fetchStatus: FetchStatus, fetchingRemotes: Set<String>) -> Bool {
         if fetchStatus == .discovering { return true }
-        guard let target else { return false }
-        return fetchingRemotes.contains(target.destination.remote)
+        guard let remote else { return false }
+        return fetchingRemotes.contains(remote)
     }
 
     // swiftlint:disable function_parameter_count
@@ -171,7 +182,7 @@ enum SyncPolicy {
     /// waits for the fetch after the click and re-checks before it runs.
     static func rowButtons(
         branch: LocalBranch, isCurrent: Bool, readStatus: BranchReadStatus, active: ActiveSync?,
-        isSwitching: Bool, isDiscovering: Bool, fetchingRemotes: Set<String>, remotes: [String],
+        isSwitching: Bool, fetchStatus: FetchStatus, fetchingRemotes: Set<String>, remotes: [String],
         configuredRemote: String?
     ) -> RowSyncButtons {
         let target = target(for: branch, readStatus: readStatus)
@@ -203,17 +214,20 @@ enum SyncPolicy {
         if readStatus == .loaded, branch.upstream == nil {
             return publishButtons(
                 hiddenRemote: hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote),
-                choice: publishRemote(remotes: remotes), busy: busy, isDiscovering: isDiscovering,
+                choice: publishRemote(remotes: remotes), busy: busy, fetchStatus: fetchStatus,
                 fetchingRemotes: fetchingRemotes)
         }
         if readStatus == .loaded, let upstream = branch.upstream, canDelete(branch, isCurrent: isCurrent) {
             // A fetch may bring the remote branch back.
-            let waiting = busy ?? (isDiscovering || fetchingRemotes.contains(upstream.remote) ? "Fetching…" : nil)
+            let fetching = isFetching(
+                remote: upstream.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
+            let waiting = busy ?? (fetching ? "Fetching…" : nil)
             let delete = waiting.map { PickerButtonState.disabled(reason: $0) } ?? .enabled
             return RowSyncButtons(pull: .hidden, push: .hidden, delete: delete)
         }
         guard let target else { return .hidden }
-        let fetchMayMoveCounts = isDiscovering || fetchingRemotes.contains(target.destination.remote)
+        let fetchMayMoveCounts = isFetching(
+            remote: target.destination.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         let pullWaiting = busy ?? (fetchMayMoveCounts ? "Fetching…" : nil)
         let diverged = showsPull && showsPush
         let pull: PickerButtonState
@@ -242,27 +256,34 @@ enum SyncPolicy {
     /// add or remove remotes, and on a fetch of the remote it would go to. With a menu,
     /// only the remote being fetched waits.
     private static func publishButtons(
-        hiddenRemote: String?, choice: PublishRemote, busy: String?, isDiscovering: Bool,
+        hiddenRemote: String?, choice: PublishRemote, busy: String?, fetchStatus: FetchStatus,
         fetchingRemotes: Set<String>
     ) -> RowSyncButtons {
         let action: PublishAction
-        let remoteIsFetching: Bool
+        // A menu has no single remote to wait on; it disables the one being fetched instead.
+        let waitRemote: String?
         switch choice {
         case .none:
             return .hidden
         case let .remote(remote):
             action = .remote(remote)
-            remoteIsFetching = fetchingRemotes.contains(remote)
+            waitRemote = remote
         case let .ask(remotes):
-            action = .menu(remotes.map { PublishMenuItem(remote: $0, isEnabled: !fetchingRemotes.contains($0)) })
-            remoteIsFetching = false
+            action = .menu(
+                remotes.map {
+                    PublishMenuItem(
+                        remote: $0,
+                        isEnabled: !isFetching(remote: $0, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes))
+                })
+            waitRemote = nil
         }
         if let hiddenRemote {
             return RowSyncButtons(
                 pull: .hidden, push: .disabled(reason: "Tracks \(hiddenRemote), but fetch settings don't fetch it"),
                 pushTitle: "Publish")
         }
-        if let waiting = busy ?? (isDiscovering || remoteIsFetching ? "Fetching…" : nil) {
+        let fetching = isFetching(remote: waitRemote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
+        if let waiting = busy ?? (fetching ? "Fetching…" : nil) {
             return RowSyncButtons(pull: .hidden, push: .disabled(reason: waiting), pushTitle: "Publish")
         }
         return RowSyncButtons(pull: .hidden, push: .enabled, pushTitle: "Publish", publish: action)

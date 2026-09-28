@@ -334,6 +334,12 @@ final class WindowState {
         isLoading = false
     }
 
+    /// Whether `session` still belongs to this window and the window is open. A task may
+    /// still need its own cancellation or ticket check.
+    func isLive(_ session: RepoSession) -> Bool {
+        session === self.session && !isClosed
+    }
+
     /// Starts a watcher for `session` and returns the generation its callbacks must match.
     @discardableResult
     private func startWatcher(session: RepoSession) -> Int {
@@ -376,7 +382,7 @@ final class WindowState {
     /// follow-up carrying their watcher's generation. A hidden window has no watcher,
     /// so showing delivers one `[.rescan]`.
     private func repositoryChanged(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
-        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
+        guard isLive(session), watcherGeneration == session.watcherGeneration else { return }
         if session.watcherRefreshRunning {
             // Merge with a pending tick of the same generation; a pending tick from a
             // stopped watcher is replaced, its work covered by the rescan that follows a restart.
@@ -394,7 +400,7 @@ final class WindowState {
         // The follow-up runs on the pending tick's own generation, so a rescan delivered
         // by a restart while this refresh ran is not lost, and a tick from a watcher
         // stopped meanwhile is dropped.
-        while let pending = session.watcherRefreshPending, session === self.session, !isClosed,
+        while let pending = session.watcherRefreshPending, isLive(session),
             pending.generation == session.watcherGeneration
         {
             session.watcherRefreshPending = nil
@@ -423,7 +429,7 @@ final class WindowState {
             // Any change can move the working tree, and the open picker shows its count.
             await refreshWorkingTreeCount(session: session)
         }
-        guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
+        guard isLive(session), watcherGeneration == session.watcherGeneration else { return }
         // A load skipped while hidden is still owed when the refresh could not decide
         // about it: commit scope reads no status, and a failed read publishes nothing.
         if diffStale { reloadDiff() }
@@ -443,7 +449,7 @@ final class WindowState {
     /// driven by `status()` alone.
     func refresh(session: RepoSession, cause: RefreshCause, watcherGeneration: Int? = nil) async {
         // A watcher callback queued before its window closed: skip the read.
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         session.refreshSerial += 1
         let serial = session.refreshSerial
         // Started before the first suspension so the read's generation is settled the
@@ -469,7 +475,7 @@ final class WindowState {
         } catch {
             outcome = .failure(error)
         }
-        guard session === self.session, !isClosed, serial == session.refreshSerial else { return }
+        guard isLive(session), serial == session.refreshSerial else { return }
         // A watcher refresh whose watcher was stopped publishes nothing; the rescan that
         // follows a restart reads again.
         if let watcherGeneration, watcherGeneration != session.watcherGeneration { return }
@@ -671,7 +677,7 @@ extension WindowState {
                 }
         }
         let outcome = LineStatsOutcome(request: request, results: results)
-        guard !Task.isCancelled, session === self.session, !isClosed, session.lineStats.record(outcome, token: token)
+        guard !Task.isCancelled, isLive(session), session.lineStats.record(outcome, token: token)
         else { return }
         files = files.map { file in results[file.id].map { file.with(lineStats: $0.lineStats) } ?? file }
     }
@@ -694,10 +700,10 @@ extension WindowState {
     /// read never overwrites a newer count. A failed read leaves no count rather than an
     /// old one.
     private func refreshWorkingTreeCount(session: RepoSession) async {
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         let ticket = takeWorkingTreeCountTicket(session: session)
         let count = (try? await session.client.status()).map(Self.distinctPathCount)
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         publishWorkingTreeCount(count, ticket: ticket, session: session)
     }
 
@@ -773,19 +779,11 @@ extension WindowState {
         guard let session, !isClosed, newScope != scope else { return }
         session.scopeSerial += 1
 
-        // Clearing `files` does not touch the selection, so the previous scope's diff load
-        // has to be stopped by hand; emptying the selection does that through `reloadDiff`.
         // Nothing is remembered to restore: the new scope's list lands on All changes, a
-        // better answer than hunting for the same paths in a different set of files, and
-        // the setter drops a pending restoration, which belongs to the list being left.
-        selection = []
-        pendingAllChanges = true
-        cancelLineStats(session: session)
-
+        // better answer than hunting for the same paths in a different set of files.
+        resetListForReload(session: session)
         scope = newScope
         selectedCommit = commit
-        files = []
-        isLoadingScope = true
         Task { [weak self] in
             await self?.refresh(session: session, cause: .scope)
         }
@@ -803,6 +801,16 @@ extension WindowState {
         pendingReselection = reselection
     }
 
+    /// Clears the current list and its line stats. The next refresh lands on All changes
+    /// unless a reselection is registered after this call.
+    private func resetListForReload(session: RepoSession) {
+        selection = []
+        pendingAllChanges = true
+        cancelLineStats(session: session)
+        files = []
+        isLoadingScope = true
+    }
+
     /// Returns to the working tree after a commit could not be read.
     ///
     /// The message is assigned after the refresh, not before: a successful refresh clears
@@ -816,12 +824,9 @@ extension WindowState {
         let serial = session.scopeSerial
         scope = .workingTree
         selectedCommit = nil
-        selection = []
-        pendingAllChanges = true
-        files = []
-        isLoadingScope = true
+        resetListForReload(session: session)
         await refresh(session: session, cause: .scope)
-        guard session === self.session, !isClosed, serial == session.scopeSerial else { return }
+        guard isLive(session), serial == session.scopeSerial else { return }
         errorMessage = "Couldn't read commit \(ref.shortSha): \(error.localizedDescription)"
     }
 
@@ -865,7 +870,7 @@ extension WindowState {
     /// `rev-parse` per watcher tick, instead of a full log on every edit to the tree.
     private func reloadHistoryIfHeadMoved(session: RepoSession) async {
         // Reached after awaits too: a window closed meanwhile must start no process.
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // Each check takes its own ticket, so the newest one wins whatever order they
         // finish in. Sharing the history generation let completion order decide instead:
         // whichever check resolved first started a load, and a check holding a fresher
@@ -881,7 +886,7 @@ extension WindowState {
         } catch {
             return
         }
-        guard session === self.session, !isClosed, ticket == session.headCheckSerial else { return }
+        guard isLive(session), ticket == session.headCheckSerial else { return }
 
         let displayed = history.revision
         // Where the picker is heading, which is not always what it shows.
@@ -918,7 +923,7 @@ extension WindowState {
     @discardableResult
     private func refreshHeadState(session: RepoSession, finishing round: PendingFetchRound? = nil) async -> Bool {
         // A watcher callback queued before its window closed: skip the read.
-        guard session === self.session, !isClosed else { return false }
+        guard isLive(session) else { return false }
         session.headStateCheckSerial += 1
         let ticket = session.headStateCheckSerial
         if let round { session.pendingFetchRound = round }
@@ -933,19 +938,19 @@ extension WindowState {
             state = try await session.client.headState()
             // A superseded or closed request stops here rather than starting another
             // git process for an answer nobody will publish.
-            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
             list = try await session.client.localBranches()
-            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
             remoteList = try await session.client.remoteBranches()
         } catch {
-            guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
             branchReadStatus = .failed
             if !unpushedCommitShas.isEmpty { unpushedCommitShas = [] }
             publishPendingFetchRound(session: session)
             publishedBranchRead(session: session)
             return true
         }
-        guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+        guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
         guard let unpushed = await readUnpushedCommits(session: session, ticket: ticket, head: state, branches: list)
         else { return false }
         headState = state
@@ -958,15 +963,17 @@ extension WindowState {
         return true
     }
 
+    /// Whether a branch read holding `ticket` is still the newest one for a live session.
+    private func isCurrentHeadStateRead(session: RepoSession, ticket: Int) -> Bool {
+        isLive(session) && ticket == session.headStateCheckSerial
+    }
+
     /// The commits HEAD's branch has not pushed, read on the branch read's ticket. Nil
     /// when that ticket was superseded or the window closed; empty whenever it cannot be
     /// said, a failed read included, so no other branch's commits stay marked.
     private func readUnpushedCommits(
         session: RepoSession, ticket: Int, head: HeadState, branches: [LocalBranch]
     ) async -> Set<String>? {
-        func isCurrent() -> Bool {
-            session === self.session && !isClosed && ticket == session.headStateCheckSerial
-        }
         // Being ahead of a local branch says nothing about the remote, so only an upstream
         // under `refs/remotes/` counts.
         guard case let .named(name) = head, let branch = branches.first(where: { $0.name == name }),
@@ -976,16 +983,16 @@ extension WindowState {
         do {
             // Resolved on every read, since the upstream ref can move without the branch.
             let upstreamTip = try await session.client.commitSha(of: upstream.localRef)
-            guard isCurrent() else { return nil }
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return nil }
             guard let upstreamTip else { return [] }
             let key = UnpushedCommits.Key(branch: name, tip: branch.tipSha, upstreamTip: upstreamTip)
             if let cached = session.unpushedCommits, cached.key == key { return cached.shas }
             let shas = try await session.client.unpushedCommits(tip: branch.tipSha, upstreamTip: upstreamTip)
             // Cached even when superseded: the answer is keyed by commit ids and stays true.
             session.unpushedCommits = UnpushedCommits(key: key, shas: shas)
-            return isCurrent() ? shas : nil
+            return isCurrentHeadStateRead(session: session, ticket: ticket) ? shas : nil
         } catch {
-            return isCurrent() ? [] : nil
+            return isCurrentHeadStateRead(session: session, ticket: ticket) ? [] : nil
         }
     }
 
@@ -1021,7 +1028,7 @@ extension WindowState {
 
     private func loadHistory(session: RepoSession, serial: Int, source: HistorySource) async {
         func isCurrent() -> Bool {
-            session === self.session && !isClosed && serial == session.historySerial && !Task.isCancelled
+            isLive(session) && serial == session.historySerial && !Task.isCancelled
         }
 
         let request: HistoryRequest
@@ -1090,7 +1097,7 @@ extension WindowState {
     /// merge whose tree may equal HEAD).
     var canOpenCommitSheet: Bool {
         guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch,
-            !isCommitPickerPresented, !isBranchPickerPresented, !isNewBranchSheetPresented
+            !isOtherOverlayPresented(besides: .commitSheet)
         else { return false }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
         return files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging
@@ -1137,10 +1144,10 @@ extension WindowState {
     }
 
     private func runCommit(message: String, revision: Int, session: RepoSession) async {
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         var failure: (any Error)?
         do { try await session.client.commit(message: message) } catch { failure = error }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // Whatever the reader typed while git ran, a cleared draft included, is theirs and
         // survives both outcomes. Only an unedited draft is settled here.
         if commitDraftRevision == revision {
@@ -1161,12 +1168,12 @@ extension WindowState {
         await refresh(session: session, cause: .commit)
         // `refresh` returns quietly for a closed window; the history load below would
         // not, and would leave `isLoadingHistory` stuck on.
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // History and HEAD reload because a commit moves both and nothing else on this
         // path would notice.
         refreshHistory(session: session)
         await refreshHeadState(session: session)
-        guard session === self.session, !isClosed, let failure else { return }
+        guard isLive(session), let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
         errorIsCommitFailure = true
@@ -1191,7 +1198,7 @@ extension WindowState {
         // Cancelled before it ran: skip the subprocess, not just the publish.
         guard !Task.isCancelled else { return }
         func isCurrent() -> Bool {
-            !Task.isCancelled && session === self.session && !isClosed
+            !Task.isCancelled && isLive(session)
                 && generation == session.commitDefaultsGeneration && scope == .workingTree
         }
         let new: CommitDefaults
@@ -1285,7 +1292,7 @@ extension WindowState {
         // A cancelled run was already settled by whoever cancelled it, and a newer run may
         // be up by now; only a run that ends on its own turns the flag off.
         defer { if !Task.isCancelled { isGeneratingCommitMessage = false } }
-        func isCurrent() -> Bool { session === self.session && !isClosed && !Task.isCancelled }
+        func isCurrent() -> Bool { isLive(session) && !Task.isCancelled }
         do {
             let patchWithStat = try await session.client.stagedPatch()
             guard isCurrent() else { return }
@@ -1323,24 +1330,32 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
             activeSync != ActiveSync(branch: branch, operation: .delete)
         else { return }
-        isSwitchingBranch = true  // before the first suspension: the admission guard
+        await startBranchSwitch(session: session) { client in
+            try await client.switchBranch(to: branch)
+        }
+    }
+
+    /// Runs `checkout` on the write chain, holding `isSwitchingBranch` until it and its
+    /// re-reads finish. The flag is set before the first suspension: callers guard on it.
+    private func startBranchSwitch(
+        session: RepoSession, checkout: @escaping (any RepoClient) async throws -> Void
+    ) async {
+        isSwitchingBranch = true
         defer { isSwitchingBranch = false }
         // A run in flight would pair the old branch name with the new branch's patch.
         cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
-            await self?.runBranchSwitch(session: session) { client in
-                try await client.switchBranch(to: branch)
-            }
+            await self?.runBranchSwitch(session: session, checkout: checkout)
         }
     }
 
     /// `checkout` is the git call that moves HEAD; everything after it is shared.
     private func runBranchSwitch(session: RepoSession, checkout: (any RepoClient) async throws -> Void) async {
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         let headBefore = headState
         var failure: (any Error)?
         do { try await checkout(session.client) } catch { failure = error }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
         // and the watcher ignores this process's own events. A commit's files and diff
         // cannot have changed, so commit scope skips the re-read.
@@ -1352,26 +1367,22 @@ extension WindowState {
             //
             // Restore selected paths that remain in the refreshed list; otherwise select
             // All changes. Old row positions are ignored because the branch may have
-            // changed. Recorded after the setter below, which drops any pending restoration.
+            // changed. Recorded after `resetListForReload`, which drops any pending restoration.
             let candidates: [PendingSelection] = files.compactMap { file in
                 guard selection.contains(.file(file.id)) else { return nil }
                 return PendingSelection(path: file.path, area: file.area, row: nil)
             }
-            selection = []
+            resetListForReload(session: session)
             if !candidates.isEmpty { restoreSelectionAfterNextRefresh(.paths(candidates)) }
-            pendingAllChanges = true
-            cancelLineStats(session: session)
-            files = []
-            isLoadingScope = true
             applyCommitDefaults(.none)
             await refresh(session: session, cause: .branchSwitch)
         }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // Reloads history only when HEAD moved or a previous read failed, and resets the
         // page when it did; two branches at one commit keep their list.
         await reloadHistoryIfHeadMoved(session: session)
         await refreshHeadState(session: session)
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // A failed post-checkout hook can still have moved HEAD, and a successful checkout
         // whose re-read failed still did. A failed checkout whose re-read also failed may
         // have moved HEAD unseen; dropping the flags beats leaving stale ones.
@@ -1385,13 +1396,8 @@ extension WindowState {
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {
         guard let session, !isClosed, !isSwitchingBranch else { return }
-        isSwitchingBranch = true  // before the first suspension: the admission guard
-        defer { isSwitchingBranch = false }
-        cancelCommitMessageGeneration()
-        await enqueueWrite(session: session) { [weak self] in
-            await self?.runBranchSwitch(session: session) { client in
-                try await client.createBranch(name)
-            }
+        await startBranchSwitch(session: session) { client in
+            try await client.createBranch(name)
         }
     }
 
@@ -1406,13 +1412,8 @@ extension WindowState {
             errorMessage = "A local branch named \(branch.name) already exists"
             return
         }
-        isSwitchingBranch = true  // before the first suspension: the admission guard
-        defer { isSwitchingBranch = false }
-        cancelCommitMessageGeneration()
-        await enqueueWrite(session: session) { [weak self] in
-            await self?.runBranchSwitch(session: session) { client in
-                try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
-            }
+        await startBranchSwitch(session: session) { client in
+            try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
         }
     }
 }
@@ -1504,7 +1505,7 @@ extension WindowState {
     /// counts, while a closed window publishes nothing.
     private func runFetchRound(_ kind: FetchRoundKind, session: RepoSession) async {
         func isWanted() -> Bool {
-            session === self.session && !isClosed
+            isLive(session)
                 && (kind == .manual || session.fetchRoundUpgradedToManual || isBranchPickerPresented)
         }
 
@@ -1584,7 +1585,7 @@ extension WindowState {
 
     /// Releases a round that stopped before git fetch, publishing nothing.
     private func abandonFetchRound(session: RepoSession) {
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         fetchingRemotes = []
         fetchStatus = .idle
         session.activeFetchRound = nil
@@ -1612,7 +1613,7 @@ extension WindowState {
     private func awaitBranchRead(session: RepoSession, finishing round: PendingFetchRound? = nil) async {
         let before = session.branchReadGeneration
         if await refreshHeadState(session: session, finishing: round) { return }
-        guard session === self.session, !isClosed, session.branchReadGeneration == before else { return }
+        guard isLive(session), session.branchReadGeneration == before else { return }
         await withCheckedContinuation { session.branchReadWaiters.append($0) }
     }
 }
@@ -1637,7 +1638,7 @@ extension WindowState {
     /// its upstream. Admitted on the same terms as a pull or push, and on the same chain.
     func publish(branch: String, to remote: String) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
-            fetchStatus != .discovering, !fetchingRemotes.contains(remote)
+            !SyncPolicy.isFetching(remote: remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
         let request = PublishRequest(branch: branch, remote: remote)
         guard
@@ -1665,7 +1666,8 @@ extension WindowState {
             let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
             SyncPolicy.allows(operation, on: target, isCurrent: isCurrent),
             operation != .pull
-                || !SyncPolicy.isFetching(target: target, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
+                || !SyncPolicy.isFetching(
+                    remote: target.destination.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
         // Before the first suspension: the admission guard. It also stops the picker
         // starting a fetch while the operation waits or runs.
@@ -1677,7 +1679,7 @@ extension WindowState {
             // Off the write chain, so a slow fetch doesn't hold up local writes. The round
             // ends once its branch read has published.
             await round.value
-            guard session === self.session, !isClosed else {
+            guard isLive(session) else {
                 activeSync = nil
                 return
             }
@@ -1703,7 +1705,7 @@ extension WindowState {
         _ operation: SyncOperation, requested: SyncDestination, wasCurrent: Bool, session: RepoSession
     ) async {
         defer { activeSync = nil }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // The write ahead of this one may have moved HEAD or retargeted the upstream, so
         // the destination is read from the repository rather than from what the picker
@@ -1720,11 +1722,8 @@ extension WindowState {
             // Every re-read here waits for a published one: the buttons stay in their
             // running state until the counts they will be drawn from have landed.
             await awaitBranchRead(session: session)
-            guard session === self.session, !isClosed else { return }
-            errorMessage =
-                operation == .pull
-                ? "Branch or upstream changed before the pull could start"
-                : "Branch or upstream changed before the push could start"
+            guard isLive(session) else { return }
+            errorMessage = operation.changedBeforeStartMessage
             return
         }
         // The same destination with nothing left to do — someone else pulled, or the
@@ -1751,21 +1750,21 @@ extension WindowState {
                 return
             }
         } catch { failure = error }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         if operation == .pull, isCurrent {
             // Either outcome re-reads: a failed pull can leave conflicts, a merge in
             // progress, or an autostash put back. A commit's files cannot have changed,
             // so commit scope skips the re-read, as a branch switch does.
             if scope == .workingTree { await refresh(session: session, cause: .pull) }
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             await reloadHistoryIfHeadMoved(session: session)
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
         }
         // A push, or a fast-forward of a branch that isn't checked out, changes no file
         // and no commit on screen: only the counts move.
         await awaitBranchRead(session: session)
-        guard session === self.session, !isClosed, let failure else { return }
+        guard isLive(session), let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
     }
@@ -1777,14 +1776,14 @@ extension WindowState {
         let branches: [LocalBranch]
         do {
             state = try await session.client.headState()
-            guard session === self.session, !isClosed else { return nil }
+            guard isLive(session) else { return nil }
             branches = try await session.client.localBranches()
         } catch {
-            guard session === self.session, !isClosed else { return nil }
+            guard isLive(session) else { return nil }
             errorMessage = error.localizedDescription
             return nil
         }
-        guard session === self.session, !isClosed else { return nil }
+        guard isLive(session) else { return nil }
         return (state, branches)
     }
 
@@ -1793,7 +1792,7 @@ extension WindowState {
     /// every exit.
     private func runPublish(_ request: PublishRequest, session: RepoSession) async {
         defer { activeSync = nil }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // Read directly, as `runSync` does: the branch may have gained an upstream, or its
         // remote gone, while this waited its turn.
@@ -1802,16 +1801,16 @@ extension WindowState {
         let configured: [String: String]
         do {
             list = try await session.client.localBranches()
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             remotes = try await session.client.remoteNames()
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             configured = try await session.client.configuredUpstreamRemotes()
         } catch {
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             errorMessage = error.localizedDescription
             return
         }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         let configuredRemote = configured[request.branch]
         guard
@@ -1819,7 +1818,7 @@ extension WindowState {
         else {
             // Stored after the branch read, so the row never pairs new config with old branches.
             await awaitBranchRead(session: session)
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             self.remotes = remotes
             configuredUpstreamRemotes = configured
             if let branch = list.first(where: { $0.name == request.branch }),
@@ -1827,21 +1826,21 @@ extension WindowState {
             {
                 errorMessage = "\(request.branch) tracks \(hidden), but fetch settings don't fetch it"
             } else {
-                errorMessage = "Branch or upstream changed before the publish could start"
+                errorMessage = SyncOperation.publish.changedBeforeStartMessage
             }
             return
         }
 
         var failure: (any Error)?
         do { try await session.client.publish(branch: request.branch, to: request.remote) } catch { failure = error }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // Re-read after either outcome, as after a push. A failed config read keeps the
         // previous value, as the picker's own read does.
         let fresh = try? await session.client.configuredUpstreamRemotes()
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         await awaitBranchRead(session: session)
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         if let fresh {
             configuredUpstreamRemotes = fresh
         } else if failure == nil {
@@ -1866,7 +1865,7 @@ extension WindowState {
     func deleteBranch(_ branch: LocalBranch) async {
         guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
             Self.isDeletable(branch, in: branches, headState: headState), let upstream = branch.upstream,
-            fetchStatus != .discovering, !fetchingRemotes.contains(upstream.remote)
+            !SyncPolicy.isFetching(remote: upstream.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
         // Before the first suspension: the admission guard.
         activeSync = ActiveSync(branch: branch.name, operation: .delete)
@@ -1887,7 +1886,7 @@ extension WindowState {
     /// reservation is released on every exit.
     private func runDelete(_ branch: LocalBranch, session: RepoSession) async {
         defer { activeSync = nil }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // Read directly, as `runSync` does: the branch may have moved, been checked out or
         // been recreated while this waited its turn.
@@ -1895,19 +1894,19 @@ extension WindowState {
 
         guard Self.isDeletable(branch, in: read.branches, headState: read.state) else {
             await awaitBranchRead(session: session)
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             // Already gone is what the reader asked for; anything else is news.
             if read.branches.contains(where: { $0.name == branch.name }) {
-                errorMessage = "Branch or upstream changed before the delete could start"
+                errorMessage = SyncOperation.delete.changedBeforeStartMessage
             }
             return
         }
 
         var failure: (any Error)?
         do { try await session.client.deleteBranch(branch.name) } catch { failure = error }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         await awaitBranchRead(session: session)
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         guard let failure else {
             // Git removed the branch's config with it.
             configuredUpstreamRemotes[branch.name] = nil

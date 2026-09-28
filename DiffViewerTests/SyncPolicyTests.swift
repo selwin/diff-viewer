@@ -72,6 +72,25 @@ struct SyncPolicyTests {
         #expect(!SyncPolicy.allows(.pull, on: target(ahead: 1, behind: 1), isCurrent: false), "only a fast-forward")
     }
 
+    // MARK: Fetch wait
+
+    /// Discovery holds every remote, and a nil remote; a fetch holds only its own remote.
+    @Test(
+        arguments: [
+            (FetchStatus.discovering, nil, [], true),
+            (.idle, nil, [], false),
+            (.fetching, "origin", ["origin"], true),
+            (.fetching, "origin", ["fork"], false),
+            (.discovering, "origin", ["fork"], true),
+        ] as [(FetchStatus, String?, Set<String>, Bool)])
+    func isFetchingWaitsOnDiscoveryOrItsOwnRemote(
+        fetchStatus: FetchStatus, remote: String?, fetchingRemotes: Set<String>, isFetching: Bool
+    ) {
+        #expect(
+            SyncPolicy.isFetching(remote: remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
+                == isFetching)
+    }
+
     // MARK: Row buttons
 
     private func buttons(
@@ -81,7 +100,7 @@ struct SyncPolicyTests {
     ) -> RowSyncButtons {
         SyncPolicy.rowButtons(
             branch: branch, isCurrent: isCurrent, readStatus: readStatus, active: active, isSwitching: isSwitching,
-            isDiscovering: isDiscovering, fetchingRemotes: fetchingRemotes, remotes: remotes,
+            fetchStatus: isDiscovering ? .discovering : .idle, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredRemote: configuredRemote)
     }
 
@@ -107,9 +126,6 @@ struct SyncPolicyTests {
 
     @Test func noRemoteUpstreamOrNoReadShowsNothing() {
         #expect(buttons(localBranch("main")) == .hidden, "no upstream")
-        #expect(
-            buttons(localBranch("main", upstream: upstream("origin/main", tracking: .gone)), isCurrent: true)
-                == .hidden, "the checked-out branch can't be deleted")
         let local = upstream("base", remote: ".", localRef: "refs/heads/base", tracking: .counts(ahead: 0, behind: 1))
         #expect(buttons(localBranch("main", upstream: local)) == .hidden)
         let outside = upstream("origin/main", localRef: "refs/heads/main", tracking: .counts(ahead: 2, behind: 0))

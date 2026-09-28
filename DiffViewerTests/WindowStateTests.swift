@@ -1116,18 +1116,25 @@ struct WindowStateTests {
         let repo = await h.adopt(state, "A", files: filesA)
         await select(filesA[0], in: state)
         let reads = await repo.client.contentReads
+        let visiblePublishes = h.published.count
 
         h.preferences.hideWhitespace.toggle()
         state.diffSettingsChanged()
         #expect(await eventually { await repo.client.contentReads == reads + 2 })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        // The reload does not wait for status, so its refresh can still be publishing.
+        #expect(await eventually { await h.published.count > visiblePublishes })
+        #expect(h.published.last?.cause == .settings)
 
+        let before = h.published.count
         state.isVisible = false
         state.diffSettingsChanged()
+        #expect(await eventually { await h.published.count > before })
+        #expect(h.published.last?.cause == .settings)
         // The reload now rides on a settings refresh, so staleness lands asynchronously.
         #expect(await eventually { await state.diffStale })
         try? await Task.sleep(for: .milliseconds(50))
-        #expect(await repo.client.contentReads == reads + 2)
+        #expect(await repo.client.contentReads == reads + 2, "a hidden window loads no diff")
     }
 
     // MARK: Changeset reloads
@@ -1320,24 +1327,6 @@ struct WindowStateTests {
         await repo.client.releaseReads()
         try? await Task.sleep(for: .milliseconds(50))
         #expect(state.files.first?.lineStats == nil)
-    }
-
-    @Test func settingsRefreshWhileHiddenMarksStaleAndLoadsNothing() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: filesA)
-        await select(filesA[0], in: state)
-        let reads = await repo.client.contentReads
-        state.isVisible = false
-        #expect(!state.diffStale)
-        let before = h.published.count
-
-        state.diffSettingsChanged()
-        #expect(await eventually { await h.published.count > before })
-        #expect(h.published.last?.cause == .settings)
-        #expect(state.diffStale)
-        try? await Task.sleep(for: .milliseconds(50))
-        #expect(await repo.client.contentReads == reads, "a hidden window loads no diff")
     }
 
     // MARK: Quiet refreshes
@@ -1762,27 +1751,6 @@ struct WindowStateTests {
         #expect(await repo.client.contentReads == reads, "nothing changed: the diff on show is kept")
     }
 
-    @Test func showingReloadsAStaleDiffOnce() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: filesA)
-        await select(filesA[0], in: state)
-        let reads = await repo.client.contentReads
-        let status = await repo.client.statusCalls
-
-        state.isVisible = false
-        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
-        state.isVisible = true
-        #expect(await eventually { await repo.client.statusCalls == status + 1 })
-        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
-        #expect(await eventually { await repo.client.contentReads == reads + 2 })
-        #expect(await eventually { await !state.diffLoader.hasActiveWork })
-        #expect(!state.diffStale)
-        try? await Task.sleep(for: .milliseconds(50))
-        #expect(await repo.client.statusCalls == status + 1, "one status read")
-        #expect(await repo.client.contentReads == reads + 2, "one load")
-    }
-
     /// A hidden window watches nothing: a running refresh and the tick queued behind it
     /// go with the watcher, and the rescan on showing finds the edit they carried.
     @Test func staleStatusAcrossHideAndShow() async {
@@ -1820,6 +1788,7 @@ struct WindowStateTests {
         #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
         #expect(await eventually { await repo.client.contentReads == reads + 2 })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await repo.client.statusCalls == status + 2)
         #expect(await repo.client.contentReads == reads + 2, "exactly one load")

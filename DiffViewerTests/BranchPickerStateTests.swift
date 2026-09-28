@@ -562,7 +562,7 @@ struct BranchPickerStateTests {
 
     // MARK: Fetching
 
-    @Test func theSpinnerShowsAndFetchIsWithheldWhileARoundRuns() {
+    @Test func fetchIsWithheldWhileARoundOrASyncRuns() {
         for status in [FetchStatus.discovering, .fetching] {
             let header = state(snapshot(branches: [main], fetchStatus: status)).headerText
             #expect(header.showsSpinner)
@@ -575,10 +575,7 @@ struct BranchPickerStateTests {
         #expect(
             state(snapshot(headState: nil, branches: [], readStatus: .unread, fetchStatus: .discovering))
                 .headerText.showsSpinner)
-    }
-
-    /// A round would not start beside a pull or push, so the button doesn't offer one.
-    @Test func fetchIsWithheldWhileASyncRuns() {
+        // A round would not start beside a pull or push.
         let pulling = snapshot(branches: [main], activeSync: ActiveSync(branch: "main", operation: .pull))
         #expect(!state(pulling).headerText.canFetch)
     }

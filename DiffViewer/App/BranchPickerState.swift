@@ -407,9 +407,9 @@ struct BranchPickerState {
     }
 
     /// A row's Pull and Push, Publish, or Delete, or nil for a header or past the end; a
-    /// remote-only row has none. Uses the same immediate fetch checks as `WindowState`'s
-    /// admission: Pull and Delete are admitted exactly as shown, while Push may still wait
-    /// for its remote's fetch and be re-checked afterwards.
+    /// remote-only row has none. Pull, Publish and Delete wait on fetches through
+    /// `SyncPolicy.isFetching`, as `WindowState`'s admission does, so the two agree. Push
+    /// may still wait for its remote's fetch and be re-checked afterwards.
     func syncButtons(forTableRow index: Int) -> RowSyncButtons? {
         guard let row = row(forTableRow: index) else { return nil }
         return Self.syncButtons(for: row, snapshot: snapshot)
@@ -425,7 +425,7 @@ struct BranchPickerState {
     {
         SyncPolicy.rowButtons(
             branch: branch, isCurrent: isCurrent, readStatus: snapshot.readStatus, active: snapshot.activeSync,
-            isSwitching: snapshot.isSwitchingBranch, isDiscovering: snapshot.fetchStatus == .discovering,
+            isSwitching: snapshot.isSwitchingBranch, fetchStatus: snapshot.fetchStatus,
             fetchingRemotes: snapshot.fetchingRemotes, remotes: snapshot.remotes,
             configuredRemote: snapshot.configuredUpstreamRemotes[branch.name])
     }

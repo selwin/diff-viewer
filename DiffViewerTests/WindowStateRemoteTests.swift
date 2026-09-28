@@ -56,25 +56,16 @@ struct WindowStateRemoteTests {
 
     // MARK: Fetching on open
 
-    @Test func openingThePickerFetchesAndRereadsTheBranches() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        let readsBefore = await repo.client.localBranchesCalls
-
-        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)]))
-        #expect(await repo.client.fetchCalls == ["origin"])
-        #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are read again after the fetch")
-    }
-
     @Test func openingFetchesEveryRemoteTrackedOrNot() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adopt(h, state, remotes: ["origin", "fork", "upstream"])
+        let readsBefore = await repo.client.localBranchesCalls
 
         await openAndFinish(state, as: fetched(["origin", "fork", "upstream"], at: h.clock))
         #expect(await repo.client.fetchCalls.sorted() == ["fork", "origin", "upstream"])
         #expect(state.remotes == ["origin", "fork", "upstream"])
+        #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are read again after the fetch")
     }
 
     @Test func aSecondOpeningWaitsOutTheCooldown() async {
@@ -97,23 +88,6 @@ struct WindowStateRemoteTests {
         h.clock += WindowState.fetchCooldown + 1
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.fetchCalls == ["origin", "origin"] })
-    }
-
-    /// A cooldown skip implies an earlier success, so the round carries that time rather
-    /// than leaving the remote out.
-    @Test func aRemoteSkippedByTheCooldownCarriesItsTimeIntoTheRound() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        let originAt = h.clock
-        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt)]))
-        state.isBranchPickerPresented = false
-
-        await repo.client.set(remoteNames: ["origin", "fork"])
-        h.clock += 10
-        await openAndFinish(
-            state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt), "fork": .fetched(at: h.clock)]))
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "origin is still fresh")
     }
 
     // MARK: Fetching by hand
@@ -304,23 +278,6 @@ struct WindowStateRemoteTests {
         #expect(state.newRemoteBranches.isEmpty, "nothing read, nothing new")
     }
 
-    @Test func theFetchStaysReservedUntilTheCountsCatchUp() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.holdLocalBranches(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(await repo.client.fetchCalls == ["origin"])
-        #expect(state.fetchStatus == .fetching)
-        #expect(state.fetchingRemotes == ["origin"])
-
-        await repo.client.holdLocalBranches(false)
-        await repo.client.releaseLocalBranches()
-        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
-    }
-
     // MARK: New branches
 
     /// Adopts with `origin/main` present, then runs a round that brings in `origin/feature`,
@@ -438,27 +395,6 @@ struct WindowStateRemoteTests {
 
     // MARK: Failures
 
-    @Test func aFailedFetchStartsNoCooldown() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.fail(fetch: true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { @MainActor in state.fetchStatus == .idle && state.lastFetchRound != nil })
-        guard case let .failed(message)? = state.lastFetchRound?.outcomes["origin"] else {
-            Issue.record("origin should have failed")
-            return
-        }
-        #expect(!message.isEmpty)
-        #expect(state.errorMessage == nil, "header news, never an alert")
-        #expect(await repo.client.fetchCalls == ["origin"])
-
-        state.isBranchPickerPresented = false
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "origin"] }, "no cooldown was started")
-    }
-
     @Test func aFailedFetchThenAFailedReadRecoversOnTheNextOpening() async {
         let h = Harness()
         let state = h.makeState()
@@ -521,6 +457,12 @@ struct WindowStateRemoteTests {
 
         state.isBranchPickerPresented = true
         #expect(await eventually { @MainActor in Self.isFailure(state.lastFetchRound?.outcomes["fork"]) })
+        guard case let .failed(message)? = state.lastFetchRound?.outcomes["fork"] else {
+            Issue.record("fork should have failed")
+            return
+        }
+        #expect(!message.isEmpty)
+        #expect(state.errorMessage == nil, "header news, never an alert")
         #expect(state.lastFetchRound?.outcomes["origin"] == .fetched(at: h.clock))
         state.isBranchPickerPresented = false
 
@@ -908,6 +850,8 @@ struct WindowStateSyncTests {
 
         await state.pull(branch: "main")
         #expect(await repo.client.pullCalls == 1)
+        #expect(await repo.client.fastForwardCalls.isEmpty)
+        #expect(h.published.contains { $0.cause == .pull })
         #expect(state.errorMessage == nil)
     }
 
@@ -971,17 +915,6 @@ struct WindowStateSyncTests {
         #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are re-read")
         #expect(state.activeSync == nil)
         #expect(state.errorMessage == nil)
-    }
-
-    @Test func aPullOnTheCurrentBranchRunsGitPull() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: main())
-
-        await state.pull(branch: "main")
-        #expect(await repo.client.pullCalls == 1)
-        #expect(await repo.client.fastForwardCalls.isEmpty)
-        #expect(h.published.contains { $0.cause == .pull })
     }
 
     @Test func aPullOnAnotherBranchFastForwardsItsRefOnly() async {

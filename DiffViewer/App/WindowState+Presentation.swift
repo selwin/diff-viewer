@@ -63,6 +63,19 @@ extension WindowState {
         case .commit: selectedCommit?.subject ?? ""
         }
     }
+
+    /// The sheets and popovers that open one at a time.
+    enum Overlay {
+        case commitSheet, commitPicker, branchPicker, newBranchSheet
+    }
+
+    /// Whether an overlay other than `overlay` is up. Only one opens at a time.
+    func isOtherOverlayPresented(besides overlay: Overlay) -> Bool {
+        (overlay != .commitSheet && isCommitSheetPresented)
+            || (overlay != .commitPicker && isCommitPickerPresented)
+            || (overlay != .branchPicker && isBranchPickerPresented)
+            || (overlay != .newBranchSheet && isNewBranchSheetPresented)
+    }
 }
 
 extension HeadState {
