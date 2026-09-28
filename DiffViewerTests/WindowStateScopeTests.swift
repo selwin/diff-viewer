@@ -218,6 +218,36 @@ struct WindowStateScopeTests {
         #expect(state.errorMessage?.contains(commit.ref.shortSha) == true)
     }
 
+    /// The fallback leaves the commit, so its line counts are work nobody will see: the
+    /// read is cancelled, and whatever it returns late is not recorded.
+    @Test func fallingBackCancelsTheCommitsLineStats() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("one.swift", commit)])
+        await h.settleStats(state)
+        await client.holdNumstat(true)
+        state.select(commit: commit)
+        #expect(await eventually { await client.heldNumstatCount >= 1 })
+        let task = state.session?.statsTask
+
+        // The working-tree read fails too, so no later refresh starts another stats read.
+        await client.fail(commitFiles: true)
+        await client.fail(true)
+        await state.refresh()
+        #expect(state.scope == .workingTree)
+        #expect(state.errorMessage?.contains(commit.ref.shortSha) == true)
+        #expect(task?.isCancelled == true)
+        #expect(state.session?.statsTask == nil)
+        #expect(state.session?.lineStats.activeRequest == nil)
+
+        // Cancellation does not resume the held numstat; releasing it lets the read finish.
+        await client.releaseNumstat()
+        await task?.value
+        #expect(
+            state.session?.lineStats.lastOutcome?.request.scope == .workingTree, "the commit's read recorded nothing")
+    }
+
     @Test func historyPaginationAsksForOneExtraAndReadsOnlyTheNextPage() async {
         let h = Harness()
         let state = h.makeState()

@@ -6,15 +6,14 @@ extension WindowState {
     /// An open window with a repository, and no commit sheet, commit picker or New Branch
     /// sheet up: the popover never opens over another one.
     var canOpenBranchPicker: Bool {
-        session != nil && !isClosed && !isCommitSheetPresented && !isCommitPickerPresented
-            && !isNewBranchSheetPresented
+        session != nil && !isClosed && !isOtherOverlayPresented(besides: .branchPicker)
     }
 
     /// Like `canOpenBranchPicker`, with the branch picker down too and no switch queued or
     /// running: the new branch starts at HEAD, which a switch is about to move.
     var canOpenNewBranchSheet: Bool {
-        session != nil && !isClosed && !isSwitchingBranch && !isCommitSheetPresented && !isCommitPickerPresented
-            && !isBranchPickerPresented && !isNewBranchSheetPresented
+        session != nil && !isClosed && !isSwitchingBranch && !isOtherOverlayPresented(besides: .newBranchSheet)
+            && !isNewBranchSheetPresented
     }
 
     /// The picker's New Branch… row and ⌘N: the popover closes first, since only one of

@@ -71,7 +71,7 @@ extension WindowState {
     private func runWrite(_ action: FileAction, on files: [ChangedFile], session: RepoSession) async {
         // Checked again here: the window may have closed, or its repository been
         // replaced, while the earlier action in the chain was running.
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // And the rows themselves may have changed meaning while this write waited its
         // turn. The repository is the authority for that, not `files`: a refresh publishes
@@ -82,11 +82,11 @@ extension WindowState {
         do {
             current = try await session.client.status()
         } catch {
-            guard session === self.session, !isClosed else { return }
+            guard isLive(session) else { return }
             errorMessage = error.localizedDescription
             return
         }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
         // Revalidate identity, kind and original path before writing; the menu may be
         // stale. A row that came back with another kind is a different action than the one
         // clicked, so it drops out of the batch and the rest of it still runs.
@@ -117,7 +117,7 @@ extension WindowState {
         } catch {
             failure = error
         }
-        guard session === self.session, !isClosed else { return }
+        guard isLive(session) else { return }
 
         // Recorded only after the write returned, and with nothing awaited between here
         // and the refresh below: a watcher refresh that got in first would consume the
@@ -136,7 +136,7 @@ extension WindowState {
         // own events. Required after a success for the same last reason: `RepoWatcher` sets
         // `kFSEventStreamCreateFlagIgnoreSelf`, so nothing else would republish.
         await refresh(session: session, cause: .fileAction)
-        guard let failure, session === self.session, !isClosed else { return }
+        guard let failure, isLive(session) else { return }
         // After the refresh, so the news survives it: a successful refresh clears only the
         // error a refresh raised.
         errorMessage = failure.localizedDescription
