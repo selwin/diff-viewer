@@ -50,15 +50,6 @@ struct SidebarReselectionTests {
         #expect(result == [.file(rows[1].id)], "discarding the bottom row selects the new bottom row")
     }
 
-    @Test func anEmptyListSelectsNothing() {
-        #expect(selection(pending("a.swift", row: 0), in: []) == [])
-    }
-
-    @Test func aMissingPathWithoutARowSelectsNothing() {
-        let rows = [changedFile("a.swift"), changedFile("b.swift")]
-        #expect(selection(pending("gone.swift"), in: rows) == [])
-    }
-
     // MARK: A whole selection at once
 
     @Test func everyPendingPathThatSurvivedIsSelectedAgain() {

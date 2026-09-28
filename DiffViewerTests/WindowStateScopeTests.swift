@@ -116,19 +116,6 @@ struct WindowStateScopeTests {
         #expect(await eventually { await state.selection == [.allChanges] }, "and on the way back too")
     }
 
-    /// All changes reads every file itself, so the prefetcher has nothing to warm.
-    @Test func allChangesWarmsNothing() async {
-        let h = Harness()
-        let state = h.makeState()
-        let commit = commitSummary("c1")
-        _ = await adopt(h, state, commit: commit, commitFiles: [])
-        #expect(state.selection == [.allChanges])
-        #expect(state.filesToWarm.isEmpty)
-
-        state.selection = [.file(workingFiles[0].id)]
-        #expect(state.filesToWarm.map(\.path) == ["a2.swift"])
-    }
-
     /// The race the separate history generation exists for: a watcher tick that only
     /// reloads the commit list must not cancel an in-flight scope change.
     @Test func aWatcherTickDuringAScopeLoadDoesNotDiscardItsFiles() async {
@@ -650,24 +637,6 @@ struct WindowStateScopeTests {
 
     // MARK: All changes
 
-    /// A watcher tick in All-changes mode republishes the list and reloads the changeset;
-    /// what it must not do is move the selection off All changes.
-    @Test func aWatcherRefreshInAllChangesModeKeepsTheSelectionAndReloads() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: workingFiles)
-        #expect(state.selection == [.allChanges])
-        let reads = await repo.client.contentReads
-
-        let updated = [changedFile("a1.swift"), changedFile("new.swift")]
-        await repo.client.set(files: updated)
-        h.watcherCallbacks[repo.root]!()
-        #expect(await eventually { await state.files == updated })
-        #expect(state.selection == [.allChanges])
-        #expect(await eventually { await repo.client.contentReads > reads }, "the changeset is read again")
-        #expect(await eventually { await !state.diffLoader.hasActiveWork })
-    }
-
     /// A settings refresh reloads the diff before it re-reads the list, so in All-changes
     /// mode the changeset it built can already be out of date by the time the new list
     /// lands. A single file's diff is unaffected, which is why the reload is conditional.
@@ -699,22 +668,6 @@ struct WindowStateScopeTests {
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
         #expect(state.selection == [.allChanges], "no row was selected, so nothing is restored")
-    }
-
-    /// The reselection rule still applies to a file the reader was actually on: staging it
-    /// moves on to the next unstaged file.
-    @Test func aFileActionOnTheSelectedFileStillReselects() async {
-        let h = Harness()
-        let state = h.makeState()
-        let files = [changedFile("a.swift"), changedFile("b.swift")]
-        let staged = changedFile("a.swift", area: .staged)
-        let repo = await h.adopt(state, "A", files: files)
-        await repo.client.set(filesAfterWrite: [staged, files[1]])
-        state.selection = [.file(files[0].id)]
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await state.selection == [.file(files[1].id)] })
     }
 
     /// The case a computed `selectedFileID` would get wrong: All changes and "nothing

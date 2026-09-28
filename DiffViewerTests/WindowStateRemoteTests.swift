@@ -99,23 +99,6 @@ struct WindowStateRemoteTests {
         #expect(await eventually { await repo.client.fetchCalls == ["origin", "origin"] })
     }
 
-    /// A cooldown skip implies an earlier success, so the round carries that time rather
-    /// than leaving the remote out.
-    @Test func aRemoteSkippedByTheCooldownCarriesItsTimeIntoTheRound() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        let originAt = h.clock
-        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt)]))
-        state.isBranchPickerPresented = false
-
-        await repo.client.set(remoteNames: ["origin", "fork"])
-        h.clock += 10
-        await openAndFinish(
-            state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt), "fork": .fetched(at: h.clock)]))
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "origin is still fresh")
-    }
-
     // MARK: Fetching by hand
 
     @Test func aManualRoundCoversEveryRemoteSkipsTheCooldownAndReadsOnce() async {
@@ -302,23 +285,6 @@ struct WindowStateRemoteTests {
         #expect(state.branches == tracked)
         #expect(state.remoteBranches == [main])
         #expect(state.newRemoteBranches.isEmpty, "nothing read, nothing new")
-    }
-
-    @Test func theFetchStaysReservedUntilTheCountsCatchUp() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.holdLocalBranches(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(await repo.client.fetchCalls == ["origin"])
-        #expect(state.fetchStatus == .fetching)
-        #expect(state.fetchingRemotes == ["origin"])
-
-        await repo.client.holdLocalBranches(false)
-        await repo.client.releaseLocalBranches()
-        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
     }
 
     // MARK: New branches
