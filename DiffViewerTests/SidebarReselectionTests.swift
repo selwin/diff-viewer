@@ -39,15 +39,12 @@ struct SidebarReselectionTests {
         #expect(selection(pending("only.swift", area: .commit(commit.ref)), in: rows) == [.file(rows[0].id)])
     }
 
-    @Test func theRememberedRowIsUsedWhenThePathIsGone() {
-        let rows = [changedFile("a.swift"), changedFile("b.swift"), changedFile("c.swift")]
-        #expect(selection(pending("gone.swift", row: 1), in: rows) == [.file(rows[1].id)])
-    }
-
     @Test func theRememberedRowIsClampedToTheLastRow() {
         let rows = [changedFile("a.swift"), changedFile("b.swift")]
         let result = selection(pending("gone.swift", row: 5), in: rows)
         #expect(result == [.file(rows[1].id)], "discarding the bottom row selects the new bottom row")
+        let onlyRow = [rows[0]]
+        #expect(selection(pending("gone.swift", row: 4), in: onlyRow) == [.file(onlyRow[0].id)])
     }
 
     // MARK: A whole selection at once
@@ -82,16 +79,10 @@ struct SidebarReselectionTests {
 
     @Test func theRowFallbackAppliesOnceAtTheLowestPendingRow() {
         let rows = [changedFile("x.swift"), changedFile("y.swift"), changedFile("z.swift")]
+        #expect(selection(pending("gone1.swift", row: 1), in: rows) == [.file(rows[1].id)])
         let result = SidebarReselection.selection(
             after: [pending("gone2.swift", row: 2), pending("gone1.swift", row: 1)], surviving: [], in: rows)
         #expect(result == [.file(rows[1].id)], "discarding two rows leaves one selected, where the topmost was")
-    }
-
-    @Test func theRowFallbackIsClampedToTheLastRow() {
-        let rows = [changedFile("x.swift")]
-        let result = SidebarReselection.selection(
-            after: [pending("gone.swift", row: 4)], surviving: [], in: rows)
-        #expect(result == [.file(rows[0].id)])
     }
 
     @Test func theRowFallbackIsSkippedWhenSomethingElseIsStillSelected() {
@@ -115,19 +106,17 @@ struct SidebarReselectionTests {
         SidebarReselection.neighbour(from: area, at: index, surviving: surviving, in: rows)
     }
 
-    @Test func stagingAMiddleRowSelectsTheRowThatSlidUp() {
-        // b.swift, at index 1 of Changes, was staged.
-        let rows = [changedFile("a.swift"), changedFile("c.swift"), changedFile("b.swift", area: .staged)]
-        #expect(neighbour(from: .unstaged, at: 1, in: rows) == [.file(rows[1].id)])
-    }
+    @Test func stagingMovesOnWithinTheChangesRows() {
+        // b.swift, the middle Changes row, was staged: the row below slid up.
+        let middle = [changedFile("a.swift"), changedFile("c.swift"), changedFile("b.swift", area: .staged)]
+        #expect(neighbour(from: .unstaged, at: 1, in: middle) == [.file(middle[1].id)])
 
-    @Test func stagingTheLastChangesRowSelectsTheNewLastChangesRow() {
-        // c.swift, at index 2 of Changes, was staged; the staged rows follow in sidebar order.
-        let rows = [
+        // c.swift, the last Changes row, was staged; the staged rows follow in sidebar order.
+        let last = [
             changedFile("a.swift"), changedFile("b.swift"),
             changedFile("c.swift", area: .staged), changedFile("d.swift", area: .staged),
         ]
-        #expect(neighbour(from: .unstaged, at: 2, in: rows) == [.file(rows[1].id)], "never a staged row")
+        #expect(neighbour(from: .unstaged, at: 2, in: last) == [.file(last[1].id)], "never a staged row")
     }
 
     @Test func stagingTheOnlyChangesRowSelectsNothing() {

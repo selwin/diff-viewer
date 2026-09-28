@@ -180,31 +180,17 @@ struct WindowStateCommitTests {
         #expect(state.errorMessage != nil)
     }
 
-    /// Typed while git ran: the reader's own text outranks both the submitted message
-    /// and the suggestion.
-    @Test func typedDuringFailingCommit() async throws {
+    /// An edit made while git runs survives the failure; `""` guards a cleared draft.
+    @Test(arguments: ["next", ""])
+    func editedDuringFailingCommit(editedMessage: String) async throws {
         let (_, state, client, _) = try await settled()
         state.commitMessage = message
         let commitTask = await startHeldCommit(state, client)
-        state.commitMessage = "next"
+        state.commitMessage = editedMessage
         await client.fail(commit: true)
         try await finish(commitTask, client, state)
 
-        #expect(state.commitMessage == "next")
-        #expect(state.errorMessage != nil)
-    }
-
-    /// A box the reader emptied is an edit like any other: the failure does not put the
-    /// submitted message back into it.
-    @Test func clearedDuringFailingCommit() async throws {
-        let (_, state, client, _) = try await settled()
-        state.commitMessage = message
-        let commitTask = await startHeldCommit(state, client)
-        state.commitMessage = ""
-        await client.fail(commit: true)
-        try await finish(commitTask, client, state)
-
-        #expect(state.commitMessage == "", "an emptied box is the reader's, not a draft to restore")
+        #expect(state.commitMessage == editedMessage, "the reader's edit, not a draft to restore")
         #expect(state.errorMessage != nil)
     }
 
