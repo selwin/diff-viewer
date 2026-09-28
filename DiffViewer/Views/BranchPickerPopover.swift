@@ -26,9 +26,11 @@ struct BranchPickerPopover: View {
             onPull: { name in Task { await windowState.pull(branch: name) } },
             onPush: { name in Task { await windowState.push(branch: name) } },
             onPublish: { name, remote in Task { await windowState.publish(branch: name, to: remote) } },
-            onDelete: { branch in
+            onDelete: { branch, pickerWindow in
                 Task {
-                    let window = services.windows[windowState.id]
+                    // On the popover itself, so asking doesn't close it; the row goes once
+                    // the delete's branch read lands.
+                    let window = pickerWindow ?? services.windows[windowState.id]
                     guard await BranchDeleteConfirmation.confirm(branch, window: window) else { return }
                     await windowState.deleteBranch(branch)
                 }
@@ -51,7 +53,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPull: (String) -> Void
     let onPush: (String) -> Void
     let onPublish: (String, String) -> Void
-    let onDelete: (LocalBranch) -> Void
+    let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
     let onNewBranch: () -> Void
     let now: @MainActor () -> Date

@@ -25,8 +25,9 @@ final class BranchPickerContainerView: NSView {
     var onPush: (String) -> Void = { _ in }
     /// Takes the branch, then the remote to publish it to.
     var onPublish: (String, String) -> Void = { _, _ in }
-    /// Takes the branch as its row showed it, which the delete checks before it runs.
-    var onDelete: (LocalBranch) -> Void = { _ in }
+    /// Takes the branch as its row showed it, which the delete checks before it runs, and
+    /// the popover's window for the confirmation to hang on.
+    var onDelete: (LocalBranch, NSWindow?) -> Void = { _, _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
     /// The New Branch… row and ⌘N.
@@ -293,7 +294,7 @@ final class BranchPickerContainerView: NSView {
                 self?.returnFocusToSearchField()
             },
             onDelete: { [weak self] in
-                self?.onDelete(branch)
+                self?.onDelete(branch, self?.window)
                 self?.returnFocusToSearchField()
             })
         cell.accessory = view
@@ -445,6 +446,8 @@ final class BranchPickerContainerView: NSView {
     }
 
     func tearDown() {
+        // A confirmation still up would otherwise never answer once its popover is gone.
+        if let window, let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .cancel) }
         fetchTimeTimer?.invalidate()
         fetchTimeTimer = nil
         removeKeyObserver()
