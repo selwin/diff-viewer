@@ -114,8 +114,8 @@ private struct TitleBarPickerLabel: View {
                 .foregroundStyle(.secondary)
         }
         // Wider than the height needs, so the text clears the capsule's round ends.
-        .padding(.horizontal, 12)
-        .frame(height: 26)
+        .padding(.horizontal, 14)
+        .frame(height: 36)
         .background {
             if isOpen {
                 Capsule().fill(.quaternary)
