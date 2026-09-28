@@ -20,9 +20,13 @@ struct SelectionActionsPopover: View {
     @State private var panelSize: CGSize = .zero
 
     var body: some View {
+        // `selectedFiles` filters every sidebar row and this view redraws on scroll, so read
+        // it once. The groups stay the model's, which the Changes menu also uses.
+        let files = windowState.selectedFiles
         let groups = windowState.selectedWriteGroups
-        let fileCount = windowState.selectedFiles.count
-        let placement = isAllowed ? currentPlacement : nil
+        let fileCount = files.count
+        let churn = LineStats.total(of: files)
+        let placement = isAllowed ? files.first.flatMap(placement(for:)) : nil
         Color.clear
             .allowsHitTesting(false)
             .onGeometryChange(for: CGRect.self) {
@@ -32,7 +36,7 @@ struct SelectionActionsPopover: View {
             }
             .overlay(alignment: .topLeading) {
                 if !groups.isEmpty {
-                    SelectionActionsContent(groups: groups, fileCount: fileCount, run: { _, _ in })
+                    SelectionActionsContent(groups: groups, fileCount: fileCount, churn: churn, run: { _, _ in })
                         .fixedSize()
                         .hidden()
                         .accessibilityHidden(true)
@@ -45,7 +49,7 @@ struct SelectionActionsPopover: View {
             }
             .overlay(alignment: .topLeading) {
                 if let placement {
-                    SelectionActionsContent(groups: groups, fileCount: fileCount, run: run)
+                    SelectionActionsContent(groups: groups, fileCount: fileCount, churn: churn, run: run)
                         .fixedSize()
                         // The content alone: a dimmed background would let the diff show through.
                         .opacity(isDimmed ? 0.6 : 1)
@@ -74,8 +78,7 @@ struct SelectionActionsPopover: View {
     ///
     /// The row's own list decides whether it is in sight and which way it lies: indices and
     /// built rows from the other list would say nothing about this one's scroll position.
-    private var currentPlacement: SelectionPopoverPlacement? {
-        guard let first = windowState.selectedFiles.first else { return nil }
+    private func placement(for first: ChangedFile) -> SelectionPopoverPlacement? {
         let list = SidebarList(area: first.area)
         let rows = windowState.rows(in: list).map(\.id)
         guard let index = rows.firstIndex(of: first.id), let listFrame = rowFrames.visibleListFrames[list],
@@ -107,17 +110,29 @@ struct SelectionActionsPopover: View {
 private struct SelectionActionsContent: View {
     let groups: [FileAction.WriteGroup]
     let fileCount: Int
+    /// The summed line counts of the selected files that have them; nil if none do.
+    let churn: LineStats?
     let run: (FileAction, [ChangedFile]) -> Void
 
     var body: some View {
+        let countText = fileCount == 1 ? "1 file selected" : "\(fileCount) files selected"
         VStack(alignment: .leading, spacing: 2) {
-            Text(fileCount == 1 ? "1 file selected" : "\(fileCount) files selected")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.top, 2)
-                .padding(.bottom, 2)
-                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: 8) {
+                Text(countText)
+                    .foregroundStyle(.secondary)
+                // Only with counts: an empty spacer could still widen the panel.
+                if !ChurnLabel.isEmpty(for: churn) {
+                    Spacer(minLength: 16)
+                    ChurnLabel(stats: churn, font: .system(size: 11, weight: .medium).monospacedDigit())
+                }
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 8)
+            .padding(.top, 2)
+            .padding(.bottom, 2)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(countText + (churn?.spokenCounts.map { ", \($0)" } ?? ""))
+            .accessibilityAddTraits(.isHeader)
             ForEach(groups, id: \.action) { group in
                 Button {
                     run(group.action, group.files)

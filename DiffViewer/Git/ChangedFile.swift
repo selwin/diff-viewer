@@ -19,10 +19,10 @@ struct BinarySizes: Hashable, Sendable {
 }
 
 extension LineStats {
-    /// The churn of a whole list: the sum of every `.counted` entry. Nil when nothing is
-    /// counted yet — stats arrive after the list, and a binary-only or empty list has no
-    /// line counts — so a caller can show the identity alone rather than "+0 −0". A path
-    /// that is both staged and unstaged counts twice: those are two real diffs.
+    /// The summed line counts of `files`, skipping any without them: binaries, and files
+    /// not counted yet or never counted. Nil when none have counts, so a caller shows
+    /// nothing rather than "+0 −0". A path both staged and unstaged counts twice: those
+    /// are two real diffs.
     static func total(of files: [ChangedFile]) -> LineStats? {
         var added = 0
         var deleted = 0
@@ -34,6 +34,14 @@ extension LineStats {
             counted = true
         }
         return counted ? .counted(added: added, deleted: deleted) : nil
+    }
+
+    /// "N additions, M deletions" for VoiceOver; nil for a binary file.
+    var spokenCounts: String? {
+        guard case let .counted(added, deleted) = self else { return nil }
+        let additions = added == 1 ? "1 addition" : "\(added) additions"
+        let deletions = deleted == 1 ? "1 deletion" : "\(deleted) deletions"
+        return "\(additions), \(deletions)"
     }
 }
 

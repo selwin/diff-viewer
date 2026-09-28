@@ -23,14 +23,7 @@ struct StagingTraySummary: Equatable {
             commitTitle = count == 1 ? "Commit 1 File" : "Commit \(count) Files"
         }
         churn = LineStats.total(of: stagedFiles)
-        let spokenChurn: String
-        if case let .counted(added, deleted)? = churn {
-            let additions = added == 1 ? "1 addition" : "\(added) additions"
-            let deletions = deleted == 1 ? "1 deletion" : "\(deleted) deletions"
-            spokenChurn = ", \(additions), \(deletions)"
-        } else {
-            spokenChurn = ""
-        }
+        let spokenChurn = churn?.spokenCounts.map { ", \($0)" } ?? ""
         headerAccessibilityLabel = "Staged, \(fileCountText)\(spokenChurn)"
         commitAccessibilityLabel = "\(commitTitle)\(spokenChurn)"
     }
