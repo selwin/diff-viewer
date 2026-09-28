@@ -21,11 +21,15 @@ import Foundation
 /// - `DIFFVIEWER_COMMIT_PICKER=1` opens the commit picker popover the same way;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
+/// - `DIFFVIEWER_NEW_BRANCH_SHEET=1` opens the New Branch sheet, rendered like the commit
+///   sheet; `DIFFVIEWER_KEYS` types into its name field.
 /// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (typed into the first
 ///   responder), `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
 ///   `winclick:<x>x<y>` (the same click in the target window itself, which closes a
-///   popover from outside), `picker` to toggle the commit picker, or `selectAll`
+///   popover from outside), `cmd:<c>` (⌘ plus a character, offered to the key window's
+///   views and then the main menu, as a real one is), `picker` to toggle the commit
+///   picker, or `selectAll`
 ///   (⌘A's action, sent to the first responder). It needs no `DIFFVIEWER_SELECT`, so
 ///   clicks can make the selection. An inactive app's window never really becomes key,
 ///   so clicks take the first-mouse path: one on a view that refuses first mouse (such
@@ -99,11 +103,12 @@ enum DebugLaunchOptions {
             let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
             let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
             let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
+            let newBranchSheet = env["DIFFVIEWER_NEW_BRANCH_SHEET"] == "1"
             let findQuery = env["DIFFVIEWER_FIND"] ?? ""
             // Any other value is ignored, so a typo never clears the saved state.
             let trayExpansion = ["expanded": true, "collapsed": false][env["DIFFVIEWER_STAGING_TRAY"] ?? ""]
             let needsWindow =
-                !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker
+                !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || newBranchSheet
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
@@ -169,6 +174,7 @@ enum DebugLaunchOptions {
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
+                windowState.isNewBranchSheetPresented = newBranchSheet
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
                     try? await Task.sleep(for: .seconds(1))
@@ -359,8 +365,9 @@ enum DebugLaunchOptions {
         try? await Task.sleep(for: .seconds(1))
     }
 
-    /// Types `keys` into whichever window is key as each is sent, so a Return that
-    /// closes a sheet or popover hands the rest to the window beneath. `picker` and
+    /// Types `keys` into whichever window is key as each is sent (or the target's sheet,
+    /// when an inactive app has none), so a Return that closes a sheet or popover hands
+    /// the rest to the window beneath. `picker` and
     /// `winclick` act on the target window, which is not key while the popover is.
     @MainActor
     private static func sendKeys(_ keys: [String], in windowState: WindowState, window target: NSWindow) async {
@@ -376,7 +383,7 @@ enum DebugLaunchOptions {
                 try? await Task.sleep(for: .seconds(1))
                 continue
             }
-            let window = NSApp.keyWindow ?? pickerWindow(of: target) ?? target
+            let window = NSApp.keyWindow ?? pickerWindow(of: target) ?? target.attachedSheet ?? target
             if key == "selectAll" {
                 // What ⌘A and Edit > Select All send. Aimed at the window's first responder
                 // because a script-launched app is inactive, so a nil target reaches nothing.
@@ -388,6 +395,10 @@ enum DebugLaunchOptions {
                 let kind = mouse == "winclick" ? "click" : String(mouse)
                 postMouse(kind, key.dropFirst(mouse.count + 1), in: mouse == "winclick" ? target : window)
                 try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
+            if key.hasPrefix("cmd:") {
+                await sendCommandKey(String(key.dropFirst("cmd:".count)), to: window)
                 continue
             }
             let code = UInt16(key)
@@ -571,21 +582,6 @@ extension DebugLaunchOptions {
         guard finished else { return "search for \(query) did not finish" }
         try? await Task.sleep(for: .milliseconds(100))
         return nil
-    }
-
-    /// The characters a real key press with `code` carries; empty for keys not listed.
-    fileprivate static func characters(forKeyCode code: UInt16) -> String {
-        let scalar: Int? =
-            switch code {
-            case 126: NSUpArrowFunctionKey
-            case 125: NSDownArrowFunctionKey
-            case 115: NSHomeFunctionKey
-            case 119: NSEndFunctionKey
-            case 36, 76: 0x0D
-            case 53: 0x1B
-            default: nil
-            }
-        return scalar.flatMap(UnicodeScalar.init).map { String(Character($0)) } ?? ""
     }
 }
 

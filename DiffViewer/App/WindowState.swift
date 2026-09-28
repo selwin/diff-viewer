@@ -184,6 +184,9 @@ final class WindowState {
     var isConfirmingFileAction = false
     /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
     var isCommitPickerPresented = false
+    /// The New Branch sheet is up. Like the pickers and the commit sheet, it opens only
+    /// while none of them is.
+    var isNewBranchSheetPresented = false
     /// The branch picker popover is up, on the same terms as the commit picker's flag.
     /// Opening it starts the automatic fetch behind its counts.
     var isBranchPickerPresented = false {
@@ -300,6 +303,7 @@ final class WindowState {
         isCommitSheetPresented = false
         isCommitPickerPresented = false
         isBranchPickerPresented = false
+        isNewBranchSheetPresented = false
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -959,12 +963,12 @@ extension WindowState {
 /// suggestion. Same file as the class so the commit state stays `private(set)`.
 extension WindowState {
     /// Whether the commit editor can open, regardless of the draft: an open window in
-    /// working-tree scope, no commit or branch switch queued or running, both pickers
-    /// down, no conflict rows, something to commit (staged files, or a merge whose tree may
-    /// equal HEAD).
+    /// working-tree scope, no commit or branch switch queued or running, both pickers and
+    /// the New Branch sheet down, no conflict rows, something to commit (staged files, or a
+    /// merge whose tree may equal HEAD).
     var canOpenCommitSheet: Bool {
         guard session != nil, !isClosed, scope == .workingTree, !isCommitting, !isSwitchingBranch,
-            !isCommitPickerPresented, !isBranchPickerPresented
+            !isCommitPickerPresented, !isBranchPickerPresented, !isNewBranchSheetPresented
         else { return false }
         guard !files.contains(where: { $0.kind == .unmerged }) else { return false }
         return files.contains(where: { $0.area == .staged }) || commitDefaults.isMerging
@@ -1187,8 +1191,8 @@ extension WindowState {
 
 // MARK: - Switching branches
 
-/// Checking out another local branch, or a remote one as a new tracking branch, from the
-/// title bar. Same file as the class so `isSwitchingBranch` stays `private(set)`.
+/// Checking out another local branch, a remote one as a new tracking branch, or a new
+/// branch made at HEAD, from the title bar. Same file as the class so `isSwitchingBranch` stays `private(set)`.
 extension WindowState {
     /// Switches the working tree to `branch` on the write chain; a second call while one
     /// is queued or running does nothing, and so does choosing the branch already checked
@@ -1253,6 +1257,20 @@ extension WindowState {
         guard let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+    }
+
+    /// Creates `name` at HEAD and switches to it, on the same terms as `switchBranch(to:)`.
+    /// The sheet has already checked the name; git still has the final say.
+    func createBranch(named name: String) async {
+        guard let session, !isClosed, !isSwitchingBranch else { return }
+        isSwitchingBranch = true  // before the first suspension: the admission guard
+        defer { isSwitchingBranch = false }
+        cancelCommitMessageGeneration()
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runBranchSwitch(session: session) { client in
+                try await client.createBranch(name)
+            }
+        }
     }
 
     /// Creates a local branch tracking `branch` and switches to it, on the same terms as

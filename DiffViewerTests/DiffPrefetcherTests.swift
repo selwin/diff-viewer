@@ -73,6 +73,8 @@ struct TaggedClient: RepoClient {
     func commit(message: String) async throws {}
     func switchBranch(to branch: String) async throws {}
     func checkoutTracking(branch: String, trackingRef: String) async throws {}
+    func createBranch(_ name: String) async throws {}
+    func isValidBranchName(_ name: String) async throws -> Bool { true }
     func deleteBranch(_ name: String) async throws {}
     func remoteNames() async throws -> [String] { [] }
     func fetch(remote: String) async throws {}

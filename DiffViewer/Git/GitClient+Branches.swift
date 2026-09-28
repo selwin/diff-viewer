@@ -84,3 +84,51 @@ extension GitClient {
         }
     }
 }
+
+// MARK: - New branches
+
+extension GitClient {
+    /// Whether git accepts `name` for a new local branch. A leading dash is refused without
+    /// running git, which would read it as an option.
+    func isValidBranchName(_ name: String) async throws -> Bool {
+        guard !name.hasPrefix("-") else { return false }
+        // The full ref, not `--branch`: that expands checkout shorthand, so `@{-1}` would
+        // pass as the previous branch's name.
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["check-ref-format", "refs/heads/\(name)"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // 1 is "not a valid name"; anything else non-zero is git failing to answer.
+        switch result.status {
+        case 0: return true
+        case 1: return false
+        default:
+            throw ProcessError.failed(
+                command: "git check-ref-format", status: result.status, stderr: result.stderrString)
+        }
+    }
+
+    /// Creates `name` at HEAD and switches to it. Runs the post-checkout hook, so it takes
+    /// the hook environment.
+    func createBranch(_ name: String) async throws {
+        // Git itself would read a leading dash as an option.
+        guard !name.hasPrefix("-") else {
+            throw ProcessError.failed(command: "git switch", status: 128, stderr: "'\(name)' is not a branch name")
+        }
+        // `-c`, never `-C`: an existing branch is refused, not reset. `--no-track`: with
+        // `branch.autoSetupMerge=inherit` or `always` the new branch would otherwise track
+        // the branch it started from, and a push would go there.
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["switch", "--no-track", "-c", name],
+            currentDirectory: repoRoot,
+            environment: await hookEnvironment()
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git switch", status: result.status, stderr: Self.commandDiagnostics(result))
+        }
+    }
+}

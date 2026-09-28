@@ -63,3 +63,23 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         }
     }
 }
+
+/// Key equivalents the popover answers before the main menu.
+extension BranchPickerContainerView {
+    /// ⌘R fetches and ⌘N opens the New Branch sheet while the popover is key. The key
+    /// window's views see a key equivalent before the main menu does, and this runs
+    /// whichever view has focus, the search field's editor included, so the menu never
+    /// gets them. Once the popover closes this view is out of the key window and ⌘R is
+    /// Refresh again.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "r": onFetch()
+        // Taken even while the row is off, so it never falls through to the menu.
+        case "n": if newBranchRow.isEnabled { onNewBranch() }
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
+    }
+}

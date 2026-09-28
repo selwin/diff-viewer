@@ -22,6 +22,27 @@ struct WindowStateBranchPickerTests {
         return repo
     }
 
+    // MARK: New Branch sheet
+
+    /// The picker hands over to the sheet, and while the sheet is up neither picker nor
+    /// the commit sheet can open.
+    @Test func theNewBranchSheetReplacesThePickerAndBlocksTheOthers() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state, files: [changedFile("a.swift", area: .staged)])
+        #expect(state.canOpenCommitSheet)
+        state.isBranchPickerPresented = true
+        #expect(!state.canOpenNewBranchSheet)
+
+        state.openNewBranchSheetFromPicker()
+
+        #expect(!state.isBranchPickerPresented)
+        #expect(state.isNewBranchSheetPresented)
+        #expect(!state.canOpenBranchPicker)
+        #expect(!state.canOpenCommitPicker)
+        #expect(!state.canOpenCommitSheet)
+    }
+
     // MARK: Paired publish
 
     @Test func headAndBranchesPublishTogether() async {

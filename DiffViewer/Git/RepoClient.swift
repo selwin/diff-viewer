@@ -76,6 +76,12 @@ protocol RepoClient: Sendable {
     /// Creates `branch` tracking the remote-tracking ref `trackingRef` and switches to it.
     /// Throws git's diagnostics when it refuses, as for a name that already exists locally.
     func checkoutTracking(branch: String, trackingRef: String) async throws
+    /// Creates `name` at HEAD, tracking nothing, and switches to it. Throws git's and the
+    /// hooks' diagnostics when it refuses, as for a name that already exists.
+    func createBranch(_ name: String) async throws
+    /// Whether git accepts `name` for a new local branch. False for a leading dash, which
+    /// never reaches git.
+    func isValidBranchName(_ name: String) async throws -> Bool
     /// Deletes a local branch whether or not it is merged: `git branch -D`. Throws git's
     /// diagnostics when it refuses, as for a branch checked out in any worktree.
     func deleteBranch(_ name: String) async throws

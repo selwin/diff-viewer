@@ -56,6 +56,9 @@ actor StubRepoClient: RepoClient {
     /// Every remote checkout asked for, in order, whether or not it succeeded.
     private(set) var checkoutTrackingCalls: [(branch: String, trackingRef: String)] = []
     private var failsCheckoutTracking = false
+    /// Every branch creation asked for, in order, whether or not it succeeded.
+    private(set) var createBranchCalls: [String] = []
+    private var failsCreateBranch = false
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
     /// Every branch a delete was asked for, in order, whether or not it succeeded.
@@ -385,6 +388,22 @@ actor StubRepoClient: RepoClient {
         stubbedLocalBranches.append(localBranch(branch, upstream: upstream(shortName, localRef: trackingRef)))
         stubbedHeadState = .named(branch)
     }
+
+    /// Makes `createBranch` throw, after recording the call.
+    func fail(createBranch on: Bool) { failsCreateBranch = on }
+
+    /// Adds the branch and moves HEAD onto it on success, as git would.
+    func createBranch(_ name: String) async throws {
+        createBranchCalls.append(name)
+        if failsCreateBranch {
+            throw ProcessError.failed(command: "git switch", status: 128, stderr: "create failed")
+        }
+        stubbedLocalBranches.append(localBranch(name))
+        stubbedHeadState = .named(name)
+    }
+
+    /// Only the leading-dash rule; git's own rules are covered by `GitCommandTests`.
+    func isValidBranchName(_ name: String) async throws -> Bool { !name.hasPrefix("-") }
 
     func switchBranch(to branch: String) async throws {
         switchBranchCalls.append(branch)

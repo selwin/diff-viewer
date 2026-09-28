@@ -1,7 +1,7 @@
 import AppKit
 
-/// The branch picker's AppKit root: header, search field, and the branch table or its
-/// empty state, laid out top-down by hand. Owns the `BranchPickerState` and applies each
+/// The branch picker's AppKit root: header, search field, the branch table or its empty
+/// state, and the New Branch… row, laid out top-down by hand. Owns the `BranchPickerState` and applies each
 /// snapshot and query to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
@@ -10,6 +10,8 @@ final class BranchPickerContainerView: NSView {
     private static let searchHeight: CGFloat = 30
     /// What an empty list keeps room for: its message, or a spinner.
     private static let emptyListHeight: CGFloat = 120
+    /// The hairline above the New Branch… row, and the gaps around the two.
+    private static let footerHeight: CGFloat = 4 + 1 + 4 + BranchPickerNewBranchRow.height + 6
 
     private(set) var state: BranchPickerState
 
@@ -23,6 +25,8 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch) -> Void = { _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
+    /// The New Branch… row and ⌘N.
+    var onNewBranch: () -> Void = {}
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
 
@@ -33,6 +37,8 @@ final class BranchPickerContainerView: NSView {
     let scrollView = NSScrollView()
     let tableView = CommitPickerTableView()
     let emptyState = CommitPickerEmptyStateView(frame: .zero)
+    private let footerHairline = HairlineView(frame: .zero)
+    let newBranchRow = BranchPickerNewBranchRow(frame: .zero)
 
     /// Set while the container itself moves the table's selection, which the delegate
     /// must not read back as the reader's choice.
@@ -53,8 +59,11 @@ final class BranchPickerContainerView: NSView {
         clipsToBounds = true
         configureSearchField()
         configureTable()
-        for view in [header, searchBackground, searchField, scrollView, emptyState] { addSubview(view) }
+        for view in [header, searchBackground, searchField, scrollView, emptyState, footerHairline, newBranchRow] {
+            addSubview(view)
+        }
         configureHeader()
+        newBranchRow.onActivate = { [weak self] in self?.onNewBranch() }
         fetchTimeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderFetchTime() }
         }
@@ -228,6 +237,7 @@ final class BranchPickerContainerView: NSView {
 
     private func renderChrome() {
         header.configure(state.headerText, fetch: state.fetchText(now: now()))
+        newBranchRow.isEnabled = !state.snapshot.isSwitchingBranch
         wireKeyViewLoop()
         switch state.emptyState {
         case nil: emptyState.configure(text: nil, isLoading: false, showsRetry: false)
@@ -317,9 +327,12 @@ final class BranchPickerContainerView: NSView {
             x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
             width: searchBackground.frame.width - 8, height: fieldHeight)
         let tableTop = searchBackground.frame.maxY + Self.gap
-        scrollView.frame = NSRect(
-            x: 0, y: tableTop, width: width, height: max(height - tableTop - BranchPickerMetrics.rowInset, 0))
+        let footerTop = height - Self.footerHeight
+        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(footerTop - tableTop, 0))
         emptyState.frame = scrollView.frame
+        footerHairline.frame = NSRect(x: 0, y: footerTop + 4, width: width, height: 1)
+        newBranchRow.frame = NSRect(
+            x: 0, y: footerHairline.frame.maxY + 4, width: width, height: BranchPickerNewBranchRow.height)
         tableView.sizeLastColumnToFit()
         // The table only knows its rows once it has laid out, so the initial highlight
         // is selected here rather than in `init`.
@@ -351,9 +364,7 @@ final class BranchPickerContainerView: NSView {
         let list = state.items.reduce(CGFloat(0)) { total, item in
             total + (item.row == nil ? BranchPickerMetrics.headerRowHeight : BranchPickerMetrics.rowHeight)
         }
-        let chrome =
-            header.fittingHeight + Self.gap + Self.searchHeight + Self.gap
-            + BranchPickerMetrics.rowInset
+        let chrome = header.fittingHeight + Self.gap + Self.searchHeight + Self.gap + Self.footerHeight
         let height = min(chrome + max(list, Self.emptyListHeight), BranchPickerMetrics.maximumHeight).rounded(.up)
         guard height != preferredHeight else { return }
         preferredHeight = height
@@ -437,19 +448,6 @@ final class BranchPickerContainerView: NSView {
 
     override func cancelOperation(_ sender: Any?) {
         onDismiss()
-    }
-
-    /// ⌘R fetches while the popover is key. The key window's views see a key equivalent
-    /// before the main menu does, and this runs whichever view has focus, the search
-    /// field's editor included, so the menu's Refresh never gets it. Once the popover
-    /// closes this view is out of the key window and ⌘R is Refresh again.
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
-        guard modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "r" else {
-            return super.performKeyEquivalent(with: event)
-        }
-        onFetch()
-        return true
     }
 }
 

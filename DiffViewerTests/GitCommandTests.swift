@@ -1371,6 +1371,64 @@ import Testing
         _ = remote
     }
 
+    // MARK: New branches
+
+    @Test func createBranchSwitchesToANewBranchAtHead() async throws {
+        let repo = try await twoBranchRepo()
+        let mainTip = try await repo.git(["rev-parse", "main"])
+
+        try await repo.client.createBranch("feature/x")
+
+        #expect(try await repo.client.headState() == .named("feature/x"))
+        #expect(try await repo.git(["rev-parse", "feature/x"]) == mainTip)
+    }
+
+    /// `branch.autoSetupMerge=inherit` would have it track main's upstream, and a push
+    /// would go there.
+    @Test func createBranchTracksNothingWhateverTheConfig() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["config", "branch.autoSetupMerge", "inherit"])
+
+        try await repo.client.createBranch("topic")
+
+        let topic = try #require(try await repo.client.localBranches().first { $0.name == "topic" })
+        #expect(topic.upstream == nil)
+        _ = remote
+    }
+
+    @Test func createBranchRefusesABadName() async throws {
+        let repo = try await twoBranchRepo()
+        for name in ["foo..bar", "-x"] {
+            await #expect(throws: (any Error).self) {
+                try await repo.client.createBranch(name)
+            }
+        }
+        #expect(try await repo.client.headState() == .named("main"))
+        #expect(try await repo.client.localBranches().map(\.name) == ["main", "side"])
+    }
+
+    /// `-c`, not `-C`: the existing branch is neither reset nor switched to.
+    @Test func createBranchRefusesAnExistingNameAndLeavesThatBranch() async throws {
+        let repo = try await twoBranchRepo()
+        let sideTip = try await repo.git(["rev-parse", "side"])
+
+        await #expect(throws: (any Error).self) {
+            try await repo.client.createBranch("side")
+        }
+
+        #expect(try await repo.client.headState() == .named("main"))
+        #expect(try await repo.git(["rev-parse", "side"]) == sideTip)
+    }
+
+    @Test func isValidBranchNameFollowsGitsRules() async throws {
+        let repo = try await twoBranchRepo()
+        // `@{-1}` is checkout shorthand for the previous branch, not a name.
+        for name in ["foo..bar", "foo.lock/bar", "foo//bar", "@{-1}", "-x"] {
+            #expect(try await !repo.client.isValidBranchName(name), "\(name)")
+        }
+        #expect(try await repo.client.isValidBranchName("feature/x"))
+    }
+
     // MARK: Contents
 
     @Test func contentsReadsAGivenRevisionAndThrowsForAMissingOne() async throws {

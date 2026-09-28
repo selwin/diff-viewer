@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
-/// popover; a click outside closes it too.
+/// popover; so does New Branch…, which opens its sheet. A click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
     /// For the window the delete confirmation hangs on.
@@ -34,6 +34,7 @@ struct BranchPickerPopover: View {
                 }
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
+            onNewBranch: { windowState.openNewBranchSheetFromPicker() },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
@@ -52,6 +53,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPublish: (String, String) -> Void
     let onDelete: (LocalBranch) -> Void
     let onFetch: () -> Void
+    let onNewBranch: () -> Void
     let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
@@ -81,6 +83,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onPublish = onPublish
         view.onDelete = onDelete
         view.onFetch = onFetch
+        view.onNewBranch = onNewBranch
         view.now = now
     }
 }

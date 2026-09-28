@@ -362,6 +362,37 @@ struct WindowStateRemoteTests {
         #expect(state.newRemoteBranches.isEmpty)
     }
 
+    /// A new branch goes through the same switch path: HEAD and the list are re-read, and
+    /// the flags go with the old branch.
+    @Test func creatingABranchSwitchesRefreshesAndClearsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state)
+
+        await state.createBranch(named: "topic")
+
+        #expect(await repo.client.createBranchCalls == ["topic"])
+        #expect(state.headState == .named("topic"))
+        #expect(state.localBranches == ["main", "topic"])
+        #expect(state.newRemoteBranches.isEmpty)
+        #expect(!state.isSwitchingBranch)
+        #expect(state.errorMessage == nil)
+    }
+
+    /// Git's refusal is reported like any switch's, and HEAD and the flags stay.
+    @Test func aRefusedBranchCreationReportsGitsErrorAndKeepsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state)
+        await repo.client.fail(createBranch: true)
+
+        await state.createBranch(named: "topic")
+
+        #expect(state.errorMessage?.contains("create failed") == true)
+        #expect(state.headState == .named("main"))
+        #expect(state.newRemoteBranches == [remoteBranch("feature").ref])
+    }
+
     /// A post-checkout hook fails after git has moved HEAD: the switch happened, so the
     /// flags go even though the command reported failure.
     @Test func aSwitchThatMovesHeadButFailsItsHookClearsTheNewFlags() async {
