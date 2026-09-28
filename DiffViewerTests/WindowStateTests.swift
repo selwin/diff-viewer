@@ -50,6 +50,15 @@ actor StubRepoClient: RepoClient {
     private var holdsLocalBranches = false
     private var heldLocalBranches: [CheckedContinuation<Void, Never>] = []
     private(set) var localBranchesCalls = 0
+    private var stubbedRemoteBranches: [RemoteBranch] = []
+    private var failsRemoteBranches = false
+    private(set) var remoteBranchesCalls = 0
+    /// Every remote checkout asked for, in order, whether or not it succeeded.
+    private(set) var checkoutTrackingCalls: [(branch: String, trackingRef: String)] = []
+    private var failsCheckoutTracking = false
+    /// Every branch creation asked for, in order, whether or not it succeeded.
+    private(set) var createBranchCalls: [String] = []
+    private var failsCreateBranch = false
     /// Every branch a switch was asked for, in order, whether or not it succeeded.
     private(set) var switchBranchCalls: [String] = []
     /// Every branch a delete was asked for, in order, whether or not it succeeded.
@@ -324,6 +333,11 @@ actor StubRepoClient: RepoClient {
     /// Releases the oldest held branches read, for the other half of that choice.
     func releaseFirstLocalBranches() { if !heldLocalBranches.isEmpty { heldLocalBranches.removeFirst().resume() } }
 
+    func set(remoteBranches branches: [RemoteBranch]) { stubbedRemoteBranches = branches }
+    func fail(remoteBranches on: Bool) { failsRemoteBranches = on }
+    /// Makes `checkoutTracking` throw, after recording the call.
+    func fail(checkoutTracking on: Bool) { failsCheckoutTracking = on }
+
     /// Makes `switchBranch` throw, after recording the call and moving HEAD.
     func fail(switchBranch on: Bool) { failsSwitchBranch = on }
     /// Suspends `switchBranch` after it records the call.
@@ -355,6 +369,41 @@ actor StubRepoClient: RepoClient {
         }
         return snapshot
     }
+
+    func remoteBranches() async throws -> [RemoteBranch] {
+        remoteBranchesCalls += 1
+        if failsRemoteBranches {
+            throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone")
+        }
+        return stubbedRemoteBranches
+    }
+
+    /// Adds the tracking branch and moves HEAD onto it on success, as git would.
+    func checkoutTracking(branch: String, trackingRef: String) async throws {
+        checkoutTrackingCalls.append((branch: branch, trackingRef: trackingRef))
+        if failsCheckoutTracking {
+            throw ProcessError.failed(command: "git switch", status: 128, stderr: "checkout failed")
+        }
+        let shortName = String(trackingRef.dropFirst("refs/remotes/".count))
+        stubbedLocalBranches.append(localBranch(branch, upstream: upstream(shortName, localRef: trackingRef)))
+        stubbedHeadState = .named(branch)
+    }
+
+    /// Makes `createBranch` throw, after recording the call.
+    func fail(createBranch on: Bool) { failsCreateBranch = on }
+
+    /// Adds the branch and moves HEAD onto it on success, as git would.
+    func createBranch(_ name: String) async throws {
+        createBranchCalls.append(name)
+        if failsCreateBranch {
+            throw ProcessError.failed(command: "git switch", status: 128, stderr: "create failed")
+        }
+        stubbedLocalBranches.append(localBranch(name))
+        stubbedHeadState = .named(name)
+    }
+
+    /// Only the leading-dash rule; git's own rules are covered by `GitCommandTests`.
+    func isValidBranchName(_ name: String) async throws -> Bool { !name.hasPrefix("-") }
 
     func switchBranch(to branch: String) async throws {
         switchBranchCalls.append(branch)

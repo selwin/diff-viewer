@@ -196,9 +196,24 @@ func localBranch(
     _ name: String,
     upstream: BranchUpstream? = nil,
     tipSha: String = objectID("tip"),
-    tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
+    tipCommitAuthor: String = "Tester"
 ) -> LocalBranch {
-    LocalBranch(name: name, upstream: upstream, tipSha: tipSha, tipCommittedAt: tipCommittedAt)
+    LocalBranch(
+        name: name, upstream: upstream, tipSha: tipSha, tipCommittedAt: tipCommittedAt,
+        tipCommitAuthor: tipCommitAuthor)
+}
+
+/// `ref` is `refs/remotes/<remote>/<name>`, the default fetch layout.
+func remoteBranch(
+    _ name: String,
+    remote: String = "origin",
+    tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
+    tipCommitAuthor: String = "Tester"
+) -> RemoteBranch {
+    RemoteBranch(
+        remote: remote, name: name, ref: "refs/remotes/\(remote)/\(name)", tipCommitAuthor: tipCommitAuthor,
+        tipCommittedAt: tipCommittedAt)
 }
 
 /// `remoteRef` defaults to the branch half of `shortName`: `origin/main` tracks

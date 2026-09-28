@@ -296,4 +296,9 @@ extension CommitPickerContainerView: PickerTableHandler {
     func cancel() {
         onDismiss()
     }
+
+    /// Every commit row takes the highlight.
+    func canHighlight(tableRow: Int) -> Bool {
+        true
+    }
 }

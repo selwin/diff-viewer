@@ -171,16 +171,16 @@ struct GitClient: RepoClient {
         // shortens `refs/heads/main` only as far as `heads/main` to stay unambiguous.
         // Stripping the prefix ourselves always yields the plain branch name.
         //
-        // The upstream, date and tip fields ride along on the same process; `nobracket` drops
-        // the `[ ]` git would otherwise wrap the counts in. NUL separates the fields,
-        // newline the branches.
+        // The upstream, date, tip and author fields ride along on the same process;
+        // `nobracket` drops the `[ ]` git would otherwise wrap the counts in. NUL separates
+        // the fields, newline the branches.
         let result = try await ProcessRunner.check(
             Self.executable,
             arguments: [
                 "for-each-ref",
                 "--format=%(refname)%00%(upstream:short)%00%(upstream:track,nobracket)"
                     + "%00%(upstream:remotename)%00%(upstream:remoteref)%00%(committerdate:iso-strict)"
-                    + "%00%(upstream)%00%(objectname)",
+                    + "%00%(upstream)%00%(objectname)%00%(authorname)",
                 "refs/heads/",
             ],
             currentDirectory: repoRoot,

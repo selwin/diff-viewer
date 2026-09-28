@@ -22,6 +22,27 @@ struct WindowStateBranchPickerTests {
         return repo
     }
 
+    // MARK: New Branch sheet
+
+    /// The picker hands over to the sheet, and while the sheet is up neither picker nor
+    /// the commit sheet can open.
+    @Test func theNewBranchSheetReplacesThePickerAndBlocksTheOthers() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state, files: [changedFile("a.swift", area: .staged)])
+        #expect(state.canOpenCommitSheet)
+        state.isBranchPickerPresented = true
+        #expect(!state.canOpenNewBranchSheet)
+
+        state.openNewBranchSheetFromPicker()
+
+        #expect(!state.isBranchPickerPresented)
+        #expect(state.isNewBranchSheetPresented)
+        #expect(!state.canOpenBranchPicker)
+        #expect(!state.canOpenCommitPicker)
+        #expect(!state.canOpenCommitSheet)
+    }
+
     // MARK: Paired publish
 
     @Test func headAndBranchesPublishTogether() async {
@@ -148,7 +169,7 @@ struct WindowStateBranchPickerTests {
 
         var picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
         #expect(!picker.rows.isEmpty)
-        #expect(picker.rows.indices.allSatisfy { !picker.canActivate(tableRow: $0) })
+        #expect(picker.items.indices.allSatisfy { !picker.canActivate(tableRow: $0) })
 
         await state.switchBranch(to: "feature")
         await repo.client.holdSwitchBranch(false)
@@ -157,6 +178,6 @@ struct WindowStateBranchPickerTests {
         #expect(await repo.client.switchBranchCalls == ["feature"], "the second call was ignored")
 
         picker = BranchPickerState(snapshot: state.branchPickerSnapshot, grouping: CommitDayGrouping())
-        #expect(picker.rows.indices.contains { picker.canActivate(tableRow: $0) }, "rows unlock once it settles")
+        #expect(picker.items.indices.contains { picker.canActivate(tableRow: $0) }, "rows unlock once it settles")
     }
 }

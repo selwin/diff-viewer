@@ -98,4 +98,25 @@ struct CommitDayGroupingTests {
         #expect(grouping.dateTimeText(for: date(2025, 9, 18, 14, 2)) == "18 Sep 2025 at 14:02")
         #expect(grouping.dateTimeText(for: date(2026, 9, 17, 14, 2)) == "17 Sep 2026 at 14:02")
     }
+
+    // MARK: Branch groups
+
+    /// Sections are cut at local midnight: 2 to 6 days ago is this week.
+    @Test func branchGroupBoundaries() {
+        #expect(grouping.branchGroup(for: date(2026, 9, 19, 0, 0)) == .today)
+        #expect(grouping.branchGroup(for: date(2026, 9, 20, 9, 0)) == .today, "a tip dated after now")
+        #expect(grouping.branchGroup(for: date(2026, 9, 18, 23, 59)) == .yesterday)
+        #expect(grouping.branchGroup(for: date(2026, 9, 18, 0, 0)) == .yesterday)
+        #expect(grouping.branchGroup(for: date(2026, 9, 17, 23, 59)) == .thisWeek)
+        #expect(grouping.branchGroup(for: date(2026, 9, 13, 0, 0)) == .thisWeek)
+        #expect(grouping.branchGroup(for: date(2026, 9, 12, 23, 59)) == .older)
+    }
+
+    @Test func branchTimeTextForms() {
+        #expect(grouping.branchTimeText(for: date(2026, 9, 19, 9, 5)) == "09:05")
+        #expect(grouping.branchTimeText(for: date(2026, 9, 18, 21, 40)) == "21:40")
+        #expect(grouping.branchTimeText(for: date(2026, 9, 15, 9, 0)) == "Tue")
+        #expect(grouping.branchTimeText(for: date(2026, 9, 12, 9, 0)) == "12 Sep")
+        #expect(grouping.branchTimeText(for: date(2025, 12, 30, 9, 0)) == "30 Dec 2025")
+    }
 }

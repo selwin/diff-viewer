@@ -33,9 +33,8 @@ struct UpstreamTrackingTests {
         #expect(UpstreamTracking.counts(ahead: 0, behind: 0).summary == nil)
     }
 
-    /// Behind first: it is the count that decides whether a pull is due.
-    @Test func bothCountsReadBehindFirst() {
-        #expect(UpstreamTracking.counts(ahead: 1, behind: 2).summary == "2 behind, 1 ahead")
+    @Test func bothCountsReadAheadFirst() {
+        #expect(UpstreamTracking.counts(ahead: 2, behind: 3).summary == "2 ahead · 3 behind")
     }
 
     @Test func oneSidedSummaries() {

@@ -1,45 +1,55 @@
 import AppKit
 
-/// The table's data source and delegate: rows come from `state`, and a selection made by
+/// The table's data source and delegate: items come from `state`, and a selection made by
 /// a click or the keyboard becomes the highlight.
 extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
-        state.rows.count
+        state.items.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard state.rows.indices.contains(row) else { return nil }
-        let cell =
-            tableView.makeView(withIdentifier: ScopeRowContentView.identifier, owner: nil) as? ScopeRowContentView
-            ?? ScopeRowContentView(frame: .zero)
-        let entry = state.rows[row]
-        cell.configure(
-            ScopeRowContentView.Content(
-                gutterTitle: entry.dayLabel?.title, gutterSubtitle: entry.dayLabel?.subtitle,
-                subject: entry.branch.name, showsCurrentPill: entry.isCurrent, trailing: entry.trailingText,
-                trailingStyle: .secondary, accessibilityActionName: "Switch to branch",
-                subjectEmphasisRanges: entry.matchedRanges.map { NSRange($0, in: entry.branch.name) }))
-        configureSyncButtons(of: cell, row: row)
-        // No callback on a row that cannot be switched to: the action must not be offered.
-        guard state.canActivate(tableRow: row) else {
-            cell.onActivate = nil
+        guard state.items.indices.contains(row) else { return nil }
+        switch state.items[row] {
+        case let .header(group):
+            let cell =
+                tableView.makeView(withIdentifier: BranchPickerGroupHeaderView.identifier, owner: nil)
+                as? BranchPickerGroupHeaderView ?? BranchPickerGroupHeaderView(frame: .zero)
+            cell.configure(group)
+            return cell
+        case let .branch(entry):
+            let cell =
+                tableView.makeView(withIdentifier: BranchPickerRowView.identifier, owner: nil)
+                as? BranchPickerRowView ?? BranchPickerRowView(frame: .zero)
+            cell.configure(entry)
+            configureHighlightAndButtons(of: cell, row: row, animated: false)
+            // No callback on a row that cannot be activated: the action must not be offered.
+            guard state.canActivate(tableRow: row) else {
+                cell.onActivate = nil
+                return cell
+            }
+            // Read the row back from the cell: a recycled cell can move.
+            cell.onActivate = { [weak self, weak cell] in
+                guard let self, let cell else { return }
+                let row = self.tableView.row(for: cell)
+                if row >= 0 { activate(tableRow: row) }
+            }
             return cell
         }
-        // Read the row back from the cell: a recycled cell can move.
-        cell.onActivate = { [weak self, weak cell] in
-            guard let self, let cell else { return }
-            let row = self.tableView.row(for: cell)
-            if row >= 0 { activate(tableRow: row) }
-        }
-        return cell
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        state.canHighlight(tableRow: row) ? BranchPickerMetrics.rowHeight : BranchPickerMetrics.headerRowHeight
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        state.canHighlight(tableRow: row)
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView =
             tableView.makeView(withIdentifier: CommitPickerTableRowView.identifier, owner: nil)
             as? CommitPickerTableRowView ?? CommitPickerTableRowView(frame: .zero)
-        // A recycled row view keeps its last hover.
-        rowView.isHovered = row == self.tableView.hoveredRow
+        rowView.style = .branchPicker
         return rowView
     }
 
@@ -51,5 +61,25 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         } else if state.highlightedTableRow != nil {
             syncSelection()
         }
+    }
+}
+
+/// Key equivalents the popover answers before the main menu.
+extension BranchPickerContainerView {
+    /// ⌘R fetches and ⌘N opens the New Branch sheet while the popover is key. The key
+    /// window's views see a key equivalent before the main menu does, and this runs
+    /// whichever view has focus, the search field's editor included, so the menu never
+    /// gets them. Once the popover closes this view is out of the key window and ⌘R is
+    /// Refresh again.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "r": onFetch()
+        // Taken even while the row is off, so it never falls through to the menu.
+        case "n": if newBranchRow.isEnabled { onNewBranch() }
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
     }
 }

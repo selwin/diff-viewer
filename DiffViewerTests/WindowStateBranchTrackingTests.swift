@@ -26,7 +26,7 @@ struct WindowStateBranchTrackingTests {
         arguments: [(LocalBranch, HeadState, String?, String)]([
             (
                 localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2))),
-                HeadState.named("main"), "2 behind, 1 ahead", "Switch branch · origin/main: 2 behind, 1 ahead"
+                HeadState.named("main"), "1 ahead · 2 behind", "Switch branch · origin/main: 1 ahead · 2 behind"
             ),
             (
                 localBranch("main", upstream: upstream("origin/main")),

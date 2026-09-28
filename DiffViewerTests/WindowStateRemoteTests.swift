@@ -3,7 +3,8 @@ import Testing
 
 @testable import DiffViewer
 
-/// Opening the branch picker fetches the remote its ahead/behind counts are read from.
+/// Fetch rounds: opening the branch picker, and its Fetch, update every remote the counts
+/// are read from.
 @MainActor
 struct WindowStateRemoteTests {
     private let tracked = [localBranch("main", upstream: upstream("origin/main"))]
@@ -32,6 +33,27 @@ struct WindowStateRemoteTests {
         h.tick(repo.root, [.refs])
     }
 
+    /// True once no round is running and the last one ended as `round`. Both are published
+    /// in one turn, so one read sees them together.
+    private func finished(_ state: WindowState, as round: FetchRound) async -> Bool {
+        await eventually { @MainActor in state.fetchStatus == .idle && state.lastFetchRound == round }
+    }
+
+    /// Opens the picker and waits for the round it starts to publish.
+    private func openAndFinish(_ state: WindowState, as round: FetchRound) async {
+        state.isBranchPickerPresented = true
+        #expect(await finished(state, as: round))
+    }
+
+    /// A round in which every one of `remotes` was fetched at `at`.
+    private func fetched(_ remotes: [String], at: Date) -> FetchRound {
+        FetchRound(outcomes: Dictionary(uniqueKeysWithValues: remotes.map { ($0, .fetched(at: at)) }))
+    }
+
+    nonisolated private static func isFailure(_ outcome: FetchRound.Outcome?) -> Bool {
+        if case .failed = outcome { true } else { false }
+    }
+
     // MARK: Fetching on open
 
     @Test func openingThePickerFetchesAndRereadsTheBranches() async {
@@ -39,12 +61,20 @@ struct WindowStateRemoteTests {
         let state = h.makeState()
         let repo = await adopt(h, state)
         let readsBefore = await repo.client.localBranchesCalls
-        let at = h.clock
 
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)]))
         #expect(await repo.client.fetchCalls == ["origin"])
         #expect(await repo.client.localBranchesCalls > readsBefore, "the counts are read again after the fetch")
+    }
+
+    @Test func openingFetchesEveryRemoteTrackedOrNot() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, remotes: ["origin", "fork", "upstream"])
+
+        await openAndFinish(state, as: fetched(["origin", "fork", "upstream"], at: h.clock))
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "origin", "upstream"])
+        #expect(state.remotes == ["origin", "fork", "upstream"])
     }
 
     @Test func aSecondOpeningWaitsOutTheCooldown() async {
@@ -53,15 +83,14 @@ struct WindowStateRemoteTests {
         let repo = await adopt(h, state)
         let at = h.clock
 
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: at)]))
         state.isBranchPickerPresented = false
 
         state.isBranchPickerPresented = true
         // The cooldown is decided after the remotes are read, so that read is the signal
-        // that the second attempt ran at all.
+        // that the second round ran at all.
         #expect(await eventually { await repo.client.remoteNamesCalls == 2 })
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: at)])))
         #expect(await repo.client.fetchCalls == ["origin"], "still inside the cooldown")
 
         state.isBranchPickerPresented = false
@@ -70,71 +99,360 @@ struct WindowStateRemoteTests {
         #expect(await eventually { await repo.client.fetchCalls == ["origin", "origin"] })
     }
 
-    /// Each remote has its own cooldown, and the footer describes the remote that was
-    /// wanted rather than whichever was fetched last.
-    @Test func eachRemoteKeepsItsOwnCooldown() async {
+    /// A cooldown skip implies an earlier success, so the round carries that time rather
+    /// than leaving the remote out.
+    @Test func aRemoteSkippedByTheCooldownCarriesItsTimeIntoTheRound() async {
         let h = Harness()
         let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
+        let repo = await adopt(h, state)
         let originAt = h.clock
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: originAt) })
+        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt)]))
         state.isBranchPickerPresented = false
 
+        await repo.client.set(remoteNames: ["origin", "fork"])
         h.clock += 10
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        reread(h, repo)
-        #expect(await eventually { await state.currentBranch?.upstream?.remote == "fork" })
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "fork", at: h.clock) })
-        #expect(await repo.client.fetchCalls == ["origin", "fork"])
-        state.isBranchPickerPresented = false
-
-        await repo.client.set(localBranches: tracked)
-        reread(h, repo)
-        #expect(await eventually { await state.currentBranch?.upstream?.remote == "origin" })
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: originAt) })
+        await openAndFinish(
+            state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt), "fork": .fetched(at: h.clock)]))
         #expect(await repo.client.fetchCalls == ["origin", "fork"], "origin is still fresh")
     }
 
-    @Test func openingWithAnUnreadListReadsItFirst() async {
+    // MARK: Fetching by hand
+
+    @Test func aManualRoundCoversEveryRemoteSkipsTheCooldownAndReadsOnce() async {
         let h = Harness()
         let state = h.makeState()
-        let repo = h.repo("A", files: [changedFile("a.swift")])
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        await repo.client.set(remoteNames: ["origin", "fork"])
-        await repo.client.holdLocalBranches(true)
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(state.branchReadStatus == .unread)
+        let repo = await adopt(h, state, remotes: ["origin", "fork"])
+        await openAndFinish(state, as: fetched(["origin", "fork"], at: h.clock))
+
+        h.clock += 10
+        let localReads = await repo.client.localBranchesCalls
+        let remoteReads = await repo.client.remoteBranchesCalls
+        await state.fetchAllRemotes()
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "fork", "origin", "origin"])
+        #expect(state.lastFetchRound == fetched(["origin", "fork"], at: h.clock))
+        #expect(await repo.client.localBranchesCalls == localReads + 1, "one branch read for the whole round")
+        #expect(await repo.client.remoteBranchesCalls == remoteReads + 2, "the refs before, and the read after")
+    }
+
+    /// One round per session: the opening's round and ⌘R's share it, and each remote is
+    /// fetched once.
+    @Test func openingThenFetchingRightAwayRunsOneRound() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, remotes: ["origin", "fork"])
+        await repo.client.holdFetch(true)
 
         state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 2 }, "the picker retries the read")
-        #expect(await repo.client.fetchCalls.isEmpty)
+        #expect(await eventually { await repo.client.heldFetchCount == 2 })
+        let opening = Task { await state.fetchForBranchPicker() }
+        let manual = Task { await state.fetchAllRemotes() }
+        await settle()
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+
+        let expected = fetched(["origin", "fork"], at: h.clock)
+        await opening.value
+        #expect(state.lastFetchRound == expected)
+        await manual.value
+        #expect(state.lastFetchRound == expected)
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "origin"])
+        #expect(await repo.client.remoteNamesCalls == 1)
+    }
+
+    /// ⌘R right after opening joins the opening's round before it applies the cooldown,
+    /// so that one round fetches every remote.
+    @Test func fetchingBeforeTheOpeningAppliesTheCooldownUpgradesItsRound() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, remotes: ["origin", "fork"])
+        await openAndFinish(state, as: fetched(["origin", "fork"], at: h.clock))
+        state.isBranchPickerPresented = false
+
+        h.clock += 10
+        await repo.client.holdRemoteNames(true)
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
+        let manual = Task { await state.fetchAllRemotes() }
+        await settle()
+        await repo.client.holdRemoteNames(false)
+        await repo.client.releaseRemoteNames()
+
+        await manual.value
+        #expect(state.lastFetchRound == fetched(["origin", "fork"], at: h.clock))
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "fork", "origin", "origin"])
+        #expect(await repo.client.remoteNamesCalls == 2, "one round, not a second")
+    }
+
+    /// Once the opening's round has skipped a remote for its cooldown, ⌘R runs a round of
+    /// its own after it, and a second ⌘R meanwhile shares that round.
+    @Test func fetchingAfterTheCooldownSkippedARemoteRunsOneFollowUpRound() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state)
+        let originAt = h.clock
+        await openAndFinish(state, as: fetched(["origin"], at: originAt))
+        state.isBranchPickerPresented = false
+
+        await repo.client.set(remoteNames: ["origin", "fork"])
+        h.clock += 10
+        await repo.client.holdFetch(true, remote: "fork")
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(await repo.client.fetchCalls == ["origin", "fork"], "origin skipped for its cooldown")
+
+        let first = Task { await state.fetchAllRemotes() }
+        let second = Task { await state.fetchAllRemotes() }
+        await settle()
+        await repo.client.holdFetch(false, remote: "fork")
+        await repo.client.releaseFetch()
+
+        await first.value
+        await second.value
+        #expect(state.lastFetchRound == fetched(["origin", "fork"], at: h.clock))
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "fork", "origin", "origin"])
+        #expect(await repo.client.remoteNamesCalls == 3, "the first opening, the second, and one follow-up")
+    }
+
+    // MARK: Holding the counts
+
+    /// A remote whose fetch has finished stays held until the round's branch read
+    /// publishes, so a pull can't act on counts from before the round.
+    @Test func remotesStayHeldUntilTheRoundsReadPublishes() async {
+        let h = Harness()
+        let state = h.makeState()
+        let behind = [
+            localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 0, behind: 2)))
+        ]
+        let repo = await adopt(h, state, branches: behind, remotes: ["origin", "fork"])
+        await repo.client.holdFetch(true, remote: "fork")
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        #expect(await eventually { await state.session?.lastSuccessfulFetchAtByRemote["origin"] != nil })
+        #expect(state.fetchingRemotes == ["origin", "fork"], "origin's fetch is done, the round's read is not")
+
+        await repo.client.holdLocalBranches(true)
+        await repo.client.holdFetch(false, remote: "fork")
+        await repo.client.releaseFetch()
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
+        #expect(state.fetchingRemotes == ["origin", "fork"])
+        #expect(state.fetchStatus == .fetching)
+        await state.pull(branch: "main")
+        #expect(await repo.client.pullCalls == 0)
 
         await repo.client.holdLocalBranches(false)
         await repo.client.releaseLocalBranches()
-        #expect(await eventually { await repo.client.fetchCalls == ["fork"] })
+        #expect(await eventually { await state.fetchingRemotes.isEmpty })
+        #expect(state.lastFetchRound?.outcomes.count == 2)
+    }
+
+    /// The counts have to come from a read that published: one superseded by a watcher
+    /// tick describes a moment the round cannot vouch for, so the round waits for the read
+    /// that replaced it rather than starting another, and that read publishes it.
+    @Test func aSupersededRoundReadHandsTheRoundToItsReplacement() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state)
+        let main = remoteBranch("main")
+        let feature = remoteBranch("feature")
+        await repo.client.set(remoteBranches: [main])
+        await repo.client.holdLocalBranches(true)
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
+        await repo.client.set(remoteBranches: [main, feature])
+        reread(h, repo)
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 2 })
+
+        await repo.client.holdLocalBranches(false)
+        await repo.client.releaseFirstLocalBranches()  // the round's own read, now superseded
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
+        #expect(state.fetchingRemotes == ["origin"], "the round waits for the replacement")
+        #expect(state.lastFetchRound == nil)
+        #expect(await repo.client.localBranchesCalls == 3, "no third read is started")
+
+        await repo.client.releaseLocalBranches()
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
+        #expect(state.fetchingRemotes.isEmpty)
+        #expect(state.newRemoteBranches == [feature.ref])
+    }
+
+    @Test func aFailedRoundReadReleasesTheRemotesAndKeepsTheOldBranches() async {
+        let h = Harness()
+        let state = h.makeState()
+        let main = remoteBranch("main")
+        let repo = h.repo("A", files: [changedFile("a.swift")])
+        await repo.client.set(localBranches: tracked)
+        await repo.client.set(remoteBranches: [main])
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await state.branchReadStatus == .loaded })
+        await repo.client.holdFetch(true)
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        await repo.client.set(remoteBranches: [main, remoteBranch("feature")])
+        await repo.client.set(localBranches: [localBranch("feature")])
+        await repo.client.fail(localBranches: true)
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
+        #expect(state.fetchingRemotes.isEmpty)
+        #expect(state.branchReadStatus == .failed)
+        #expect(state.branches == tracked)
+        #expect(state.remoteBranches == [main])
+        #expect(state.newRemoteBranches.isEmpty, "nothing read, nothing new")
+    }
+
+    @Test func theFetchStaysReservedUntilTheCountsCatchUp() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state)
+        await repo.client.holdLocalBranches(true)
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
+        #expect(await repo.client.fetchCalls == ["origin"])
+        #expect(state.fetchStatus == .fetching)
+        #expect(state.fetchingRemotes == ["origin"])
+
+        await repo.client.holdLocalBranches(false)
+        await repo.client.releaseLocalBranches()
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
+    }
+
+    // MARK: New branches
+
+    /// Adopts with `origin/main` present, then runs a round that brings in `origin/feature`,
+    /// which is flagged New.
+    private func adoptWithNewFeature(_ h: Harness, _ state: WindowState, branches: [LocalBranch]? = nil) async -> (
+        root: RepositoryRoot, client: StubRepoClient
+    ) {
+        let main = remoteBranch("main")
+        let repo = h.repo("A", files: [changedFile("a.swift")])
+        await repo.client.set(localBranches: branches ?? tracked)
+        await repo.client.set(remoteBranches: [main])
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await state.remoteBranches == [main] })
+        await repo.client.holdFetch(true)
+
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await repo.client.heldFetchCount == 1 })
+        await repo.client.set(remoteBranches: [main, remoteBranch("feature")])
+        await repo.client.holdFetch(false)
+        await repo.client.releaseFetch()
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
+        #expect(state.newRemoteBranches == [remoteBranch("feature").ref], "main was there before the round")
+        return repo
+    }
+
+    @Test func newBranchesSurviveAFailedFetchAndClearOnCheckout() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state)
+        let feature = remoteBranch("feature")
+
+        await repo.client.fail(fetch: true)
+        await state.fetchAllRemotes()
+        #expect(Self.isFailure(state.lastFetchRound?.outcomes["origin"]))
+        #expect(state.newRemoteBranches == [feature.ref], "a failed fetch keeps the flags")
+
+        await state.checkoutRemoteBranch(feature)
+        #expect(state.headState == .named("feature"))
+        #expect(state.newRemoteBranches.isEmpty)
+    }
+
+    /// A new branch goes through the same switch path: HEAD and the list are re-read, and
+    /// the flags go with the old branch.
+    @Test func creatingABranchSwitchesRefreshesAndClearsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state)
+
+        await state.createBranch(named: "topic")
+
+        #expect(await repo.client.createBranchCalls == ["topic"])
+        #expect(state.headState == .named("topic"))
+        #expect(state.localBranches == ["main", "topic"])
+        #expect(state.newRemoteBranches.isEmpty)
+        #expect(!state.isSwitchingBranch)
+        #expect(state.errorMessage == nil)
+    }
+
+    /// Git's refusal is reported like any switch's, and HEAD and the flags stay.
+    @Test func aRefusedBranchCreationReportsGitsErrorAndKeepsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state)
+        await repo.client.fail(createBranch: true)
+
+        await state.createBranch(named: "topic")
+
+        #expect(state.errorMessage?.contains("create failed") == true)
+        #expect(state.headState == .named("main"))
+        #expect(state.newRemoteBranches == [remoteBranch("feature").ref])
+    }
+
+    /// A post-checkout hook fails after git has moved HEAD: the switch happened, so the
+    /// flags go even though the command reported failure.
+    @Test func aSwitchThatMovesHeadButFailsItsHookClearsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state, branches: tracked + [localBranch("topic")])
+        await repo.client.set(headStateAfterSwitch: .named("topic"))
+        await repo.client.fail(switchBranch: true)
+
+        await state.switchBranch(to: "topic")
+        #expect(state.headState == .named("topic"))
+        #expect(state.errorMessage != nil)
+        #expect(state.newRemoteBranches.isEmpty)
+    }
+
+    /// A failed hook followed by a failed HEAD read: whether HEAD moved is unknown, so the
+    /// flags go rather than risk outliving the switch.
+    @Test func aFailedSwitchWhoseRereadFailsClearsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state, branches: tracked + [localBranch("topic")])
+        await repo.client.fail(switchBranch: true)
+        await repo.client.fail(headState: true)
+
+        await state.switchBranch(to: "topic")
+        #expect(state.branchReadStatus == .failed)
+        #expect(state.errorMessage != nil)
+        #expect(state.newRemoteBranches.isEmpty)
+    }
+
+    /// A switch that fails without moving HEAD leaves the flags alone.
+    @Test func aSwitchThatLeavesHeadKeepsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptWithNewFeature(h, state, branches: tracked + [localBranch("topic")])
+        await repo.client.fail(switchBranch: true)
+
+        await state.switchBranch(to: "topic")
+        #expect(state.headState == .named("main"))
+        #expect(state.errorMessage != nil)
+        #expect(state.newRemoteBranches == [remoteBranch("feature").ref])
     }
 
     // MARK: Failures
 
-    @Test func aFailedFetchStartsNoCooldownAndIsNotRetried() async {
+    @Test func aFailedFetchStartsNoCooldown() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adopt(h, state)
         await repo.client.fail(fetch: true)
 
         state.isBranchPickerPresented = true
-        #expect(await eventually { if case .failed = await state.fetchStatus { true } else { false } })
-        guard case let .failed(remote, message) = state.fetchStatus else { return }
-        #expect(remote == "origin")
+        #expect(await eventually { @MainActor in state.fetchStatus == .idle && state.lastFetchRound != nil })
+        guard case let .failed(message)? = state.lastFetchRound?.outcomes["origin"] else {
+            Issue.record("origin should have failed")
+            return
+        }
         #expect(!message.isEmpty)
-        // The follow-up is decided when the status is published, so a settled status is
-        // proof that no second fetch was started.
-        #expect(await repo.client.fetchCalls == ["origin"], "a failure of the same remote is not retried")
+        #expect(state.errorMessage == nil, "header news, never an alert")
+        #expect(await repo.client.fetchCalls == ["origin"])
 
         state.isBranchPickerPresented = false
         state.isBranchPickerPresented = true
@@ -148,7 +466,7 @@ struct WindowStateRemoteTests {
         await repo.client.fail(fetch: true)
 
         state.isBranchPickerPresented = true
-        #expect(await eventually { if case .failed = await state.fetchStatus { true } else { false } })
+        #expect(await eventually { @MainActor in Self.isFailure(state.lastFetchRound?.outcomes["origin"]) })
         state.isBranchPickerPresented = false
 
         await repo.client.fail(localBranches: true)
@@ -157,19 +475,19 @@ struct WindowStateRemoteTests {
 
         await repo.client.fail(localBranches: false)
         await repo.client.fail(fetch: false)
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "origin"] })
+        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)]))
+        #expect(await repo.client.fetchCalls == ["origin", "origin"])
         #expect(state.branchReadStatus == .loaded)
     }
 
+    /// The round ends in a branch read even when the cooldown skips every remote.
     @Test func aSuccessfulFetchThenAFailedReadRetriesOnlyTheRead() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adopt(h, state)
         let at = h.clock
 
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        await openAndFinish(state, as: FetchRound(outcomes: ["origin": .fetched(at: at)]))
         state.isBranchPickerPresented = false
 
         await repo.client.fail(localBranches: true)
@@ -179,46 +497,40 @@ struct WindowStateRemoteTests {
         await repo.client.fail(localBranches: false)
         state.isBranchPickerPresented = true
         #expect(await eventually { await state.branchReadStatus == .loaded })
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: at)])))
         #expect(await repo.client.fetchCalls == ["origin"], "the fetch is still fresh")
     }
 
-    @Test func aFailedRemoteDiscoveryNamesNoRemote() async {
+    @Test func aFailedRemoteDiscoveryIsReportedAndFetchesNothing() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adopt(h, state)
         await repo.client.fail(remoteNames: true)
 
         state.isBranchPickerPresented = true
-        #expect(await eventually { if case .failed(nil, _) = await state.fetchStatus { true } else { false } })
+        #expect(await eventually { @MainActor in state.fetchStatus == .idle && state.lastFetchRound != nil })
+        #expect(state.lastFetchRound?.discoveryError != nil)
         #expect(await repo.client.fetchCalls.isEmpty)
     }
 
-    // MARK: Choosing the remote
-
-    @Test func theRemoteIsTheUpstreamThenOriginThenTheOnlyOne() {
-        let head = HeadState.named("main")
-        let branches = [localBranch("main", upstream: upstream("fork/main", remote: "fork"))]
-        #expect(
-            WindowState.resolveFetchRemote(headState: head, branches: branches, remotes: ["origin", "fork"]) == "fork")
-        // An upstream on a remote git no longer has falls through to the rest.
-        #expect(WindowState.resolveFetchRemote(headState: head, branches: branches, remotes: ["origin"]) == "origin")
-        #expect(WindowState.resolveFetchRemote(headState: head, branches: branches, remotes: ["other"]) == "other")
-        #expect(
-            WindowState.resolveFetchRemote(headState: head, branches: [localBranch("main")], remotes: ["a", "b"]) == nil
-        )
-        #expect(WindowState.resolveFetchRemote(headState: nil, branches: [], remotes: ["upstream"]) == "upstream")
-        #expect(WindowState.resolveFetchRemote(headState: nil, branches: [], remotes: []) == nil)
-    }
-
-    @Test func noResolvableRemoteFetchesNothing() async {
+    @Test func anotherRemotesFailureIsReportedUntilItSucceeds() async {
         let h = Harness()
         let state = h.makeState()
-        let repo = await adopt(h, state, branches: [localBranch("main")], remotes: ["a", "b"])
+        let repo = await adopt(h, state, remotes: ["origin", "fork"])
+        await repo.client.fail(fetch: true, remote: "fork")
 
         state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .noFetchTarget })
-        #expect(await repo.client.fetchCalls.isEmpty)
+        #expect(await eventually { @MainActor in Self.isFailure(state.lastFetchRound?.outcomes["fork"]) })
+        #expect(state.lastFetchRound?.outcomes["origin"] == .fetched(at: h.clock))
+        state.isBranchPickerPresented = false
+
+        // fork failed, so it has no cooldown and is fetched again; origin is still fresh.
+        await repo.client.fail(fetch: false, remote: "fork")
+        let originAt = h.clock
+        h.clock += 10
+        await openAndFinish(
+            state, as: FetchRound(outcomes: ["origin": .fetched(at: originAt), "fork": .fetched(at: h.clock)]))
+        #expect(await repo.client.fetchCalls.sorted() == ["fork", "fork", "origin"])
     }
 
     // MARK: Dismissal and closing
@@ -249,30 +561,12 @@ struct WindowStateRemoteTests {
 
         #expect(await eventually { await state.fetchStatus == .idle })
         #expect(await repo.client.fetchCalls.isEmpty)
+        #expect(state.lastFetchRound == nil)
     }
 
-    /// The reservation is the admission guard: a second opening while one attempt is
-    /// still resolving joins it, then reads the remotes again without a second fetch.
-    @Test func aSecondOpeningDuringDiscoveryJoinsIt() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.holdRemoteNames(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
-        state.isBranchPickerPresented = false
-        state.isBranchPickerPresented = true
-
-        await repo.client.holdRemoteNames(false)
-        await repo.client.releaseRemoteNames()
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })
-        #expect(await repo.client.remoteNamesCalls == 2, "the remotes are read again for the second opening")
-        #expect(await repo.client.fetchCalls == ["origin"], "origin is inside its cooldown")
-    }
-
-    /// A reopening joins a discovery that then fails, and still gets one of its own.
-    @Test func aReopeningDuringAFailedDiscoveryDiscoversAgain() async {
+    /// A reopening while the round still lists the remotes joins it rather than starting
+    /// another.
+    @Test func aReopeningDuringDiscoveryJoinsTheRound() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adopt(h, state)
@@ -284,33 +578,11 @@ struct WindowStateRemoteTests {
         state.isBranchPickerPresented = true
         await settle()
 
-        await repo.client.fail(remoteNames: true)
-        await repo.client.releaseRemoteNames()
-        // The fresh discovery is held in turn, which is proof it started.
-        #expect(await eventually { await repo.client.remoteNamesCalls == 2 })
-        #expect(await eventually { await repo.client.heldRemoteNamesCount == 1 })
-        await repo.client.fail(remoteNames: false)
         await repo.client.holdRemoteNames(false)
         await repo.client.releaseRemoteNames()
-
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: h.clock)])))
+        #expect(await repo.client.remoteNamesCalls == 1)
         #expect(await repo.client.fetchCalls == ["origin"])
-    }
-
-    @Test func theFetchStaysReservedUntilTheCountsCatchUp() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.holdLocalBranches(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(await repo.client.fetchCalls == ["origin"])
-        #expect(state.fetchStatus == .fetching(remote: "origin"))
-
-        await repo.client.holdLocalBranches(false)
-        await repo.client.releaseLocalBranches()
-        #expect(await eventually { if case .fetched = await state.fetchStatus { true } else { false } })
     }
 
     @Test func aDismissalDuringTheFetchStillRecordsIt() async {
@@ -327,159 +599,12 @@ struct WindowStateRemoteTests {
         await repo.client.holdFetch(false)
         await repo.client.releaseFetch()
 
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: at) })
+        #expect(await finished(state, as: FetchRound(outcomes: ["origin": .fetched(at: at)])))
         #expect(await repo.client.localBranchesCalls > readsBefore, "the counts still catch up")
 
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.remoteNamesCalls == 2 })
         #expect(await repo.client.fetchCalls == ["origin"], "the cooldown was recorded")
-    }
-
-    // MARK: Following a changed remote
-
-    @Test func aRemoteThatChangedDuringTheFetchIsFetchedOnce() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
-        await repo.client.holdFetch(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        // The branch now tracks another remote, as a switch during the fetch would leave it.
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        await repo.client.holdFetch(false)
-        await repo.client.releaseFetch()
-
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "fork", at: h.clock) })
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "one follow-up, then the cycle ends")
-    }
-
-    @Test func aDismissalDuringTheFetchStopsTheFollowUp() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
-        await repo.client.holdFetch(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        state.isBranchPickerPresented = false
-        await repo.client.holdFetch(false)
-        await repo.client.releaseFetch()
-
-        #expect(await eventually { if case .fetched = await state.fetchStatus { true } else { false } })
-        #expect(await repo.client.fetchCalls == ["origin"], "nothing follows a dismissed picker")
-    }
-
-    /// A failing fetch is still followed up: the branch may have moved to another remote
-    /// while it ran, and that remote's counts are what the picker is about to show.
-    @Test func aFailedFetchStillFollowsAChangedRemote() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
-        await repo.client.holdFetch(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        await repo.client.fail(fetch: true)
-        await repo.client.releaseFetch()
-
-        // The follow-up is held in turn, which is proof it started.
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] })
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        await repo.client.fail(fetch: false)
-        await repo.client.holdFetch(false)
-        await repo.client.releaseFetch()
-
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "fork", at: h.clock) })
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "exactly one follow-up")
-        #expect(state.session?.lastSuccessfulFetchAtByRemote["origin"] == nil, "a failure starts no cooldown")
-    }
-
-    /// The counts have to come from a read that published: one superseded by a watcher
-    /// tick describes a moment the fetch cannot vouch for, so the reservation waits for
-    /// the read that replaced it rather than starting another.
-    @Test func aSupersededPostFetchReadKeepsTheReservation() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
-        await repo.client.holdLocalBranches(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        // A watcher tick supersedes the fetch's own read while it is held.
-        await repo.client.set(localBranches: [localBranch("main", upstream: upstream("fork/main", remote: "fork"))])
-        reread(h, repo)
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 2 })
-
-        await repo.client.holdLocalBranches(false)
-        await repo.client.releaseFirstLocalBranches()  // the fetch's own read, now superseded
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(state.fetchStatus == .fetching(remote: "origin"), "the reservation waits for the replacement")
-        #expect(await repo.client.localBranchesCalls == 3, "no third read is started")
-
-        await repo.client.releaseLocalBranches()
-        // The read that lands carries the new upstream, and the follow-up acts on it.
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] })
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "fork", at: h.clock) })
-    }
-
-    /// The same wait before the fetch: an opening that has to read the branches first
-    /// takes the answer of whichever read publishes.
-    @Test func aSupersededPreFetchReadWaitsForTheOneThatPublishes() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = h.repo("A", files: [changedFile("a.swift")])
-        await repo.client.set(localBranches: tracked)
-        await repo.client.set(remoteNames: ["origin"])
-        await repo.client.holdLocalBranches(true)
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(state.branchReadStatus == .unread)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 2 })
-        reread(h, repo)
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 3 })
-
-        await repo.client.holdLocalBranches(false)
-        await repo.client.releaseFirstLocalBranches()  // adoption's read, superseded
-        await repo.client.releaseFirstLocalBranches()  // the picker's read, superseded
-        #expect(await eventually { await repo.client.heldLocalBranchesCount == 1 })
-        #expect(state.fetchStatus == .fetching(remote: nil), "nothing is fetched until a read publishes")
-        #expect(await repo.client.fetchCalls.isEmpty)
-
-        await repo.client.releaseLocalBranches()
-        #expect(await eventually { await repo.client.fetchCalls == ["origin"] })
-    }
-
-    /// The follow-up tries each remote once per opening, so two branches pointing at each
-    /// other cannot keep it going.
-    @Test func aRemoteAlreadyTriedIsNotFetchedAgain() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, remotes: ["origin", "fork"])
-        let fork = [localBranch("main", upstream: upstream("fork/main", remote: "fork"))]
-        await repo.client.holdFetch(true)
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        await repo.client.set(localBranches: fork)
-        await repo.client.fail(fetch: true)
-        await repo.client.releaseFetch()
-
-        // origin failed and the branch now tracks fork, so fork is fetched next.
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] })
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        // And back again while fork's fetch runs: origin has no cooldown, only a turn spent.
-        await repo.client.set(localBranches: tracked)
-        await repo.client.fail(fetch: false)
-        await repo.client.holdFetch(false)
-        await repo.client.releaseFetch()
-
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "fork", at: h.clock) })
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "origin had its turn")
     }
 
     @Test func closingDuringTheFetchPublishesNothing() async {
@@ -494,150 +619,9 @@ struct WindowStateRemoteTests {
         await repo.client.holdFetch(false)
         await repo.client.releaseFetch()
         await settle()
-        #expect(state.fetchStatus == .fetching(remote: "origin"), "a closed window publishes nothing")
+        #expect(state.fetchStatus == .fetching, "a closed window publishes nothing")
+        #expect(state.lastFetchRound == nil)
         #expect(await repo.client.fetchCalls == ["origin"])
-    }
-
-    // MARK: Other remotes
-
-    /// `main` tracks origin and `feature` tracks fork.
-    private let twoRemotes = [
-        localBranch("main", upstream: upstream("origin/main")),
-        localBranch("feature", upstream: upstream("fork/feature", remote: "fork")),
-    ]
-
-    /// True once `fetchStatus` is `status` and no remote is being fetched. Both are checked
-    /// in one read because the other remotes start in the same turn `status` is published.
-    private func settled(_ state: WindowState, at status: FetchStatus) async -> Bool {
-        await eventually { @MainActor in state.fetchStatus == status && state.fetchingRemotes.isEmpty }
-    }
-
-    @Test func everyRemoteAListedBranchTracksIsFetched() async {
-        let h = Harness()
-        let state = h.makeState()
-        let branches = twoRemotes + [localBranch("old", upstream: upstream("gone/old", remote: "gone"))]
-        let repo = await adopt(h, state, branches: branches, remotes: ["origin", "fork"])
-
-        state.isBranchPickerPresented = true
-        #expect(await settled(state, at: .fetched(remote: "origin", at: h.clock)))
-        #expect(await repo.client.fetchCalls == ["origin", "fork"], "the header's remote first, never a missing one")
-        #expect(state.secondaryFetchFailures.isEmpty)
-    }
-
-    @Test func anotherRemoteWithinItsCooldownIsNotFetchedAgain() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
-        await repo.client.fail(fetch: true, remote: "origin")
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] })
-        #expect(await eventually { await state.fetchingRemotes.isEmpty })
-        state.isBranchPickerPresented = false
-
-        // origin failed, so it has no cooldown and is fetched again.
-        await repo.client.fail(fetch: false, remote: "origin")
-        h.clock += 10
-        state.isBranchPickerPresented = true
-        #expect(await settled(state, at: .fetched(remote: "origin", at: h.clock)))
-        #expect(await repo.client.fetchCalls == ["origin", "fork", "origin"], "fork is still fresh")
-    }
-
-    @Test func reopeningJoinsAnotherRemotesFetchInsteadOfRepeatingIt() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
-        await repo.client.holdFetch(true, remote: "fork")
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        #expect(state.fetchStatus == .fetched(remote: "origin", at: h.clock), "a slow remote holds back only itself")
-        #expect(state.fetchingRemotes == ["fork"])
-        state.isBranchPickerPresented = false
-
-        // Past origin's cooldown, so a second origin fetch proves the reopening ran.
-        h.clock += WindowState.fetchCooldown + 1
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })
-        await repo.client.holdFetch(false, remote: "fork")
-        await repo.client.releaseFetch()
-        #expect(await eventually { await state.fetchingRemotes.isEmpty })
-        #expect(await repo.client.fetchCalls == ["origin", "fork", "origin"], "fork was fetched once")
-    }
-
-    @Test func anotherRemotesFailureIsReportedUntilItSucceeds() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
-        await repo.client.fail(fetch: true, remote: "fork")
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await state.secondaryFetchFailures["fork"] != nil })
-        #expect(state.fetchStatus == .fetched(remote: "origin", at: h.clock))
-        #expect(state.errorMessage == nil, "footer news, never an alert")
-        state.isBranchPickerPresented = false
-
-        await repo.client.fail(fetch: false, remote: "fork")
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork", "fork"] }, "no cooldown")
-        #expect(await eventually { await state.fetchingRemotes.isEmpty })
-        #expect(state.secondaryFetchFailures.isEmpty)
-    }
-
-    /// A reopening while the current branch's remote is fetched still reads the remotes
-    /// itself, so a remote tracked since the picker closed is fetched too.
-    @Test func reopeningDuringTheFetchPicksUpANewlyTrackedRemote() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state)
-        await repo.client.holdFetch(true, remote: "origin")
-
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        state.isBranchPickerPresented = false
-
-        await repo.client.set(remoteNames: ["origin", "fork"])
-        await repo.client.set(localBranches: twoRemotes)
-        state.isBranchPickerPresented = true
-        await settle()
-        await repo.client.holdFetch(false, remote: "origin")
-        await repo.client.releaseFetch()
-
-        #expect(await eventually { await repo.client.fetchCalls == ["origin", "fork"] }, "origin is fetched once")
-        #expect(await settled(state, at: .fetched(remote: "origin", at: h.clock)))
-        #expect(state.remotes == ["origin", "fork"])
-    }
-
-    /// A fetch an earlier opening started still refreshes the counts, but its failure is
-    /// not news for a later opening that no longer tracks the remote.
-    @Test func anEarlierOpeningsFailureStaysOutOfALaterFooter() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await adopt(h, state, branches: twoRemotes, remotes: ["origin", "fork"])
-        // The first opening is run directly so the test can wait for it; the presentation's
-        // own task fails discovery and ends first.
-        await repo.client.fail(remoteNames: true)
-        state.isBranchPickerPresented = true
-        #expect(await eventually { if case .failed(nil, _) = await state.fetchStatus { true } else { false } })
-        await repo.client.fail(remoteNames: false)
-        await repo.client.holdFetch(true, remote: "fork")
-        let first = Task { await state.fetchForBranchPicker() }
-        #expect(await eventually { await repo.client.heldFetchCount == 1 })
-        state.isBranchPickerPresented = false
-
-        await repo.client.set(localBranches: tracked)
-        reread(h, repo)
-        #expect(await eventually { await state.branches.count == 1 })
-        state.isBranchPickerPresented = true
-        #expect(await eventually { await repo.client.remoteNamesCalls == 3 })
-        #expect(await eventually { await state.fetchStatus == .fetched(remote: "origin", at: h.clock) })
-
-        await repo.client.fail(fetch: true, remote: "fork")
-        await repo.client.holdFetch(false, remote: "fork")
-        await repo.client.releaseFetch()
-        await first.value
-        #expect(state.fetchingRemotes.isEmpty, "the counts were still refreshed")
-        #expect(state.secondaryFetchFailures.isEmpty)
     }
 }
 
@@ -704,7 +688,12 @@ struct WindowStateSyncTests {
         let state = h.makeState()
         let feature = localBranch("feature", upstream: upstream("fork/feature", remote: "fork"))
         let repo = await adopt(h, state, branches: main(ahead: 1, behind: 0) + [feature])
+        // origin is fetched first, so the next round's cooldown leaves it out.
+        state.isBranchPickerPresented = true
+        #expect(await eventually { await state.lastFetchRound != nil })
+        state.isBranchPickerPresented = false
         await repo.client.set(remoteNames: ["origin", "fork"])
+        h.clock += 10
         await repo.client.holdFetch(true, remote: "fork")
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.heldFetchCount == 1 })
@@ -1162,8 +1151,7 @@ struct WindowStatePublishTests {
         state.isBranchPickerPresented = true
         #expect(
             await eventually { @MainActor in
-                let fetching = if case .fetching = state.fetchStatus { true } else { false }
-                return state.remotes == remotes && !fetching && state.fetchingRemotes.isEmpty
+                state.remotes == remotes && state.fetchStatus == .idle
             })
     }
 
@@ -1257,7 +1245,12 @@ struct WindowStatePublishTests {
         let h = Harness()
         let state = h.makeState()
         let onFork = localBranch("main", upstream: upstream("fork/main", remote: "fork"))
-        let repo = await adopt(h, state, branches: [onFork, feature], remotes: ["origin", "fork"])
+        let repo = await adopt(h, state, branches: [onFork, feature], remotes: ["origin"])
+        // origin is fetched first, so the next round's cooldown leaves it out.
+        await openPicker(state, remotes: ["origin"])
+        state.isBranchPickerPresented = false
+        await repo.client.set(remoteNames: ["origin", "fork"])
+        h.clock += 10
         await repo.client.holdFetch(true, remote: "fork")
         state.isBranchPickerPresented = true
         #expect(await eventually { await repo.client.heldFetchCount == 1 })
@@ -1297,9 +1290,7 @@ struct WindowStateDeleteTests {
         state.isBranchPickerPresented = true
         #expect(
             await eventually { @MainActor in
-                let fetching = if case .fetching = state.fetchStatus { true } else { false }
-                return state.configuredUpstreamRemotes["feature"] == "origin" && !fetching
-                    && state.fetchingRemotes.isEmpty
+                state.configuredUpstreamRemotes["feature"] == "origin" && state.fetchStatus == .idle
             })
 
         await state.deleteBranch(feature)

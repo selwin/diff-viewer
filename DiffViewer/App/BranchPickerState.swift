@@ -8,17 +8,13 @@ enum BranchReadStatus: Equatable, Sendable {
     case failed
 }
 
-/// How the picker's automatic fetch went. The remote is unknown until it is resolved,
-/// which is why `.fetching` and `.failed` both allow a nil one.
+/// Where the running fetch round is.
 enum FetchStatus: Equatable, Sendable {
     case idle
-    /// Nil while the remote is still being resolved.
-    case fetching(remote: String?)
-    case fetched(remote: String, at: Date)
-    /// A nil remote means remote discovery itself failed.
-    case failed(remote: String?, message: String)
-    /// No eligible remote could be resolved.
-    case noFetchTarget
+    /// Listing the remotes: any of them may yet be fetched.
+    case discovering
+    /// Fetching the remotes in `fetchingRemotes`, then re-reading the branches.
+    case fetching
 }
 
 /// What the window hands the branch picker on every change.
@@ -30,34 +26,130 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var fetchStatus: FetchStatus = .idle
     /// The pull, push, publish or delete in flight and its branch, or nil when none is running.
     var activeSync: ActiveSync?
-    /// Every remote being fetched, the current branch's included.
+    /// The remotes the running round fetches, held until its branch read publishes.
     var fetchingRemotes: Set<String> = []
     var remotes: [String] = []
     /// Branch name to its configured upstream remote, including upstreams git can't map.
     var configuredUpstreamRemotes: [String: String] = [:]
-    /// Remote to git's message, for each remote other than the current branch's whose
-    /// fetch failed.
-    var secondaryFetchFailures: [String: String] = [:]
+    /// How each remote fared in the last finished round, or nil before the first.
+    var lastFetchRound: FetchRound?
+    /// Every remote-tracking branch, read with `branches`.
+    var remoteBranches: [RemoteBranch] = []
+    /// The remote-tracking refs fetch rounds brought in, by full ref.
+    var newRemoteBranches: Set<String> = []
 }
 
-struct BranchPickerRow: Equatable {
-    let branch: LocalBranch
-    /// Set on the first row of each consecutive same-day run.
-    let dayLabel: CommitDayGrouping.DayLabel?
-    let isCurrent: Bool
-    /// What follows the name: the upstream's state, or empty when there is nothing to say.
-    let trailingText: String
-    /// The name's characters the query matched; empty when no query is active.
-    let matchedRanges: [Range<String.Index>]
+/// Which branch a row stands for. The highlight, reloads and actions all go by it, never
+/// by position, so a row keeps its identity as the list moves.
+enum BranchRowID: Hashable, Sendable {
+    case local(name: String)
+    /// A remote-tracking branch no local branch tracks, by full ref: two remotes can carry
+    /// the same name.
+    case remote(ref: String)
+}
+
+/// What activating a row asks the window to do.
+enum BranchActivation: Equatable {
+    case switchTo(name: String)
+    /// Create a local branch tracking this remote one, then switch to it.
+    case checkoutTracking(RemoteBranch)
+}
+
+/// The words on a row's right edge, and whether they are drawn in the accent colour.
+enum BranchRowStatus: Equatable {
+    /// In sync, or a remote-only branch that isn't new.
+    case none
+    case counts(ahead: Int, behind: Int)
+    case notPublished
+    /// Tracks a remote whose fetch settings don't cover the upstream.
+    case upstreamNotFetched
+    case upstreamGone
+    /// A remote-only branch a fetch round brought in. Local rows never show it.
+    case new
+
+    var text: String {
+        switch self {
+        case .none: ""
+        case let .counts(ahead, behind): UpstreamTracking.counts(ahead: ahead, behind: behind).summary ?? ""
+        case .notPublished: "Not published"
+        case .upstreamNotFetched: "upstream not fetched"
+        case .upstreamGone: UpstreamTracking.gone.summary ?? ""
+        case .new: "New"
+        }
+    }
+
+    var isAccent: Bool { self == .new }
 
     /// `configuredRemote` tells a branch that tracks nothing from one whose upstream the
     /// fetch settings hide.
-    static func trailingText(for branch: LocalBranch, configuredRemote: String?) -> String {
+    static func local(_ branch: LocalBranch, configuredRemote: String?) -> BranchRowStatus {
         guard let upstream = branch.upstream else {
             return SyncPolicy.hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote) == nil
-                ? "no upstream" : "upstream not fetched"
+                ? .notPublished : .upstreamNotFetched
         }
-        return upstream.tracking.summary ?? ""
+        switch upstream.tracking {
+        case .gone: return .upstreamGone
+        case let .counts(ahead, behind):
+            return ahead == 0 && behind == 0 ? .none : .counts(ahead: ahead, behind: behind)
+        }
+    }
+}
+
+struct BranchPickerRow: Equatable {
+    enum Kind: Equatable {
+        case current
+        case local
+        case remoteOnly
+    }
+
+    /// The branch as it was read, which the row's actions carry.
+    enum Source: Equatable {
+        case local(LocalBranch)
+        case remote(RemoteBranch)
+    }
+
+    let id: BranchRowID
+    let kind: Kind
+    let source: Source
+    /// What the row shows: a remote-only branch keeps its remote's prefix unless it is the
+    /// publish remote's and no local branch shares the name.
+    let name: String
+    /// `author · time`.
+    let subtitle: String
+    let status: BranchRowStatus
+    /// Why the row can't be checked out, shown as its tooltip.
+    let blockedReason: String?
+    /// The name's characters the query matched; empty when no query is active.
+    var matchedRanges: [Range<String.Index>] = []
+
+    var tipCommittedAt: Date {
+        switch source {
+        case let .local(branch): branch.tipCommittedAt
+        case let .remote(branch): branch.tipCommittedAt
+        }
+    }
+}
+
+/// One table row: a recency section's title, or a branch.
+enum BranchPickerItem: Equatable {
+    case header(BranchDateGroup)
+    case branch(BranchPickerRow)
+
+    /// What a reload matches rows by.
+    enum Key: Hashable {
+        case header(BranchDateGroup)
+        case branch(BranchRowID)
+    }
+
+    var key: Key {
+        switch self {
+        case let .header(group): .header(group)
+        case let .branch(row): .branch(row.id)
+        }
+    }
+
+    var row: BranchPickerRow? {
+        if case let .branch(row) = self { row } else { nil }
     }
 }
 
@@ -70,63 +162,99 @@ enum BranchPickerEmptyState: Equatable {
     case noMatches
 }
 
-/// What follows the rows: a note, with an optional tooltip.
-enum BranchPickerFooter: Equatable {
-    case none
-    case text(String, tooltip: String?)
-}
-
-/// The header's face: where HEAD is, and how far it is from its upstream.
+/// The header's face: where HEAD is, how far it is from its upstream, and the current
+/// branch's Pull and Push.
 struct BranchPickerHeaderText: Equatable {
     let title: String
-    let showsCurrentPill: Bool
-    let detail: String
-    /// True while a fetch runs, whether or not its remote is known yet.
+    /// What the detail line says about HEAD's upstream; the fetch news follows.
+    var detailParts: [String] = []
+    /// True while a fetch round runs, whether or not its remotes are known yet.
     var showsSpinner = false
+    /// Fetch is offered unless a round is running or a pull or push is about to move the
+    /// same counts, which a round would not start beside.
+    var canFetch = true
+    /// HEAD's branch, which `buttons` act on; nil when HEAD is on no listed branch.
+    var branch: String?
+    var buttons = RowSyncButtons.hidden
+
+    /// A header button Tab can reach.
+    enum Control: Equatable {
+        case fetch
+        case pull
+        case push
+    }
+
+    /// The header buttons Tab visits after the search field, in order: only those shown
+    /// and enabled, so focus never lands on a button that can't act.
+    var focusOrder: [Control] {
+        var order: [Control] = canFetch ? [.fetch] : []
+        guard branch != nil else { return order }
+        if buttons.pull == .enabled { order.append(.pull) }
+        if buttons.push == .enabled { order.append(.push) }
+        return order
+    }
+
+    /// The detail line, with the fetch news last.
+    func detail(fetch: BranchPickerFetchText?) -> String {
+        (detailParts + [fetch?.text ?? ""]).filter { !$0.isEmpty }.joined(separator: " · ")
+    }
 
     static func make(snapshot: BranchPickerSnapshot) -> BranchPickerHeaderText {
-        let spinner = if case .fetching = snapshot.fetchStatus { true } else { false }
+        let spinner = snapshot.fetchStatus != .idle
+        let canFetch = !spinner && snapshot.activeSync == nil
         guard let headState = snapshot.headState else {
             let title = snapshot.readStatus == .failed ? "Couldn't read branches" : "Loading…"
-            return BranchPickerHeaderText(
-                title: title, showsCurrentPill: false, detail: "", showsSpinner: spinner)
+            return BranchPickerHeaderText(title: title, showsSpinner: spinner, canFetch: canFetch)
         }
         switch headState {
         case let .detached(sha):
-            return BranchPickerHeaderText(
-                title: "Detached " + sha.prefix(7), showsCurrentPill: false, detail: "", showsSpinner: spinner)
+            return BranchPickerHeaderText(title: "Detached " + sha.prefix(7), showsSpinner: spinner, canFetch: canFetch)
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
-            let detail = snapshot.branches.first { $0.name == name }.map { branch in
-                // Worded as the row is, so a hidden upstream reads the same in both places.
-                guard let upstream = branch.upstream else {
-                    return BranchPickerRow.trailingText(
-                        for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
-                }
-                return upstream.tracking.summary ?? "up to date"
+            guard let branch = snapshot.branches.first(where: { $0.name == name }) else {
+                return BranchPickerHeaderText(title: name, showsSpinner: spinner, canFetch: canFetch)
             }
+            // Worded as the row is, so a hidden upstream reads the same in both places.
+            let status = BranchRowStatus.local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
             return BranchPickerHeaderText(
-                title: name, showsCurrentPill: true, detail: detail ?? "", showsSpinner: spinner)
+                title: name, detailParts: [status == .none ? "up to date" : status.text], showsSpinner: spinner,
+                canFetch: canFetch, branch: name,
+                buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot))
         }
+    }
+}
+
+/// What the branch table must do after a snapshot or a query.
+enum BranchTableChange: Equatable {
+    case none
+    /// `removed` indexes the old items; `inserted` and `refreshed` the new ones. Rows that
+    /// stay keep their cells, so the table can slide them into place.
+    case update(removed: IndexSet, inserted: IndexSet, refreshed: IndexSet)
+    case reloadAll
+
+    /// Rows whose content changed, with none coming or going.
+    static func refresh(_ rows: IndexSet) -> BranchTableChange {
+        .update(removed: [], inserted: [], refreshed: rows)
     }
 }
 
 /// What the table must do after a snapshot. Row buttons change apart from the rows, so a
 /// busy state coming and going restyles buttons without reloading any row.
 struct BranchPickerChange: Equatable {
-    var rows: PickerTableChange
+    var rows: BranchTableChange
     var buttonsChanged: Bool
 }
 
-/// The branch picker's model: the rows, the highlight, and what the table must do after
+/// The branch picker's model: the items, the highlight, and what the table must do after
 /// each snapshot. Picker behavior independent of AppKit.
 ///
-/// Positions for keyboard movement are row indexes: there is no pinned row.
+/// Items are table rows: section headers and branches. Only branches can be highlighted
+/// or activated, so movement steps over headers.
 struct BranchPickerState {
     private(set) var snapshot: BranchPickerSnapshot
-    private(set) var rows: [BranchPickerRow]
-    /// The branch the keyboard is on, or nil when there are no rows.
-    private(set) var highlightedBranch: String?
+    private(set) var items: [BranchPickerItem]
+    /// The row the keyboard or pointer is on, or nil when there are no rows.
+    private(set) var highlightedRow: BranchRowID?
     /// The search text, normalized, so a spaces-only field reads as no query at all.
     private(set) var query = ""
     private let grouping: CommitDayGrouping
@@ -134,70 +262,132 @@ struct BranchPickerState {
     init(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) {
         self.snapshot = snapshot
         self.grouping = grouping
-        rows = Self.makeRows(snapshot: snapshot, grouping: grouping, query: "")
-        highlightedBranch = Self.initialHighlight(rows: rows, query: "")
+        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: "")
+        highlightedRow = Self.initialHighlight(items: items, query: "")
     }
 
-    private static func makeRows(
+    // MARK: Items
+
+    private static func makeItems(
         snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, query: String
-    ) -> [BranchPickerRow] {
-        guard !query.isEmpty else { return datedRows(snapshot: snapshot, grouping: grouping) }
-        return rankedRows(snapshot: snapshot, query: query)
+    ) -> [BranchPickerItem] {
+        let rows =
+            localRows(snapshot: snapshot, grouping: grouping) + remoteRows(snapshot: snapshot, grouping: grouping)
+        guard !query.isEmpty else { return groupedItems(rows, grouping: grouping) }
+        return rankedRows(rows, query: query).map(BranchPickerItem.branch)
     }
 
-    /// Newest tip first, so the branches in play come before the ones left behind.
-    private static func datedRows(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) -> [BranchPickerRow] {
-        let sorted = snapshot.branches.sorted(by: isNewer)
-        let labels = grouping.gutterLabels(for: sorted.map(\.tipCommittedAt))
-        return zip(sorted, labels).map { branch, label in
-            row(for: branch, dayLabel: label, matchedRanges: [], snapshot: snapshot)
+    /// Newest tip first within each section, so the branches in play come before the ones
+    /// left behind. Empty sections are left out.
+    private static func groupedItems(_ rows: [BranchPickerRow], grouping: CommitDayGrouping) -> [BranchPickerItem] {
+        var byGroup: [BranchDateGroup: [BranchPickerRow]] = [:]
+        for row in rows.sorted(by: isNewer) {
+            byGroup[grouping.branchGroup(for: row.tipCommittedAt), default: []].append(row)
+        }
+        return BranchDateGroup.allCases.flatMap { group -> [BranchPickerItem] in
+            guard let rows = byGroup[group] else { return [] }
+            return [.header(group)] + rows.map(BranchPickerItem.branch)
         }
     }
 
-    /// Best match first. Ranked rows form no same-day runs, so none carries a day label.
-    private static func rankedRows(snapshot: BranchPickerSnapshot, query: String) -> [BranchPickerRow] {
-        let matched = snapshot.branches.compactMap { branch in
-            FuzzyMatch.match(query, in: branch.name).map { (branch: branch, match: $0) }
-        }
+    /// Best match first. A ranked list has no sections.
+    private static func rankedRows(_ rows: [BranchPickerRow], query: String) -> [BranchPickerRow] {
+        let matched = rows.compactMap { row in FuzzyMatch.match(query, in: row.name).map { (row: row, match: $0) } }
         let sorted = matched.sorted { a, b in
-            a.match.score == b.match.score ? isNewer(a.branch, b.branch) : a.match.score > b.match.score
+            a.match.score == b.match.score ? isNewer(a.row, b.row) : a.match.score > b.match.score
         }
-        return sorted.map { row(for: $0.branch, dayLabel: nil, matchedRanges: $0.match.ranges, snapshot: snapshot) }
+        return sorted.map { entry in
+            var row = entry.row
+            row.matchedRanges = entry.match.ranges
+            return row
+        }
     }
 
-    /// Names break a tie so the order never depends on how git listed the branches.
-    private static func isNewer(_ a: LocalBranch, _ b: LocalBranch) -> Bool {
-        a.tipCommittedAt == b.tipCommittedAt ? a.name < b.name : a.tipCommittedAt > b.tipCommittedAt
+    /// Names, then local before remote, break a tie so the order never depends on how git
+    /// listed the branches.
+    private static func isNewer(_ a: BranchPickerRow, _ b: BranchPickerRow) -> Bool {
+        if a.tipCommittedAt != b.tipCommittedAt { return a.tipCommittedAt > b.tipCommittedAt }
+        if a.name != b.name { return a.name < b.name }
+        return a.kind != .remoteOnly && b.kind == .remoteOnly
     }
 
-    private static func row(
-        for branch: LocalBranch, dayLabel: CommitDayGrouping.DayLabel?, matchedRanges: [Range<String.Index>],
-        snapshot: BranchPickerSnapshot
-    ) -> BranchPickerRow {
-        BranchPickerRow(
-            branch: branch, dayLabel: dayLabel, isCurrent: snapshot.headState == .named(branch.name),
-            trailingText: BranchPickerRow.trailingText(
-                for: branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]),
-            matchedRanges: matchedRanges)
+    private static func localRows(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) -> [BranchPickerRow] {
+        snapshot.branches.map { branch in
+            BranchPickerRow(
+                id: .local(name: branch.name), kind: snapshot.headState == .named(branch.name) ? .current : .local,
+                source: .local(branch), name: branch.name,
+                subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
+                status: .local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]),
+                blockedReason: nil)
+        }
+    }
+
+    /// The remote branches no local branch tracks.
+    private static func remoteRows(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping) -> [BranchPickerRow] {
+        let localNames = Set(snapshot.branches.map(\.name))
+        let shortRemote = publishRemote(snapshot)
+        return RemoteOnlyBranches.filter(remotes: snapshot.remoteBranches, locals: snapshot.branches).map { branch in
+            let collides = localNames.contains(branch.name)
+            // The prefix stays on a collision, so the reader can tell the two rows apart.
+            let name = !collides && branch.remote == shortRemote ? branch.name : "\(branch.remote)/\(branch.name)"
+            return BranchPickerRow(
+                id: .remote(ref: branch.ref), kind: .remoteOnly, source: .remote(branch), name: name,
+                subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
+                status: snapshot.newRemoteBranches.contains(branch.ref) ? .new : .none,
+                blockedReason: collides ? "A local branch named \(branch.name) already exists" : nil)
+        }
+    }
+
+    /// Where Publish would go. Until a fetch round has listed the remotes, the ones the
+    /// remote branches name stand in, so names don't change as the first round starts.
+    private static func publishRemote(_ snapshot: BranchPickerSnapshot) -> String? {
+        var remotes = snapshot.remotes
+        if remotes.isEmpty {
+            for branch in snapshot.remoteBranches where !remotes.contains(branch.remote) {
+                remotes.append(branch.remote)
+            }
+        }
+        if case let .remote(remote) = SyncPolicy.publishRemote(remotes: remotes) { return remote }
+        return nil
+    }
+
+    private static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
+        "\(author) · \(grouping.branchTimeText(for: date))"
     }
 
     /// A search starts on its best match; otherwise the current branch, else the first row.
-    private static func initialHighlight(rows: [BranchPickerRow], query: String) -> String? {
-        guard query.isEmpty else { return rows.first?.branch.name }
-        return rows.first { $0.isCurrent }?.branch.name ?? rows.first?.branch.name
+    private static func initialHighlight(items: [BranchPickerItem], query: String) -> BranchRowID? {
+        let rows = items.compactMap(\.row)
+        guard query.isEmpty else { return rows.first?.id }
+        return (rows.first { $0.kind == .current } ?? rows.first)?.id
     }
 
     // MARK: Derived
 
+    /// The branch rows, in table order.
+    var rows: [BranchPickerRow] {
+        items.compactMap(\.row)
+    }
+
     var highlightedTableRow: Int? {
-        guard let highlightedBranch else { return nil }
-        return rows.firstIndex { $0.branch.name == highlightedBranch }
+        guard let highlightedRow else { return nil }
+        return items.firstIndex { $0.row?.id == highlightedRow }
+    }
+
+    /// Nil for a section header or past the end.
+    func row(forTableRow index: Int) -> BranchPickerRow? {
+        items.indices.contains(index) ? items[index].row : nil
+    }
+
+    /// Section headers take no highlight, hover or click.
+    func canHighlight(tableRow index: Int) -> Bool {
+        row(forTableRow: index) != nil
     }
 
     /// Nil when there are rows.
     var emptyState: BranchPickerEmptyState? {
-        guard rows.isEmpty else { return nil }
-        if !query.isEmpty, !snapshot.branches.isEmpty { return .noMatches }
+        guard items.isEmpty else { return nil }
+        if !query.isEmpty, !snapshot.branches.isEmpty || !snapshot.remoteBranches.isEmpty { return .noMatches }
         switch snapshot.readStatus {
         case .unread: return .loading
         case .failed: return .failed
@@ -205,131 +395,138 @@ struct BranchPickerState {
         }
     }
 
-    /// A failed read keeps the last branch list, and saying its counts may be stale
-    /// outranks any fetch news, even while a search hides every row. Failures come before
-    /// success, the header's remote before the others.
-    var footer: BranchPickerFooter {
-        if !snapshot.branches.isEmpty, snapshot.readStatus == .failed {
-            return .text("Couldn't refresh branches; counts may be stale", tooltip: nil)
-        }
-        if case let .failed(remote, message) = snapshot.fetchStatus {
-            let text = remote.map { "Couldn't fetch \($0)" } ?? "Couldn't load remotes"
-            return .text(text, tooltip: message)
-        }
-        let failures = snapshot.secondaryFetchFailures.sorted { $0.key < $1.key }
-        if let only = failures.first, failures.count == 1 {
-            return .text("Couldn't fetch \(only.key)", tooltip: only.value)
-        }
-        if !failures.isEmpty {
-            let names = failures.map(\.key).joined(separator: ", ")
-            let messages = failures.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
-            return .text("Couldn't fetch \(names)", tooltip: messages)
-        }
-        if case let .fetched(remote, at) = snapshot.fetchStatus {
-            return .text("Fetched \(remote) \(Self.fetchedTime(at))", tooltip: nil)
-        }
-        return .none
-    }
-
-    /// Wall-clock time rather than "just now", which would go stale while the popover
-    /// stays open.
-    static func fetchedTime(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
+    /// The header's fetch news as of `now`; the caller re-asks as time passes.
+    func fetchText(now: Date) -> BranchPickerFetchText? {
+        BranchPickerFetchText.make(
+            isFetching: snapshot.fetchStatus != .idle, readFailed: snapshot.readStatus == .failed,
+            lastRound: snapshot.lastFetchRound, now: now)
     }
 
     var headerText: BranchPickerHeaderText {
         BranchPickerHeaderText.make(snapshot: snapshot)
     }
 
-    /// A row's Pull and Push, Publish, or Delete, or nil past the end. Uses the same
-    /// immediate fetch checks as `WindowState`'s admission: Pull and Delete are admitted
-    /// exactly as shown, while Push may still wait for its remote's fetch and be re-checked
-    /// afterwards.
-    func syncButtons(forTableRow row: Int) -> RowSyncButtons? {
-        guard rows.indices.contains(row) else { return nil }
-        return Self.syncButtons(for: rows[row], snapshot: snapshot)
+    /// A row's Pull and Push, Publish, or Delete, or nil for a header or past the end; a
+    /// remote-only row has none. Uses the same immediate fetch checks as `WindowState`'s
+    /// admission: Pull and Delete are admitted exactly as shown, while Push may still wait
+    /// for its remote's fetch and be re-checked afterwards.
+    func syncButtons(forTableRow index: Int) -> RowSyncButtons? {
+        guard let row = row(forTableRow: index) else { return nil }
+        return Self.syncButtons(for: row, snapshot: snapshot)
     }
 
     private static func syncButtons(for row: BranchPickerRow, snapshot: BranchPickerSnapshot) -> RowSyncButtons {
+        guard case let .local(branch) = row.source else { return .hidden }
+        return syncButtons(for: branch, isCurrent: row.kind == .current, snapshot: snapshot)
+    }
+
+    static func syncButtons(for branch: LocalBranch, isCurrent: Bool, snapshot: BranchPickerSnapshot)
+        -> RowSyncButtons
+    {
         SyncPolicy.rowButtons(
-            branch: row.branch, isCurrent: row.isCurrent, readStatus: snapshot.readStatus,
-            active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch,
-            isDiscovering: snapshot.fetchStatus == .fetching(remote: nil), fetchingRemotes: snapshot.fetchingRemotes,
-            remotes: snapshot.remotes, configuredRemote: snapshot.configuredUpstreamRemotes[row.branch.name])
+            branch: branch, isCurrent: isCurrent, readStatus: snapshot.readStatus, active: snapshot.activeSync,
+            isSwitching: snapshot.isSwitchingBranch, isDiscovering: snapshot.fetchStatus == .discovering,
+            fetchingRemotes: snapshot.fetchingRemotes, remotes: snapshot.remotes,
+            configuredRemote: snapshot.configuredUpstreamRemotes[branch.name])
     }
 
-    func branchName(forTableRow row: Int) -> String? {
-        branch(forTableRow: row)?.name
+    /// The local branch as the row shows it, which a delete checks against before it runs.
+    func branch(forTableRow index: Int) -> LocalBranch? {
+        guard case let .local(branch)? = row(forTableRow: index)?.source else { return nil }
+        return branch
     }
 
-    /// The branch as the row shows it, which a delete checks against before it runs.
-    func branch(forTableRow row: Int) -> LocalBranch? {
-        rows.indices.contains(row) ? rows[row].branch : nil
+    /// What activating the row does, or nil when it can't be activated: the current
+    /// branch is already checked out, a switch in flight locks every row until it settles,
+    /// a branch being deleted can't be checked out, and a remote branch whose name a local
+    /// branch has would collide with it.
+    func activation(forTableRow index: Int) -> BranchActivation? {
+        guard !snapshot.isSwitchingBranch, let row = row(forTableRow: index), row.blockedReason == nil else {
+            return nil
+        }
+        switch row.source {
+        case let .local(branch):
+            guard row.kind != .current, branch.name != Self.deleting(snapshot) else { return nil }
+            return .switchTo(name: branch.name)
+        case let .remote(branch):
+            return .checkoutTracking(branch)
+        }
     }
 
-    /// The current branch is already checked out; activating it would be a no-op switch.
-    /// A switch in flight locks every row until it settles, and a branch being deleted
-    /// can't be checked out.
-    func canActivate(tableRow row: Int) -> Bool {
-        guard !snapshot.isSwitchingBranch, rows.indices.contains(row) else { return false }
-        return !rows[row].isCurrent && rows[row].branch.name != Self.deleting(snapshot)
+    func canActivate(tableRow index: Int) -> Bool {
+        activation(forTableRow: index) != nil
     }
 
     // MARK: Snapshots
 
-    /// Takes a new snapshot and reports what the table must do. Header, footer and the
-    /// empty state are re-read after every call; only the rows and buttons are reported.
+    /// Takes a new snapshot and reports what the table must do. Header and the empty
+    /// state are re-read after every call; only the rows and buttons are reported.
     mutating func apply(_ new: BranchPickerSnapshot) -> BranchPickerChange {
         guard new != snapshot else { return BranchPickerChange(rows: .none, buttonsChanged: false) }
         let old = snapshot
-        let oldButtons = rows.map { Self.syncButtons(for: $0, snapshot: old) }
+        // By branch, since rows can come and go: only rows that stay can have changed buttons.
+        let oldButtons = Dictionary(
+            rows.map { ($0.id, Self.syncButtons(for: $0, snapshot: old)) }, uniquingKeysWith: { first, _ in first })
         snapshot = new
-        let rowChange = applyRows(new, old: old)
-        let buttonsChanged = rows.map { Self.syncButtons(for: $0, snapshot: new) } != oldButtons
+        let rowChange = applyItems(new, old: old)
+        let buttonsChanged = rows.contains { row in
+            oldButtons[row.id].map { $0 != Self.syncButtons(for: row, snapshot: new) } ?? false
+        }
         return BranchPickerChange(rows: rowChange, buttonsChanged: buttonsChanged)
     }
 
-    private mutating func applyRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> PickerTableChange {
-        // A read status, fetch news, the remotes or a sync in flight moves no row. A switch
-        // flag changes whether any row can activate, which its cell holds, so every row is
-        // refreshed in place; a delete starting or ending changes only its own row.
-        // Configured upstreams change a row's trailing text.
-        guard
-            new.branches != old.branches || new.headState != old.headState
-                || new.configuredUpstreamRemotes != old.configuredUpstreamRemotes
-        else {
-            if new.isSwitchingBranch != old.isSwitchingBranch {
-                return .incremental(inserted: nil, refreshed: IndexSet(rows.indices))
-            }
-            let refreshed = deleteChangedRows(new, old: old)
-            return refreshed.isEmpty ? .none : .incremental(inserted: nil, refreshed: refreshed)
-        }
+    private mutating func applyItems(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> BranchTableChange {
+        let oldItems = items
+        items = Self.makeItems(snapshot: new, grouping: grouping, query: query)
+        keepHighlight(oldItems: oldItems)
+        // A list appearing or emptying swaps with the empty state: there is nothing to slide.
+        guard oldItems.isEmpty == items.isEmpty else { return .reloadAll }
+        // A moved row is a removal and an insertion; the rows between slide.
+        let difference = items.map(\.key).difference(from: oldItems.map(\.key))
+        let removed = IndexSet(difference.removals.map(Self.offset))
+        let inserted = IndexSet(difference.insertions.map(Self.offset))
+        let stayed = zip(
+            oldItems.indices.filter { !removed.contains($0) }, items.indices.filter { !inserted.contains($0) })
+        // The cells hold whether a row can activate: a switch flag changing reaches every
+        // row, and a delete starting or ending reaches its own.
+        let switchChanged = new.isSwitchingBranch != old.isSwitchingBranch
+        var refreshed = IndexSet(stayed.filter { switchChanged || oldItems[$0] != items[$1] }.map { $1 })
+        refreshed.formUnion(deleteChangedRows(new, old: old).subtracting(inserted))
+        guard !removed.isEmpty || !inserted.isEmpty || !refreshed.isEmpty else { return .none }
+        return .update(removed: removed, inserted: inserted, refreshed: refreshed)
+    }
 
-        let oldRows = rows
-        rows = Self.makeRows(snapshot: new, grouping: grouping, query: query)
-        let change: PickerTableChange
-        if oldRows.map(\.branch.name) == rows.map(\.branch.name) {
-            var refreshed = IndexSet()
-            for (index, pair) in zip(oldRows, rows).enumerated() where pair.0 != pair.1 {
-                refreshed.insert(index)
-            }
-            change = .incremental(inserted: nil, refreshed: refreshed.union(deleteChangedRows(new, old: old)))
-        } else {
-            change = .reloadAll
+    private static func offset(of change: CollectionDifference<BranchPickerItem.Key>.Change) -> Int {
+        switch change {
+        case let .insert(offset, _, _), let .remove(offset, _, _): offset
         }
+    }
 
-        // Keep the highlight by name across list reloads.
-        if !rows.contains(where: { $0.branch.name == highlightedBranch }) {
-            highlightedBranch = Self.initialHighlight(rows: rows, query: query)
-        }
-        return change
+    /// Keeps the highlight by identity. When its row goes, a neighbour takes it, so the
+    /// highlight stays where the reader was looking rather than jumping to the top.
+    private mutating func keepHighlight(oldItems: [BranchPickerItem]) {
+        let listed = Set(rows.map(\.id))
+        if let highlightedRow, listed.contains(highlightedRow) { return }
+        highlightedRow =
+            highlightedRow.flatMap { Self.neighbour(of: $0, in: oldItems, listed: listed) }
+            ?? Self.initialHighlight(items: items, query: query)
+    }
+
+    /// The branch after `id` in `oldItems` that is still listed, else the one before it.
+    private static func neighbour(
+        of id: BranchRowID, in oldItems: [BranchPickerItem], listed: Set<BranchRowID>
+    ) -> BranchRowID? {
+        guard let index = oldItems.firstIndex(where: { $0.row?.id == id }) else { return nil }
+        let after = oldItems[(index + 1)...].lazy.compactMap(\.row?.id).first { listed.contains($0) }
+        let before = oldItems[..<index].reversed().lazy.compactMap(\.row?.id).first { listed.contains($0) }
+        return after ?? before
     }
 
     /// The rows of the branches whose delete started or ended between `old` and `new`.
     private func deleteChangedRows(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> IndexSet {
         guard Self.deleting(new) != Self.deleting(old) else { return [] }
         let names = [Self.deleting(new), Self.deleting(old)].compactMap { $0 }
-        return IndexSet(names.compactMap { name in rows.firstIndex { $0.branch.name == name } })
+        return IndexSet(names.compactMap { name in items.firstIndex { $0.row?.id == .local(name: name) } })
     }
 
     /// The branch being deleted, which no row may activate.
@@ -341,41 +538,47 @@ struct BranchPickerState {
 
     /// Takes the search field's text. Lists are small, so any change reloads every row
     /// rather than diffing them.
-    mutating func setQuery(_ text: String) -> PickerTableChange {
+    mutating func setQuery(_ text: String) -> BranchTableChange {
         let normalized = FuzzyMatch.normalized(text)
         guard normalized != query else { return .none }
         query = normalized
-        rows = Self.makeRows(snapshot: snapshot, grouping: grouping, query: query)
-        highlightedBranch = Self.initialHighlight(rows: rows, query: query)
+        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: query)
+        highlightedRow = Self.initialHighlight(items: items, query: query)
         return .reloadAll
     }
 
     // MARK: Navigation
 
-    private mutating func highlight(position: Int) {
-        guard !rows.isEmpty else { return }
-        highlightedBranch = rows[min(max(position, 0), rows.count - 1)].branch.name
+    /// Moves `offset` branch rows from the highlight, clamped at both ends.
+    private mutating func move(by offset: Int) {
+        let positions = items.indices.filter { items[$0].row != nil }
+        guard !positions.isEmpty else { return }
+        let current = highlightedTableRow.flatMap { positions.firstIndex(of: $0) } ?? 0
+        let target = positions[min(max(current + offset, 0), positions.count - 1)]
+        highlightedRow = items[target].row?.id
     }
 
     mutating func moveUp() {
-        highlight(position: (highlightedTableRow ?? 0) - 1)
+        move(by: -1)
     }
 
     mutating func moveDown() {
-        highlight(position: (highlightedTableRow ?? 0) + 1)
+        move(by: 1)
     }
 
     mutating func moveToFirst() {
-        highlight(position: 0)
+        highlightedRow = rows.first?.id
     }
 
     mutating func moveToLast() {
-        highlight(position: rows.count - 1)
+        highlightedRow = rows.last?.id
     }
 
-    /// Out-of-range rows are ignored.
-    mutating func highlight(tableRow row: Int) {
-        guard rows.indices.contains(row) else { return }
-        highlightedBranch = rows[row].branch.name
+    /// Headers and out-of-range rows are ignored. Returns whether the highlight moved.
+    @discardableResult
+    mutating func highlight(tableRow index: Int) -> Bool {
+        guard let row = row(forTableRow: index), row.id != highlightedRow else { return false }
+        highlightedRow = row.id
+        return true
     }
 }

@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var pendingCommitMessage: String?
     /// The sheet was reopened because the draft changed while it was closing.
     @State private var commitDraftChanged = false
+    /// The branch name the reader confirmed, held until the New Branch sheet is gone.
+    @State private var pendingBranchName: String?
     /// An error alert is up; a new message waits for it to be dismissed rather than
     /// stacking another sheet on it.
     @State private var isPresentingError = false
@@ -60,7 +62,7 @@ struct ContentView: View {
             // A bare name, not a glass pill.
             .sharedBackgroundVisibility(.hidden)
             // One item, so the two pickers stay side by side; the shared background is
-            // hidden because each one draws its own bordered box.
+            // hidden because each one draws its own capsule.
             ToolbarItem(placement: .navigation) {
                 HStack(spacing: 8) {
                     BranchPickerView()
@@ -122,6 +124,16 @@ struct ContentView: View {
                 windowState.isCommitSheetPresented = false
             }
         }
+        .sheet(isPresented: $windowState.isNewBranchSheetPresented, onDismiss: handleNewBranchSheetDismissal) {
+            NewBranchSheet(
+                validation: NewBranchNameValidation(
+                    exists: { [windowState] in windowState.hasLocalBranch(named: $0) },
+                    check: { [windowState] in await windowState.isValidBranchName($0) }),
+                onCreate: { name in
+                    pendingBranchName = name
+                    windowState.isNewBranchSheetPresented = false
+                })
+        }
     }
 
     /// The selection popover's conditions apart from where the row is. Write groups exist
@@ -134,7 +146,8 @@ struct ContentView: View {
             return false
         }
         return !windowState.isCommitSheetPresented && !windowState.isCommitPickerPresented
-            && !windowState.isBranchPickerPresented && !isPresentingError && !windowState.isConfirmingFileAction
+            && !windowState.isBranchPickerPresented && !windowState.isNewBranchSheetPresented && !isPresentingError
+            && !windowState.isConfirmingFileAction
     }
 
     /// Consumes the confirmed submission after the sheet is gone, so the commit's error
@@ -152,6 +165,14 @@ struct ContentView: View {
                 windowState.isCommitSheetPresented = true
             }
         }
+    }
+
+    /// Creates the branch once the sheet is gone, so git's error alert never races the
+    /// dismissal, as for the commit sheet.
+    private func handleNewBranchSheetDismissal() {
+        guard let name = pendingBranchName else { return }
+        pendingBranchName = nil
+        Task { await windowState.createBranch(named: name) }
     }
 
     private func presentErrorIfNeeded() {

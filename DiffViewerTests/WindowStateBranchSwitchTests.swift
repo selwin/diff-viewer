@@ -449,6 +449,64 @@ struct WindowStateBranchSwitchTests {
         #expect(state.localBranches == ["main"], "the older read finished and applied nothing")
     }
 
+    /// Remote branches ride the same read, so they are never newer than the local list.
+    @Test func headRefreshPublishesRemoteBranchesWithTheLocalOnes() async throws {
+        let (h, state, client, root) = try await settled()
+        await client.set(localBranches: ["main", "a"])
+        await client.set(remoteBranches: [remoteBranch("main"), remoteBranch("b")])
+
+        h.tick(root, [.refs])
+        #expect(await eventually { await state.remoteBranches.map(\.name) == ["main", "b"] })
+        #expect(state.localBranches == ["main", "a"])
+    }
+
+    /// A failed remote read fails the pair, as a failed local read does: the lists on show
+    /// stay as they were.
+    @Test func aFailedRemoteBranchesReadKeepsBothLists() async throws {
+        let (h, state, client, root) = try await settled()
+        await client.fail(remoteBranches: true)
+        await client.set(localBranches: ["a", "b"])
+        let reads = await client.remoteBranchesCalls
+
+        h.tick(root, [.refs])
+        #expect(await eventually { await client.remoteBranchesCalls == reads + 1 })
+        #expect(await eventually { await state.branchReadStatus == .failed })
+        #expect(state.localBranches == ["main"])
+        #expect(state.remoteBranches.isEmpty)
+    }
+
+    // MARK: Remote checkout
+
+    @Test func remoteCheckoutCreatesTheTrackingBranchThenRefreshes() async throws {
+        let (h, state, client, _) = try await settled()
+
+        await state.checkoutRemoteBranch(remoteBranch("feature", remote: "upstream"))
+
+        #expect(
+            await client.checkoutTrackingCalls.map { "\($0.branch) \($0.trackingRef)" }
+                == ["feature refs/remotes/upstream/feature"])
+        #expect(await client.switchBranchCalls.isEmpty)
+        #expect(h.published.last?.cause == .branchSwitch)
+        #expect(state.headState == .named("feature"))
+        #expect(state.localBranches == ["main", "feature"])
+        #expect(!state.isSwitchingBranch)
+        #expect(state.errorMessage == nil)
+    }
+
+    /// A same-named local branch may track something else entirely, so the checkout is
+    /// refused by name before git runs, never redirected to that branch.
+    @Test func remoteCheckoutOfAnExistingLocalNameReportsItWithoutGit() async throws {
+        let (_, state, client, _) = try await settled()
+
+        await state.checkoutRemoteBranch(remoteBranch("main", remote: "upstream"))
+
+        #expect(await client.checkoutTrackingCalls.isEmpty)
+        #expect(await client.switchBranchCalls.isEmpty)
+        #expect(state.errorMessage == "A local branch named main already exists")
+        #expect(state.headState == .named("main"))
+        #expect(!state.isSwitchingBranch)
+    }
+
     // MARK: Presentation
 
     @Test func scopeDisplayTitleNamesTheWorkingTreeOrTheCommit() async throws {
