@@ -26,52 +26,6 @@ struct WindowStateCommitPickerTests {
         (0...WindowState.commitPageSize * 2).map { commitSummary("c\($0)") }
     }
 
-    // MARK: File count
-
-    @Test func fileCountIsOfDistinctPaths() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await adopt(h, state, commits: [commitSummary("c1")])
-        #expect(state.files.count == 3)
-        #expect(state.displayedScopeFileCount == 2, "a file staged and unstaged counts once")
-        #expect(state.commitPickerSnapshot.displayedScopeFileCount == 2)
-    }
-
-    @Test func fileCountIsUnknownWhileAScopeLoads() async {
-        let h = Harness()
-        let state = h.makeState()
-        let commit = commitSummary("c1")
-        let client = await adopt(h, state, commits: [commit])
-        let file = ChangedFile(path: "one.swift", originalPath: nil, kind: .modified, area: .commit(commit.ref))
-        await client.set(files: [file], forCommit: commit.ref.sha)
-
-        await client.holdCommitFiles(true)
-        state.select(commit: commit)
-        #expect(await eventually { await client.heldCommitFileCount == 1 })
-        #expect(state.isLoadingScope)
-        #expect(state.displayedScopeFileCount == nil)
-
-        await client.holdCommitFiles(false)
-        await client.releaseCommitFiles()
-        #expect(await eventually { await !state.isLoadingScope })
-        #expect(state.displayedScopeFileCount == 1)
-    }
-
-    @Test func fileCountIsUnknownAfterAFailedListRead() async {
-        let h = Harness()
-        let state = h.makeState()
-        let client = await adopt(h, state, commits: [commitSummary("c1")])
-        await client.fail(true)
-        h.watcherCallbacks.values.first?()
-        #expect(await eventually { await state.listReadFailed })
-        #expect(state.displayedScopeFileCount == nil)
-
-        await client.fail(false)
-        h.watcherCallbacks.values.first?()
-        #expect(await eventually { await !state.listReadFailed })
-        #expect(state.displayedScopeFileCount == 2)
-    }
-
     // MARK: Snapshot
 
     @Test func snapshotKeepsTheDisplayedCommitWhenThePageDropsIt() async {
@@ -91,12 +45,8 @@ struct WindowStateCommitPickerTests {
         let snapshot = state.commitPickerSnapshot
         #expect(snapshot.displayedScope == .commit(first.ref))
         #expect(snapshot.displayedCommit == first)
-        #expect(snapshot.commits == [first, second])
+        #expect(snapshot.commits == [second], "the page alone; the list gives the selection its own section")
         #expect(!snapshot.historyLoadFailed)
-
-        let listSnapshot = state.commitPickerListSnapshot
-        #expect(listSnapshot.displayedCommit == first)
-        #expect(listSnapshot.commits == [second], "the page alone; the list gives the selection its own section")
     }
 
     @Test func snapshotReportsAFailedLoadMoreOverALoadedPage() async {

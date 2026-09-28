@@ -1,51 +1,79 @@
 import AppKit
 
-/// The table's data source and delegate: rows come from `state`, and a selection the
-/// keyboard or type-select makes becomes the highlight.
+/// The table's data source and delegate: items come from `state`, and a selection made by
+/// a click or the keyboard becomes the highlight.
 extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int {
-        state.rows.count
+        state.items.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard state.rows.indices.contains(row) else { return nil }
-        let cell =
-            tableView.makeView(withIdentifier: ScopeRowContentView.identifier, owner: nil) as? ScopeRowContentView
-            ?? ScopeRowContentView(frame: .zero)
-        let entry = state.rows[row]
-        cell.configure(
-            ScopeRowContentView.Content(
-                gutterTitle: entry.dayLabel?.title, gutterSubtitle: entry.dayLabel?.subtitle,
-                subject: entry.commit.subject, showsCurrentPill: entry.isDisplayedScope,
-                trailing: entry.commit.ref.shortSha, trailingStyle: .hash, accessibilityActionName: "Show"))
-        // Read the row back from the cell: a recycled cell can move.
-        cell.onActivate = { [weak self, weak cell] in
-            guard let self, let cell else { return }
-            let row = self.tableView.row(for: cell)
-            if row >= 0 { activate(tableRow: row) }
+        guard state.items.indices.contains(row) else { return nil }
+        let cell: NSTableCellView
+        switch state.items[row] {
+        case let .header(section, _):
+            let header =
+                tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
+                as? PickerGroupHeaderView ?? PickerGroupHeaderView(frame: .zero)
+            header.configure(title: section.title)
+            return header
+        case let .workingTree(entry):
+            let view = makeRowView()
+            view.configure(entry)
+            cell = view
+        case let .commit(entry):
+            let view = makeRowView()
+            view.configure(entry)
+            cell = view
+        case let .message(message):
+            let view =
+                tableView.makeView(withIdentifier: CommitPickerMessageRowView.identifier, owner: nil)
+                as? CommitPickerMessageRowView ?? CommitPickerMessageRowView(frame: .zero)
+            view.configure(message)
+            view.onActivate = message.action == nil ? nil : activationHandler(for: view)
+            cell = view
         }
+        configureHighlight(of: cell, row: row)
         return cell
     }
 
+    private func makeRowView() -> CommitPickerRowView {
+        let view =
+            tableView.makeView(withIdentifier: CommitPickerRowView.identifier, owner: nil) as? CommitPickerRowView
+            ?? CommitPickerRowView(frame: .zero)
+        view.onActivate = activationHandler(for: view)
+        view.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
+        return view
+    }
+
+    /// Reads the row back from the cell: a recycled cell can move.
+    private func activationHandler(for cell: NSView) -> () -> Void {
+        { [weak self, weak cell] in
+            guard let self, let cell else { return }
+            let row = tableView.row(for: cell)
+            if row >= 0 { activate(tableRow: row) }
+        }
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        rowHeight(forItem: row)
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        state.canHighlight(item: row)
+    }
+
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let rowView =
-            tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil)
-            as? PickerTableRowView ?? PickerTableRowView(frame: .zero)
-        // A recycled row view keeps its last hover.
-        rowView.isHovered = row == self.tableView.hoveredRow
-        return rowView
+        tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil) as? PickerTableRowView
+            ?? PickerTableRowView(frame: .zero)
     }
 
-    func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
-        state.rows.indices.contains(row) ? state.rows[row].commit.subject : nil
-    }
-
-    /// An empty selection changes nothing: the highlight is Working Tree or a row.
+    /// An empty selection changes nothing: only the pointer leaving clears the highlight.
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
         if tableView.selectedRow >= 0 {
-            highlight(tableRow: tableView.selectedRow)
-        } else if state.highlightedTableRow != nil {
+            highlight(item: tableView.selectedRow)
+        } else if state.highlightedItemIndex != nil {
             syncSelection()
         }
     }

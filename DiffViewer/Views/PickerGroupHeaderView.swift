@@ -1,7 +1,7 @@
 import AppKit
 
-/// A recency section's title. Never selectable: the table's handler says it takes no
-/// highlight.
+/// A section's title, such as a recency group. Never selectable: the table's handler
+/// says it takes no highlight.
 final class PickerGroupHeaderView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("PickerGroupHeaderView")
 
@@ -21,9 +21,9 @@ final class PickerGroupHeaderView: NSTableCellView {
 
     override var isFlipped: Bool { true }
 
-    func configure(_ group: RecencyGroup) {
-        title.stringValue = group.title
-        setAccessibilityLabel(group.title)
+    func configure(title text: String) {
+        title.stringValue = text
+        setAccessibilityLabel(text)
         needsLayout = true
     }
 

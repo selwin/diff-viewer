@@ -18,19 +18,13 @@ enum RecencyGroup: CaseIterable, Sendable {
     }
 }
 
-/// How the commit picker names days: relative for today and yesterday, by weekday
-/// after that, with the year only when it is not this one.
+/// How the pickers date commits and group them by recency: relative for today and
+/// yesterday, by weekday within the week, with the year only when it is not this one.
 ///
 /// Every input is injected so tests can pin the calendar, the zone and "now".
 struct CommitDayGrouping {
-    struct DayLabel: Equatable, Sendable {
-        let title: String
-        let subtitle: String
-    }
-
     private let calendar: Calendar
     private let now: Date
-    private let weekday: DateFormatter
     private let dayMonth: DateFormatter
     private let dayMonthYear: DateFormatter
     private let time: DateFormatter
@@ -56,47 +50,12 @@ struct CommitDayGrouping {
             formatter.dateFormat = pattern
             return formatter
         }
-        weekday = formatter("EEEE")
         dayMonth = formatter("d MMM")
         dayMonthYear = formatter("d MMM yyyy")
         time = formatter("HH:mm")
         shortWeekday = formatter("EEE")
         weekdayDayMonth = formatter("EEE d MMM")
         weekdayDayMonthYear = formatter("EEE d MMM yyyy")
-    }
-
-    func dayLabel(for date: Date) -> DayLabel {
-        let title =
-            switch daysAgo(date) {
-            case 0: "Today"
-            case 1: "Yesterday"
-            default: weekday.string(from: date)
-            }
-        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        return DayLabel(title: title, subtitle: (sameYear ? dayMonth : dayMonthYear).string(from: date))
-    }
-
-    // Group adjacent commits by local day without reordering git's traversal.
-    func gutterLabels(for dates: [Date]) -> [DayLabel?] {
-        var labels: [DayLabel?] = []
-        labels.reserveCapacity(dates.count)
-        var previousDay: Date?
-        for date in dates {
-            let day = calendar.startOfDay(for: date)
-            labels.append(day == previousDay ? nil : dayLabel(for: date))
-            previousDay = day
-        }
-        return labels
-    }
-
-    func dateTimeText(for date: Date) -> String {
-        let day =
-            switch daysAgo(date) {
-            case 0: "Today"
-            case 1: "Yesterday"
-            default: dayMonthYear.string(from: date)
-            }
-        return "\(day) at \(time.string(from: date))"
     }
 
     /// A tip dated after now counts as today.

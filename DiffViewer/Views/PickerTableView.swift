@@ -30,11 +30,9 @@ final class PickerTableView: NSTableView {
     /// `pointerMoved` is false when the rows moved under a still pointer: a scroll or a
     /// reload, which a keyboard move can cause.
     var onHoverChange: ((_ previous: Int?, _ current: Int?, _ pointerMoved: Bool) -> Void)?
-    /// Points left of this belong to the day labels, not the rows; zero for no gutter.
-    var gutterWidth = CommitPickerMetrics.gutterWidth
 
     private var trackingArea: NSTrackingArea?
-    private(set) var hoveredRow: Int?
+    private var hoveredRow: Int?
     /// The row the mouse went down on, until it comes up.
     private var pressedRow: Int?
 
@@ -115,15 +113,13 @@ final class PickerTableView: NSTableView {
             let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? any PickerRowAccessoryHosting,
             let accessory = cell.accessory, !accessory.isHidden
         else { return false }
-        // Pills fading out refuse clicks but still swallow them: a press aimed at Pull
-        // must not switch branches instead.
+        // An accessory click must not activate its row, even while the accessory fades out
+        // and refuses the click itself.
         return accessory.bounds.contains(accessory.convert(point, from: self))
     }
 
-    /// The row under `point`, or nil in the gutter, on a row that takes no highlight, or
-    /// below the rows.
+    /// The row under `point`, or nil on a row that takes no highlight or below the rows.
     private func contentRow(at point: NSPoint) -> Int? {
-        guard point.x >= gutterWidth else { return nil }
         let row = row(at: point)
         guard row >= 0, handler?.canHighlight(tableRow: row) ?? true else { return nil }
         return row
@@ -138,10 +134,6 @@ final class PickerTableView: NSTableView {
         }
         let previous = hoveredRow
         hoveredRow = row
-        // The previous row can be past the end after a reload shrank the table.
-        for index in [previous, row].compactMap({ $0 }) where index < numberOfRows {
-            (rowView(atRow: index, makeIfNecessary: false) as? PickerTableRowView)?.isHovered = index == row
-        }
         onHoverChange?(previous, row, pointerMoved)
     }
 }

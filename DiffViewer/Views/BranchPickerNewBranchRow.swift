@@ -102,8 +102,7 @@ final class BranchPickerNewBranchRow: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard isEnabled, isHovered || isPressed else { return }
-        let fill = isPressed ? CommitPickerMetrics.highlightColor : CommitPickerMetrics.hoverColor
-        fill.setFill()
+        (isPressed ? NSColor.secondarySystemFill : NSColor.quaternarySystemFill).setFill()
         let rect = bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0)
         NSBezierPath(
             roundedRect: rect, xRadius: PickerMetrics.cornerRadius, yRadius: PickerMetrics.cornerRadius

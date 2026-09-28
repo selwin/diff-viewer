@@ -14,7 +14,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
             let cell =
                 tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
                 as? PickerGroupHeaderView ?? PickerGroupHeaderView(frame: .zero)
-            cell.configure(group)
+            cell.configure(title: group.title)
             return cell
         case let .branch(entry):
             let cell =
@@ -46,11 +46,8 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let rowView =
-            tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil)
-            as? PickerTableRowView ?? PickerTableRowView(frame: .zero)
-        rowView.style = .branchPicker
-        return rowView
+        tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil) as? PickerTableRowView
+            ?? PickerTableRowView(frame: .zero)
     }
 
     /// An empty selection changes nothing: the highlight is always a row.

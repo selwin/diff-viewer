@@ -1,9 +1,9 @@
 import Foundation
 
-/// What the window hands the commit picker list on every change. The displayed commit is
+/// What the window hands the commit picker on every change. The displayed commit is
 /// kept apart from the loaded page: a page reset or a branch switch can drop it from the
 /// page, and the picker still lists it.
-struct CommitPickerListSnapshot: Equatable, Sendable {
+struct CommitPickerSnapshot: Equatable, Sendable {
     var displayedScope: DiffScope
     /// The displayed commit's summary, when the scope is a commit and one is held.
     var displayedCommit: CommitSummary?
@@ -39,7 +39,7 @@ struct CommitPickerWorkingTreeRow: Equatable {
     let isSelectedScope: Bool
 }
 
-struct CommitPickerListRow: Equatable {
+struct CommitPickerRow: Equatable {
     let scope: DiffScope
     let sha: String
     let shortSha: String
@@ -120,7 +120,7 @@ enum CommitPickerItem: Equatable {
     /// `firstSha` is the first commit under the header: a clock-skewed history can repeat
     /// a group, and each repeat must stay a distinct row.
     case header(Section, firstSha: String)
-    case commit(CommitPickerListRow)
+    case commit(CommitPickerRow)
     case message(CommitPickerMessage)
 
     /// What a reload matches rows by.
@@ -140,7 +140,7 @@ enum CommitPickerItem: Equatable {
         }
     }
 
-    var commitRow: CommitPickerListRow? {
+    var commitRow: CommitPickerRow? {
         if case let .commit(row) = self { row } else { nil }
     }
 
@@ -164,25 +164,27 @@ enum CommitPickerHighlight: Equatable {
 }
 
 /// The header's face: the title over the detail parts and, for a commit, its short SHA.
-struct CommitPickerListHeaderText: Equatable {
+struct CommitPickerHeaderText: Equatable {
     let title: String
     var detailParts: [String] = []
     /// Drawn monospaced after the detail parts; nil for Working Tree.
     var shortSha: String?
+    /// What the copy button copies; nil for Working Tree.
+    var sha: String?
 
-    static func make(snapshot: CommitPickerListSnapshot, grouping: CommitDayGrouping) -> CommitPickerListHeaderText {
+    static func make(snapshot: CommitPickerSnapshot, grouping: CommitDayGrouping) -> CommitPickerHeaderText {
         switch snapshot.displayedScope {
         case .workingTree:
-            return CommitPickerListHeaderText(
+            return CommitPickerHeaderText(
                 title: CommitPickerWorkingTreeRow.title,
                 detailParts: snapshot.workingTreeChangeCount.map { [ChangeCountText.make($0)] } ?? [])
         case let .commit(ref):
             guard let commit = snapshot.displayedCommit else {
-                return CommitPickerListHeaderText(title: ref.shortSha, shortSha: ref.shortSha)
+                return CommitPickerHeaderText(title: ref.shortSha, shortSha: ref.shortSha, sha: ref.sha)
             }
-            return CommitPickerListHeaderText(
+            return CommitPickerHeaderText(
                 title: commit.subject, detailParts: [commit.author, grouping.commitDateText(for: commit.committedAt)],
-                shortSha: commit.ref.shortSha)
+                shortSha: commit.ref.shortSha, sha: commit.ref.sha)
         }
     }
 }

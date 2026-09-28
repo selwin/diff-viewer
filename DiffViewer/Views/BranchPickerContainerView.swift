@@ -34,7 +34,7 @@ final class BranchPickerContainerView: NSView {
     private let searchBackground = RoundedFillView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = PickerTableView()
-    let emptyState = CommitPickerEmptyStateView(frame: .zero)
+    let emptyState = PickerEmptyStateView(frame: .zero)
     private let footerHairline = HairlineView(frame: .zero)
     let newBranchRow = BranchPickerNewBranchRow(frame: .zero)
 
@@ -108,7 +108,6 @@ final class BranchPickerContainerView: NSView {
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
-        tableView.gutterWidth = 0
         tableView.rowHeight = PickerMetrics.rowHeight
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
@@ -262,11 +261,11 @@ final class BranchPickerContainerView: NSView {
         newBranchRow.isEnabled = !state.snapshot.isSwitchingBranch
         wireKeyViewLoop()
         switch state.emptyState {
-        case nil: emptyState.configure(text: nil, isLoading: false, showsRetry: false)
-        case .loading: emptyState.configure(text: "Loading…", isLoading: true, showsRetry: false)
-        case .noBranches: emptyState.configure(text: "No branches", isLoading: false, showsRetry: false)
-        case .failed: emptyState.configure(text: "Couldn't read branches", isLoading: false, showsRetry: false)
-        case .noMatches: emptyState.configure(text: "No matching branches", isLoading: false, showsRetry: false)
+        case nil: emptyState.configure(text: nil, isLoading: false)
+        case .loading: emptyState.configure(text: "Loading…", isLoading: true)
+        case .noBranches: emptyState.configure(text: "No branches", isLoading: false)
+        case .failed: emptyState.configure(text: "Couldn't read branches", isLoading: false)
+        case .noMatches: emptyState.configure(text: "No matching branches", isLoading: false)
         }
         needsLayout = true
     }
