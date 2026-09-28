@@ -2,17 +2,17 @@ import AppKit
 
 /// The branch picker's header: where HEAD is, a detail line for how far that branch is from
 /// its upstream and how the fetch went, the current branch's Pull and Push, and a round
-/// Fetch button that spins while a round runs.
-final class BranchPickerHeaderView: NSVisualEffectView {
+/// Fetch button that spins while a round runs. It draws no background of its own, so the
+/// header and the list share the popover's one surface.
+final class BranchPickerHeaderView: NSView {
     private static let topPadding: CGFloat = 13
     private static let sidePadding: CGFloat = 16
-    private static let bottomPadding: CGFloat = 12
+    private static let bottomPadding: CGFloat = 4
     private static let lineGap: CGFloat = 2
     private static let controlGap: CGFloat = 8
 
     private let title = CommitPickerMetrics.label(font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
     private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-    private let hairline = HairlineView(frame: .zero)
     private let syncButtons = BranchRowSyncButtons(style: .header)
     private let fetchButton = FetchButton(frame: .zero)
 
@@ -26,11 +26,9 @@ final class BranchPickerHeaderView: NSVisualEffectView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        material = .headerView
-        blendingMode = .withinWindow
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
-        for view in [title, detail, hairline, syncButtons, fetchButton] { addSubview(view) }
+        for view in [title, detail, syncButtons, fetchButton] { addSubview(view) }
     }
 
     @available(*, unavailable)
@@ -79,11 +77,10 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         }
     }
 
-    /// Two text lines, padding, and the hairline; constant so counts arriving later do
-    /// not move the rows.
+    /// Two text lines and padding; constant so counts arriving later do not move the rows.
     var fittingHeight: CGFloat {
         Self.topPadding + CommitPickerMetrics.naturalSize(of: title).height + Self.lineGap + Self.detailHeight
-            + Self.bottomPadding + 1
+            + Self.bottomPadding
     }
 
     /// The detail line's height for its font, measured once, so an empty line still
@@ -116,7 +113,6 @@ final class BranchPickerHeaderView: NSVisualEffectView {
         title.frame = NSRect(x: Self.sidePadding, y: Self.topPadding, width: textWidth, height: titleHeight)
         detail.frame = NSRect(
             x: Self.sidePadding, y: title.frame.maxY + Self.lineGap, width: textWidth, height: Self.detailHeight)
-        hairline.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
     }
 }
 

@@ -7,7 +7,11 @@ import AppKit
 final class BranchPickerContainerView: NSView {
     private static let searchInset: CGFloat = 12
     private static let gap: CGFloat = 8
-    private static let searchHeight: CGFloat = 30
+    /// Tighter than `gap`, so the first group sits close under the search field.
+    private static let listGap: CGFloat = 5
+    /// Lines the New Branch… divider up with the header's text.
+    private static let footerHairlineInset: CGFloat = 16
+    private static let searchHeight: CGFloat = 28
     /// What an empty list keeps room for: its message, or a spinner.
     private static let emptyListHeight: CGFloat = 120
     /// The hairline above the New Branch… row, and the gaps around the two.
@@ -326,11 +330,13 @@ final class BranchPickerContainerView: NSView {
         searchField.frame = NSRect(
             x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
             width: searchBackground.frame.width - 8, height: fieldHeight)
-        let tableTop = searchBackground.frame.maxY + Self.gap
+        let tableTop = searchBackground.frame.maxY + Self.listGap
         let footerTop = height - Self.footerHeight
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(footerTop - tableTop, 0))
         emptyState.frame = scrollView.frame
-        footerHairline.frame = NSRect(x: 0, y: footerTop + 4, width: width, height: 1)
+        footerHairline.frame = NSRect(
+            x: Self.footerHairlineInset, y: footerTop + 4, width: max(width - Self.footerHairlineInset * 2, 0),
+            height: 1)
         newBranchRow.frame = NSRect(
             x: 0, y: footerHairline.frame.maxY + 4, width: width, height: BranchPickerNewBranchRow.height)
         tableView.sizeLastColumnToFit()
@@ -364,7 +370,7 @@ final class BranchPickerContainerView: NSView {
         let list = state.items.reduce(CGFloat(0)) { total, item in
             total + (item.row == nil ? BranchPickerMetrics.headerRowHeight : BranchPickerMetrics.rowHeight)
         }
-        let chrome = header.fittingHeight + Self.gap + Self.searchHeight + Self.gap + Self.footerHeight
+        let chrome = header.fittingHeight + Self.gap + Self.searchHeight + Self.listGap + Self.footerHeight
         let height = min(chrome + max(list, Self.emptyListHeight), BranchPickerMetrics.maximumHeight).rounded(.up)
         guard height != preferredHeight else { return }
         preferredHeight = height
@@ -569,7 +575,7 @@ final class FilledSearchFieldCell: NSSearchFieldCell {
     }
 }
 
-/// A quiet rounded fill, behind a borderless control.
+/// A quiet capsule fill, behind a borderless control.
 final class RoundedFillView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -580,7 +586,9 @@ final class RoundedFillView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.quaternarySystemFill.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+        // Tuned to read as #F1F1F2 on the light popover; labelColor keeps dark mode in step.
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        let radius = bounds.height / 2
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 }
