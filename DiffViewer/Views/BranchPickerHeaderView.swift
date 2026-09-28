@@ -5,14 +5,12 @@ import AppKit
 /// and the current branch's Pull and Push after it. It draws no background of its own, so the
 /// header and the list share the popover's one surface.
 final class BranchPickerHeaderView: NSView {
-    private static let topPadding: CGFloat = 13
-    private static let sidePadding: CGFloat = 16
-    private static let bottomPadding: CGFloat = 4
-    private static let lineGap: CGFloat = 2
+    private typealias Metrics = PickerMetrics.Header
+
     private static let controlGap: CGFloat = 8
 
-    private let title = CommitPickerMetrics.label(font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
-    private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+    private let title = PickerLabel.make(font: Metrics.titleFont, color: .labelColor)
+    private let detail = PickerLabel.make(font: Metrics.detailFont, color: .secondaryLabelColor)
     private let syncButtons = BranchRowSyncButtons(style: .header)
     private let fetchButton = FetchButton(frame: .zero)
 
@@ -79,22 +77,23 @@ final class BranchPickerHeaderView: NSView {
 
     /// Two text lines and padding; constant so counts arriving later do not move the rows.
     var fittingHeight: CGFloat {
-        Self.topPadding + CommitPickerMetrics.naturalSize(of: title).height + Self.lineGap + Self.detailHeight
-            + Self.bottomPadding
+        Metrics.topPadding + PickerViewGeometry.naturalSize(of: title).height + Metrics.lineGap
+            + Self.detailHeight + Metrics.bottomPadding
     }
 
     /// The detail line's height for its font, measured once, so an empty line still
     /// reserves its space.
-    private static let detailHeight: CGFloat = CommitPickerMetrics.naturalSize(
-        of: CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .labelColor)
+    private static let detailHeight: CGFloat = PickerViewGeometry.naturalSize(
+        of: PickerLabel.make(font: Metrics.detailFont, color: .labelColor)
     ).height
 
     override func layout() {
         super.layout()
-        let titleHeight = CommitPickerMetrics.naturalSize(of: title).height
-        let centerY = (Self.topPadding + titleHeight + Self.lineGap + Self.detailHeight + Self.topPadding) / 2
+        let titleHeight = PickerViewGeometry.naturalSize(of: title).height
+        let centerY =
+            (Metrics.topPadding + titleHeight + Metrics.lineGap + Self.detailHeight + Metrics.topPadding) / 2
         // The controls on the trailing edge are placed first; the text takes what is left.
-        var trailing = bounds.width - Self.sidePadding
+        var trailing = bounds.width - Metrics.sidePadding
         // Both controls carry a margin for their focus rings; the gaps are between the shapes.
         let margin = SyncPillButton.focusRingMargin
         // Fetch comes first, left of Pull and Push, in the order Tab visits them.
@@ -110,10 +109,11 @@ final class BranchPickerHeaderView: NSView {
             x: trailing - fetchSide + margin, y: (centerY - fetchSide / 2).rounded(), width: fetchSide,
             height: fetchSide)
         trailing = fetchButton.frame.minX + margin - Self.controlGap
-        let textWidth = max(trailing - Self.sidePadding, 0)
-        title.frame = NSRect(x: Self.sidePadding, y: Self.topPadding, width: textWidth, height: titleHeight)
+        let textWidth = max(trailing - Metrics.sidePadding, 0)
+        title.frame = NSRect(x: Metrics.sidePadding, y: Metrics.topPadding, width: textWidth, height: titleHeight)
         detail.frame = NSRect(
-            x: Self.sidePadding, y: title.frame.maxY + Self.lineGap, width: textWidth, height: Self.detailHeight)
+            x: Metrics.sidePadding, y: title.frame.maxY + Metrics.lineGap, width: textWidth,
+            height: Self.detailHeight)
     }
 }
 

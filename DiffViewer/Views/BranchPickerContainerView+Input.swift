@@ -12,8 +12,8 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         switch state.items[row] {
         case let .header(group):
             let cell =
-                tableView.makeView(withIdentifier: BranchPickerGroupHeaderView.identifier, owner: nil)
-                as? BranchPickerGroupHeaderView ?? BranchPickerGroupHeaderView(frame: .zero)
+                tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
+                as? PickerGroupHeaderView ?? PickerGroupHeaderView(frame: .zero)
             cell.configure(group)
             return cell
         case let .branch(entry):
@@ -38,7 +38,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        state.canHighlight(tableRow: row) ? BranchPickerMetrics.rowHeight : BranchPickerMetrics.headerRowHeight
+        state.canHighlight(tableRow: row) ? PickerMetrics.rowHeight : PickerMetrics.headerRowHeight
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
@@ -47,8 +47,8 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView =
-            tableView.makeView(withIdentifier: CommitPickerTableRowView.identifier, owner: nil)
-            as? CommitPickerTableRowView ?? CommitPickerTableRowView(frame: .zero)
+            tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil)
+            as? PickerTableRowView ?? PickerTableRowView(frame: .zero)
         rowView.style = .branchPicker
         return rowView
     }

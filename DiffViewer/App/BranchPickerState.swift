@@ -132,12 +132,12 @@ struct BranchPickerRow: Equatable {
 
 /// One table row: a recency section's title, or a branch.
 enum BranchPickerItem: Equatable {
-    case header(BranchDateGroup)
+    case header(RecencyGroup)
     case branch(BranchPickerRow)
 
     /// What a reload matches rows by.
     enum Key: Hashable {
-        case header(BranchDateGroup)
+        case header(RecencyGroup)
         case branch(BranchRowID)
     }
 
@@ -280,11 +280,11 @@ struct BranchPickerState {
     /// Newest tip first within each section, so the branches in play come before the ones
     /// left behind. Empty sections are left out.
     private static func groupedItems(_ rows: [BranchPickerRow], grouping: CommitDayGrouping) -> [BranchPickerItem] {
-        var byGroup: [BranchDateGroup: [BranchPickerRow]] = [:]
+        var byGroup: [RecencyGroup: [BranchPickerRow]] = [:]
         for row in rows.sorted(by: isNewer) {
-            byGroup[grouping.branchGroup(for: row.tipCommittedAt), default: []].append(row)
+            byGroup[grouping.recencyGroup(for: row.tipCommittedAt), default: []].append(row)
         }
-        return BranchDateGroup.allCases.flatMap { group -> [BranchPickerItem] in
+        return RecencyGroup.allCases.flatMap { group -> [BranchPickerItem] in
             guard let rows = byGroup[group] else { return [] }
             return [.header(group)] + rows.map(BranchPickerItem.branch)
         }

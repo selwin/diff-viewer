@@ -29,8 +29,8 @@ extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let rowView =
-            tableView.makeView(withIdentifier: CommitPickerTableRowView.identifier, owner: nil)
-            as? CommitPickerTableRowView ?? CommitPickerTableRowView(frame: .zero)
+            tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil)
+            as? PickerTableRowView ?? PickerTableRowView(frame: .zero)
         // A recycled row view keeps its last hover.
         rowView.isHovered = row == self.tableView.hoveredRow
         return rowView

@@ -12,7 +12,6 @@ enum CommitPickerMetrics {
     static let textInset: CGFloat = 12
     static let rowHeight: CGFloat = 38
     static let rowGap: CGFloat = 1
-    static let cornerRadius: CGFloat = 7
     static let footerHeight: CGFloat = 30
 
     static func contentRect(in bounds: NSRect) -> NSRect {
@@ -21,46 +20,10 @@ enum CommitPickerMetrics {
             height: bounds.height)
     }
 
-    static func label(font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) -> NSTextField {
-        let field = NSTextField(labelWithString: "")
-        field.font = font
-        field.textColor = color
-        field.alignment = alignment
-        field.lineBreakMode = .byTruncatingTail
-        field.maximumNumberOfLines = 1
-        field.cell?.truncatesLastVisibleLine = true
-        return field
-    }
-
-    /// A truncating label's `intrinsicContentSize` is capped by its current frame; the
-    /// cell's size is the text's natural size.
-    static func naturalSize(of field: NSTextField) -> NSSize {
-        field.cell?.cellSize ?? .zero
-    }
-
     /// The highlighted row's fill: neutral, and clearly stronger than the hover fill
     /// and the pinned row's resting fill (both quaternary).
     static let highlightColor = NSColor.secondarySystemFill
     static let hoverColor = NSColor.quaternarySystemFill
-
-    /// The vertical centre of `field`'s capitals, in its (flipped) superview's coordinates.
-    static func capCenterY(of field: NSTextField) -> CGFloat {
-        field.frame.minY + field.firstBaselineOffsetFromTop - capHeight(of: field) / 2
-    }
-
-    /// The y that puts `field`'s capitals centred on `centerY`.
-    static func y(centering field: NSTextField, on centerY: CGFloat) -> CGFloat {
-        centerY + capHeight(of: field) / 2 - field.firstBaselineOffsetFromTop
-    }
-
-    private static func capHeight(of field: NSTextField) -> CGFloat {
-        (field.font ?? .systemFont(ofSize: NSFont.systemFontSize)).capHeight
-    }
-
-    /// Pixel alignment that never shrinks a label into truncating.
-    static let pixelAlignment: AlignmentOptions = [
-        .alignMinXNearest, .alignMinYNearest, .alignWidthOutward, .alignHeightOutward,
-    ]
 }
 
 /// The "CURRENT" tag beside the displayed scope: an outlined capsule.
@@ -148,14 +111,14 @@ final class ScopeRowContentView: NSTableCellView, PickerRowAccessoryHosting {
 
     private static let subjectFont = NSFont.systemFont(ofSize: 13.5)
 
-    private let gutterTitle = CommitPickerMetrics.label(
+    private let gutterTitle = PickerLabel.make(
         font: .systemFont(ofSize: 13, weight: .semibold), color: .labelColor, alignment: .right)
-    private let gutterSubtitle = CommitPickerMetrics.label(
+    private let gutterSubtitle = PickerLabel.make(
         font: .systemFont(ofSize: 11), color: .secondaryLabelColor, alignment: .right)
-    private let subject = CommitPickerMetrics.label(font: subjectFont, color: .labelColor)
+    private let subject = PickerLabel.make(font: subjectFont, color: .labelColor)
     private let pill = CurrentPillView(frame: .zero)
     private var accessibilityActionName = "Show"
-    private let trailing = CommitPickerMetrics.label(
+    private let trailing = PickerLabel.make(
         font: .monospacedSystemFont(ofSize: 12, weight: .regular), color: .tertiaryLabelColor, alignment: .right)
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -216,34 +179,34 @@ final class ScopeRowContentView: NSTableCellView, PickerRowAccessoryHosting {
         layoutGutter()
         let content = CommitPickerMetrics.contentRect(in: bounds)
         let subjectX = content.minX + CommitPickerMetrics.textInset
-        let subjectHeight = CommitPickerMetrics.naturalSize(of: subject).height
+        let subjectHeight = PickerViewGeometry.naturalSize(of: subject).height
         subject.frame = NSRect(
             x: subjectX, y: ((bounds.height - subjectHeight) / 2).rounded(), width: 0, height: subjectHeight)
-        let centerY = CommitPickerMetrics.capCenterY(of: subject)
+        let centerY = PickerViewGeometry.capCenterY(of: subject)
         var rightEdge = content.maxX - CommitPickerMetrics.textInset
         if let accessory, !accessory.isHidden {
             let size = accessory.intrinsicContentSize
             accessory.frame = backingAlignedRect(
                 NSRect(x: rightEdge - size.width, y: centerY - size.height / 2, width: size.width, height: size.height),
-                options: CommitPickerMetrics.pixelAlignment)
+                options: PickerViewGeometry.pixelAlignment)
             rightEdge = accessory.frame.minX - 8
         }
         if trailing.stringValue.isEmpty {
             trailing.frame = .zero
         } else {
-            let size = CommitPickerMetrics.naturalSize(of: trailing)
+            let size = PickerViewGeometry.naturalSize(of: trailing)
             trailing.frame = backingAlignedRect(
                 NSRect(
-                    x: rightEdge - size.width, y: CommitPickerMetrics.y(centering: trailing, on: centerY),
+                    x: rightEdge - size.width, y: PickerViewGeometry.y(centering: trailing, on: centerY),
                     width: size.width, height: size.height),
-                options: CommitPickerMetrics.pixelAlignment)
+                options: PickerViewGeometry.pixelAlignment)
             rightEdge = trailing.frame.minX - 8
         }
         if !pill.isHidden {
             let size = pill.intrinsicContentSize
             pill.frame = backingAlignedRect(
                 NSRect(x: rightEdge - size.width, y: centerY - size.height / 2, width: size.width, height: size.height),
-                options: CommitPickerMetrics.pixelAlignment)
+                options: PickerViewGeometry.pixelAlignment)
             rightEdge = pill.frame.minX - 8
         }
         subject.frame.size.width = max(rightEdge - subjectX, 0)
@@ -252,72 +215,12 @@ final class ScopeRowContentView: NSTableCellView, PickerRowAccessoryHosting {
     private func layoutGutter() {
         let maxX = CommitPickerMetrics.gutterWidth - CommitPickerMetrics.gutterTrailingInset
         let width = maxX - 4
-        let titleHeight = CommitPickerMetrics.naturalSize(of: gutterTitle).height
+        let titleHeight = PickerViewGeometry.naturalSize(of: gutterTitle).height
         let subtitleHeight =
-            gutterSubtitle.stringValue.isEmpty ? 0 : CommitPickerMetrics.naturalSize(of: gutterSubtitle).height
+            gutterSubtitle.stringValue.isEmpty ? 0 : PickerViewGeometry.naturalSize(of: gutterSubtitle).height
         let top = ((bounds.height - titleHeight - subtitleHeight) / 2).rounded()
         gutterTitle.frame = NSRect(x: maxX - width, y: top, width: width, height: titleHeight)
         gutterSubtitle.frame = NSRect(x: maxX - width, y: top + titleHeight, width: width, height: subtitleHeight)
         gutterSubtitle.isHidden = subtitleHeight == 0
-    }
-}
-
-/// A table row that highlights only its content area, with rounded corners, and
-/// never paints a background of its own so the gutter shows through. In the commit
-/// picker the highlight is a neutral fill, so the text keeps its colors; in the branch
-/// picker it is the accent fill, which the cell answers with white text.
-final class CommitPickerTableRowView: NSTableRowView {
-    static let identifier = NSUserInterfaceItemIdentifier("CommitPickerTableRowView")
-
-    enum Style {
-        /// Neutral fills inside the content area, beside the gutter.
-        case commitPicker
-        /// An accent fill across the row, and no hover fill: hover moves the highlight.
-        case branchPicker
-    }
-
-    var style = Style.commitPicker {
-        didSet { if style != oldValue { needsDisplay = true } }
-    }
-
-    /// Set by the table's pointer tracking; drawn only while the row is not selected.
-    var isHovered = false {
-        didSet { if isHovered != oldValue { needsDisplay = true } }
-    }
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        clipsToBounds = true
-        identifier = Self.identifier
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    private var highlightPath: NSBezierPath {
-        let rect =
-            switch style {
-            case .commitPicker: CommitPickerMetrics.contentRect(in: bounds)
-            case .branchPicker: bounds.insetBy(dx: BranchPickerMetrics.rowInset, dy: 0)
-            }
-        return NSBezierPath(
-            roundedRect: rect, xRadius: CommitPickerMetrics.cornerRadius, yRadius: CommitPickerMetrics.cornerRadius)
-    }
-
-    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
-
-    override func drawBackground(in dirtyRect: NSRect) {
-        guard style == .commitPicker, isHovered, !isSelected else { return }
-        CommitPickerMetrics.hoverColor.setFill()
-        highlightPath.fill()
-    }
-
-    override func drawSelection(in dirtyRect: NSRect) {
-        guard isSelected else { return }
-        switch style {
-        case .commitPicker: CommitPickerMetrics.highlightColor.setFill()
-        case .branchPicker: NSColor.selectedContentBackgroundColor.setFill()
-        }
-        highlightPath.fill()
     }
 }

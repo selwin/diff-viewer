@@ -50,8 +50,8 @@ final class CommitPickerPinnedRowView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(
-            roundedRect: CommitPickerMetrics.contentRect(in: bounds), xRadius: CommitPickerMetrics.cornerRadius,
-            yRadius: CommitPickerMetrics.cornerRadius)
+            roundedRect: CommitPickerMetrics.contentRect(in: bounds), xRadius: PickerMetrics.cornerRadius,
+            yRadius: PickerMetrics.cornerRadius)
         if isHighlighted {
             CommitPickerMetrics.highlightColor.setFill()
             path.fill()

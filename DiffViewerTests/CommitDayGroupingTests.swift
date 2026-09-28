@@ -102,14 +102,14 @@ struct CommitDayGroupingTests {
     // MARK: Branch groups
 
     /// Sections are cut at local midnight: 2 to 6 days ago is this week.
-    @Test func branchGroupBoundaries() {
-        #expect(grouping.branchGroup(for: date(2026, 9, 19, 0, 0)) == .today)
-        #expect(grouping.branchGroup(for: date(2026, 9, 20, 9, 0)) == .today, "a tip dated after now")
-        #expect(grouping.branchGroup(for: date(2026, 9, 18, 23, 59)) == .yesterday)
-        #expect(grouping.branchGroup(for: date(2026, 9, 18, 0, 0)) == .yesterday)
-        #expect(grouping.branchGroup(for: date(2026, 9, 17, 23, 59)) == .thisWeek)
-        #expect(grouping.branchGroup(for: date(2026, 9, 13, 0, 0)) == .thisWeek)
-        #expect(grouping.branchGroup(for: date(2026, 9, 12, 23, 59)) == .older)
+    @Test func recencyGroupBoundaries() {
+        #expect(grouping.recencyGroup(for: date(2026, 9, 19, 0, 0)) == .today)
+        #expect(grouping.recencyGroup(for: date(2026, 9, 20, 9, 0)) == .today, "a tip dated after now")
+        #expect(grouping.recencyGroup(for: date(2026, 9, 18, 23, 59)) == .yesterday)
+        #expect(grouping.recencyGroup(for: date(2026, 9, 18, 0, 0)) == .yesterday)
+        #expect(grouping.recencyGroup(for: date(2026, 9, 17, 23, 59)) == .thisWeek)
+        #expect(grouping.recencyGroup(for: date(2026, 9, 13, 0, 0)) == .thisWeek)
+        #expect(grouping.recencyGroup(for: date(2026, 9, 12, 23, 59)) == .older)
     }
 
     @Test func branchTimeTextForms() {

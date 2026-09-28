@@ -5,15 +5,8 @@ import AppKit
 /// snapshot and query to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
-    private static let searchInset: CGFloat = 12
-    private static let gap: CGFloat = 8
-    /// Tighter than `gap`, so the first group sits close under the search field.
-    private static let listGap: CGFloat = 5
     /// Lines the New Branch… divider up with the header's text.
     private static let footerHairlineInset: CGFloat = 16
-    private static let searchHeight: CGFloat = 28
-    /// What an empty list keeps room for: its message, or a spinner.
-    private static let emptyListHeight: CGFloat = 120
     /// The hairline above the New Branch… row, and the gaps around the two.
     private static let footerHeight: CGFloat = 4 + 1 + 4 + BranchPickerNewBranchRow.height + 6
 
@@ -40,7 +33,7 @@ final class BranchPickerContainerView: NSView {
     /// The search field's rounded fill; the field itself draws no bezel.
     private let searchBackground = RoundedFillView(frame: .zero)
     let scrollView = NSScrollView()
-    let tableView = CommitPickerTableView()
+    let tableView = PickerTableView()
     let emptyState = CommitPickerEmptyStateView(frame: .zero)
     private let footerHairline = HairlineView(frame: .zero)
     let newBranchRow = BranchPickerNewBranchRow(frame: .zero)
@@ -116,7 +109,7 @@ final class BranchPickerContainerView: NSView {
         tableView.headerView = nil
         tableView.style = .plain
         tableView.gutterWidth = 0
-        tableView.rowHeight = BranchPickerMetrics.rowHeight
+        tableView.rowHeight = PickerMetrics.rowHeight
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
@@ -349,13 +342,13 @@ final class BranchPickerContainerView: NSView {
         let headerHeight = header.fittingHeight
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         searchBackground.frame = NSRect(
-            x: Self.searchInset, y: headerHeight + Self.gap, width: width - Self.searchInset * 2,
-            height: Self.searchHeight)
+            x: PickerMetrics.searchInset, y: headerHeight + PickerMetrics.searchTopGap,
+            width: width - PickerMetrics.searchInset * 2, height: PickerMetrics.searchHeight)
         let fieldHeight = searchField.intrinsicContentSize.height
         searchField.frame = NSRect(
             x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
             width: searchBackground.frame.width - 8, height: fieldHeight)
-        let tableTop = searchBackground.frame.maxY + Self.listGap
+        let tableTop = searchBackground.frame.maxY + PickerMetrics.listTopGap
         let footerTop = height - Self.footerHeight
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(footerTop - tableTop, 0))
         emptyState.frame = scrollView.frame
@@ -395,17 +388,19 @@ final class BranchPickerContainerView: NSView {
     private func updatePreferredHeight() {
         guard state.query.isEmpty else { return }
         let list = state.items.reduce(CGFloat(0)) { total, item in
-            total + (item.row == nil ? BranchPickerMetrics.headerRowHeight : BranchPickerMetrics.rowHeight)
+            total + (item.row == nil ? PickerMetrics.headerRowHeight : PickerMetrics.rowHeight)
         }
-        let chrome = header.fittingHeight + Self.gap + Self.searchHeight + Self.listGap + Self.footerHeight
-        let height = min(chrome + max(list, Self.emptyListHeight), BranchPickerMetrics.maximumHeight).rounded(.up)
+        let chrome =
+            header.fittingHeight + PickerMetrics.searchTopGap + PickerMetrics.searchHeight
+            + PickerMetrics.listTopGap + Self.footerHeight
+        let height = min(chrome + max(list, PickerMetrics.emptyListHeight), PickerMetrics.maximumHeight).rounded(.up)
         guard height > preferredHeight else { return }
         preferredHeight = height
         invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: BranchPickerMetrics.width, height: preferredHeight)
+        NSSize(width: PickerMetrics.width, height: preferredHeight)
     }
 
     // MARK: Window

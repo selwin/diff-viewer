@@ -21,11 +21,10 @@ protocol PickerRowAccessoryHosting: AnyObject {
 }
 
 /// The picker's table: unmodified navigation keys go to the handler, everything else
-/// (type-select included) to AppKit. A click on a row activates it on release, so a
-/// drag off the row cancels; clicks in the gutter, which belongs to the day labels, on rows
-/// the handler says take no highlight, and below the rows are swallowed, and so are clicks
-/// on a row's accessory, whose buttons take their own. Tracks the hovered row.
-final class CommitPickerTableView: NSTableView {
+/// (type-select included) to AppKit. A click activates its row on release, so a drag off
+/// the row cancels. Clicks below the rows, on rows that take no highlight, or on a row's
+/// accessory never activate one. Tracks the hovered row.
+final class PickerTableView: NSTableView {
     weak var handler: (any PickerTableHandler)?
     /// Called with the previously hovered row and the new one whenever the hover moves.
     /// `pointerMoved` is false when the rows moved under a still pointer: a scroll or a
@@ -141,7 +140,7 @@ final class CommitPickerTableView: NSTableView {
         hoveredRow = row
         // The previous row can be past the end after a reload shrank the table.
         for index in [previous, row].compactMap({ $0 }) where index < numberOfRows {
-            (rowView(atRow: index, makeIfNecessary: false) as? CommitPickerTableRowView)?.isHovered = index == row
+            (rowView(atRow: index, makeIfNecessary: false) as? PickerTableRowView)?.isHovered = index == row
         }
         onHoverChange?(previous, row, pointerMoved)
     }

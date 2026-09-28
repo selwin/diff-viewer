@@ -1,7 +1,7 @@
 import Foundation
 
-/// The branch picker's recency sections, newest first.
-enum BranchDateGroup: CaseIterable, Sendable {
+/// Recency sections, newest first.
+enum RecencyGroup: CaseIterable, Sendable {
     case today
     case yesterday
     /// Two to six days ago.
@@ -96,7 +96,7 @@ struct CommitDayGrouping {
     }
 
     /// A tip dated after now counts as today.
-    func branchGroup(for date: Date) -> BranchDateGroup {
+    func recencyGroup(for date: Date) -> RecencyGroup {
         switch daysAgo(date) {
         case ...0: .today
         case 1: .yesterday
@@ -107,7 +107,7 @@ struct CommitDayGrouping {
 
     /// Short enough for a row's subtitle; the section header says which day.
     func branchTimeText(for date: Date) -> String {
-        switch branchGroup(for: date) {
+        switch recencyGroup(for: date) {
         case .today, .yesterday: return time.string(from: date)
         case .thisWeek: return shortWeekday.string(from: date)
         case .older:

@@ -1,18 +1,5 @@
 import AppKit
 
-/// The branch picker's geometry.
-enum BranchPickerMetrics {
-    static let width: CGFloat = 410
-    /// The popover grows with its list up to this height, then the list scrolls.
-    static let maximumHeight: CGFloat = 560
-    /// How far the highlight and the search field stay from the popover's sides.
-    static let rowInset: CGFloat = 8
-    /// Text and icons sit this far inside the highlight.
-    static let contentInset: CGFloat = 10
-    static let rowHeight: CGFloat = 44
-    static let headerRowHeight: CGFloat = 26
-}
-
 /// A branch row: icon, name over `author · time`, status text, and the Pull/Push pills,
 /// which the container shows only on the highlighted row. As the highlight moves, the pills
 /// fade and the status slides to make room. As a table cell it stays an accessibility cell;
@@ -21,13 +8,10 @@ enum BranchPickerMetrics {
 final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     static let identifier = NSUserInterfaceItemIdentifier("BranchPickerRowView")
 
-    private static let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
-    private static let currentNameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     private static let matchFont = NSFont.systemFont(ofSize: 13, weight: .bold)
+    private static let accentStatusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     private static let iconSize: CGFloat = 14
     private static let iconGap: CGFloat = 9
-    private static let lineGap: CGFloat = 1
-    private static let trailingGap: CGFloat = 10
     private static let animationDuration: TimeInterval = 0.18
 
     /// Set by the table's owner; nil on rows that cannot be activated.
@@ -56,10 +40,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     }
 
     private let icon = NSImageView()
-    private let name = CommitPickerMetrics.label(font: nameFont, color: .labelColor)
-    private let subtitle = CommitPickerMetrics.label(font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
-    private let status = CommitPickerMetrics.label(
-        font: .systemFont(ofSize: 12), color: .secondaryLabelColor, alignment: .right)
+    private let name = PickerLabel.make(font: PickerMetrics.nameFont, color: .labelColor)
+    private let subtitle = PickerLabel.make(font: PickerMetrics.subtitleFont, color: .secondaryLabelColor)
+    private let status = PickerLabel.make(
+        font: PickerMetrics.statusFont, color: .secondaryLabelColor, alignment: .right)
     private var row: BranchPickerRow?
     private var accessibilityActionName = "Switch to branch"
 
@@ -111,7 +95,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         } else {
             status.textColor = secondary
         }
-        status.font = .systemFont(ofSize: 12, weight: row.status.isAccent ? .semibold : .regular)
+        status.font = row.status.isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
         icon.contentTintColor =
             isHighlighted ? .white : (row.kind == .current ? .controlAccentColor : .secondaryLabelColor)
         (accessory as? BranchRowSyncButtons)?.isOnAccent = isHighlighted
@@ -120,7 +104,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private static func attributedName(_ row: BranchPickerRow, color: NSColor) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
-        let base = row.kind == .current ? currentNameFont : nameFont
+        let base = row.kind == .current ? PickerMetrics.currentNameFont : PickerMetrics.nameFont
         let string = NSMutableAttributedString(
             string: row.name, attributes: [.font: base, .foregroundColor: color, .paragraphStyle: paragraph])
         for range in row.matchedRanges {
@@ -237,7 +221,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Where the pills and status go with the pills shown or not, and where the name must
     /// stop. One place, so an animation ends exactly where a plain layout would put things.
     private func trailingFrames(showingAccessory: Bool) -> (accessory: NSRect?, status: NSRect, textMaxX: CGFloat) {
-        var rightEdge = bounds.width - BranchPickerMetrics.rowInset - BranchPickerMetrics.contentInset
+        var rightEdge = bounds.width - PickerMetrics.rowInset - PickerMetrics.contentInset
         var accessoryFrame: NSRect?
         if showingAccessory, let accessory {
             let size = accessory.intrinsicContentSize
@@ -245,19 +229,19 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
                 NSRect(
                     x: rightEdge - size.width, y: (bounds.height - size.height) / 2, width: size.width,
                     height: size.height),
-                options: CommitPickerMetrics.pixelAlignment)
+                options: PickerViewGeometry.pixelAlignment)
             accessoryFrame = frame
-            rightEdge = frame.minX - Self.trailingGap
+            rightEdge = frame.minX - PickerMetrics.trailingGap
         }
         var statusFrame = NSRect.zero
         if !status.stringValue.isEmpty {
-            let size = CommitPickerMetrics.naturalSize(of: status)
+            let size = PickerViewGeometry.naturalSize(of: status)
             statusFrame = backingAlignedRect(
                 NSRect(
                     x: rightEdge - size.width, y: (bounds.height - size.height) / 2, width: size.width,
                     height: size.height),
-                options: CommitPickerMetrics.pixelAlignment)
-            rightEdge = statusFrame.minX - Self.trailingGap
+                options: PickerViewGeometry.pixelAlignment)
+            rightEdge = statusFrame.minX - PickerMetrics.trailingGap
         }
         return (accessoryFrame, statusFrame, rightEdge)
     }
@@ -266,10 +250,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     // row, measured first so the name takes what is left.
     override func layout() {
         super.layout()
-        let leading = BranchPickerMetrics.rowInset + BranchPickerMetrics.contentInset
-        let nameHeight = CommitPickerMetrics.naturalSize(of: name).height
-        let subtitleHeight = CommitPickerMetrics.naturalSize(of: subtitle).height
-        let top = ((bounds.height - nameHeight - Self.lineGap - subtitleHeight) / 2).rounded()
+        let leading = PickerMetrics.rowInset + PickerMetrics.contentInset
+        let nameHeight = PickerViewGeometry.naturalSize(of: name).height
+        let subtitleHeight = PickerViewGeometry.naturalSize(of: subtitle).height
+        let top = ((bounds.height - nameHeight - PickerMetrics.lineGap - subtitleHeight) / 2).rounded()
         icon.frame = NSRect(
             x: leading, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
             height: Self.iconSize)
@@ -280,47 +264,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         let textWidth = max(textMaxX - textX, 0)
         name.frame = NSRect(x: textX, y: top, width: textWidth, height: nameHeight)
         subtitle.frame = NSRect(
-            x: textX, y: name.frame.maxY + Self.lineGap, width: textWidth, height: subtitleHeight)
+            x: textX, y: name.frame.maxY + PickerMetrics.lineGap, width: textWidth, height: subtitleHeight)
         // A running animation already ends on `target`; setting it here would snap it.
         guard !isAnimating else { return }
         if let frame = target.accessory { accessory?.frame = frame }
         status.frame = target.status
-    }
-}
-
-/// A recency section's title. Never selectable: the table's handler says it takes no
-/// highlight.
-final class BranchPickerGroupHeaderView: NSTableCellView {
-    static let identifier = NSUserInterfaceItemIdentifier("BranchPickerGroupHeaderView")
-
-    private let title = CommitPickerMetrics.label(
-        font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        clipsToBounds = true
-        identifier = Self.identifier
-        addSubview(title)
-        setAccessibilityRole(.staticText)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var isFlipped: Bool { true }
-
-    func configure(_ group: BranchDateGroup) {
-        title.stringValue = group.title
-        setAccessibilityLabel(group.title)
-        needsLayout = true
-    }
-
-    /// Sits low in its row, close to the rows it names.
-    override func layout() {
-        super.layout()
-        let leading = BranchPickerMetrics.rowInset + BranchPickerMetrics.contentInset
-        let height = CommitPickerMetrics.naturalSize(of: title).height
-        title.frame = NSRect(
-            x: leading, y: bounds.height - height - 4, width: max(bounds.width - leading * 2, 0), height: height)
     }
 }

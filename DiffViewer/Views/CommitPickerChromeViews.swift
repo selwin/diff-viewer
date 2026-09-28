@@ -43,9 +43,9 @@ final class CommitPickerHeaderView: NSVisualEffectView {
     private static let bottomPadding: CGFloat = 12
     private static let lineGap: CGFloat = 3
 
-    private let title = CommitPickerMetrics.label(font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
+    private let title = PickerLabel.make(font: .systemFont(ofSize: 15, weight: .semibold), color: .labelColor)
     private let pill = CurrentPillView(frame: .zero)
-    private let detail = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+    private let detail = PickerLabel.make(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private let hairline = HairlineView(frame: .zero)
 
     override init(frame: NSRect) {
@@ -85,29 +85,29 @@ final class CommitPickerHeaderView: NSVisualEffectView {
     /// Two text lines, padding, and the hairline; constant so the count arriving later
     /// does not move the rows.
     var fittingHeight: CGFloat {
-        Self.topPadding + CommitPickerMetrics.naturalSize(of: title).height + Self.lineGap + Self.detailHeight
+        Self.topPadding + PickerViewGeometry.naturalSize(of: title).height + Self.lineGap + Self.detailHeight
             + Self.bottomPadding + 1
     }
 
     /// The detail line's height for its font, measured once: the attributed text's own
     /// height varies with its segments.
-    private static let detailHeight: CGFloat = CommitPickerMetrics.naturalSize(
-        of: CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .labelColor)
+    private static let detailHeight: CGFloat = PickerViewGeometry.naturalSize(
+        of: PickerLabel.make(font: .systemFont(ofSize: 12), color: .labelColor)
     ).height
 
     override func layout() {
         super.layout()
         let maxX = bounds.width - Self.sidePadding
-        let titleSize = CommitPickerMetrics.naturalSize(of: title)
+        let titleSize = PickerViewGeometry.naturalSize(of: title)
         let titleHeight = titleSize.height
         let pillSize = pill.intrinsicContentSize
         let titleWidth = min(titleSize.width, maxX - Self.sidePadding - 8 - pillSize.width)
         title.frame = NSRect(x: Self.sidePadding, y: Self.topPadding, width: max(titleWidth, 0), height: titleHeight)
         pill.frame = backingAlignedRect(
             NSRect(
-                x: title.frame.maxX + 8, y: CommitPickerMetrics.capCenterY(of: title) - pillSize.height / 2,
+                x: title.frame.maxX + 8, y: PickerViewGeometry.capCenterY(of: title) - pillSize.height / 2,
                 width: pillSize.width, height: pillSize.height),
-            options: CommitPickerMetrics.pixelAlignment)
+            options: PickerViewGeometry.pixelAlignment)
         let detailY = title.frame.maxY + Self.lineGap
         detail.frame = NSRect(
             x: Self.sidePadding, y: detailY, width: maxX - Self.sidePadding, height: Self.detailHeight)
@@ -131,7 +131,7 @@ final class CommitPickerFooterView: NSView {
     var onRetry: () -> Void = {}
 
     private let spinner = NSProgressIndicator()
-    private let label = CommitPickerMetrics.label(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+    private let label = PickerLabel.make(font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
     private lazy var retry = makeRetryLink(target: self, action: #selector(retryClicked))
 
     override init(frame: NSRect) {
@@ -184,7 +184,7 @@ final class CommitPickerFooterView: NSView {
             x = view.frame.maxX + 6
         }
         if !spinner.isHidden { place(spinner, size: NSSize(width: 16, height: 16)) }
-        place(label, size: CommitPickerMetrics.naturalSize(of: label))
+        place(label, size: PickerViewGeometry.naturalSize(of: label))
         if !retry.isHidden { place(retry, size: retry.intrinsicContentSize) }
     }
 }
@@ -194,7 +194,7 @@ final class CommitPickerEmptyStateView: NSView {
     var onRetry: () -> Void = {}
 
     private let spinner = NSProgressIndicator()
-    private let label = CommitPickerMetrics.label(
+    private let label = PickerLabel.make(
         font: .systemFont(ofSize: 13), color: .secondaryLabelColor, alignment: .center)
     private lazy var retry: NSButton = {
         let button = NSButton(title: "Retry", target: self, action: #selector(retryClicked))
@@ -243,7 +243,7 @@ final class CommitPickerEmptyStateView: NSView {
 
     override func layout() {
         super.layout()
-        let labelSize = CommitPickerMetrics.naturalSize(of: label)
+        let labelSize = PickerViewGeometry.naturalSize(of: label)
         let spinnerWidth: CGFloat = spinner.isHidden ? 0 : 16 + 6
         let retrySize = retry.isHidden ? .zero : retry.intrinsicContentSize
         let blockHeight = labelSize.height + (retry.isHidden ? 0 : 8 + retrySize.height)

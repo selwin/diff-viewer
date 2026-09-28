@@ -16,7 +16,7 @@ final class CommitPickerContainerView: NSView {
     let gutter = CommitPickerGutterView(frame: .zero)
     let pinnedRow = CommitPickerPinnedRowView(frame: .zero)
     let scrollView = NSScrollView()
-    let tableView = CommitPickerTableView()
+    let tableView = PickerTableView()
     let footer = CommitPickerFooterView(frame: .zero)
     let emptyState = CommitPickerEmptyStateView(frame: .zero)
 
