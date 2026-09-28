@@ -109,7 +109,7 @@ struct CommitPickerStateTests {
         var picker = state(snapshot(commits: [c1, c2]))
         let longer = CommitSummary(
             sha: c2.ref.sha, shortSha: String(c2.ref.sha.prefix(9)), parents: c2.parents, subject: c2.subject,
-            committedAt: c2.committedAt)
+            committedAt: c2.committedAt, author: c2.author)
         let change = picker.apply(snapshot(commits: [c1, longer]))
         #expect(change == .incremental(inserted: nil, refreshed: [1]))
         #expect(picker.rows[1].commit.ref.shortSha == longer.ref.shortSha)
@@ -253,7 +253,7 @@ struct CommitPickerStateTests {
     @Test func headerTextUsesTheDisplayedCommitsShortSha() {
         let longer = CommitSummary(
             sha: c1.ref.sha, shortSha: String(c1.ref.sha.prefix(8)), parents: c1.parents, subject: c1.subject,
-            committedAt: c1.committedAt)
+            committedAt: c1.committedAt, author: c1.author)
         let header = CommitPickerHeaderText.make(
             snapshot: snapshot(
                 displayedScope: .commit(c1.ref), displayedCommit: longer, commits: [longer], fileCount: nil),

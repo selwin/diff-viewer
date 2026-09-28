@@ -179,14 +179,16 @@ func commitSummary(
     _ seed: String,
     subject: String = "A commit",
     parents: [String]? = nil,
-    committedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+    committedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
+    author: String = "Tester"
 ) -> CommitSummary {
     CommitSummary(
         sha: objectID(seed),
         shortSha: String(objectID(seed).prefix(7)),
         parents: parents ?? [objectID("\(seed)-parent")],
         subject: subject,
-        committedAt: committedAt
+        committedAt: committedAt,
+        author: author
     )
 }
 

@@ -406,8 +406,9 @@ import Testing
         let hexSubject = String(repeating: "a", count: 40)
         let head = try await repo.commit(hexSubject)
 
-        let commits = try await repo.client.recentCommits(startingAt: head, limit: 10)
+        let commits = try await repo.client.recentCommits(startingAt: head, skip: 0, limit: 10)
         #expect(commits.map(\.subject) == [hexSubject, "Odd \u{1f} subject \u{1e} here", "Root commit"])
+        #expect(commits.map(\.author) == ["Tester", "Tester", "Tester"])
         #expect(commits.first?.ref.sha == head)
         #expect(commits.last?.ref.firstParentSHA == nil, "the root commit has no parent")
         #expect(commits.first?.ref.firstParentSHA == commits[1].ref.sha)
@@ -425,7 +426,7 @@ import Testing
             shas.append(try await repo.commit("Commit \(index)", environment: ["GIT_COMMITTER_DATE": stamp]))
         }
 
-        let commits = try await repo.client.recentCommits(startingAt: shas[2], limit: 10)
+        let commits = try await repo.client.recentCommits(startingAt: shas[2], skip: 0, limit: 10)
         #expect(commits.map(\.ref.sha) == shas.reversed())
         let iso = ISO8601DateFormatter()
         #expect(commits.map(\.committedAt) == stamps.reversed().map { iso.date(from: $0) })
@@ -433,9 +434,28 @@ import Testing
 
     @Test func recentCommitsFollowsFirstParentsOnly() async throws {
         let (repo, _, side, merge) = try await mergeRepo()
-        let commits = try await repo.client.recentCommits(startingAt: merge, limit: 10)
+        let commits = try await repo.client.recentCommits(startingAt: merge, skip: 0, limit: 10)
         #expect(commits.first?.isMerge == true)
         #expect(!commits.contains { $0.ref.sha == side }, "side-branch commits are not listed individually")
+    }
+
+    /// The author is who wrote the change, not who committed it.
+    @Test func recentCommitsReadTheAuthorName() async throws {
+        let repo = try Repo()
+        try await repo.initialize()
+        let head = try await repo.commit("Borrowed", environment: ["GIT_AUTHOR_NAME": "Ada Lovelace"])
+        let commits = try await repo.client.recentCommits(startingAt: head, skip: 0, limit: 1)
+        #expect(commits.map(\.author) == ["Ada Lovelace"])
+    }
+
+    /// `skip` counts first parents, so pages of a merge's history never list the side
+    /// branch's commits or overlap.
+    @Test func recentCommitsSkipsAlongTheFirstParentChain() async throws {
+        let (repo, _, _, merge) = try await mergeRepo()
+        let first = try await repo.client.recentCommits(startingAt: merge, skip: 0, limit: 1)
+        let rest = try await repo.client.recentCommits(startingAt: merge, skip: 1, limit: 10)
+        #expect(first.map(\.subject) == ["Merge side"])
+        #expect(rest.map(\.subject) == ["Main commit", "Root commit"])
     }
 
     @Test func recentCommitsHonoursTheLimit() async throws {
@@ -446,7 +466,7 @@ import Testing
             try await repo.commit("Commit \(index)")
         }
         let head = try await repo.git(["rev-parse", "HEAD"])
-        #expect(try await repo.client.recentCommits(startingAt: head, limit: 3).count == 3)
+        #expect(try await repo.client.recentCommits(startingAt: head, skip: 0, limit: 3).count == 3)
     }
 
     // MARK: HEAD
@@ -603,6 +623,39 @@ import Testing
         let main = try #require(try await repo.client.localBranches().first { $0.name == "main" })
         #expect(main.upstream?.shortName == "origin/main")
         #expect(main.upstream?.tracking == .gone)
+        _ = remote
+    }
+
+    // MARK: Unpushed commits
+
+    /// Local work, then a merge of newer upstream commits, then more local work: the merge
+    /// is on the first-parent chain and unpushed, the upstream commits it brought in are not.
+    @Test func unpushedCommitsFollowTheFirstParentChainAboveTheUpstream() async throws {
+        let (repo, remote) = try await pushedRepo()
+        let root = try await repo.git(["rev-parse", "HEAD"])
+        let upstreamCommit = try await advanceRemoteMain(of: remote)
+        try repo.write("local.txt", "one\n")
+        let local = try await repo.commit("Local commit")
+        try await repo.client.fetch(remote: "origin")
+        try await repo.git(["merge", "--no-ff", "origin/main", "-m", "Merge upstream"])
+        let merge = try await repo.git(["rev-parse", "HEAD"])
+        try repo.write("local.txt", "two\n")
+        let tip = try await repo.commit("After the merge")
+
+        let upstreamTip = try #require(try await repo.client.commitSha(of: "refs/remotes/origin/main"))
+        #expect(upstreamTip == upstreamCommit)
+        let unpushed = try await repo.client.unpushedCommits(tip: tip, upstreamTip: upstreamTip)
+        #expect(unpushed == [tip, merge, local])
+        #expect(!unpushed.contains(root) && !unpushed.contains(upstreamCommit))
+    }
+
+    @Test func commitShaOfARefThatNamesNoCommitIsNil() async throws {
+        let (repo, remote) = try await pushedRepo()
+        try await repo.git(["update-ref", "-d", "refs/remotes/origin/main"])
+        #expect(try await repo.client.commitSha(of: "refs/remotes/origin/main") == nil)
+        #expect(try await repo.client.commitSha(of: "--all") == nil, "an option never reaches git")
+        let head = try await repo.git(["rev-parse", "HEAD"])
+        #expect(try await repo.client.commitSha(of: "refs/heads/main") == head)
         _ = remote
     }
 

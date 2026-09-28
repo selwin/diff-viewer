@@ -27,8 +27,14 @@ protocol RepoClient: Sendable {
     ///
     /// Takes the revision to start from rather than reading HEAD itself: the caller
     /// resolves HEAD once, so a checkout between the two reads cannot pair one
-    /// revision's history with another's.
-    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary]
+    /// revision's history with another's. `skip` counts commits in that revision's
+    /// first-parent traversal, so pages read against one pinned SHA never overlap.
+    func recentCommits(startingAt revision: String, skip: Int, limit: Int) async throws -> [CommitSummary]
+    /// The commit `ref` resolves to, or nil when it names no commit.
+    func commitSha(of ref: String) async throws -> String?
+    /// The commits on `tip`'s first-parent chain that `upstreamTip` cannot reach. Both are
+    /// object ids, never ref names, so the answer belongs to exactly those two commits.
+    func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String>
     /// The files `commit` changed against its first parent, or against the empty tree at
     /// a root commit.
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile]

@@ -18,8 +18,8 @@ enum GitLogParseError: Error, LocalizedError {
 }
 
 /// Parses `git log -z` written with the field layout in `GitClient.recentCommits`:
-/// five NUL-separated fields per commit — sha, abbreviated sha, parents, committer
-/// date, subject — with git's `-z` terminator after each commit.
+/// six NUL-separated fields per commit — sha, abbreviated sha, parents, committer
+/// date, author name, subject — with git's `-z` terminator after each commit.
 ///
 /// Fields are read strictly positionally. There is deliberately no attempt to
 /// resynchronise on a field that looks like an object id: a commit subject may itself
@@ -30,13 +30,14 @@ enum GitLogParseError: Error, LocalizedError {
 enum GitLogParser {
     /// The lengths git's two object formats produce, SHA-1 and SHA-256.
     private static let objectIDLengths: Set<Int> = [40, 64]
+    private static let fieldsPerCommit = 6
 
     static func parse(_ data: Data) throws -> [CommitSummary] {
         var fields = data.split(separator: 0, omittingEmptySubsequences: false)
             .map { String(decoding: $0, as: UTF8.self) }
         // `-z` terminates the last commit too, leaving one empty field behind it.
         if fields.last == "" { fields.removeLast() }
-        guard fields.count.isMultiple(of: 5) else {
+        guard fields.count.isMultiple(of: fieldsPerCommit) else {
             throw GitLogParseError.malformedFraming(fieldCount: fields.count)
         }
 
@@ -44,8 +45,8 @@ enum GitLogParser {
         dates.formatOptions = [.withInternetDateTime]
 
         var commits: [CommitSummary] = []
-        commits.reserveCapacity(fields.count / 5)
-        for start in stride(from: 0, to: fields.count, by: 5) {
+        commits.reserveCapacity(fields.count / fieldsPerCommit)
+        for start in stride(from: 0, to: fields.count, by: fieldsPerCommit) {
             let sha = fields[start]
             guard isObjectID(sha) else { throw GitLogParseError.notAnObjectID(sha) }
             guard let committedAt = dates.date(from: fields[start + 3]) else {
@@ -57,8 +58,9 @@ enum GitLogParser {
                     shortSha: fields[start + 1],
                     // Empty at a root commit; `%P` is space-separated.
                     parents: fields[start + 2].split(separator: " ").map(String.init),
-                    subject: fields[start + 4],
-                    committedAt: committedAt
+                    subject: fields[start + 5],
+                    committedAt: committedAt,
+                    author: fields[start + 4]
                 ))
         }
         return commits

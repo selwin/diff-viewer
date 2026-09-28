@@ -58,7 +58,9 @@ struct TaggedClient: RepoClient {
     func headState() async throws -> HeadState { .named("main") }
     func localBranches() async throws -> [LocalBranch] { [] }
     func remoteBranches() async throws -> [RemoteBranch] { [] }
-    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] { [] }
+    func recentCommits(startingAt revision: String, skip: Int, limit: Int) async throws -> [CommitSummary] { [] }
+    func commitSha(of ref: String) async throws -> String? { nil }
+    func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> { [] }
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
     func objectSizes(of specs: [String]) async throws -> [Int64?] { specs.map { _ in nil } }

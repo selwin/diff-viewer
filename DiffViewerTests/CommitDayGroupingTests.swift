@@ -99,6 +99,27 @@ struct CommitDayGroupingTests {
         #expect(grouping.dateTimeText(for: date(2026, 9, 17, 14, 2)) == "17 Sep 2026 at 14:02")
     }
 
+    // MARK: Commit row dates
+
+    @Test func commitDateTextForms() {
+        #expect(grouping.commitDateText(for: date(2026, 9, 19, 14, 2)) == "Today 14:02")
+        #expect(grouping.commitDateText(for: date(2026, 9, 20, 9, 0)) == "Today 09:00", "a date after now")
+        #expect(grouping.commitDateText(for: date(2026, 9, 18, 17, 40)) == "Yesterday 17:40")
+        #expect(grouping.commitDateText(for: date(2026, 9, 17, 9, 0)) == "Thu 17 Sep")
+        #expect(grouping.commitDateText(for: date(2026, 9, 13, 9, 0)) == "Sun 13 Sep")
+        #expect(grouping.commitDateText(for: date(2026, 9, 12, 23, 59)) == "12 Sep")
+        #expect(grouping.commitDateText(for: date(2025, 9, 18, 9, 0)) == "18 Sep 2025")
+    }
+
+    /// Only a date outside the current year carries it, even within the last week.
+    @Test func commitDateTextAcrossNewYear() {
+        let newYear = CommitDayGrouping(
+            calendar: Self.calendar, locale: Self.locale, timeZone: Self.timeZone, now: date(2027, 1, 2, 10, 0))
+        #expect(newYear.commitDateText(for: date(2027, 1, 1, 8, 30)) == "Yesterday 08:30")
+        #expect(newYear.commitDateText(for: date(2026, 12, 31, 17, 40)) == "Thu 31 Dec 2026")
+        #expect(newYear.commitDateText(for: date(2026, 12, 20, 9, 0)) == "20 Dec 2026")
+    }
+
     // MARK: Branch groups
 
     /// Sections are cut at local midnight: 2 to 6 days ago is this week.

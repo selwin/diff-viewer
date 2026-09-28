@@ -35,6 +35,8 @@ struct CommitDayGrouping {
     private let dayMonthYear: DateFormatter
     private let time: DateFormatter
     private let shortWeekday: DateFormatter
+    private let weekdayDayMonth: DateFormatter
+    private let weekdayDayMonthYear: DateFormatter
 
     init(
         calendar: Calendar = .current, locale: Locale = .current, timeZone: TimeZone = .current, now: Date = .now
@@ -59,6 +61,8 @@ struct CommitDayGrouping {
         dayMonthYear = formatter("d MMM yyyy")
         time = formatter("HH:mm")
         shortWeekday = formatter("EEE")
+        weekdayDayMonth = formatter("EEE d MMM")
+        weekdayDayMonthYear = formatter("EEE d MMM yyyy")
     }
 
     func dayLabel(for date: Date) -> DayLabel {
@@ -110,10 +114,24 @@ struct CommitDayGrouping {
         switch recencyGroup(for: date) {
         case .today, .yesterday: return time.string(from: date)
         case .thisWeek: return shortWeekday.string(from: date)
-        case .older:
-            let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-            return (sameYear ? dayMonth : dayMonthYear).string(from: date)
+        case .older: return (isInCurrentYear(date) ? dayMonth : dayMonthYear).string(from: date)
         }
+    }
+
+    /// A commit row's date: the day and time for today and yesterday, the weekday and date
+    /// for two to six days ago, the date after that. The year only outside this one.
+    func commitDateText(for date: Date) -> String {
+        let sameYear = isInCurrentYear(date)
+        switch recencyGroup(for: date) {
+        case .today: return "Today \(time.string(from: date))"
+        case .yesterday: return "Yesterday \(time.string(from: date))"
+        case .thisWeek: return (sameYear ? weekdayDayMonth : weekdayDayMonthYear).string(from: date)
+        case .older: return (sameYear ? dayMonth : dayMonthYear).string(from: date)
+        }
+    }
+
+    private func isInCurrentYear(_ date: Date) -> Bool {
+        calendar.component(.year, from: date) == calendar.component(.year, from: now)
     }
 
     /// Whole local days between `date` and `now`; negative for a date after `now`.

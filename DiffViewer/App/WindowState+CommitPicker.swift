@@ -14,7 +14,7 @@ extension WindowState {
     /// unread, not clean.
     var displayedScopeFileCount: Int? {
         guard !isLoadingScope, !listReadFailed else { return nil }
-        return Set(files.map(\.path)).count
+        return Self.distinctPathCount(files)
     }
 
     var commitPickerSnapshot: CommitPickerSnapshot {

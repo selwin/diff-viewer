@@ -204,12 +204,12 @@ struct GitClient: RepoClient {
         )
     }
 
-    func recentCommits(startingAt revision: String, limit: Int) async throws -> [CommitSummary] {
+    func recentCommits(startingAt revision: String, skip: Int, limit: Int) async throws -> [CommitSummary] {
         let result = try await ProcessRunner.check(
             Self.executable,
             arguments: [
-                "log", "-z", "--first-parent", "-n", String(limit),
-                "--format=%H%x00%h%x00%P%x00%cI%x00%s", revision,
+                "log", "-z", "--first-parent", "--skip=\(skip)", "-n", String(limit),
+                "--format=%H%x00%h%x00%P%x00%cI%x00%an%x00%s", revision,
             ],
             currentDirectory: repoRoot,
             environment: callEnvironment

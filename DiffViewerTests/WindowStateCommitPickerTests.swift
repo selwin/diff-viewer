@@ -113,19 +113,19 @@ struct WindowStateCommitPickerTests {
 
     // MARK: Retry
 
-    /// Retry asks again at the limit the failed Load More set; a second failure and a
-    /// second Retry stay there too, so repeated failures never inflate the request.
-    @Test func retryAfterAFailedLoadMoreKeepsTheLimit() async {
+    /// Retry asks again for the page the failed Load More asked for; a second failure and
+    /// a second Retry stay on it too, so repeated failures never skip or repeat commits.
+    @Test func retryAfterAFailedLoadMoreRepeatsThatPage() async {
         let h = Harness()
         let state = h.makeState()
         let client = await adopt(h, state, commits: twoPages)
-        let limit = WindowState.commitPageSize * 2
+        let page = WindowState.commitPageSize
 
         await client.fail(history: true)
         state.loadMoreCommits()
         #expect(await eventually { await state.historyErrorMessage != nil })
-        #expect(state.commitLimit == limit)
-        #expect(await client.lastHistoryLimit == limit + 1)
+        #expect(await client.lastHistorySkip == page)
+        #expect(await client.lastHistoryLimit == page + 1)
 
         // First retry, held so it can be failed again after it asked.
         await client.fail(history: false)
@@ -134,7 +134,7 @@ struct WindowStateCommitPickerTests {
         state.retryHistoryLoad()
         #expect(await eventually { await client.heldHistoryCount == 1 })
         #expect(await client.headCalls == heads + 1, "HEAD is read again")
-        #expect(await client.lastHistoryLimit == limit + 1)
+        #expect(await client.lastHistorySkip == page)
         #expect(state.isLoadingHistory)
 
         state.retryHistoryLoad()
@@ -153,9 +153,8 @@ struct WindowStateCommitPickerTests {
         #expect(await eventually { await !state.isLoadingHistory })
         #expect(state.historyErrorMessage == nil)
         #expect(await client.headCalls == heads + 2)
-        #expect(await client.lastHistoryLimit == limit + 1, "never bumped by a retry")
-        #expect(state.commitLimit == limit)
-        #expect(state.history.commits.count == limit)
+        #expect(await client.lastHistorySkip == page, "never moved by a retry")
+        #expect(state.history.commits == Array(twoPages.prefix(page * 2)), "the page is appended once")
 
         state.retryHistoryLoad()
         try? await Task.sleep(for: .milliseconds(50))
@@ -192,9 +191,69 @@ struct WindowStateCommitPickerTests {
         #expect(await eventually { await state.history.revision == newHead })
         #expect(await eventually { await !state.isLoadingHistory })
         #expect(state.historyErrorMessage == nil)
-        #expect(state.commitLimit == WindowState.commitPageSize)
+        #expect(await client.lastHistorySkip == 0)
         #expect(state.history.commits.count == WindowState.commitPageSize)
         #expect(state.history.hasMore)
+    }
+
+    // MARK: Paging
+
+    @Test func loadMoreAppendsOnlyTheNextPage() async {
+        let h = Harness()
+        let state = h.makeState()
+        let client = await adopt(h, state, commits: twoPages)
+        let revision = state.history.revision
+
+        state.loadMoreCommits()
+        #expect(await eventually { await state.history.commits.count == WindowState.commitPageSize * 2 })
+        #expect(state.history.commits == Array(twoPages.prefix(WindowState.commitPageSize * 2)))
+        #expect(state.history.hasMore)
+        #expect(state.history.revision == revision)
+        #expect(await client.lastHistorySkip == WindowState.commitPageSize)
+        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
+    }
+
+    /// A Retry after HEAD moved must not append the old revision's next page to a list
+    /// that now belongs elsewhere: it starts again at page one.
+    @Test func retryAfterHeadMovedRestartsAtPageOne() async {
+        let h = Harness()
+        let state = h.makeState()
+        let client = await adopt(h, state, commits: twoPages)
+        await client.fail(history: true)
+        state.loadMoreCommits()
+        #expect(await eventually { await state.historyErrorMessage != nil })
+
+        let moved = (0...WindowState.commitPageSize).map { commitSummary("m\($0)") }
+        await client.set(head: objectID("moved"))
+        await client.set(commits: moved)
+        await client.fail(history: false)
+        state.retryHistoryLoad()
+        #expect(await eventually { await state.history.revision == objectID("moved") })
+        #expect(state.history.commits == Array(moved.prefix(WindowState.commitPageSize)))
+        #expect(await client.lastHistorySkip == 0)
+        #expect(state.historyErrorMessage == nil)
+    }
+
+    @Test func aHeadMoveDuringANextPageDropsThatPage() async {
+        let h = Harness()
+        let state = h.makeState()
+        let client = await adopt(h, state, commits: twoPages)
+        await client.holdHistory(true)
+        state.loadMoreCommits()
+        #expect(await eventually { await client.heldHistoryCount == 1 })
+
+        let moved = (0...WindowState.commitPageSize).map { commitSummary("m\($0)") }
+        await client.set(head: objectID("moved"))
+        await client.set(commits: moved)
+        h.watcherChangeCallbacks.values.first?([.refs])
+        #expect(await eventually { await client.heldHistoryCount == 2 })
+        #expect(await client.lastHistorySkip == 0)
+
+        await client.holdHistory(false)
+        await client.releaseHistory()
+        #expect(await eventually { await !state.isLoadingHistory })
+        #expect(state.history.revision == objectID("moved"))
+        #expect(state.history.commits == Array(moved.prefix(WindowState.commitPageSize)))
     }
 
     // MARK: Presentation guards

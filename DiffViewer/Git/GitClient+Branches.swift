@@ -20,6 +20,38 @@ extension GitClient {
         return try RemoteBranchParser.parse(result.stdoutString, refspecsByRemote: refspecs)
     }
 
+    /// The commit `ref` resolves to, or nil when it names no commit. A name with a leading
+    /// dash never reaches git, which would read it as an option.
+    func commitSha(of ref: String) async throws -> String? {
+        guard !ref.hasPrefix("-") else { return nil }
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["rev-parse", "--verify", "--quiet", "\(ref)^{commit}"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // `--quiet` promises exit 1 for a name that resolves to no commit.
+        if result.status == 1 { return nil }
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git rev-parse --verify \(ref)", status: result.status, stderr: result.stderrString)
+        }
+        return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The commits on `tip`'s first-parent chain that `upstreamTip` cannot reach.
+    /// `--first-parent` narrows only what is listed: exclusion still follows every parent
+    /// of the upstream, so a commit the upstream reached through a merge is not unpushed.
+    func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["rev-list", "--first-parent", tip, "--not", upstreamTip],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        return Set(result.stdoutString.split(whereSeparator: \.isNewline).map(String.init))
+    }
+
     /// Every remote's `remote.<name>.fetch` values, in config order.
     private func fetchRefspecsByRemote() async throws -> [String: [String]] {
         let result = try await ProcessRunner.run(

@@ -28,15 +28,18 @@ struct CommitSummary: Sendable, Identifiable {
     /// Every parent, in git's order. The first is the one `ref` compares against.
     let parents: [String]
     let subject: String
-    /// The committer timestamp, used for the picker's date labels.
+    /// The committer date, which dates and groups the rows, while `author` is the author
+    /// name.
     let committedAt: Date
+    let author: String
 
     /// Derives the ref from the parsed parents so the two can never disagree.
-    init(sha: String, shortSha: String, parents: [String], subject: String, committedAt: Date) {
+    init(sha: String, shortSha: String, parents: [String], subject: String, committedAt: Date, author: String) {
         self.ref = CommitRef(sha: sha, shortSha: shortSha, firstParentSHA: parents.first)
         self.parents = parents
         self.subject = subject
         self.committedAt = committedAt
+        self.author = author
     }
 
     var id: String { ref.sha }
@@ -53,6 +56,7 @@ extension CommitSummary: Hashable {
             && lhs.parents == rhs.parents
             && lhs.subject == rhs.subject
             && lhs.committedAt == rhs.committedAt
+            && lhs.author == rhs.author
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(ref) }

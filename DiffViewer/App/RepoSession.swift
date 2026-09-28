@@ -41,6 +41,12 @@ final class RepoSession {
     var headStateCheckSerial = 0
     /// The commit-list read in flight, if any.
     var historyTask: Task<Void, Never>?
+    /// The last unpushed read. Keyed by commit ids, so it stays true for its key and a
+    /// branch read whose tips match needs no `rev-list`.
+    var unpushedCommits: UnpushedCommits?
+    /// Incremented per Working Tree count read and per working-tree refresh, so only the
+    /// newest of them publishes the count whatever order they finish in.
+    var workingTreeCountSerial = 0
     /// The tail of the chain of repository writes: sidebar file actions, commits, and branch switches. Each
     /// new write waits for this task before touching the repository, so two quick clicks
     /// cannot run two `git` writes at once and collide on `index.lock`. A fetch is not on
@@ -135,9 +141,25 @@ struct CommitHistory: Sendable, Equatable {
     var hasMore = false
 }
 
-/// One history read: which revision, and how many commits of it.
+/// One history read: which revision, where in its first-parent traversal, and how many
+/// commits of it.
 struct HistoryRequest: Equatable, Sendable {
     /// Nil when HEAD is unborn.
     var revision: String?
+    /// Zero for page one, which replaces the list; any other page is appended to it.
+    var skip: Int
     var limit: Int
+}
+
+/// The commits on a branch's first-parent chain that its remote-tracking upstream lacks,
+/// and the tips they were read from.
+struct UnpushedCommits: Sendable, Equatable {
+    struct Key: Sendable, Equatable {
+        let branch: String
+        let tip: String
+        let upstreamTip: String
+    }
+
+    let key: Key
+    let shas: Set<String>
 }

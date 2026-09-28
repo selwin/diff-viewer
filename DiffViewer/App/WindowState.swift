@@ -125,13 +125,21 @@ final class WindowState {
     var currentBranch: LocalBranch? { branches.first { $0.name == currentBranchName } }
     /// True while a branch switch is queued, running, or refreshing repository state.
     private(set) var isSwitchingBranch = false
-    private(set) var commitLimit = WindowState.commitPageSize
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
     /// The read a history load is serving, so an identical repeat can be skipped instead
     /// of cancelling and restarting a `git log` that would produce the same answer.
     /// `ProcessRunner` does not kill the subprocess it cancels, so restarts accumulate.
     private var historyRequestInFlight: HistoryRequest?
+    /// The read behind `historyErrorMessage`, so a retry can repeat a failed next page.
+    /// Nil when the failure came before a revision was known.
+    private var failedHistoryRequest: HistoryRequest?
+    /// The commits on HEAD's branch that its remote-tracking upstream lacks, published with
+    /// the branch read. Empty whenever that cannot be said.
+    private(set) var unpushedCommitShas: Set<String> = []
+    /// Distinct paths the working tree has changed, or nil while unread or after a failed
+    /// read. Kept current while a commit is shown only as long as the commit picker is open.
+    private(set) var workingTreeChangeCount: Int?
     /// True from a scope change until that scope's file list arrives, so an unfinished
     /// read is not drawn as a commit that changed nothing.
     private(set) var isLoadingScope = false
@@ -183,7 +191,14 @@ final class WindowState {
     /// does nothing, and the Changes menu greys out rather than queue another question.
     var isConfirmingFileAction = false
     /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
-    var isCommitPickerPresented = false
+    /// Opening it over a commit re-reads the Working Tree count, which no refresh keeps
+    /// current outside working-tree scope.
+    var isCommitPickerPresented = false {
+        didSet {
+            guard isCommitPickerPresented, !oldValue, scope != .workingTree, let session else { return }
+            Task { @MainActor [weak self] in await self?.refreshWorkingTreeCount(session: session) }
+        }
+    }
     /// The New Branch sheet is up. Like the pickers and the commit sheet, it opens only
     /// while none of them is.
     var isNewBranchSheetPresented = false
@@ -218,7 +233,7 @@ final class WindowState {
     /// starts and when one is cancelled.
     private(set) var commitGenerationError: String?
 
-    /// How many commits a page holds, and how many `Load More` adds.
+    /// How many commits each history read asks for.
     static let commitPageSize = 50
 
     /// Called after every refresh that publishes `files`, whether or not the list changed.
@@ -402,7 +417,12 @@ final class WindowState {
         // Before the first suspension, so the read's generation is settled the moment
         // the tick is accepted.
         if work.commitDefaults { startCommitDefaultsRead(session: session) }
-        if work.status { await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration) }
+        if work.status {
+            await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration)
+        } else if isCommitPickerPresented, scope != .workingTree {
+            // Any change can move the working tree, and the open picker shows its count.
+            await refreshWorkingTreeCount(session: session)
+        }
         guard session === self.session, !isClosed, watcherGeneration == session.watcherGeneration else { return }
         // A load skipped while hidden is still owed when the refresh could not decide
         // about it: commit scope reads no status, and a failed read publishes nothing.
@@ -436,6 +456,8 @@ final class WindowState {
         let client = session.client
 
         let scope = self.scope
+        // A working-tree read outranks every count read started before it.
+        let countTicket = scope == .workingTree ? takeWorkingTreeCountTicket(session: session) : nil
         let outcome: Result<[ChangedFile], Error>
         do {
             switch scope {
@@ -459,6 +481,7 @@ final class WindowState {
         switch outcome {
         case let .success(newFiles):
             listReadFailed = false
+            publishWorkingTreeCount(Self.distinctPathCount(newFiles), ticket: countTicket, session: session)
             // Taken before anything is applied: a restoration describes the list this
             // refresh is about to replace, and only this refresh can grant it.
             let pending = pendingReselection
@@ -548,6 +571,7 @@ final class WindowState {
                 await fallBackToWorkingTree(session: session, from: ref, error: error)
             } else {
                 listReadFailed = true
+                publishWorkingTreeCount(nil, ticket: countTicket, session: session)
                 errorMessage = error.localizedDescription
                 errorRaisedByRefresh = true
             }
@@ -660,6 +684,40 @@ extension WindowState {
     }
 }
 
+// MARK: - Working Tree count
+
+/// Counting the working tree's changes while a commit is shown, for the commit picker's
+/// Working Tree row. In working-tree scope the refresh sets the count from its own list.
+extension WindowState {
+    /// Reads the working tree's status for its count alone. Publishes only while its
+    /// session is current, the window is open and its ticket is the newest, so a late
+    /// read never overwrites a newer count. A failed read leaves no count rather than an
+    /// old one.
+    private func refreshWorkingTreeCount(session: RepoSession) async {
+        guard session === self.session, !isClosed else { return }
+        let ticket = takeWorkingTreeCountTicket(session: session)
+        let count = (try? await session.client.status()).map(Self.distinctPathCount)
+        guard session === self.session, !isClosed else { return }
+        publishWorkingTreeCount(count, ticket: ticket, session: session)
+    }
+
+    private func takeWorkingTreeCountTicket(session: RepoSession) -> Int {
+        session.workingTreeCountSerial += 1
+        return session.workingTreeCountSerial
+    }
+
+    /// Sets the count only for the newest ticket; a nil ticket is a read that never took one.
+    private func publishWorkingTreeCount(_ count: Int?, ticket: Int?, session: RepoSession) {
+        guard let ticket, ticket == session.workingTreeCountSerial, count != workingTreeChangeCount else { return }
+        workingTreeChangeCount = count
+    }
+
+    /// A file both staged and unstaged counts once.
+    static func distinctPathCount(_ files: [ChangedFile]) -> Int {
+        Set(files.map(\.path)).count
+    }
+}
+
 /// Choosing what the sidebar shows, and reading the branch history the picker lists.
 ///
 /// An extension rather than more of the class body, which is long enough already; it
@@ -671,11 +729,12 @@ extension WindowState {
     /// combination a single "resolve HEAD?" flag allowed, where a caller could ask to
     /// resolve HEAD *and* name a revision.
     private enum HistorySource {
-        /// Read HEAD first. Adoption and ⌘R, where the revision is not known yet.
-        case currentHead
-        /// A revision the caller already resolved, so the commits and the revision they
-        /// describe come from one reading of HEAD rather than two.
-        case revision(String?)
+        /// Read HEAD first. Adoption, ⌘R and Retry, where the revision is not known yet.
+        /// `retrying` is the failed read a Retry repeats if HEAD has not moved.
+        case currentHead(retrying: HistoryRequest?)
+        /// A read whose revision the caller already resolved, so the commits and the
+        /// revision they describe come from one reading of HEAD rather than two.
+        case request(HistoryRequest)
     }
 
     // MARK: - Scope
@@ -770,26 +829,36 @@ extension WindowState {
 
     /// Resolves HEAD and loads its history: adoption and ⌘R.
     private func refreshHistory(session: RepoSession) {
-        startHistoryLoad(session: session, source: .currentHead)
+        startHistoryLoad(session: session, source: .currentHead(retrying: nil))
     }
 
-    /// Reads another page of commits. Ignored while a page is already loading:
+    /// Reads the next page and appends it. Ignored while a page is already loading:
     /// `ProcessRunner` does not kill a subprocess when its task is cancelled, so
-    /// repeated clicks would otherwise pile up ever-larger `git log` reads whose output
-    /// is thrown away.
+    /// repeated clicks would otherwise pile up `git log` reads whose output is thrown away.
     func loadMoreCommits() {
-        guard let session, !isClosed, !isLoadingHistory, history.hasMore else { return }
-        commitLimit += Self.commitPageSize
+        guard let session, !isClosed, !isLoadingHistory, history.hasMore, let revision = history.revision
+        else { return }
         // Page against the revision already on show, so a checkout mid-scroll cannot
-        // splice two branches' commits into one list.
-        startHistoryLoad(session: session, source: .revision(history.revision))
+        // splice two branches' commits into one list, and the skip stays stable.
+        let request = HistoryRequest(revision: revision, skip: history.commits.count, limit: Self.commitPageSize)
+        startHistoryLoad(session: session, source: .request(request))
     }
 
-    /// The picker's Retry: the same `commitLimit`, so a failed Load More never grows the request.
+    /// The picker's Retry.
     func retryHistoryLoad() {
         guard let session, !isClosed, !isLoadingHistory, historyErrorMessage != nil else { return }
         // Read HEAD again: the last good history may belong to another branch.
-        startHistoryLoad(session: session, source: .currentHead)
+        startHistoryLoad(session: session, source: .currentHead(retrying: failedHistoryRequest))
+    }
+
+    /// What to read for `head`: page one, or `failed` again.
+    ///
+    /// A failed next page is repeated only while HEAD still names the revision on show.
+    /// Once HEAD has moved, the read restarts at page one and replaces the list, so an old
+    /// revision's page is never appended after a branch change.
+    private func historyRequest(head: String?, retrying failed: HistoryRequest?) -> HistoryRequest {
+        if let failed, failed.skip > 0, failed.revision == head, head == history.revision { return failed }
+        return HistoryRequest(revision: head, skip: 0, limit: Self.commitPageSize)
     }
 
     /// Reloads the commit list only when HEAD has moved since the page was read. One
@@ -828,12 +897,12 @@ extension WindowState {
         // Retry a failed read too, or one bad moment would leave the picker empty until
         // HEAD happened to move.
         guard head != displayed || historyErrorMessage != nil else { return }
-        // A different HEAD is a different branch or a new commit: start from page one.
-        if head != displayed { commitLimit = Self.commitPageSize }
+        // A different HEAD is a different branch or a new commit: page one.
+        let request = historyRequest(head: head, retrying: failedHistoryRequest)
         // Several ticks can arrive while one `git log` is still running; restarting it
         // for the answer it is already fetching only burns processes.
-        guard historyRequestInFlight != HistoryRequest(revision: head, limit: commitLimit) else { return }
-        startHistoryLoad(session: session, source: .revision(head))
+        guard historyRequestInFlight != request else { return }
+        startHistoryLoad(session: session, source: .request(request))
     }
 
     /// Re-reads where HEAD points and the local and remote branch lists, on its own serial
@@ -855,7 +924,8 @@ extension WindowState {
         if let round { session.pendingFetchRound = round }
         // A failure leaves the last known pair on show: the next tick reads again, and
         // stale beats blank. Nothing is published until every read is in, so the picker
-        // never sees a HEAD the branch lists have not caught up with.
+        // never sees a HEAD the branch lists have not caught up with. Not pushed is the
+        // exception: a stale mark could outlive a push, so a failure clears it.
         let state: HeadState
         let list: [LocalBranch]
         let remoteList: [RemoteBranch]
@@ -870,18 +940,53 @@ extension WindowState {
         } catch {
             guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
             branchReadStatus = .failed
+            if !unpushedCommitShas.isEmpty { unpushedCommitShas = [] }
             publishPendingFetchRound(session: session)
             publishedBranchRead(session: session)
             return true
         }
         guard session === self.session, !isClosed, ticket == session.headStateCheckSerial else { return false }
+        guard let unpushed = await readUnpushedCommits(session: session, ticket: ticket, head: state, branches: list)
+        else { return false }
         headState = state
         branches = list
         remoteBranches = remoteList
+        if unpushed != unpushedCommitShas { unpushedCommitShas = unpushed }
         branchReadStatus = .loaded
         publishPendingFetchRound(session: session)
         publishedBranchRead(session: session)
         return true
+    }
+
+    /// The commits HEAD's branch has not pushed, read on the branch read's ticket. Nil
+    /// when that ticket was superseded or the window closed; empty whenever it cannot be
+    /// said, a failed read included, so no other branch's commits stay marked.
+    private func readUnpushedCommits(
+        session: RepoSession, ticket: Int, head: HeadState, branches: [LocalBranch]
+    ) async -> Set<String>? {
+        func isCurrent() -> Bool {
+            session === self.session && !isClosed && ticket == session.headStateCheckSerial
+        }
+        // Being ahead of a local branch says nothing about the remote, so only an upstream
+        // under `refs/remotes/` counts.
+        guard case let .named(name) = head, let branch = branches.first(where: { $0.name == name }),
+            let upstream = branch.upstream, upstream.localRef.hasPrefix("refs/remotes/"),
+            case let .counts(ahead, _) = upstream.tracking, ahead > 0
+        else { return [] }
+        do {
+            // Resolved on every read, since the upstream ref can move without the branch.
+            let upstreamTip = try await session.client.commitSha(of: upstream.localRef)
+            guard isCurrent() else { return nil }
+            guard let upstreamTip else { return [] }
+            let key = UnpushedCommits.Key(branch: name, tip: branch.tipSha, upstreamTip: upstreamTip)
+            if let cached = session.unpushedCommits, cached.key == key { return cached.shas }
+            let shas = try await session.client.unpushedCommits(tip: branch.tipSha, upstreamTip: upstreamTip)
+            // Cached even when superseded: the answer is keyed by commit ids and stays true.
+            session.unpushedCommits = UnpushedCommits(key: key, shas: shas)
+            return isCurrent() ? shas : nil
+        } catch {
+            return isCurrent() ? [] : nil
+        }
     }
 
     /// Records a published branch read and wakes whoever was waiting for one.
@@ -907,48 +1012,65 @@ extension WindowState {
         session.historyTask?.cancel()
         isLoadingHistory = true
         historyErrorMessage = nil
-        let limit = commitLimit
-        historyRequestInFlight =
-            if case let .revision(revision) = source { HistoryRequest(revision: revision, limit: limit) } else { nil }
+        failedHistoryRequest = nil
+        historyRequestInFlight = if case let .request(request) = source { request } else { nil }
         session.historyTask = Task { [weak self] in
-            await self?.loadHistory(session: session, serial: serial, source: source, limit: limit)
+            await self?.loadHistory(session: session, serial: serial, source: source)
         }
     }
 
-    private func loadHistory(session: RepoSession, serial: Int, source: HistorySource, limit: Int) async {
+    private func loadHistory(session: RepoSession, serial: Int, source: HistorySource) async {
         func isCurrent() -> Bool {
             session === self.session && !isClosed && serial == session.historySerial && !Task.isCancelled
         }
 
-        do {
-            let revision: String?
-            switch source {
-            case .currentHead:
-                revision = try await session.client.headSha()
+        let request: HistoryRequest
+        switch source {
+        case let .currentHead(retrying):
+            let head: String?
+            do {
+                head = try await session.client.headSha()
+            } catch {
                 guard isCurrent() else { return }
-                historyRequestInFlight = HistoryRequest(revision: revision, limit: limit)
-            case let .revision(value):
-                revision = value
-            }
-
-            guard let revision else {
-                // An unborn HEAD: a real, settled answer, not a failure.
-                guard isCurrent() else { return }
-                history = CommitHistory()
-                finishHistoryLoad()
+                // The read being retried is still the one left to do.
+                failHistoryLoad(error, request: retrying)
                 return
             }
-            // One extra tells us whether another page exists without a second query.
-            let page = try await session.client.recentCommits(startingAt: revision, limit: limit + 1)
             guard isCurrent() else { return }
+            request = historyRequest(head: head, retrying: retrying)
+            historyRequestInFlight = request
+        case let .request(value):
+            request = value
+        }
+
+        guard let revision = request.revision else {
+            // An unborn HEAD: a real, settled answer, not a failure.
+            guard isCurrent() else { return }
+            history = CommitHistory()
+            finishHistoryLoad()
+            return
+        }
+        do {
+            // One extra tells us whether another page exists without a second query.
+            let page = try await session.client.recentCommits(
+                startingAt: revision, skip: request.skip, limit: request.limit + 1)
+            guard isCurrent() else { return }
+            // A next page is only ever asked of the revision on show, and any other load
+            // supersedes it, so the list it extends is the one it was read against.
+            let earlier = request.skip == 0 ? [] : history.commits
             history = CommitHistory(
-                revision: revision, commits: Array(page.prefix(limit)), hasMore: page.count > limit)
+                revision: revision, commits: earlier + page.prefix(request.limit), hasMore: page.count > request.limit)
             finishHistoryLoad()
         } catch {
             guard isCurrent() else { return }
-            historyErrorMessage = error.localizedDescription
-            finishHistoryLoad()
+            failHistoryLoad(error, request: request)
         }
+    }
+
+    private func failHistoryLoad(_ error: Error, request: HistoryRequest?) {
+        historyErrorMessage = error.localizedDescription
+        failedHistoryRequest = request
+        finishHistoryLoad()
     }
 
     private func finishHistoryLoad() {
