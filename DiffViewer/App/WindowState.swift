@@ -79,20 +79,26 @@ final class WindowState {
     /// Keyboard focus. Informational for the view; nothing in the model branches on it.
     var isKey = false
 
-    /// On screen, per AppKit's occlusion state. A hidden window stops its watcher and
-    /// starts no diff or highlight work. Showing restarts watching and schedules a
-    /// rescan; stale or changed content reloads.
+    /// On screen, per AppKit's occlusion state. A hidden window starts no diff or
+    /// highlight work, and its watcher only keeps `workingTreeChurn` current for the tab
+    /// bar, refreshing the file list only in working-tree scope, where the churn comes from
+    /// it. Showing restarts watching and schedules a rescan; stale or changed content reloads.
     var isVisible = true {
         didSet {
             guard isVisible != oldValue, !isClosed else { return }
             if isVisible {
                 guard let session else { return }
+                stopWatcher(session: session)
                 let watcherGeneration = startWatcher(session: session)
                 Task {
                     await repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: [.rescan])
                 }
             } else {
-                if let session { stopWatcher(session: session) }
+                if let session {
+                    // A new generation drops the visible watcher's refreshes still in flight.
+                    stopWatcher(session: session)
+                    startWatcher(session: session)
+                }
                 if diffLoader.cancelActiveWork() { diffStale = true }
             }
         }
@@ -137,9 +143,9 @@ final class WindowState {
     /// The commits on HEAD's branch that its remote-tracking upstream lacks, published with
     /// the branch read. Empty whenever that cannot be said.
     private(set) var unpushedCommitShas: Set<String> = []
-    /// Distinct paths the working tree has changed, or nil while unread or after a failed
-    /// read. Kept current while a commit is shown only as long as the commit picker is open.
-    private(set) var workingTreeChangeCount: Int?
+    /// The working tree's changed files and line churn, or nil while unread or after a
+    /// failed read. Kept current by every watcher tick, in any scope and while hidden.
+    private(set) var workingTreeChurn: RepositoryChurn?
     /// True from a scope change until that scope's file list arrives, so an unfinished
     /// read is not drawn as a commit that changed nothing.
     private(set) var isLoadingScope = false
@@ -191,14 +197,7 @@ final class WindowState {
     /// does nothing, and the Changes menu greys out rather than queue another question.
     var isConfirmingFileAction = false
     /// The commit picker popover is up. Also cleared by SwiftUI when a click outside closes it.
-    /// Opening it over a commit re-reads the Working Tree count, which no refresh keeps
-    /// current outside working-tree scope.
-    var isCommitPickerPresented = false {
-        didSet {
-            guard isCommitPickerPresented, !oldValue, scope != .workingTree, let session else { return }
-            Task { @MainActor [weak self] in await self?.refreshWorkingTreeCount(session: session) }
-        }
-    }
+    var isCommitPickerPresented = false
     /// The New Branch sheet is up. Like the pickers and the commit sheet, it opens only
     /// while none of them is.
     var isNewBranchSheetPresented = false
@@ -286,8 +285,7 @@ final class WindowState {
     func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
         guard session == nil, !isClosed else { return false }
         let session = RepoSession(root: root, client: client)
-        // A window adopted hidden gets its watcher when shown.
-        if isVisible { startWatcher(session: session) }
+        startWatcher(session: session)
         self.session = session
         title = root.name
         selection = []
@@ -379,8 +377,8 @@ final class WindowState {
 
     /// Something under `.git` or in the working tree changed, per the watcher of
     /// `watcherGeneration`. One refresh runs at a time; ticks during it merge into one
-    /// follow-up carrying their watcher's generation. A hidden window has no watcher,
-    /// so showing delivers one `[.rescan]`.
+    /// follow-up carrying their watcher's generation. A hidden window's ticks only keep
+    /// the churn current, so showing delivers one `[.rescan]`.
     private func repositoryChanged(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
         guard isLive(session), watcherGeneration == session.watcherGeneration else { return }
         if session.watcherRefreshRunning {
@@ -410,14 +408,27 @@ final class WindowState {
     }
 
     /// Routes `changes` to the reads they can invalidate. In commit scope only repository
-    /// metadata is refreshed: a commit's contents cannot change, and re-reading them on
-    /// every keystroke in another editor would redo alignment and highlighting for nothing.
+    /// metadata and the working-tree churn are refreshed: a commit's contents cannot
+    /// change, and re-reading them on every keystroke in another editor would redo
+    /// alignment and highlighting for nothing.
     private func runWatcherRefresh(session: RepoSession, watcherGeneration: Int, changes: Set<RepoChange>) async {
+        // Before the hidden path too: `.gitattributes` can change line counts of files
+        // whose fingerprints did not move, and only a new revision stops their reuse.
         if changes.contains(.configuration) || changes.contains(.rescan) {
             session.configurationRevision += 1
             // The configuration may have gained a template; until the read below says,
             // a worktree write has to be assumed to touch it.
             session.templateDependency = .unknown
+        }
+        // Hidden, only the tab bar's churn is wanted: the working tree's list and line
+        // counts supply it, and the rescan on show redoes the rest.
+        guard isVisible else {
+            if scope == .workingTree {
+                await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration)
+            } else {
+                await refreshWorkingTreeChurn(session: session)
+            }
+            return
         }
         let work = RefreshRouting.work(for: changes, scope: scope, template: session.templateDependency)
         // Before the first suspension, so the read's generation is settled the moment
@@ -425,9 +436,9 @@ final class WindowState {
         if work.commitDefaults { startCommitDefaultsRead(session: session) }
         if work.status {
             await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration)
-        } else if isCommitPickerPresented, scope != .workingTree {
-            // Any change can move the working tree, and the open picker shows its count.
-            await refreshWorkingTreeCount(session: session)
+        } else if scope != .workingTree {
+            // Any change can move the working tree, and the tab bar shows its churn.
+            await refreshWorkingTreeChurn(session: session)
         }
         guard isLive(session), watcherGeneration == session.watcherGeneration else { return }
         // A load skipped while hidden is still owed when the refresh could not decide
@@ -462,8 +473,9 @@ final class WindowState {
         let client = session.client
 
         let scope = self.scope
-        // A working-tree read outranks every count read started before it.
-        let countTicket = scope == .workingTree ? takeWorkingTreeCountTicket(session: session) : nil
+        // Outranks every churn read started before it, so none can land while this list's
+        // counts are still coming; the churn itself is published later on a ticket of its own.
+        if scope == .workingTree { takeWorkingTreeChurnTicket(session: session) }
         let outcome: Result<[ChangedFile], Error>
         do {
             switch scope {
@@ -487,7 +499,6 @@ final class WindowState {
         switch outcome {
         case let .success(newFiles):
             listReadFailed = false
-            publishWorkingTreeCount(Self.distinctPathCount(newFiles), ticket: countTicket, session: session)
             // Taken before anything is applied: a restoration describes the list this
             // refresh is about to replace, and only this refresh can grant it.
             let pending = pendingReselection
@@ -561,6 +572,9 @@ final class WindowState {
             case let .reuseLastOutcome(cancelActive):
                 // The counts were carried over above; the superseded read has nothing to add.
                 if cancelActive { session.statsTask?.cancel() }
+                // Otherwise the churn waits for `attachLineStats`, so the tab never shows
+                // a list whose lines are still being counted.
+                if scope == .workingTree { publishListChurn(RepositoryChurn(published), session: session) }
             case .keepActive:
                 break
             case let .start(token, cancelActive):
@@ -577,7 +591,7 @@ final class WindowState {
                 await fallBackToWorkingTree(session: session, from: ref, error: error)
             } else {
                 listReadFailed = true
-                publishWorkingTreeCount(nil, ticket: countTicket, session: session)
+                publishListChurn(nil, session: session)
                 errorMessage = error.localizedDescription
                 errorRaisedByRefresh = true
             }
@@ -648,26 +662,9 @@ extension WindowState {
     private func attachLineStats(
         to newFiles: [ChangedFile], request: LineStatsRequest, token: Int, session: RepoSession
     ) async {
-        let client = session.client
-        let ignoreWhitespace = request.hideWhitespace
-        // The working tree's two areas are independent processes and stay concurrent;
-        // a commit scope has a single area.
-        let numstat = await withTaskGroup(of: (ChangedFile.Area, [NumstatEntry]?).self) { group in
-            for area in request.scope.areas {
-                group.addTask {
-                    let entries = try? await client.numstat(area: area, ignoreWhitespace: ignoreWhitespace)
-                    return (area, entries)
-                }
-            }
-            // A failed numstat leaves its area out, which the joiner reports as unknown.
-            var rows: [ChangedFile.Area: [NumstatEntry]] = [:]
-            for await (area, entries) in group where entries != nil {
-                rows[area] = entries
-            }
-            return rows
-        }
-        guard !Task.isCancelled else { return }
-        let joined = await LineStatsJoiner.attach(numstat: numstat, to: newFiles, client: client)
+        let (joined, numstat) = await Self.joinLineStats(
+            to: newFiles, areas: request.scope.areas, ignoreWhitespace: request.hideWhitespace,
+            client: session.client)
         var results: [ChangedFile.ID: LineStatsResult] = [:]
         for file in joined {
             results[file.id] =
@@ -683,6 +680,36 @@ extension WindowState {
         guard !Task.isCancelled, isLive(session), session.lineStats.record(outcome, token: token)
         else { return }
         files = files.map { file in results[file.id].map { file.with(lineStats: $0.lineStats) } ?? file }
+        // The working tree's churn is published once its counts are in. A failed list read
+        // since then keeps its nil: these counts belong to the list it could not replace.
+        if request.scope == .workingTree, scope == .workingTree, !listReadFailed {
+            publishListChurn(RepositoryChurn(files), session: session)
+        }
+    }
+
+    /// Numstat for each of `areas`, joined onto `files` with untracked files counted.
+    /// Returns the rows too, so a caller can tell a failed area from one without churn.
+    private static func joinLineStats(
+        to files: [ChangedFile], areas: [ChangedFile.Area], ignoreWhitespace: Bool, client: any RepoClient
+    ) async -> (joined: [ChangedFile], numstat: [ChangedFile.Area: [NumstatEntry]]) {
+        // The working tree's two areas are independent processes and stay concurrent;
+        // a commit scope has a single area.
+        let numstat = await withTaskGroup(of: (ChangedFile.Area, [NumstatEntry]?).self) { group in
+            for area in areas {
+                group.addTask {
+                    let entries = try? await client.numstat(area: area, ignoreWhitespace: ignoreWhitespace)
+                    return (area, entries)
+                }
+            }
+            // A failed numstat leaves its area out, which the joiner reports as unknown.
+            var rows: [ChangedFile.Area: [NumstatEntry]] = [:]
+            for await (area, entries) in group where entries != nil {
+                rows[area] = entries
+            }
+            return rows
+        }
+        guard !Task.isCancelled else { return (files, numstat) }
+        return (await LineStatsJoiner.attach(numstat: numstat, to: files, client: client), numstat)
     }
 
     /// Stops the active line-stats read, for a window or a scope that no longer wants it.
@@ -693,37 +720,57 @@ extension WindowState {
     }
 }
 
-// MARK: - Working Tree count
+// MARK: - Working Tree churn
 
-/// Counting the working tree's changes while a commit is shown, for the commit picker's
-/// Working Tree row. In working-tree scope the refresh sets the count from its own list.
+/// Keeping `workingTreeChurn` current for the tab bar and the commit picker's Working Tree
+/// row. In working-tree scope it is the sidebar list's own total; in commit scope a
+/// separate read of status and numstat supplies it.
 extension WindowState {
-    /// Reads the working tree's status for its count alone. Publishes only while its
-    /// session is current, the window is open and its ticket is the newest, so a late
-    /// read never overwrites a newer count. A failed read leaves no count rather than an
-    /// old one.
-    private func refreshWorkingTreeCount(session: RepoSession) async {
+    /// Reads the working tree's status and line counts for its churn alone. Publishes
+    /// only while its session is current, the window is open and its ticket is the newest,
+    /// so a late read never overwrites a newer churn. A failed status read leaves no churn
+    /// rather than an old one; a failed numstat only leaves those lines out.
+    private func refreshWorkingTreeChurn(session: RepoSession) async {
         guard isLive(session) else { return }
-        let ticket = takeWorkingTreeCountTicket(session: session)
-        let count = (try? await session.client.status()).map(Self.distinctPathCount)
+        let ticket = takeWorkingTreeChurnTicket(session: session)
+        guard let status = try? await session.client.status() else {
+            guard isLive(session) else { return }
+            publishWorkingTreeChurn(nil, ticket: ticket, session: session)
+            return
+        }
+        // Already outranked: skip the numstat nobody will publish.
+        guard isLive(session), ticket == session.workingTreeChurnSerial else { return }
+        // A clean tree has no lines to count.
+        guard !status.isEmpty else {
+            publishWorkingTreeChurn(RepositoryChurn(status), ticket: ticket, session: session)
+            return
+        }
+        let (joined, _) = await Self.joinLineStats(
+            to: status, areas: DiffScope.workingTree.areas, ignoreWhitespace: preferences.hideWhitespace,
+            client: session.client)
         guard isLive(session) else { return }
-        publishWorkingTreeCount(count, ticket: ticket, session: session)
+        publishWorkingTreeChurn(RepositoryChurn(joined), ticket: ticket, session: session)
     }
 
-    private func takeWorkingTreeCountTicket(session: RepoSession) -> Int {
-        session.workingTreeCountSerial += 1
-        return session.workingTreeCountSerial
+    @discardableResult
+    private func takeWorkingTreeChurnTicket(session: RepoSession) -> Int {
+        session.workingTreeChurnSerial += 1
+        return session.workingTreeChurnSerial
     }
 
-    /// Sets the count only for the newest ticket; a nil ticket is a read that never took one.
-    private func publishWorkingTreeCount(_ count: Int?, ticket: Int?, session: RepoSession) {
-        guard let ticket, ticket == session.workingTreeCountSerial, count != workingTreeChangeCount else { return }
-        workingTreeChangeCount = count
+    /// Sets the churn only for the newest ticket.
+    private func publishWorkingTreeChurn(_ churn: RepositoryChurn?, ticket: Int, session: RepoSession) {
+        guard ticket == session.workingTreeChurnSerial else { return }
+        session.workingTreeChurnPublishedSerial = ticket
+        if churn != workingTreeChurn { workingTreeChurn = churn }
     }
 
-    /// A file both staged and unstaged counts once.
-    static func distinctPathCount(_ files: [ChangedFile]) -> Int {
-        Set(files.map(\.path)).count
+    /// Publishes the churn of the sidebar's working-tree list. Its ticket is taken now,
+    /// not when the read started: churn reads only start in commit scope, so any still in
+    /// flight is older than this list, and a line-count read kept across refreshes must
+    /// not be outranked by the refresh that kept it.
+    private func publishListChurn(_ churn: RepositoryChurn?, session: RepoSession) {
+        publishWorkingTreeChurn(churn, ticket: takeWorkingTreeChurnTicket(session: session), session: session)
     }
 }
 
@@ -781,6 +828,11 @@ extension WindowState {
     private func select(scope newScope: DiffScope, commit: CommitSummary?) {
         guard let session, !isClosed, newScope != scope else { return }
         session.scopeSerial += 1
+        // Leaving the working tree drops its unfinished status and line-count reads, so a
+        // churn still waiting on either needs a read of its own.
+        let churnOwed =
+            scope == .workingTree
+            && (workingTreeChurn == nil || session.workingTreeChurnPublishedSerial != session.workingTreeChurnSerial)
 
         // Nothing is remembered to restore: the new scope's list lands on All changes, a
         // better answer than hunting for the same paths in a different set of files.
@@ -789,6 +841,9 @@ extension WindowState {
         selectedCommit = commit
         Task { [weak self] in
             await self?.refresh(session: session, cause: .scope)
+        }
+        if churnOwed {
+            Task { [weak self] in await self?.refreshWorkingTreeChurn(session: session) }
         }
     }
 
@@ -1379,6 +1434,9 @@ extension WindowState {
             if !candidates.isEmpty { restoreSelectionAfterNextRefresh(.paths(candidates)) }
             applyCommitDefaults(.none)
             await refresh(session: session, cause: .branchSwitch)
+        } else {
+            // The commit on show is unchanged, but the working tree the tab counts is not.
+            await refreshWorkingTreeChurn(session: session)
         }
         guard isLive(session) else { return }
         // Reloads history only when HEAD moved or a previous read failed, and resets the
@@ -1758,8 +1816,12 @@ extension WindowState {
         if operation == .pull, isCurrent {
             // Either outcome re-reads: a failed pull can leave conflicts, a merge in
             // progress, or an autostash put back. A commit's files cannot have changed,
-            // so commit scope skips the re-read, as a branch switch does.
-            if scope == .workingTree { await refresh(session: session, cause: .pull) }
+            // so commit scope re-reads only the churn, as a branch switch does.
+            if scope == .workingTree {
+                await refresh(session: session, cause: .pull)
+            } else {
+                await refreshWorkingTreeChurn(session: session)
+            }
             guard isLive(session) else { return }
             await reloadHistoryIfHeadMoved(session: session)
             guard isLive(session) else { return }

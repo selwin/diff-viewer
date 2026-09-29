@@ -17,7 +17,7 @@ Where DiffViewer stands versus the bar:
 | Full syntax colouring both panes | yes | yes | yes | yes |
 | Ignore whitespace | yes (3 kinds + regex filters) | yes | not documented | yes (one toggle) |
 | Live working-copy refresh | yes (7.0 headline) | yes | yes | yes |
-| Multiple repos at once | tabs | repo tabs | tabs + windows | **yes** (native tabs, no change indicator) |
+| Multiple repos at once | tabs | repo tabs | tabs + windows | **yes** (native tabs with +/− churn) |
 | Aggregate +/- churn | counts by kind only | per-commit only | none | **yes** (All changes row and header) |
 | Per-file +/- churn in sidebar | no | no | no | **yes** |
 | Stage / unstage / discard from file list | no (viewer) | yes | no | **yes** (whole file) |
@@ -39,7 +39,7 @@ Where DiffViewer stands versus the bar:
 
 Items Selwin asked for. They take priority over the "Next" list below. Earlier requests
 (per-file churn, the sidebar context menu, multi-selection with bulk actions, the copy
-button on git error alerts, copying from the branch picker, moved-code detection) have shipped and are gone from here.
+button on git error alerts, copying from the branch picker, moved-code detection, churn on repository tabs) have shipped and are gone from here.
 
 ### A. Branch state in the title bar (remainder)
 
@@ -71,29 +71,6 @@ file after staging or unstaging have landed; what remains is below.
 - The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
 
 **Tests.** Which file S targets in All changes from a scroll position.
-
----
-
-### D. Tab indicator when a repository has changes (requested 2026-09-24)
-
-**Goal.** With several repositories open as tabs, you can see from the tab bar which
-ones have diffs to read without switching to each. Sublime Merge does this, and it's
-what makes tabs useful while a coding agent works in another repo.
-
-**Design.**
-- A small dot in the tab's `NSWindowTab.accessoryView` while the working tree has
-  changes (the sidebar's file list is non-empty). It goes away once the repository is
-  clean. It could carry the changed-file count if the dot alone proves too vague.
-- Background tabs are occluded windows, and a hidden window stops its watcher today
-  (`WindowState.isVisible`), so its file list goes stale. The indicator needs hidden
-  windows to keep a status-only watch (status, no diff or highlight work) so the dot
-  is current.
-- Open question: whether the dot also marks changes since the tab was last key, and
-  clears when you view them, as Sublime Merge's unread dot does.
-- This absorbs the "Tab change indicator" item from the Next list.
-
-**Tests.** None; UI, checked by screenshot. A status-only refresh path for hidden
-windows, if one is added, gets tests for when it runs.
 
 ---
 

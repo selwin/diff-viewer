@@ -1757,11 +1757,15 @@ struct WindowStateTests {
 
         state.isVisible = false
         #expect(first?.stopped == true)
-        #expect(state.session?.watcher == nil)
+        #expect(h.watcherStarts[repo.root] == 2, "hidden, a watcher keeps the churn")
+        let hidden = h.watchers[repo.root]
+        #expect(hidden !== first)
+        #expect(hidden?.stopped == false)
 
         state.isVisible = true
-        #expect(h.watcherStarts[repo.root] == 2)
-        #expect(h.watchers[repo.root] !== first)
+        #expect(hidden?.stopped == true)
+        #expect(h.watcherStarts[repo.root] == 3)
+        #expect(h.watchers[repo.root] !== hidden)
         #expect(h.watchers[repo.root]?.stopped == false)
         #expect(await eventually { await h.published.count > before })
         #expect(h.published.last?.cause == .watcher)
@@ -1770,8 +1774,8 @@ struct WindowStateTests {
         #expect(await repo.client.contentReads == reads, "nothing changed: the diff on show is kept")
     }
 
-    /// A hidden window watches nothing: a running refresh and the tick queued behind it
-    /// go with the watcher, and the rescan on showing finds the edit they carried.
+    /// Hiding replaces the watcher: a running refresh and the tick queued behind it go
+    /// with the old one, and the rescan on showing finds the edit they carried.
     @Test func staleStatusAcrossHideAndShow() async {
         let h = Harness()
         let state = h.makeState()
@@ -1844,18 +1848,19 @@ struct WindowStateTests {
         let before = await Reads(repo.client)
 
         state.isVisible = true
-        // A commit's files cannot change, so no status read. The owed load runs and reuses
-        // the result the changeset registered, so it reads nothing.
+        // A commit's files cannot change; the status and numstat reads are the working
+        // tree's churn. The owed load runs and reuses the result the changeset registered,
+        // so it reads nothing.
         #expect(await eventually { await self.hasContent(state, for: file) })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
-        let expected = before.plus(head: 1, headState: 1)
+        let expected = before.plus(status: 1, head: 1, headState: 1, numstat: 2)
         #expect(await eventually { await Reads(repo.client) == expected })
         #expect(!state.diffStale)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await Reads(repo.client) == expected)
     }
 
-    @Test func adoptingHiddenStartsTheWatcherOnShow() async {
+    @Test func adoptingHiddenStartsAWatcherAtOnce() async {
         let h = Harness()
         let state = h.makeState()
         state.isVisible = false
@@ -1863,12 +1868,99 @@ struct WindowStateTests {
         let before = h.published.count
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await h.published.count > before })
-        #expect(h.watcherStarts[repo.root, default: 0] == 0)
-        #expect(state.session?.watcher == nil)
-
-        state.isVisible = true
         #expect(h.watcherStarts[repo.root] == 1)
         #expect(state.session?.watcher != nil)
+
+        state.isVisible = true
+        #expect(h.watcherStarts[repo.root] == 2)
+        #expect(state.session?.watcher != nil)
+    }
+
+    /// A hidden tick refreshes the list and its line counts for the tab bar's churn, and
+    /// nothing else: no diff, no repository metadata, no commit defaults.
+    @Test func aHiddenTickRefreshesOnlyTheListAndItsChurn() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        #expect(state.workingTreeChurn == RepositoryChurn(changedFileCount: 2, added: 8, deleted: 3))
+        state.isVisible = false
+        let before = await Reads(repo.client)
+        let published = h.published.count
+
+        let updated = filesA + [changedFile("new.swift")]
+        await repo.client.set(files: updated)
+        await repo.client.set(numstat: [counted(filesA[0], 3, 1), counted(updated[2], 4, 0)], area: .unstaged)
+        h.tick(repo.root, [.worktree, .index, .refs])
+        #expect(
+            await eventually {
+                await state.workingTreeChurn == RepositoryChurn(changedFileCount: 3, added: 12, deleted: 3)
+            })
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(await Reads(repo.client) == before.plus(status: 1, numstat: 2))
+        #expect(state.files.map(\.id) == updated.map(\.id))
+        #expect(h.published.count == published + 1)
+        #expect(state.diffStale, "the new row's diff waits for the window to show")
+    }
+
+    /// A `.gitattributes` edit can change line counts without moving any fingerprint, so a
+    /// hidden tab must re-count rather than reuse the counts it has.
+    @Test func aHiddenConfigurationChangeRecountsUnchangedFiles() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adoptSettled(h, state, files: filesA)
+        state.isVisible = false
+        let before = await Reads(repo.client)
+
+        await repo.client.set(numstat: [counted(filesA[0], 1, 0)], area: .unstaged)
+        await repo.client.set(numstat: [counted(filesA[1], 1, 0)], area: .staged)
+        h.tick(repo.root, [.configuration])
+        let recounted = RepositoryChurn(changedFileCount: 2, added: 2, deleted: 0)
+        #expect(await eventually { await state.workingTreeChurn == recounted })
+        #expect(await Reads(repo.client) == before.plus(status: 1, numstat: 2))
+    }
+
+    @Test func showingAfterAHiddenTickLoadsTheOwedDiff() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        state.isVisible = false
+        let updated = filesA + [changedFile("new.swift")]
+        await repo.client.set(files: updated)
+        h.tick(repo.root, [.worktree])
+        #expect(await eventually { await state.workingTreeChurn?.changedFileCount == 3 })
+        #expect(state.files == updated)
+        #expect(state.diffStale)
+        let reads = await repo.client.contentReads
+
+        state.isVisible = true
+        #expect(await eventually { await repo.client.contentReads > reads })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        #expect(!state.diffStale)
+    }
+
+    /// Showing while a hidden refresh is in flight queues the rescan behind it.
+    @Test func aHiddenRefreshInFlightDoesNotLoseTheRescan() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: filesA)
+        state.isVisible = false
+        let status = await repo.client.statusCalls
+        let before = h.published.count
+
+        await repo.client.hold(true)
+        h.tick(repo.root, [.worktree])
+        #expect(await eventually { await repo.client.heldCount == 1 })
+        state.isVisible = true
+        #expect(await eventually { await state.session?.watcherRefreshPending != nil })
+
+        let updated = [changedFile("new.swift")]
+        await repo.client.set(files: updated)
+        await repo.client.hold(false)
+        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.statusCalls == status + 2 }, "the rescan runs as the follow-up")
+        #expect(await eventually { await h.published.count == before + 1 })
+        #expect(state.files == updated)
+        #expect(await eventually { await state.workingTreeChurn?.changedFileCount == 1 })
     }
 
     @Test func aRescanDeliveredDuringARunningRefreshIsNotLost() async {
@@ -1999,9 +2091,12 @@ struct WindowStateTests {
         }
 
         /// The same counters after the given reads.
-        func plus(status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0, content: Int = 0) -> Reads {
+        func plus(
+            status: Int = 0, head: Int = 0, headState: Int = 0, defaults: Int = 0, numstat: Int = 0, content: Int = 0
+        ) -> Reads {
             var reads = self
             reads.status += status
+            reads.numstat += numstat
             reads.head += head
             reads.headState += headState
             reads.defaults += defaults
@@ -2254,27 +2349,29 @@ struct WindowStateTests {
         return repo
     }
 
-    @Test func aWorktreeTickDoesNothingInCommitScope() async {
+    @Test func aWorktreeTickOnlyReadsTheChurnInCommitScope() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adoptInCommitScope(h, state)
         let before = await Reads(repo.client)
 
         h.tick(repo.root, [.worktree])
+        let expected = before.plus(status: 1, numstat: 2)
+        #expect(await eventually { await Reads(repo.client) == expected })
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(await Reads(repo.client) == before)
+        #expect(await Reads(repo.client) == expected, "the churn's status and numstat, no diff")
     }
 
-    @Test func aRefsTickChecksHeadWithoutStatusInCommitScope() async {
+    @Test func aRefsTickChecksHeadAndReadsTheChurnInCommitScope() async {
         let h = Harness()
         let state = h.makeState()
         let repo = await adoptInCommitScope(h, state)
         let before = await Reads(repo.client)
 
         h.tick(repo.root, [.refs])
-        let expected = before.plus(head: 1, headState: 1)
+        let expected = before.plus(status: 1, head: 1, headState: 1, numstat: 2)
         #expect(await eventually { await Reads(repo.client) == expected })
         try? await Task.sleep(for: .milliseconds(50))
-        #expect(await Reads(repo.client) == expected, "no status read, no defaults read")
+        #expect(await Reads(repo.client) == expected, "the churn's reads, no defaults read")
     }
 }

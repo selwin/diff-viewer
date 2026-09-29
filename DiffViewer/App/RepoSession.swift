@@ -44,9 +44,13 @@ final class RepoSession {
     /// The last unpushed read. Keyed by commit ids, so it stays true for its key and a
     /// branch read whose tips match needs no `rev-list`.
     var unpushedCommits: UnpushedCommits?
-    /// Incremented per Working Tree count read and per working-tree refresh, so only the
-    /// newest of them publishes the count whatever order they finish in.
-    var workingTreeCountSerial = 0
+    /// Incremented per working-tree churn read, per working-tree refresh, and per churn
+    /// publish of the working-tree list, so only the newest of them publishes whatever
+    /// order they finish in.
+    var workingTreeChurnSerial = 0
+    /// The serial the churn was last published under. Behind `workingTreeChurnSerial`
+    /// while a newer read, or a working-tree list's line counts, is still coming.
+    var workingTreeChurnPublishedSerial = 0
     /// The tail of the chain of repository writes: sidebar file actions, commits, and branch switches. Each
     /// new write waits for this task before touching the repository, so two quick clicks
     /// cannot run two `git` writes at once and collide on `index.lock`. A fetch is not on
