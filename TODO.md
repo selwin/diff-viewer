@@ -39,7 +39,7 @@ Where DiffViewer stands versus the bar:
 
 Items Selwin asked for. They take priority over the "Next" list below. Earlier requests
 (per-file churn, the sidebar context menu, multi-selection with bulk actions, the copy
-button on git error alerts, moved-code detection) have shipped and are gone from here.
+button on git error alerts, copying from the branch picker, moved-code detection) have shipped and are gone from here.
 
 ### A. Branch state in the title bar (remainder)
 
@@ -71,25 +71,6 @@ file after staging or unstaging have landed; what remains is below.
 - The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
 
 **Tests.** Which file S targets in All changes from a scroll position.
-
----
-
-### C. Copy from the branch picker (requested 2026-09-24)
-
-**Goal.** Hovering over a branch row offers a way to copy its name, so it can go into a
-terminal, review, or chat without retyping. The commit picker's copy button has landed;
-the branch picker has no copy yet.
-
-**Design.**
-- On hover (and keyboard highlight), a small copy button appears on the row, as it does
-  on a commit row, and copies the branch name. It sits in the row's accessory slot next
-  to the sync buttons, and a click never activates the row.
-- A right-click menu offers the same.
-- ⌘C copies the highlighted row's name.
-- Brief "Copied" feedback on the button; an accessibility custom action ("Copy branch
-  name").
-
-**Tests.** None; UI, checked by screenshot.
 
 ---
 

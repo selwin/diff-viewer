@@ -548,16 +548,28 @@ struct BranchPickerStateTests {
         #expect(detached.buttons == .hidden)
     }
 
+    /// The name is copyable before the list carries it, though no sync buttons act on it yet.
+    @Test func theHeaderCopiesANamedHeadListedOrNot() {
+        #expect(state(snapshot(branches: [main])).headerText.copyableName == "main")
+        let unlisted = state(snapshot(branches: [feature])).headerText
+        #expect(unlisted.copyableName == "main")
+        #expect(unlisted.branch == nil)
+        let detached = state(snapshot(headState: .detached(sha: objectID("x")), branches: [main])).headerText
+        #expect(detached.copyableName == nil)
+    }
+
     /// Tab skips header buttons that are hidden or can't act.
     @Test func theHeaderFocusOrderHoldsOnlyButtonsThatCanAct() {
         let ahead = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 2, behind: 0)))
-        #expect(state(snapshot(branches: [ahead])).headerText.focusOrder == [.fetch, .push])
+        #expect(state(snapshot(branches: [ahead])).headerText.focusOrder == [.copy, .fetch, .push])
         let diverged = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 1)))
-        #expect(state(snapshot(branches: [diverged])).headerText.focusOrder == [.fetch, .pull], "Push says pull first")
+        #expect(
+            state(snapshot(branches: [diverged])).headerText.focusOrder == [.copy, .fetch, .pull],
+            "Push says pull first")
         let fetching = state(snapshot(branches: [diverged], fetchStatus: .fetching)).headerText
-        #expect(fetching.focusOrder == [.pull], "Fetch is disabled while a round runs")
+        #expect(fetching.focusOrder == [.copy, .pull], "Fetch is disabled while a round runs")
         let detached = state(snapshot(headState: .detached(sha: objectID("x")), branches: [ahead])).headerText
-        #expect(detached.focusOrder == [.fetch])
+        #expect(detached.focusOrder == [.fetch], "A detached HEAD has no name to copy")
     }
 
     // MARK: Fetching

@@ -20,6 +20,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
             let cell =
                 tableView.makeView(withIdentifier: BranchPickerRowView.identifier, owner: nil)
                 as? BranchPickerRowView ?? BranchPickerRowView(frame: .zero)
+            cell.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
             cell.configure(entry)
             configureHighlightAndButtons(of: cell, row: row, animated: false)
             // No callback on a row that cannot be activated: the action must not be offered.
@@ -63,11 +64,11 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
 /// Key equivalents the popover answers before the main menu.
 extension BranchPickerContainerView {
-    /// ⌘R fetches and ⌘N opens the New Branch sheet while the popover is key. The key
-    /// window's views see a key equivalent before the main menu does, and this runs
-    /// whichever view has focus, the search field's editor included, so the menu never
-    /// gets them. Once the popover closes this view is out of the key window and ⌘R is
-    /// Refresh again.
+    /// ⌘R fetches, ⌘N opens the New Branch sheet and ⌘C copies the highlighted branch's
+    /// name while the popover is key. The key window's views see a key equivalent before
+    /// the main menu does, and this runs whichever view has focus, the search field's
+    /// editor included, so the menu never gets them. Once the popover closes this view is
+    /// out of the key window and ⌘R is Refresh again.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
         guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
@@ -75,8 +76,61 @@ extension BranchPickerContainerView {
         case "r": onFetch()
         // Taken even while the row is off, so it never falls through to the menu.
         case "n": if newBranchRow.isEnabled { onNewBranch() }
+        case "c":
+            // With text selected in the query, or no highlighted row, ⌘C is AppKit's.
+            if let editor = searchField.currentEditor(), editor.selectedRange.length > 0 {
+                return super.performKeyEquivalent(with: event)
+            }
+            guard let row = state.highlightedTableRow, let branch = state.row(forTableRow: row) else {
+                return super.performKeyEquivalent(with: event)
+            }
+            copyBranchName(branch.name, rowID: branch.id)
         default: return super.performKeyEquivalent(with: event)
         }
         return true
+    }
+}
+
+/// The rows' right-click menu, and the copy it shares with ⌘C.
+extension BranchPickerContainerView {
+    func menu(forTableRow row: Int) -> NSMenu? {
+        guard let branch = state.row(forTableRow: row) else { return nil }
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Copy Branch Name", action: #selector(copyBranchNameChosen), keyEquivalent: "")
+        item.target = self
+        // Bound now: a refresh can move or replace the row while the menu is open.
+        item.representedObject = BranchNameCopy(name: branch.name, rowID: branch.id)
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func copyBranchNameChosen(_ sender: NSMenuItem) {
+        guard let choice = sender.representedObject as? BranchNameCopy else { return }
+        copyBranchName(choice.name, rowID: choice.rowID)
+    }
+
+    /// Copies `name`, then shows the checkmark on its row's cell only if that cell still
+    /// shows `name`: cells are reused, and a refresh can change what one shows. This skips
+    /// the button's `onCopy`, so focus is returned here.
+    private func copyBranchName(_ name: String, rowID: BranchRowID) {
+        PickerCopyButton.copyToPasteboard(name)
+        if let row = state.items.firstIndex(where: { $0.row?.id == rowID }),
+            let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? BranchPickerRowView,
+            cell.copyButton.text == name
+        {
+            cell.copyButton.showCopied()
+        }
+        returnFocusToSearchField()
+    }
+}
+
+/// A row menu's copy, bound to the row's name and identity when the menu is built.
+private final class BranchNameCopy {
+    let name: String
+    let rowID: BranchRowID
+
+    init(name: String, rowID: BranchRowID) {
+        self.name = name
+        self.rowID = rowID
     }
 }

@@ -12,18 +12,24 @@ protocol PickerTableHandler: AnyObject {
     func cancel()
     /// False for rows that take no hover, highlight or click, such as section headers.
     func canHighlight(tableRow: Int) -> Bool
+    /// The right-click menu for a row; nil for none.
+    func menu(forTableRow: Int) -> NSMenu?
+}
+
+extension PickerTableHandler {
+    func menu(forTableRow: Int) -> NSMenu? { nil }
 }
 
 /// A row cell with controls of its own, whose clicks must not activate the row.
 @MainActor
 protocol PickerRowAccessoryHosting: AnyObject {
-    var accessory: NSView? { get }
+    var accessories: [NSView] { get }
 }
 
 /// The picker's table: unmodified navigation keys go to the handler, everything else
 /// (type-select included) to AppKit. A click activates its row on release, so a drag off
 /// the row cancels. Clicks below the rows, on rows that take no highlight, or on a row's
-/// accessory never activate one. Tracks the hovered row.
+/// accessories never activate one. Tracks the hovered row.
 final class PickerTableView: NSTableView {
     weak var handler: (any PickerTableHandler)?
     /// Called with the previously hovered row and the new one whenever the hover moves.
@@ -76,6 +82,13 @@ final class PickerTableView: NSTableView {
         handler?.activate(tableRow: pressedRow)
     }
 
+    /// The handler's menu for the row under the pointer; none below the rows or on a
+    /// section header.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let row = contentRow(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        return handler?.menu(forTableRow: row)
+    }
+
     // MARK: Hover
 
     override func updateTrackingAreas() {
@@ -110,12 +123,13 @@ final class PickerTableView: NSTableView {
     private func isOnAccessory(_ point: NSPoint) -> Bool {
         let row = row(at: point)
         guard row >= 0,
-            let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? any PickerRowAccessoryHosting,
-            let accessory = cell.accessory, !accessory.isHidden
+            let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? any PickerRowAccessoryHosting
         else { return false }
         // An accessory click must not activate its row, even while the accessory fades out
         // and refuses the click itself.
-        return accessory.bounds.contains(accessory.convert(point, from: self))
+        return cell.accessories.contains { accessory in
+            !accessory.isHidden && accessory.bounds.contains(accessory.convert(point, from: self))
+        }
     }
 
     /// The row under `point`, or nil on a row that takes no highlight or below the rows.

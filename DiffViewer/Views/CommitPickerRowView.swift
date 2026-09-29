@@ -9,8 +9,9 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     static let identifier = NSUserInterfaceItemIdentifier("CommitPickerRowView")
 
     private static let hashFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-    /// Between the hash and the copy button. The labels' own padding spaces the dot.
-    private static let detailGap: CGFloat = 2
+    /// Between the hash and the copy button, whose hover fill already pads the icon. The
+    /// labels' own padding spaces the dot.
+    private static let detailGap: CGFloat = 0
     private static let checkmarkSize: CGFloat = 14
 
     /// Set by the table's owner.
@@ -21,12 +22,12 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         didSet { if isHighlighted != oldValue { applyHighlight() } }
     }
 
-    let copyButton = CopyShaButton(frame: .zero)
+    let copyButton = PickerCopyButton(label: "Copy SHA")
 
     /// The copy button, on a commit row: the table sends clicks on it to the button, never
     /// to the row.
-    var accessory: NSView? {
-        sha == nil ? nil : copyButton
+    var accessories: [NSView] {
+        sha == nil ? [] : [copyButton]
     }
 
     private let name = PickerLabel.make(font: PickerMetrics.nameFont, color: .labelColor)
@@ -86,7 +87,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         shaLabel.stringValue = face.shortSha ?? ""
         dot.isHidden = face.shortSha == nil || face.detail.isEmpty
         shaLabel.isHidden = face.shortSha == nil
-        if let sha = face.sha { copyButton.configure(sha: sha) }
+        if let sha = face.sha { copyButton.configure(text: sha) }
         status.stringValue = face.status
         checkmark.isHidden = !face.isSelectedScope
         let described = [
@@ -127,7 +128,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             actions.append(
                 NSAccessibilityCustomAction(name: "Copy SHA") { [weak self] in
                     guard let self else { return false }
-                    copyButton.copySha()
+                    copyButton.copyText()
                     return true
                 })
         }
@@ -176,7 +177,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private func layoutDetail(x: CGFloat, y: CGFloat, maxX: CGFloat, height: CGFloat) {
         var tail: CGFloat = 0
         if !shaLabel.isHidden {
-            tail += PickerViewGeometry.naturalSize(of: shaLabel).width + Self.detailGap + CopyShaButton.side
+            tail += PickerViewGeometry.naturalSize(of: shaLabel).width + Self.detailGap + PickerCopyButton.side
             if !dot.isHidden { tail += PickerViewGeometry.naturalSize(of: dot).width }
         }
         let subtitleWidth = min(PickerViewGeometry.naturalSize(of: subtitle).width, max(maxX - x - tail, 0))
@@ -192,9 +193,11 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         shaLabel.frame = backingAlignedRect(
             NSRect(x: cursor, y: y + (height - shaSize.height) / 2, width: shaSize.width, height: shaSize.height),
             options: PickerViewGeometry.pixelAlignment)
-        let side = CopyShaButton.side
+        let side = PickerCopyButton.side
         copyButton.frame = backingAlignedRect(
             NSRect(x: shaLabel.frame.maxX + Self.detailGap, y: y + (height - side) / 2, width: side, height: side),
             options: PickerViewGeometry.pixelAlignment)
+        // A reused cell's button may have moved out from under the pointer.
+        copyButton.refreshHover(animated: false)
     }
 }

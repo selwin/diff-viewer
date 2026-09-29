@@ -1,10 +1,11 @@
 import AppKit
 
-/// A branch row: icon, name over `author · time`, status text, and the Pull/Push pills,
-/// which the container shows only on the highlighted row. As the highlight moves, the pills
-/// fade and the status slides to make room. As a table cell it stays an accessibility cell;
-/// a press, or the named accessibility action, activates the row, and the pills' actions
-/// are offered beside it.
+/// A branch row: icon, name with a copy button after it, `author · time`, status text, and
+/// the Pull/Push pills. The copy button and pills show on the highlighted row; pills also
+/// stay while their operation runs. As the highlight moves, the pills fade and the status
+/// slides to make room. As a table cell it stays an accessibility cell; a press, or the
+/// named accessibility action, activates the row, and the copy and the pills' actions are
+/// offered beside it.
 final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     static let identifier = NSUserInterfaceItemIdentifier("BranchPickerRowView")
 
@@ -12,23 +13,36 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private static let accentStatusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     private static let iconSize: CGFloat = 14
     private static let iconGap: CGFloat = 9
+    /// Between the name and the copy button, whose hover fill already pads the icon.
+    private static let copyGap: CGFloat = 0
     private static let animationDuration: TimeInterval = 0.18
 
     /// Set by the table's owner; nil on rows that cannot be activated.
     var onActivate: (() -> Void)?
 
-    /// The pills. Take the space they need only while shown; see `showAccessory`.
-    var accessory: NSView? {
+    /// The pills. Take the space they need only while shown; see `showSyncButtons`.
+    var syncButtons: BranchRowSyncButtons? {
         didSet {
-            guard accessory !== oldValue else { return }
+            guard syncButtons !== oldValue else { return }
             oldValue?.removeFromSuperview()
-            if let accessory { addSubview(accessory) }
+            if let syncButtons { addSubview(syncButtons) }
             needsLayout = true
         }
     }
 
+    /// Copies the name the row shows, remote prefix included.
+    let copyButton = PickerCopyButton(label: "Copy Branch Name")
+
+    /// The copy button and pills: the table sends clicks on them to the buttons, never to
+    /// the row.
+    var accessories: [NSView] {
+        syncButtons.map { [copyButton, $0] } ?? [copyButton]
+    }
+
     /// Whether the pills are shown, or fading in; false while they fade out.
-    private var isAccessoryShown = false
+    private var areSyncButtonsShown = false
+    /// Whether the name's line has room for the copy button; set by `layout()`.
+    private var copyButtonFits = false
     /// Bumped by every show or hide, so a finished fade only applies if nothing replaced it.
     private var animationGeneration = 0
     /// While set, `layout()` leaves the status and pills to the running animation.
@@ -52,7 +66,9 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         clipsToBounds = true
         identifier = Self.identifier
         icon.imageScaling = .scaleProportionallyUpOrDown
-        for view in [icon, name, subtitle, status] { addSubview(view) }
+        // Like the pills: the search field keeps the keyboard.
+        copyButton.refusesFirstResponder = true
+        for view in [icon, name, copyButton, subtitle, status] { addSubview(view) }
     }
 
     @available(*, unavailable)
@@ -72,6 +88,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             }
         icon.image = symbol?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         subtitle.stringValue = row.subtitle
+        copyButton.configure(text: row.name)
         status.stringValue = row.status.text
         toolTip = row.blockedReason
         accessibilityActionName = row.kind == .remoteOnly ? "Check out branch" : "Switch to branch"
@@ -98,7 +115,15 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         status.font = row.status.isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
         icon.contentTintColor =
             isHighlighted ? .white : (row.kind == .current ? .controlAccentColor : .secondaryLabelColor)
-        (accessory as? BranchRowSyncButtons)?.isOnAccent = isHighlighted
+        syncButtons?.isOnAccent = isHighlighted
+        updateCopyButton()
+    }
+
+    /// The one place the copy button's visibility is set: on the highlighted row, when it
+    /// fits. Called when either changes.
+    private func updateCopyButton() {
+        copyButton.isOnAccent = isHighlighted
+        copyButton.isHidden = !(isHighlighted && copyButtonFits)
     }
 
     private static func attributedName(_ row: BranchPickerRow, color: NSColor) -> NSAttributedString {
@@ -129,7 +154,15 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
                     self?.accessibilityPerformPress() ?? false
                 })
         }
-        actions += accessory?.accessibilityCustomActions() ?? []
+        if row != nil {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Copy branch name") { [weak self] in
+                    guard let self else { return false }
+                    copyButton.copyText()
+                    return true
+                })
+        }
+        actions += syncButtons?.accessibilityCustomActions() ?? []
         return actions.isEmpty ? nil : actions
     }
 
@@ -138,10 +171,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Shows or hides the pills. Animated, the pills fade and the status slides; a change
     /// mid-animation starts from what is on screen. Hidden pills take no clicks, and
     /// fading-out ones refuse them.
-    func showAccessory(_ shown: Bool, animated: Bool) {
-        let changed = shown != isAccessoryShown
-        isAccessoryShown = shown
-        guard let accessory else { return stopAnimating() }
+    func showSyncButtons(_ shown: Bool, animated: Bool) {
+        let changed = shown != areSyncButtonsShown
+        areSyncButtonsShown = shown
+        guard let syncButtons else { return stopAnimating() }
         guard changed, animated, window != nil, !bounds.isEmpty else {
             // A running animation already heads for this state; otherwise snap.
             if !(isAnimating && !changed) { stopAnimating() }
@@ -149,12 +182,12 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         }
         animationGeneration += 1
         let generation = animationGeneration
-        let target = trailingFrames(showingAccessory: shown)
+        let target = trailingFrames(showingSyncButtons: shown)
         let statusX = takeOnScreenState(of: status).x
-        let opacity = accessory.isHidden ? 0 : takeOnScreenState(of: accessory).opacity
-        accessory.isHidden = false
-        if shown, let frame = target.accessory { accessory.frame = frame }
-        (accessory as? BranchRowSyncButtons)?.acceptsClicks = shown
+        let opacity = syncButtons.isHidden ? 0 : takeOnScreenState(of: syncButtons).opacity
+        syncButtons.isHidden = false
+        if shown, let frame = target.syncButtons { syncButtons.frame = frame }
+        syncButtons.acceptsClicks = shown
         isAnimating = true
         // The name takes its narrower width now: see `layout()`.
         needsLayout = true
@@ -168,10 +201,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
                 self.finishAnimating()
             }
         }
-        accessory.alphaValue = shown ? 1 : 0
+        syncButtons.alphaValue = shown ? 1 : 0
         // Pills come in slowly and leave quickly, so they stay faint while the status moves
         // past them.
-        add(keyPath: "opacity", from: opacity, to: shown ? 1 : 0, timing: shown ? .easeIn : .easeOut, to: accessory)
+        add(keyPath: "opacity", from: opacity, to: shown ? 1 : 0, timing: shown ? .easeIn : .easeOut, to: syncButtons)
         status.frame = target.status
         if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let layer = status.layer {
             add(keyPath: "position.x", from: statusX, to: layer.position.x, timing: .easeOut, to: status)
@@ -194,15 +227,15 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private func stopAnimating() {
         animationGeneration += 1
         status.layer?.removeAllAnimations()
-        accessory?.layer?.removeAllAnimations()
+        syncButtons?.layer?.removeAllAnimations()
         finishAnimating()
     }
 
     private func finishAnimating() {
         isAnimating = false
-        accessory?.alphaValue = 1
-        accessory?.isHidden = !isAccessoryShown
-        (accessory as? BranchRowSyncButtons)?.acceptsClicks = true
+        syncButtons?.alphaValue = 1
+        syncButtons?.isHidden = !areSyncButtonsShown
+        syncButtons?.acceptsClicks = true
         needsLayout = true
     }
 
@@ -220,17 +253,19 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     /// Where the pills and status go with the pills shown or not, and where the name must
     /// stop. One place, so an animation ends exactly where a plain layout would put things.
-    private func trailingFrames(showingAccessory: Bool) -> (accessory: NSRect?, status: NSRect, textMaxX: CGFloat) {
+    private func trailingFrames(
+        showingSyncButtons: Bool
+    ) -> (syncButtons: NSRect?, status: NSRect, textMaxX: CGFloat) {
         var rightEdge = bounds.width - PickerMetrics.rowInset - PickerMetrics.contentInset
-        var accessoryFrame: NSRect?
-        if showingAccessory, let accessory {
-            let size = accessory.intrinsicContentSize
+        var syncButtonsFrame: NSRect?
+        if showingSyncButtons, let syncButtons {
+            let size = syncButtons.intrinsicContentSize
             let frame = backingAlignedRect(
                 NSRect(
                     x: rightEdge - size.width, y: (bounds.height - size.height) / 2, width: size.width,
                     height: size.height),
                 options: PickerViewGeometry.pixelAlignment)
-            accessoryFrame = frame
+            syncButtonsFrame = frame
             rightEdge = frame.minX - PickerMetrics.trailingGap
         }
         var statusFrame = NSRect.zero
@@ -243,7 +278,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
                 options: PickerViewGeometry.pixelAlignment)
             rightEdge = statusFrame.minX - PickerMetrics.trailingGap
         }
-        return (accessoryFrame, statusFrame, rightEdge)
+        return (syncButtonsFrame, statusFrame, rightEdge)
     }
 
     // The two text lines are centred as a block; the status and pills are centred on the
@@ -257,17 +292,35 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         icon.frame = NSRect(
             x: leading, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
             height: Self.iconSize)
-        let target = trailingFrames(showingAccessory: isAccessoryShown)
+        let target = trailingFrames(showingSyncButtons: areSyncButtonsShown)
         // Pills fading out still take their room, so the name never runs under them.
-        let textMaxX = isAnimating ? trailingFrames(showingAccessory: true).textMaxX : target.textMaxX
+        let textMaxX = isAnimating ? trailingFrames(showingSyncButtons: true).textMaxX : target.textMaxX
         let textX = icon.frame.maxX + Self.iconGap
         let textWidth = max(textMaxX - textX, 0)
-        name.frame = NSRect(x: textX, y: top, width: textWidth, height: nameHeight)
+        layoutName(x: textX, y: top, width: textWidth, height: nameHeight)
         subtitle.frame = NSRect(
             x: textX, y: name.frame.maxY + PickerMetrics.lineGap, width: textWidth, height: subtitleHeight)
         // A running animation already ends on `target`; setting it here would snap it.
         guard !isAnimating else { return }
-        if let frame = target.accessory { accessory?.frame = frame }
+        if let frame = target.syncButtons { syncButtons?.frame = frame }
         status.frame = target.status
+    }
+
+    /// The name, truncating, then the copy button. The button's room is kept while it is
+    /// hidden, so the name does not shift as the highlight moves; too narrow a line hides
+    /// the button and gives the name all of it.
+    private func layoutName(x: CGFloat, y: CGFloat, width: CGFloat, height: CGFloat) {
+        let side = PickerCopyButton.side
+        copyButtonFits = width >= Self.copyGap + side
+        let nameWidth =
+            copyButtonFits
+            ? max(min(PickerViewGeometry.naturalSize(of: name).width, width - Self.copyGap - side), 0) : width
+        name.frame = NSRect(x: x, y: y, width: nameWidth, height: height)
+        copyButton.frame = backingAlignedRect(
+            NSRect(x: name.frame.maxX + Self.copyGap, y: y + (height - side) / 2, width: side, height: side),
+            options: PickerViewGeometry.pixelAlignment)
+        updateCopyButton()
+        // A reused cell's button may have moved out from under the pointer.
+        copyButton.refreshHover(animated: false)
     }
 }

@@ -8,8 +8,9 @@ final class CommitPickerHeaderView: NSView {
     private typealias Metrics = PickerMetrics.Header
 
     private static let hashFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-    /// Between the hash and the copy button. The labels' own padding spaces the dot.
-    private static let detailGap: CGFloat = 2
+    /// Between the hash and the copy button, whose hover fill already pads the icon. The
+    /// labels' own padding spaces the dot.
+    private static let detailGap: CGFloat = 0
 
     /// After a copy; the picker returns focus to its search field.
     var onCopy: () -> Void {
@@ -30,7 +31,7 @@ final class CommitPickerHeaderView: NSView {
     private let detail = PickerLabel.make(font: Metrics.detailFont, color: .secondaryLabelColor)
     private let dot = PickerLabel.make(font: Metrics.detailFont, color: .secondaryLabelColor)
     private let shaLabel = PickerLabel.make(font: hashFont, color: .secondaryLabelColor)
-    private let copyButton = CopyShaButton(frame: .zero)
+    private let copyButton = PickerCopyButton(label: "Copy SHA")
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -51,7 +52,7 @@ final class CommitPickerHeaderView: NSView {
         shaLabel.isHidden = text.shortSha == nil
         dot.isHidden = text.shortSha == nil || text.detailParts.isEmpty
         copyButton.isHidden = text.sha == nil
-        if let sha = text.sha { copyButton.configure(sha: sha) }
+        if let sha = text.sha { copyButton.configure(text: sha) }
         needsLayout = true
     }
 
@@ -86,7 +87,7 @@ final class CommitPickerHeaderView: NSView {
         let height = Self.detailHeight
         let dotWidth = dot.isHidden ? 0 : PickerViewGeometry.naturalSize(of: dot).width
         let shaWidth = shaLabel.isHidden ? 0 : PickerViewGeometry.naturalSize(of: shaLabel).width
-        let copyWidth = copyButton.isHidden ? 0 : Self.detailGap + CopyShaButton.side
+        let copyWidth = copyButton.isHidden ? 0 : Self.detailGap + PickerCopyButton.side
         let detailWidth = min(
             PickerViewGeometry.naturalSize(of: detail).width, max(maxX - x - dotWidth - shaWidth - copyWidth, 0))
         detail.frame = NSRect(x: x, y: y, width: detailWidth, height: height)
@@ -100,7 +101,7 @@ final class CommitPickerHeaderView: NSView {
         shaLabel.frame = backingAlignedRect(
             NSRect(x: cursor, y: y + (height - shaSize.height) / 2, width: shaSize.width, height: shaSize.height),
             options: PickerViewGeometry.pixelAlignment)
-        let side = CopyShaButton.side
+        let side = PickerCopyButton.side
         copyButton.frame = backingAlignedRect(
             NSRect(x: shaLabel.frame.maxX + Self.detailGap, y: y + (height - side) / 2, width: side, height: side),
             options: PickerViewGeometry.pixelAlignment)

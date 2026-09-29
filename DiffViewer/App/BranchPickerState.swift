@@ -176,9 +176,13 @@ struct BranchPickerHeaderText: Equatable {
     /// HEAD's branch, which `buttons` act on; nil when HEAD is on no listed branch.
     var branch: String?
     var buttons = RowSyncButtons.hidden
+    /// What the title's copy button copies: HEAD's branch name, listed or not yet. Nil
+    /// when HEAD is detached or unread.
+    var copyableName: String?
 
     /// A header button Tab can reach.
     enum Control: Equatable {
+        case copy
         case fetch
         case pull
         case push
@@ -187,7 +191,8 @@ struct BranchPickerHeaderText: Equatable {
     /// The header buttons Tab visits after the search field, in order: only those shown
     /// and enabled, so focus never lands on a button that can't act.
     var focusOrder: [Control] {
-        var order: [Control] = canFetch ? [.fetch] : []
+        var order: [Control] = copyableName == nil ? [] : [.copy]
+        if canFetch { order.append(.fetch) }
         guard branch != nil else { return order }
         if buttons.pull == .enabled { order.append(.pull) }
         if buttons.push == .enabled { order.append(.push) }
@@ -212,14 +217,16 @@ struct BranchPickerHeaderText: Equatable {
         case let .named(name):
             // A branch missing from the list says nothing: the counts are what the list holds.
             guard let branch = snapshot.branches.first(where: { $0.name == name }) else {
-                return BranchPickerHeaderText(title: name, showsSpinner: spinner, canFetch: canFetch)
+                return BranchPickerHeaderText(
+                    title: name, showsSpinner: spinner, canFetch: canFetch, copyableName: name)
             }
             // Worded as the row is, so a hidden upstream reads the same in both places.
             let status = BranchRowStatus.local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
             return BranchPickerHeaderText(
                 title: name, detailParts: [status == .none ? "up to date" : status.text], showsSpinner: spinner,
                 canFetch: canFetch, branch: name,
-                buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot))
+                buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
+                copyableName: name)
         }
     }
 }

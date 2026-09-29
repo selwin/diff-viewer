@@ -1,19 +1,29 @@
 import AppKit
 
-/// The branch picker's header: where HEAD is, a detail line for how far that branch is from
-/// its upstream and how the fetch went, a round Fetch button that spins while a round runs,
-/// and the current branch's Pull and Push after it. It draws no background of its own, so the
-/// header and the list share the popover's one surface.
+/// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
+/// detail line for how far that branch is from its upstream and how the fetch went, a
+/// round Fetch button that spins while a round runs, and the current branch's Pull and
+/// Push after it. It draws no background of its own, so the header and the list share the
+/// popover's one surface.
 final class BranchPickerHeaderView: NSView {
     private typealias Metrics = PickerMetrics.Header
 
     private static let controlGap: CGFloat = 8
+    /// Between the title and the copy button, whose hover fill already pads the icon.
+    private static let copyGap: CGFloat = 2
 
     private let title = PickerLabel.make(font: Metrics.titleFont, color: .labelColor)
+    // Focusable like the header's other controls, so it carries room for its ring.
+    private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: SyncPillButton.focusRingMargin)
     private let detail = PickerLabel.make(font: Metrics.detailFont, color: .secondaryLabelColor)
     private let syncButtons = BranchRowSyncButtons(style: .header)
     private let fetchButton = FetchButton(frame: .zero)
 
+    /// After a copy; the picker returns focus to its search field.
+    var onCopy: () -> Void {
+        get { copyButton.onCopy }
+        set { copyButton.onCopy = newValue }
+    }
     var onFetch: () -> Void = {}
     var onPull: (String) -> Void = { _ in }
     var onPush: (String) -> Void = { _ in }
@@ -26,7 +36,7 @@ final class BranchPickerHeaderView: NSView {
         clipsToBounds = true
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
-        for view in [title, detail, syncButtons, fetchButton] { addSubview(view) }
+        for view in [title, copyButton, detail, syncButtons, fetchButton] { addSubview(view) }
     }
 
     @available(*, unavailable)
@@ -38,6 +48,7 @@ final class BranchPickerHeaderView: NSView {
     func configure(_ text: BranchPickerHeaderText, fetch: BranchPickerFetchText?) {
         self.text = text
         title.stringValue = text.title
+        if let name = text.copyableName { copyButton.configure(text: name) }
         configureFetch(fetch)
         fetchButton.isEnabled = text.canFetch
         fetchButton.isSpinning = text.showsSpinner
@@ -68,6 +79,7 @@ final class BranchPickerHeaderView: NSView {
     func keyViews(for order: [BranchPickerHeaderText.Control]) -> [NSView] {
         order.map { control in
             switch control {
+            case .copy: copyButton
             case .fetch: fetchButton
             case .pull: syncButtons.pullButton
             case .push: syncButtons.pushButton
@@ -110,10 +122,27 @@ final class BranchPickerHeaderView: NSView {
             height: fetchSide)
         trailing = fetchButton.frame.minX + margin - Self.controlGap
         let textWidth = max(trailing - Metrics.sidePadding, 0)
-        title.frame = NSRect(x: Metrics.sidePadding, y: Metrics.topPadding, width: textWidth, height: titleHeight)
+        layoutTitle(width: textWidth, height: titleHeight)
         detail.frame = NSRect(
             x: Metrics.sidePadding, y: title.frame.maxY + Metrics.lineGap, width: textWidth,
             height: Self.detailHeight)
+    }
+
+    /// The title, truncating, then the copy button, which is hidden when there's nothing to
+    /// copy or no room for it.
+    private func layoutTitle(width: CGFloat, height: CGFloat) {
+        let side = PickerCopyButton.side
+        let showsCopy = text.copyableName != nil && width >= Self.copyGap + side
+        let naturalWidth = PickerViewGeometry.naturalSize(of: title).width
+        let titleWidth = showsCopy ? max(min(naturalWidth, width - Self.copyGap - side), 0) : width
+        title.frame = NSRect(x: Metrics.sidePadding, y: Metrics.topPadding, width: titleWidth, height: height)
+        copyButton.isHidden = !showsCopy
+        let frameSide = copyButton.frameSide
+        copyButton.frame = backingAlignedRect(
+            NSRect(
+                x: title.frame.maxX + Self.copyGap - copyButton.focusMargin, y: title.frame.midY - frameSide / 2,
+                width: frameSide, height: frameSide),
+            options: PickerViewGeometry.pixelAlignment)
     }
 }
 

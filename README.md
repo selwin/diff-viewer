@@ -59,7 +59,8 @@ experience. We want this to be speedy when reviewing large diffs.
   parent. A commit's diffs never change, so nothing reloads until HEAD moves.
 - **Branch picker** (⌘B) in the title bar: switch local branches. A row offers Push or
   Pull when the branch is ahead of or behind its upstream, and Publish when it tracks
-  nothing.
+  nothing. Copy a row's name with the copy button on the highlighted row, right-click, or
+  ⌘C; the header has a copy button for the current branch.
 - **Commit** (⌘Return): records the index with your message, prefilled the way
   `git commit` would. ⌘G drafts a message with Apple's on-device model. Hooks run with
   your login shell's PATH, so a pre-commit hook finds Homebrew tools even from a Finder
@@ -95,7 +96,6 @@ Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, Jux
 - Keyboard staging: Stage ⌘S, Unstage ⇧⌘S, Discard ⌘⌫, with the selection walking to the
   next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G, ⌘Return.
 - A Find button in the toolbar.
-- Copy a hash or branch name from the pickers; copy a failed hook's output in one click.
 
 **Next**
 - A "Change 3 of 41" strip with previous/next controls.

@@ -74,6 +74,7 @@ final class BranchPickerContainerView: NSView {
 
     /// The header's buttons act on the current branch, and return focus like the rows' do.
     private func configureHeader() {
+        header.onCopy = { [weak self] in self?.returnFocusToSearchField() }
         header.onFetch = { [weak self] in
             self?.onFetch()
             self?.returnFocusToSearchField()
@@ -287,11 +288,11 @@ final class BranchPickerContainerView: NSView {
         let isHighlighted = row == state.highlightedTableRow
         cell.isHighlighted = isHighlighted
         guard let buttons = state.syncButtons(forTableRow: row), let branch = state.branch(forTableRow: row) else {
-            cell.accessory = nil
-            cell.showAccessory(false, animated: false)
+            cell.syncButtons = nil
+            cell.showSyncButtons(false, animated: false)
             return
         }
-        let view = cell.accessory as? BranchRowSyncButtons ?? BranchRowSyncButtons(style: .rowPills)
+        let view = cell.syncButtons ?? BranchRowSyncButtons(style: .rowPills)
         view.isOnAccent = isHighlighted
         // The popover stays up during an operation, and the search field keeps the
         // keyboard: a click must not leave focus on a button that is about to disable.
@@ -313,8 +314,8 @@ final class BranchPickerContainerView: NSView {
                 self?.onDelete(branch, self?.window)
                 self?.returnFocusToSearchField()
             })
-        cell.accessory = view
-        cell.showAccessory(view.shouldShow, animated: animated)
+        cell.syncButtons = view
+        cell.showSyncButtons(view.shouldShow, animated: animated)
     }
 
     /// Re-configures whichever of `rows` have a cell on screen.
@@ -429,16 +430,16 @@ final class BranchPickerContainerView: NSView {
 
     /// The search field holds focus. Only a field that lost it is refocused, with the caret
     /// at the end: refocusing selects the text, and the next key would replace the query.
-    private func returnFocusToSearchField() {
+    func returnFocusToSearchField() {
         guard searchField.currentEditor() == nil else { return }
         window?.makeFirstResponder(searchField)
         let end = searchField.stringValue.utf16.count
         searchField.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
     }
 
-    /// Search field → Fetch → Pull → Push → search field, over the header buttons that can
-    /// act; AppKit skips buttons unless Full Keyboard Access is on. Set explicitly rather
-    /// than recalculated, so the order doesn't depend on the popover window.
+    /// Search field → Copy → Fetch → Pull → Push → search field, over the header buttons
+    /// that can act; AppKit skips buttons unless Full Keyboard Access is on. Set explicitly
+    /// rather than recalculated, so the order doesn't depend on the popover window.
     private func wireKeyViewLoop() {
         let loop = [searchField] + header.keyViews(for: state.headerText.focusOrder)
         for (view, next) in zip(loop, loop.dropFirst() + [searchField]) { view.nextKeyView = next }
