@@ -65,42 +65,134 @@ enum LanguageRegistry {
             name: .field("name"), requires: ScopeRule.Requirement(field: "computed_value")),
     ]
 
+    private static func named(_ kinds: String...) -> [String: ScopeRule] {
+        Dictionary(uniqueKeysWithValues: kinds.map { ($0, ScopeRule(name: .field("name"))) })
+    }
+
+    private static let pythonScopes = named("class_definition", "function_definition")
+
+    /// An arrow or function expression assigned to a plain name (`const render = () => {}`)
+    /// or a class field. Destructuring and computed keys don't name anything.
+    private static let assignedFunction = ScopeRule.Requirement(
+        field: "value", types: ["arrow_function", "function_expression", "generator_function"])
+
+    private static let javaScriptScopes: [String: ScopeRule] = {
+        var rules = named(
+            "class_declaration", "function_declaration", "generator_function_declaration", "method_definition")
+        rules["variable_declarator"] = ScopeRule(
+            name: .field("name", types: ["identifier"]), requires: assignedFunction)
+        rules["field_definition"] = ScopeRule(
+            name: .field("property", types: ["property_identifier", "private_property_identifier"]),
+            requires: assignedFunction)
+        return rules
+    }()
+
+    /// TypeScript's class fields are `public_field_definition` with a `name` field.
+    private static let typeScriptScopes: [String: ScopeRule] = {
+        var rules = javaScriptScopes
+        rules["field_definition"] = nil
+        rules["public_field_definition"] = ScopeRule(
+            name: .field("name", types: ["property_identifier", "private_property_identifier"]),
+            requires: assignedFunction)
+        let typeKinds = named(
+            "abstract_class_declaration", "interface_declaration", "enum_declaration", "module", "internal_module")
+        for (kind, rule) in typeKinds {
+            rules[kind] = rule
+        }
+        return rules
+    }()
+
+    private static let goScopes = named("function_declaration", "method_declaration", "type_spec")
+
+    /// An `impl` block is named by the type it implements.
+    private static let rustScopes: [String: ScopeRule] = {
+        var rules = named("function_item", "trait_item", "mod_item", "struct_item", "enum_item")
+        rules["impl_item"] = ScopeRule(name: .field("type"))
+        return rules
+    }()
+
+    /// C function names sit at the end of a `declarator` chain. C++ type specifiers are
+    /// only scopes when they have a body, so `struct Cart *p` and `class Cart;` are not.
+    private static let cScopes: [String: ScopeRule] = [
+        "function_definition": ScopeRule(name: .cDeclaratorIdentifier)
+    ]
+
+    private static let cppScopes: [String: ScopeRule] = {
+        var rules = cScopes
+        rules["namespace_definition"] = ScopeRule(name: .field("name"))
+        for kind in ["class_specifier", "struct_specifier"] {
+            rules[kind] = ScopeRule(name: .field("name"), requires: ScopeRule.Requirement(field: "body"))
+        }
+        return rules
+    }()
+
+    private static let javaScopes = named(
+        "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
+        "method_declaration", "constructor_declaration")
+
+    /// The Kotlin grammar has no fields: types are named by a `type_identifier` child and
+    /// functions by a `simple_identifier` child.
+    private static let kotlinScopes: [String: ScopeRule] = [
+        "class_declaration": ScopeRule(name: .childOfType("type_identifier")),
+        "object_declaration": ScopeRule(name: .childOfType("type_identifier")),
+        "function_declaration": ScopeRule(name: .childOfType("simple_identifier")),
+    ]
+
+    private static let rubyScopes = named("class", "module", "method", "singleton_method")
+
+    private static let phpScopes = named(
+        "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
+        "function_definition", "method_declaration", "namespace_definition")
+
+    private static let bashScopes = named("function_definition")
+
+    // Files found by name and by extension share one Spec, because scope rules are cached
+    // per language name: a second Spec with different rules would be ignored or win at random.
+    private static let bashSpec = Spec("Bash", scopes: bashScopes, tree_sitter_bash)
+    private static let rubySpec = Spec("Ruby", scopes: rubyScopes, tree_sitter_ruby)
+    private static let jsonSpec = Spec("JSON", tree_sitter_json)
+
     private static let byExtension: [String: Spec] = {
         var map: [String: Spec] = [:]
         func add(_ spec: Spec, _ extensions: String...) {
             for ext in extensions { map[ext] = spec }
         }
         add(Spec("Swift", scopes: swiftScopes, tree_sitter_swift), "swift")
-        add(Spec("Python", tree_sitter_python), "py", "pyi", "pyw")
-        add(Spec("JavaScript", tree_sitter_javascript), "js", "mjs", "cjs", "jsx")
-        add(Spec("TypeScript", tree_sitter_typescript), "ts", "mts", "cts")
-        add(Spec("TSX", bundleName: "TreeSitterTypeScript_TreeSitterTSX", tree_sitter_tsx), "tsx")
-        add(Spec("JSON", tree_sitter_json), "json", "jsonc", "json5")
+        add(Spec("Python", scopes: pythonScopes, tree_sitter_python), "py", "pyi", "pyw")
+        add(Spec("JavaScript", scopes: javaScriptScopes, tree_sitter_javascript), "js", "mjs", "cjs", "jsx")
+        add(Spec("TypeScript", scopes: typeScriptScopes, tree_sitter_typescript), "ts", "mts", "cts")
+        add(
+            Spec(
+                "TSX", bundleName: "TreeSitterTypeScript_TreeSitterTSX", scopes: typeScriptScopes,
+                tree_sitter_tsx), "tsx")
+        add(jsonSpec, "json", "jsonc", "json5")
         // tree-sitter-go lists call and definition captures before `(identifier) @variable`.
-        add(Spec("Go", precedence: .earlierPatternWins, tree_sitter_go), "go")
-        add(Spec("Rust", tree_sitter_rust), "rs")
-        add(Spec("C", tree_sitter_c), "c", "h")
-        add(Spec("CPP", tree_sitter_cpp), "cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++", "mm", "ipp")
+        add(Spec("Go", precedence: .earlierPatternWins, scopes: goScopes, tree_sitter_go), "go")
+        add(Spec("Rust", scopes: rustScopes, tree_sitter_rust), "rs")
+        add(Spec("C", scopes: cScopes, tree_sitter_c), "c", "h")
+        add(
+            Spec("CPP", scopes: cppScopes, tree_sitter_cpp),
+            "cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++", "mm", "ipp")
         add(Spec("HTML", tree_sitter_html), "html", "htm", "xhtml")
         add(Spec("CSS", tree_sitter_css), "css")
-        add(Spec("Bash", tree_sitter_bash), "sh", "bash", "zsh", "bashrc", "zshrc")
-        add(Spec("Ruby", tree_sitter_ruby), "rb", "rake", "gemspec")
+        add(bashSpec, "sh", "bash", "zsh", "bashrc", "zshrc")
+        add(rubySpec, "rb", "rake", "gemspec")
         add(Spec("YAML", tree_sitter_yaml), "yml", "yaml")
         add(Spec("TOML", tree_sitter_toml), "toml")
-        add(Spec("Java", tree_sitter_java), "java")
-        add(Spec("PHP", tree_sitter_php), "php", "phtml")
+        add(Spec("Java", scopes: javaScopes, tree_sitter_java), "java")
+        add(Spec("PHP", scopes: phpScopes, tree_sitter_php), "php", "phtml")
         add(Spec("Markdown", tree_sitter_markdown), "md", "markdown", "mdx")
-        add(Spec("Kotlin", tree_sitter_kotlin), "kt", "kts")
+        add(Spec("Kotlin", scopes: kotlinScopes, tree_sitter_kotlin), "kt", "kts")
         return map
     }()
 
     private static let byFileName: [String: Spec] = [
-        "Makefile": Spec("Bash", tree_sitter_bash),
-        "Dockerfile": Spec("Bash", tree_sitter_bash),
-        "Podfile": Spec("Ruby", tree_sitter_ruby),
-        "Gemfile": Spec("Ruby", tree_sitter_ruby),
-        "Rakefile": Spec("Ruby", tree_sitter_ruby),
-        "Package.resolved": Spec("JSON", tree_sitter_json),
+        "Makefile": bashSpec,
+        "Dockerfile": bashSpec,
+        "Podfile": rubySpec,
+        "Gemfile": rubySpec,
+        "Rakefile": rubySpec,
+        "Package.resolved": jsonSpec,
     ]
 
     static func spec(forFileNamed fileName: String) -> Spec? {

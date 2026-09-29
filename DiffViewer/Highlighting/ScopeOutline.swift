@@ -10,7 +10,7 @@ struct ScopeRule: Sendable {
         case field(String, types: Set<String>? = nil)
         /// The first child of this node type, for grammars without fields.
         case childOfType(String)
-        /// The innermost node reached by following `declarator` fields, as in C function definitions.
+        /// The name at the end of a `declarator` chain, as in C and C++ function definitions.
         case cDeclaratorIdentifier
         /// A fixed label, for nodes whose name field isn't a name.
         case fixed(String)
@@ -208,15 +208,49 @@ extension ScopeOutline {
             case .childOfType(let type):
                 nameNode = (0..<node.childCount).lazy.compactMap { node.child(at: $0) }.first { $0.nodeType == type }
             case .cDeclaratorIdentifier:
-                var current = node.child(byFieldName: "declarator")
-                while let next = current?.child(byFieldName: "declarator") { current = next }
-                nameNode = current
+                nameNode = Self.declaredName(of: node)
+                if nameNode?.nodeType == "operator_cast" {
+                    return nameNode?.child(byFieldName: "type").flatMap(singleLineText).map { "operator \($0)" }
+                }
             }
             guard let nameNode else { return nil }
+            return singleLineText(of: nameNode)
+        }
+
+        private func singleLineText(of nameNode: Node) -> String? {
             let name = text.substring(with: nameNode.range).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, !name.contains(where: \.isNewline) else { return nil }
             return name
         }
+
+        /// Pointers, arrays and functions nest through `declarator`; C++ references have no
+        /// field, so take their last named child. A conversion operator's `declarator` is
+        /// its abstract parameter list, so the walk stops there. A qualified name yields
+        /// its innermost `name`, because separators show only the closest scope. Anything
+        /// else at the end (a parenthesized function-pointer declarator, a template
+        /// function) is not a plain name.
+        private static func declaredName(of node: Node) -> Node? {
+            var current = node.child(byFieldName: "declarator")
+            while let node = current, node.nodeType != "operator_cast" {
+                if let next = node.child(byFieldName: "declarator") {
+                    current = next
+                } else if node.nodeType == "reference_declarator", node.namedChildCount > 0 {
+                    current = node.namedChild(at: node.namedChildCount - 1)
+                } else {
+                    break
+                }
+            }
+            while let node = current, node.nodeType == "qualified_identifier",
+                let inner = node.child(byFieldName: "name")
+            {
+                current = inner
+            }
+            return current.flatMap { matches($0, declaredNameTypes) ? $0 : nil }
+        }
+
+        private static let declaredNameTypes: Set<String> = [
+            "identifier", "field_identifier", "destructor_name", "operator_name", "operator_cast",
+        ]
 
         private static func matches(_ node: Node, _ types: Set<String>?) -> Bool {
             guard let types else { return true }
