@@ -35,25 +35,42 @@ enum LanguageRegistry {
         let name: String
         let bundleName: String
         let precedence: Precedence
+        /// Node kinds that name an enclosing function, method or type.
+        let scopes: [String: ScopeRule]
         let language: @Sendable () -> OpaquePointer?
 
         init(
             _ name: String, bundleName: String? = nil, precedence: Precedence = .laterPatternWins,
+            scopes: [String: ScopeRule] = [:],
             _ language: @escaping @Sendable () -> OpaquePointer?
         ) {
             self.name = name
             self.bundleName = bundleName ?? "TreeSitter\(name)_TreeSitter\(name)"
             self.precedence = precedence
+            self.scopes = scopes
             self.language = language
         }
     }
+
+    /// `class_declaration` also covers struct, enum, actor and extension. A subscript's
+    /// name field is its type, and only computed properties have a body.
+    private static let swiftScopes: [String: ScopeRule] = [
+        "class_declaration": ScopeRule(name: .field("name")),
+        "protocol_declaration": ScopeRule(name: .field("name")),
+        "function_declaration": ScopeRule(name: .field("name")),
+        "init_declaration": ScopeRule(name: .field("name")),
+        "protocol_function_declaration": ScopeRule(name: .field("name")),
+        "subscript_declaration": ScopeRule(name: .fixed("subscript")),
+        "property_declaration": ScopeRule(
+            name: .field("name"), requires: ScopeRule.Requirement(field: "computed_value")),
+    ]
 
     private static let byExtension: [String: Spec] = {
         var map: [String: Spec] = [:]
         func add(_ spec: Spec, _ extensions: String...) {
             for ext in extensions { map[ext] = spec }
         }
-        add(Spec("Swift", tree_sitter_swift), "swift")
+        add(Spec("Swift", scopes: swiftScopes, tree_sitter_swift), "swift")
         add(Spec("Python", tree_sitter_python), "py", "pyi", "pyw")
         add(Spec("JavaScript", tree_sitter_javascript), "js", "mjs", "cjs", "jsx")
         add(Spec("TypeScript", tree_sitter_typescript), "ts", "mts", "cts")
@@ -110,6 +127,7 @@ enum LanguageRegistry {
 
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cache: [String: LanguageConfiguration] = [:]
+    nonisolated(unsafe) private static var scopeRulesCache: [String: ScopeRules] = [:]
 
     /// The parser and highlight queries for a file, or nil if the language is not bundled
     /// or its queries fail to load. Configurations are cached per language.
@@ -130,5 +148,19 @@ enum LanguageRegistry {
             NSLog("Failed to load grammar \(spec.name): \(error)")
             return nil
         }
+    }
+
+    /// The file's scope rules resolved to grammar symbols, cached per language. Nil when
+    /// the language is not bundled; empty when it has no rules.
+    static func scopeRules(forFileNamed fileName: String) -> ScopeRules? {
+        guard let spec = spec(forFileNamed: fileName),
+            let config = configuration(forFileNamed: fileName)
+        else { return nil }
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cached = scopeRulesCache[spec.name] { return cached }
+        let rules = ScopeRules(spec.scopes, language: config.language)
+        scopeRulesCache[spec.name] = rules
+        return rules
     }
 }
