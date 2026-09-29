@@ -256,12 +256,13 @@ struct RepositoryCommands: Commands {
     }
 }
 
-/// The Changes menu: the sidebar's writes on the selected rows. Scoped to file-list focus,
-/// which is also when the selection popover shows, so the bare S and U shortcuts still
-/// type in the find bar and the commit sheet. The two that lose work have no shortcut.
+/// The Changes menu: the sidebar's writes on the selected rows. Selected-file commands
+/// require list focus so S and U remain available for text entry. Stage All targets the
+/// focused window. The two that lose work have no shortcut.
 struct ChangesCommands: Commands {
     let services: AppServices
     @FocusedValue(\.fileListWindowState) private var windowState
+    @FocusedValue(\.windowState) private var sceneWindowState
 
     var body: some Commands {
         // Built once per menu update rather than once per item: each build scans the selection.
@@ -271,9 +272,19 @@ struct ChangesCommands: Commands {
                 .keyboardShortcut("s", modifiers: [])
             button("Unstage", for: .unstage, in: groups)
                 .keyboardShortcut("u", modifiers: [])
+            Button("Stage All") { stageAll() }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(!(sceneWindowState?.canStageAll ?? false))
             button("Discard Changes…", for: .discard, in: groups)
             button("Move to Trash…", for: .trash, in: groups)
         }
+    }
+
+    /// The guard repeats `.disabled`, which only reflects the state at the last render.
+    private func stageAll() {
+        guard let state = sceneWindowState, state.canStageAll else { return }
+        let files = state.stageableUnstagedFiles
+        Task { await FileActionRunner(windowState: state, services: services).run(.stage, on: files) }
     }
 
     /// The selection's writes, or none while a branch switch or a confirmation is in progress.
