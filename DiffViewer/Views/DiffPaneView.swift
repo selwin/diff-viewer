@@ -24,10 +24,15 @@ final class DiffPaneView: NSView {
     /// be reset, so plain assignment is not allowed.
     private(set) var model: PaneModel?
 
-    /// Syntax color runs per line index. Only the shaped line cache is reset; header text
-    /// does not depend on syntax styles.
+    /// Syntax color runs per line index. Lines whose runs changed are reshaped; lines whose
+    /// runs stayed equal are reused. Header text does not depend on syntax styles.
     var styles: [[StyleRun]]? {
-        didSet { lineCache.removeAll(); needsDisplay = true }
+        didSet {
+            let old = oldValue
+            let new = styles
+            lineCache = lineCache.filter { Self.keepsShapedLine(at: $0.key, old: old, new: new) }
+            needsDisplay = true
+        }
     }
 
     /// Find hits per document row, in raw UTF-16 offsets on this pane's side.
@@ -556,5 +561,13 @@ extension DiffPaneView {
         var units = line.utf16.count
         if line.utf16.contains(9) { units += line.utf16.count(where: { $0 == 9 }) * (DiffTheme.tabWidth - 1) }
         return units
+    }
+
+    /// A shaped line bakes in its style runs, so it survives a style change only when both
+    /// snapshots have runs for it and they are equal. A line shaped before any styles
+    /// arrived is always reshaped.
+    static func keepsShapedLine(at index: Int, old: [[StyleRun]]?, new: [[StyleRun]]?) -> Bool {
+        guard let old, let new, old.indices.contains(index), new.indices.contains(index) else { return false }
+        return old[index] == new[index]
     }
 }
