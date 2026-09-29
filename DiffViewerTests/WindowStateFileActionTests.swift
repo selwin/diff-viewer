@@ -644,4 +644,134 @@ struct WindowStateFileActionTests {
         #expect(await repo.client.performed.isEmpty)
         #expect(h.published.count == publishes)
     }
+
+    // MARK: Stage All
+
+    /// Stage All hands `stageableUnstagedFiles` to `perform`: the conflict is not one of them,
+    /// so it stays in Changes rather than being marked resolved.
+    @Test func stagingTheStageableFilesLeavesConflictsAndStagedRowsAlone() async {
+        let h = Harness()
+        let state = h.makeState()
+        let conflict = changedFile("conflict.swift", kind: .unmerged)
+        let staged = changedFile("s.swift", area: .staged)
+        let stagedA = changedFile("a.swift", area: .staged)
+        let stagedB = changedFile("b.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: [files[0], files[1], conflict, staged])
+        await repo.client.set(filesAfterWrite: [stagedA, stagedB, conflict, staged])
+        #expect(state.selectedFiles.isEmpty, "no row is selected, only All changes")
+
+        await state.perform(.stage, on: state.stageableUnstagedFiles)
+
+        #expect(await repo.client.performed.map(\.paths) == [["a.swift", "b.swift"]])
+        #expect(await eventually { await state.unstagedFiles.map(\.id) == [conflict.id] })
+    }
+
+    @Test func stageAllIsAvailableWithOrdinaryUnstagedRows() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await h.adopt(state, "A", files: files)
+
+        #expect(state.canStageAll)
+    }
+
+    @Test func stageAllIsUnavailableWithOnlyConflictsOrNothingUnstaged() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await h.adopt(state, "A", files: [changedFile("x.swift", kind: .unmerged), files[2]])
+
+        #expect(state.stageableUnstagedFiles.isEmpty)
+        #expect(!state.canStageAll)
+    }
+
+    @Test func stageAllIsUnavailableWhileAConfirmationIsUp() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await h.adopt(state, "A", files: files)
+
+        state.isConfirmingFileAction = true
+
+        #expect(!state.canStageAll)
+    }
+
+    @Test func stageAllIsUnavailableWhileAnOverlayIsPresented() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await h.adopt(state, "A", files: files)
+
+        state.isCommitSheetPresented = true
+        #expect(!state.canStageAll)
+        state.isCommitSheetPresented = false
+        state.isCommitPickerPresented = true
+        #expect(!state.canStageAll)
+        state.isCommitPickerPresented = false
+        state.isNewBranchSheetPresented = true
+        #expect(!state.canStageAll)
+        state.isNewBranchSheetPresented = false
+        state.isBranchPickerPresented = true
+        #expect(!state.canStageAll)
+        state.isBranchPickerPresented = false
+
+        #expect(state.canStageAll)
+    }
+
+    /// The commit list's files replace Changes, so this also holds for an empty list; the
+    /// scope check is what keeps it false once a commit's rows are on screen.
+    @Test func stageAllIsUnavailableInCommitScope() async {
+        let h = Harness()
+        let state = h.makeState()
+        let commit = commitSummary("c1")
+        let repo = h.repo("A", files: files)
+        await repo.client.set(head: commit.ref.sha)
+        await repo.client.set(commits: [commit])
+        await repo.client.set(
+            files: [ChangedFile(path: "p.swift", originalPath: nil, kind: .modified, area: .commit(commit.ref))],
+            forCommit: commit.ref.sha)
+        #expect(state.adopt(root: repo.root, client: repo.client))
+        #expect(await eventually { await !state.history.commits.isEmpty })
+
+        state.select(commit: commit)
+        #expect(await eventually { await state.files.map(\.path) == ["p.swift"] })
+
+        #expect(!state.canStageAll)
+    }
+
+    @Test func stageAllIsUnavailableWhileABranchSwitchRuns() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: files)
+        let client = repo.client
+        await client.holdSwitchBranch(true)
+
+        let task = Task { await state.switchBranch(to: "side") }
+        #expect(await eventually { await client.heldSwitchBranchCount == 1 })
+
+        #expect(state.isSwitchingBranch)
+        #expect(!state.canStageAll)
+
+        await client.holdSwitchBranch(false)
+        await client.releaseSwitchBranch()
+        await task.value
+    }
+
+    /// The commit is queued behind a held stage, which is the only way to see it in flight.
+    @Test func stageAllIsUnavailableWhileACommitRuns() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: files)
+        let client = repo.client
+        state.commitMessage = "Add the picker"
+        await client.holdActions(true)
+        let stage = Task { await state.perform(.stage, on: [files[0]]) }
+        #expect(await eventually { await client.heldActionCount == 1 })
+
+        let commit = Task { await state.commit() }
+        #expect(await eventually { await state.isCommitting })
+
+        #expect(!state.canStageAll)
+
+        await client.holdActions(false)
+        await client.releaseActions()
+        await stage.value
+        await commit.value
+    }
 }

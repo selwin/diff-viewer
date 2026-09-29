@@ -4,6 +4,7 @@ import SwiftUI
 /// to commit. Both lists share one selection; each has its own focus and scroll position.
 struct SidebarView: View {
     @Environment(WindowState.self) private var windowState
+    @Environment(AppServices.self) private var services
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
@@ -45,6 +46,14 @@ struct SidebarView: View {
         .onChange(of: showsStagedList) { _, shows in
             if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
         }
+    }
+
+    /// The guard repeats `.disabled`, which only reflects the state at the last render.
+    private func stageAll() {
+        guard windowState.canStageAll else { return }
+        let files = windowState.stageableUnstagedFiles
+        let runner = FileActionRunner(windowState: windowState, services: services)
+        Task { await runner.run(.stage, on: files) }
     }
 
     private func changesList(firstSelectedID: ChangedFile.ID?) -> some View {
@@ -98,12 +107,23 @@ struct SidebarView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Changes")
+                        HStack(spacing: 4) {
+                            Text("Changes")
+                            Text("\(windowState.unstagedFiles.count)")
+                        }
+                        .foregroundStyle(.secondary)
                         Spacer()
-                        Text("\(windowState.unstagedFiles.count)")
+                        // Nothing to stage but conflicts: no dead button.
+                        if !windowState.stageableUnstagedFiles.isEmpty {
+                            Button("Stage All") { stageAll() }
+                                .buttonStyle(HeaderLinkButtonStyle())
+                                .disabled(!windowState.canStageAll)
+                                .accessibilityHint("Excludes conflicts")
+                                .help("Stage all changes except conflicts (⌥⌘S)")
+                            Text("⌥⌘S").foregroundStyle(.secondary)
+                        }
                     }
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
                     // Section headers run to the sidebar's edge; the rows' counts stop short of it.
                     .padding(.trailing, 12)
                 }
@@ -273,5 +293,37 @@ struct SidebarFileRow: View {
     /// Truncated at the head so the file name at the end stays visible.
     private func caption(_ text: String) -> some View {
         Text(text).lineLimit(1).truncationMode(.head)
+    }
+}
+
+/// A tinted text button for a section header. The hover fill says it is clickable; the
+/// negative padding lets the fill grow past the label without moving it.
+private struct HeaderLinkButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HoverFill(configuration: configuration)
+    }
+
+    private struct HoverFill: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @State private var isHovered = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(.tint)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(background, in: .capsule)
+                .contentShape(.rect)
+                .onHover { isHovered = $0 }
+                .padding(.horizontal, -6)
+                .padding(.vertical, -2)
+                .opacity(isEnabled ? 1 : 0.5)
+        }
+
+        private var background: AnyShapeStyle {
+            guard isEnabled, isHovered || configuration.isPressed else { return AnyShapeStyle(.clear) }
+            return AnyShapeStyle(.tint.opacity(configuration.isPressed ? 0.2 : 0.12))
+        }
     }
 }

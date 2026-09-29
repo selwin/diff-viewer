@@ -96,8 +96,21 @@ extension WindowState {
 
     var unstagedFiles: [ChangedFile] { files.filter { $0.area == .unstaged } }
     var stagedFiles: [ChangedFile] { files.filter { $0.area == .staged } }
+    /// What Stage All writes: staging a conflict marks it resolved, which a bulk action
+    /// should not do silently. Those rows keep Mark Resolved on their own menu.
+    var stageableUnstagedFiles: [ChangedFile] { unstagedFiles.filter { $0.kind != .unmerged } }
     /// The selected commit's files. Empty in working-tree scope.
     var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
+
+    /// Whether Stage All can run: the window is idle (no write, confirmation or overlay in
+    /// progress) and Changes holds something to stage.
+    var canStageAll: Bool {
+        guard session != nil, !isClosed, scope == .workingTree, !isSwitchingBranch, !isConfirmingFileAction,
+            !isCommitting, !isCommitSheetPresented, !isCommitPickerPresented, !isBranchPickerPresented,
+            !isNewBranchSheetPresented
+        else { return false }
+        return !stageableUnstagedFiles.isEmpty
+    }
 
     /// The files in the order the sidebar draws them, which is not the order of `files`:
     /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.

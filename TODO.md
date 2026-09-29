@@ -64,8 +64,8 @@ file list has focus), the selection popover, and moving the selection on to the 
 file after staging or unstaging have landed; what remains is below.
 
 **Design.**
-- Stage All / Unstage All, ⌥⌘S / ⌥⇧⌘S, in the Changes menu. Disabled when they don't
-  apply and run through `FileActionRunner`, like the other items.
+- Unstage All, ⌥⇧⌘S, in the Changes menu (Stage All ⌥⌘S has landed). Disabled when it
+  doesn't apply and runs through `FileActionRunner`, like the other items.
 - With All changes selected, S stages the file whose section is at the top of the
   scroll.
 - The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
@@ -324,9 +324,10 @@ Roughly in priority order.
   Remaining: the context menu (Copy, Copy Path, Copy Line Number, Reveal in Finder, Open
   in Default Editor) and the deferred conventions (shift-click extend, Escape to clear,
   dimming when the window is not key, autoscroll while the mouse is held still).
-- **Sidebar action follow-ups.** Stage All / Unstage All and next-file selection are
-  item B under "Requested". Still open: Stage All / Unstage All buttons on the Changes
-  header and the staging tray header; one-step discard of a staged change
+- **Sidebar action follow-ups.** Unstage All and next-file selection are
+  item B under "Requested". Still open: an Unstage All button on the staging tray
+  header; Stage All passes every path as a git argument, so very large change sets may
+  need batching or `--pathspec-from-file`; one-step discard of a staged change
   (`git restore --staged --worktree`); and `NSWorkspace.recycle` instead of the
   `FileManager.trashItem` loop so a batch trash is one Finder undo.
 - **All changes, remaining pieces.** ⌥⌘↓ / ⌥⌘↑ for next/previous file; file ticks in
