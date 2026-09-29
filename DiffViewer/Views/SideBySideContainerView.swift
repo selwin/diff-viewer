@@ -251,23 +251,6 @@ final class SideBySideContainerView: NSView {
         applyCurrentBlock()
     }
 
-    /// Hands both panes the current document, with the changeset's sections and section
-    /// index when there is one, so the gutter can number lines per file. Both install and
-    /// append come through here, so the panes' moved-line maps always cover every move.
-    private func installModels(mode: DocumentUpdate.Mode) {
-        guard let document else { return }
-        let sections = changeset?.sections ?? []
-        let sectionIndex = changeset?.sectionIndex
-        leftPane.install(
-            PaneModel(
-                side: .old, rows: document.rows, lines: document.oldLines, sections: sections,
-                sectionIndex: sectionIndex, moves: document.moves), mode: mode)
-        rightPane.install(
-            PaneModel(
-                side: .new, rows: document.rows, lines: document.newLines, sections: sections,
-                sectionIndex: sectionIndex, moves: document.moves), mode: mode)
-    }
-
     /// Applies a style snapshot built for the installed document. A snapshot is
     /// identified by its own id, not the document's, so a reload of the same document
     /// still reapplies its styles.
@@ -528,5 +511,28 @@ final class SideBySideContainerView: NSView {
         origin.y = y
         target.contentView.scroll(to: origin)
         target.reflectScrolledClipView(target.contentView)
+    }
+}
+
+extension SideBySideContainerView {
+    /// Hands both panes the current document, with the changeset's sections and section
+    /// index when there is one, so the gutter can number lines per file. Both install and
+    /// append come through here, so the panes' moved-line maps always cover every move.
+    private func installModels(mode: DocumentUpdate.Mode) {
+        guard let document else { return }
+        let sections = changeset?.sections ?? []
+        let sectionIndex = changeset?.sectionIndex
+        // An append only adds sections, so the blocks already anchored keep their anchors.
+        let reusing = { (pane: DiffPaneView) in mode == .append ? pane.model?.scopeAnchors ?? [] : [] }
+        leftPane.install(
+            PaneModel(
+                side: .old, rows: document.rows, lines: document.oldLines, sections: sections,
+                sectionIndex: sectionIndex, moves: document.moves, changeBlocks: document.changeBlocks,
+                reusingScopeAnchors: reusing(leftPane)), mode: mode)
+        rightPane.install(
+            PaneModel(
+                side: .new, rows: document.rows, lines: document.newLines, sections: sections,
+                sectionIndex: sectionIndex, moves: document.moves, changeBlocks: document.changeBlocks,
+                reusingScopeAnchors: reusing(rightPane)), mode: mode)
     }
 }

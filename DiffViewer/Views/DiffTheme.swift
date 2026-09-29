@@ -52,6 +52,8 @@ enum DiffTheme {
     static let foldBackground = dynamic(light: rgb(240, 244, 250), dark: rgb(34, 38, 46))
     static let foldControl = dynamic(light: rgb(0, 0, 0, 0.07), dark: rgb(255, 255, 255, 0.09))
     static let foldText = NSColor.secondaryLabelColor
+    /// A separator's scope names, in the primary text colour so they stand out from the grey count.
+    static let foldScope = NSColor.labelColor
 
     // A changeset's file headers, the gaps between files, and one-line notices.
     static let headerBackground = dynamic(light: rgb(243, 245, 248), dark: rgb(38, 41, 47))

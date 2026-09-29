@@ -15,8 +15,8 @@ struct PaneSelectionTests {
     private static let oldLines = ["alpha", "beta", "gamma"]
     private static let newLines = ["alpha", "delta", "inserted", "gamma"]
 
-    private static let oldModel = PaneModel(side: .old, rows: rows, lines: oldLines)
-    private static let newModel = PaneModel(side: .new, rows: rows, lines: newLines)
+    private static let oldModel = PaneModel(side: .old, rows: rows, lines: oldLines, changeBlocks: [])
+    private static let newModel = PaneModel(side: .new, rows: rows, lines: newLines, changeBlocks: [])
 
     private static func position(_ row: Int, _ offset: Int) -> TextPosition {
         TextPosition(row: row, offset: offset)
@@ -146,7 +146,7 @@ struct PaneSelectionTests {
         #expect(Self.newModel.text(in: whole) == Self.newLines.joined(separator: "\n"))
         let wholeOld = try #require(Self.oldModel.fullSelection)
         #expect(Self.oldModel.text(in: wholeOld) == Self.oldLines.joined(separator: "\n"))
-        #expect(PaneModel(side: .new, rows: [], lines: []).fullSelection == nil)
+        #expect(PaneModel(side: .new, rows: [], lines: [], changeBlocks: []).fullSelection == nil)
     }
 
     @Test func lineLengthIsZeroForPadRows() {

@@ -35,7 +35,8 @@ struct PaneModelTests {
     }
 
     private func model(_ side: PaneModel.Side, sections: [ChangesetSection]) -> PaneModel {
-        PaneModel(side: side, rows: rows, lines: side == .old ? oldLines : newLines, sections: sections)
+        PaneModel(
+            side: side, rows: rows, lines: side == .old ? oldLines : newLines, sections: sections, changeBlocks: [])
     }
 
     /// This side's cell of the row at `index`, which is what the pane draws from.
@@ -79,7 +80,7 @@ struct PaneModelTests {
         // A prefix of notices only: the gutter already reserves the changeset minimum, so
         // it does not widen when the first text section lands.
         let notices = [section("logo.png", rowRange: 0..<0, old: (0, 0), new: (0, 0), outcome: .binary)]
-        #expect(PaneModel(side: .old, rows: [], lines: [], sections: notices).gutterDigits == 4)
+        #expect(PaneModel(side: .old, rows: [], lines: [], sections: notices, changeBlocks: []).gutterDigits == 4)
     }
 
     /// Old lines 0-1 moved down to new lines 4-5; old line 5 moved up to new line 1. Row
@@ -90,15 +91,15 @@ struct PaneModelTests {
     ]
 
     @Test func movedLinesAreLookedUpPerSide() {
-        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves)
-        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves)
+        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves, changeBlocks: [])
+        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves, changeBlocks: [])
         #expect((0..<6).filter(old.isMoved(line:)) == [0, 1, 5])
         #expect((0..<8).filter(new.isMoved(line:)) == [1, 4, 5])
     }
 
     @Test func markerSitsOnARunsFirstLineAndPointsAtThePartner() {
-        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves)
-        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves)
+        let old = PaneModel(side: .old, rows: rows, lines: oldLines, moves: moves, changeBlocks: [])
+        let new = PaneModel(side: .new, rows: rows, lines: newLines, moves: moves, changeBlocks: [])
         #expect(old.moveMarker(forLine: 0) == MoveMarker(partnerRow: 4, pointsUp: false))
         #expect(old.moveMarker(forLine: 1) == nil)
         #expect(old.moveMarker(forLine: 5) == MoveMarker(partnerRow: 1, pointsUp: true))

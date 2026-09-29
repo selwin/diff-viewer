@@ -91,7 +91,7 @@ extension DiffPaneView {
         let point = convert(event.locationInWindow, from: nil)
         if let onFoldAction, let (index, hidden) = separatorHidden(at: point) {
             if event.modifierFlags.contains(.option) { return onFoldAction(.expandAll) }
-            let control = controlRects(for: hidden, rowRect: rowRect(at: index)).first(where: {
+            let control = separatorLayout(for: hidden, rowRect: rowRect(at: index)).layout.controls.first(where: {
                 $0.rect.contains(point)
             })?.control
             return onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
