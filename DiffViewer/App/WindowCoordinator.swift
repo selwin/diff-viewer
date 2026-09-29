@@ -383,8 +383,10 @@ final class WindowCoordinator {
     }
 
     private func prefetch(for id: WindowID) {
-        guard let window = windows[id], let client = window.session?.client else { return }
-        prefetcher.prefetch(files: window.filesToWarm, client: client)
+        guard let window = windows[id], let client = window.session?.client, let root = window.repositoryRoot else {
+            return
+        }
+        prefetcher.prefetch(files: window.filesToWarm, repository: root, client: client)
     }
 
     /// An unchanged watcher tick has nothing new to warm.

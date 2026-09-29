@@ -39,12 +39,18 @@ final class DiffLoader {
 
     private let cache: DifftCache
     private let resultCache: DiffResultCache
+    /// One cache per window, so a save re-highlights only the side that changed.
+    private let highlight: DiffEngine.Highlight
     private var task: Task<Void, Never>?
     private var generation = 0
 
-    init(cache: DifftCache, resultCache: DiffResultCache = DiffResultCache()) {
+    init(
+        cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
+        highlightCache: HighlightCache = HighlightCache()
+    ) {
         self.cache = cache
         self.resultCache = resultCache
+        highlight = highlightCache.highlight()
     }
 
     /// Stops any in-flight diff. Published presentation state stays as it is; the cancelled
@@ -86,6 +92,9 @@ final class DiffLoader {
         isLoading = true
         errorMessage = nil
         task = Task {
+            let signposter = PipelineMetrics.signposter
+            let loadState = signposter.beginInterval("singleLoad", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("singleLoad", loadState) }
             do {
                 let oldFormat = ImagePreview.format(for: file.originalPath ?? file.path)
                 let newFormat = ImagePreview.format(for: file.path)
@@ -98,12 +107,12 @@ final class DiffLoader {
                     try Task.checkCancellation()
                     output = try await DiffEngine.build(
                         sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
-                        priority: .foreground)
+                        priority: .foreground, highlight: highlight)
                     imageSources = sources
                 } else {
                     output = try await DiffEngine.load(
                         file, repository: repository, client: client, hideWhitespace: hideWhitespace, cache: cache,
-                        resultCache: resultCache, priority: .foreground)
+                        resultCache: resultCache, priority: .foreground, highlight: highlight)
                 }
                 try Task.checkCancellation()
                 // SVG stays a text diff, so it is previewed on its text content too.
@@ -175,12 +184,16 @@ final class DiffLoader {
         let assembler = ChangesetAssembler(
             files: files, repository: repository, client: client, hideWhitespace: hideWhitespace,
             foldOptions: foldOptions,
-            publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache)
+            publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache,
+            highlight: highlight)
         task = Task { [weak self] in
             guard let self else { return }
+            let signposter = PipelineMetrics.signposter
+            let loadState = signposter.beginInterval("changesetLoad", id: signposter.makeSignpostID())
             await assembler.run { [self] publication in
                 await publish(publication, generation: gen)
             }
+            signposter.endInterval("changesetLoad", loadState)
             guard gen == generation else { return }
             isLoading = false
             changesetProgress = nil

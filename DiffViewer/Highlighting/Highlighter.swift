@@ -18,6 +18,7 @@ enum Highlighter {
 
         let parser = Parser()
         do { try parser.setLanguage(config.language) } catch { return nil }
+        PipelineMetrics.countParse()
         guard let tree = parser.parse(text) else { return nil }
 
         // Collect captures as UTF-16 ranges, then paint in tree-sitter precedence order:

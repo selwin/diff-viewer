@@ -149,3 +149,65 @@ struct DiffEngineLoadTests {
         #expect(try await secondLoadReads(file))
     }
 }
+
+// MARK: - Overlap
+
+/// Opens once. A waiter resumes when it opens, or after a timeout so a regression fails
+/// the test instead of hanging it.
+private actor Gate {
+    private var isOpen = false
+    private(set) var timedOut = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        isOpen = true
+        resumeWaiters()
+    }
+
+    func wait(timeout: Duration) async {
+        guard !isOpen else { return }
+        let timer = Task.detached { [self] in
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            await expire()
+        }
+        await withCheckedContinuation { waiters.append($0) }
+        timer.cancel()
+    }
+
+    private func expire() {
+        guard !isOpen else { return }
+        timedOut = true
+        resumeWaiters()
+    }
+
+    private func resumeWaiters() {
+        for waiter in waiters { waiter.resume() }
+        waiters = []
+    }
+}
+
+struct DiffEngineOverlapTests {
+    /// Highlighting needs only the lines, so it starts while difft is still running.
+    @Test func highlightingStartsBeforeDifftReturns() async throws {
+        let highlightStarted = Gate()
+        let cache = DifftCache(runner: { _, _, fileName, _ in
+            await highlightStarted.wait(timeout: .seconds(5))
+            return DifftFile(language: "Swift", path: fileName, status: "changed", chunks: [])
+        })
+        let probe = HighlighterProbe().callback()
+        let sources = DiffEngine.Sources(old: Data("a\nb\n".utf8), new: Data("a\nc\nd\n".utf8), fileName: "a.swift")
+
+        let output = try await DiffEngine.build(
+            sources, hideWhitespace: false, cache: cache, resultCache: DiffResultCache(), priority: .foreground,
+            highlight: { lines, fileName in
+                await highlightStarted.open()
+                return await probe(lines, fileName)
+            })
+
+        #expect(await !highlightStarted.timedOut, "difft returned before highlighting started")
+        let built = try #require(document(output))
+        #expect(built.language == "Swift", "difft's result was used")
+        #expect(output.styles?.old?.count == built.oldLines.count)
+        #expect(output.styles?.new?.count == built.newLines.count)
+    }
+}

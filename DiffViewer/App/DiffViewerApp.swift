@@ -96,7 +96,11 @@ struct RepositoryWindow: View {
             .environment(services)
             .environment(services.preferences)
             .environment(state)
-            .background(WindowAccessor(windowID: state.id, sceneRoot: sceneRoot, services: services))
+            .background(
+                WindowAccessor(
+                    windowID: state.id, sceneRoot: sceneRoot, services: services,
+                    churn: state.workingTreeChurn)
+            )
             .focusedSceneValue(\.windowState, state)
             // Folders opened from Finder reach `AppDelegate.application(_:open:)` and
             // are routed by the coordinator. Letting every window "handle" the external
@@ -114,6 +118,9 @@ struct RepositoryWindow: View {
                 services.installAppHooks(delegate: delegate, openWindow: openWindow)
                 services.coordinator.register(state, sceneRoot: sceneRoot) { sceneRoot = $0 }
                 DebugLaunchOptions.apply(to: services)
+                #if DEBUG
+                    DebugBenchmark.start(services: services)
+                #endif
             }
     }
 }

@@ -2,11 +2,14 @@ import AppKit
 import SwiftUI
 
 /// A zero-size view that finds its window's `NSWindow` and forwards its key,
-/// occlusion, and close notifications to the coordinator under the window's id.
+/// occlusion, and close notifications to the coordinator under the window's id. It also
+/// puts the working tree's churn on the window's tab.
 struct WindowAccessor: NSViewRepresentable {
     let windowID: WindowID
     let sceneRoot: RepositoryRoot?
     let services: AppServices
+    /// The working tree's churn; the tab shows it while there is any.
+    let churn: RepositoryChurn?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(windowID: windowID, services: services)
@@ -16,11 +19,13 @@ struct WindowAccessor: NSViewRepresentable {
         let view = AccessorView()
         view.coordinator = context.coordinator
         context.coordinator.sceneRoot = sceneRoot
+        context.coordinator.churn = churn
         return view
     }
 
     func updateNSView(_ view: AccessorView, context: Context) {
         context.coordinator.sceneRoot = sceneRoot
+        context.coordinator.churn = churn
         // A window that SwiftUI closed and presented again got a fresh state and id;
         // its observers were removed on close, so attach again under the new id.
         if context.coordinator.windowID != windowID {
@@ -55,9 +60,13 @@ struct WindowAccessor: NSViewRepresentable {
     final class Coordinator {
         var windowID: WindowID
         var sceneRoot: RepositoryRoot?
+        var churn: RepositoryChurn? {
+            didSet { if churn != oldValue { updateTabChurn() } }
+        }
         private let services: AppServices
         private weak var window: NSWindow?
         private var observers: [any NSObjectProtocol] = []
+        private let tabChurn = TabChurnView()
 
         init(windowID: WindowID, services: AppServices) {
             self.windowID = windowID
@@ -79,6 +88,7 @@ struct WindowAccessor: NSViewRepresentable {
             window.tabbingMode = .preferred
             window.tabbingIdentifier = "repository"
             services.windows[windowID] = window
+            updateTabChurn()
             let coordinator = services.coordinator
             coordinator.windowDidAttach(windowID, sceneRoot: sceneRoot)
             let center = NotificationCenter.default
@@ -109,6 +119,19 @@ struct WindowAccessor: NSViewRepresentable {
             // Notifications sent before the observers existed are not replayed.
             coordinator.windowOcclusionChanged(windowID, visible: window.occlusionState.contains(.visible))
             if window.isKeyWindow { coordinator.windowDidBecomeKey(windowID) }
+        }
+
+        /// The tab's title stays the plain repository name; the churn is an accessory.
+        private func updateTabChurn() {
+            guard let window else { return }
+            guard let churn, churn.changedFileCount > 0 else {
+                window.tab.accessoryView = nil
+                window.tab.toolTip = nil
+                return
+            }
+            tabChurn.show(churn)
+            window.tab.toolTip = churn.summary
+            if window.tab.accessoryView !== tabChurn { window.tab.accessoryView = tabChurn }
         }
 
         func detach() {

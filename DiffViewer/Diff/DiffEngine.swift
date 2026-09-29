@@ -72,7 +72,7 @@ enum DiffEngine {
     static func load(
         _ file: ChangedFile, repository: RepositoryRoot, client: any RepoClient, hideWhitespace: Bool,
         cache: DifftCache, resultCache: DiffResultCache, priority: DifftCache.Priority,
-        maxSourceBytes: Int = .max, highlight: Highlight = defaultHighlight
+        maxSourceBytes: Int = .max, highlight: @escaping Highlight = defaultHighlight
     ) async throws -> Output {
         let inputs = inputKey(for: file, repository: repository, hideWhitespace: hideWhitespace)
         if let inputs, await worktreeUnchanged(file, client: client),
@@ -83,10 +83,15 @@ enum DiffEngine {
         }
 
         let read: (sources: Sources, matchesFingerprint: Bool)
-        if inputs == nil {
-            read = (try await sources(for: file, client: client), false)
-        } else {
-            read = try await verifiedSources(for: file, client: client)
+        do {
+            let signposter = PipelineMetrics.signposter
+            let readState = signposter.beginInterval("read", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("read", readState) }
+            if inputs == nil {
+                read = (try await sources(for: file, client: client), false)
+            } else {
+                read = try await verifiedSources(for: file, client: client)
+            }
         }
         try Task.checkCancellation()
         // A computation-admission limit, not a memory one: the read has happened, but a
@@ -220,7 +225,7 @@ enum DiffEngine {
     /// still works as a plain line diff. Throws only `CancellationError`.
     static func build(
         _ sources: Sources, hideWhitespace: Bool, cache: DifftCache, resultCache: DiffResultCache,
-        priority: DifftCache.Priority, highlight: Highlight = defaultHighlight
+        priority: DifftCache.Priority, highlight: @escaping Highlight = defaultHighlight
     ) async throws -> Output {
         try await buildStoring(
             sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache, priority: priority,
@@ -232,7 +237,7 @@ enum DiffEngine {
     /// is not stored (binary, identical, or built without difft hints).
     private static func buildStoring(
         _ sources: Sources, hideWhitespace: Bool, cache: DifftCache, resultCache: DiffResultCache,
-        priority: DifftCache.Priority, highlight: Highlight = defaultHighlight
+        priority: DifftCache.Priority, highlight: @escaping Highlight = defaultHighlight
     ) async throws -> (output: Output, storedKey: DiffResultCache.Key?) {
         try Task.checkCancellation()
         if isBinary(sources.old) || isBinary(sources.new) { return (Output(content: .binary, styles: nil), nil) }
@@ -246,39 +251,63 @@ enum DiffEngine {
 
         let oldText = String(decoding: sources.old, as: UTF8.self)
         let newText = String(decoding: sources.new, as: UTF8.self)
-
-        let difft = await cache.result(
-            for: difftKey, old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
-        try Task.checkCancellation()
-        let hints = difft?.hints ?? DifftHints()
-        let language = difft?.language
-
-        let document = await Task.detached(priority: .userInitiated) {
-            let oldLines = TextLines.split(oldText)
-            let newLines = TextLines.split(newText)
-            let rows = DiffAligner.align(
-                oldLines: oldLines, newLines: newLines, hideWhitespace: hideWhitespace, hints: hints)
-            let moves = MoveDetector.detect(
-                oldLines: oldLines, newLines: newLines, rows: rows, hideWhitespace: hideWhitespace)
-            return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language, moves: moves)
+        // Split once: the styles and the document share these arrays, so they line up.
+        let lines = await Task.detached(priority: .userInitiated) {
+            (old: TextLines.split(oldText), new: TextLines.split(newText))
         }.value
-        try Task.checkCancellation()
 
-        // Sequential, so a caller processing one file at a time runs one parse at a time.
-        let old = await highlight(document.oldLines, sources.fileName)
-        try Task.checkCancellation()
-        let new = await highlight(document.newLines, sources.fileName)
-        let styles = SyntaxStyles(old: old, new: new)
+        // Highlighting needs only the lines, so it runs while difft does. The sides stay
+        // sequential, so a caller processing one file at a time runs one parse at a time,
+        // except that a cancelled build returns without waiting for a parse it cannot stop.
+        let highlighting = Task {
+            let signposter = PipelineMetrics.signposter
+            let highlightState = signposter.beginInterval("highlight", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("highlight", highlightState) }
+            let old = await highlight(lines.old, sources.fileName)
+            try Task.checkCancellation()
+            let new = await highlight(lines.new, sources.fileName)
+            return SyntaxStyles(old: old, new: new)
+        }
 
-        // Only a successful difft result is kept: `DifftCache` forgets a failure after a
-        // while so the fallback document is retried, and this store has no expiry. A
-        // result finished after cancellation is still kept: it is valid and the next
-        // load hits; the caller decides whether to publish it.
-        guard difft != nil else { return (Output(content: .text(document), styles: styles), nil) }
-        let entry = DiffResultCache.Entry(
-            document: document, styles: styles, sourceByteCount: sources.old.count + sources.new.count)
-        await resultCache.store(entry, for: key)
-        return (Output(content: .text(document), styles: styles), key)
+        // The highlight task is unstructured, so the build's cancellation is forwarded to it.
+        return try await withTaskCancellationHandler {
+            let signposter = PipelineMetrics.signposter
+            let difftState = signposter.beginInterval("difft", id: signposter.makeSignpostID())
+            let difft = await cache.result(
+                for: difftKey, old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
+            signposter.endInterval("difft", difftState)
+            try Task.checkCancellation()
+            let hints = difft?.hints ?? DifftHints()
+            let language = difft?.language
+
+            let alignState = signposter.beginInterval("align", id: signposter.makeSignpostID())
+            let document = await Task.detached(priority: .userInitiated) {
+                let rows = DiffAligner.align(
+                    oldLines: lines.old, newLines: lines.new, hideWhitespace: hideWhitespace, hints: hints)
+                let moves = MoveDetector.detect(
+                    oldLines: lines.old, newLines: lines.new, rows: rows, hideWhitespace: hideWhitespace)
+                return DiffDocument(
+                    oldLines: lines.old, newLines: lines.new, rows: rows, language: language, moves: moves)
+            }.value
+            signposter.endInterval("align", alignState)
+            try Task.checkCancellation()
+
+            // Cancelled here, this waits for the side being parsed, as before; the other
+            // side is skipped.
+            let styles = try await highlighting.value
+
+            // Only a successful difft result is kept: `DifftCache` forgets a failure after a
+            // while so the fallback document is retried, and this store has no expiry. A
+            // result finished after cancellation is still kept: it is valid and the next
+            // load hits; the caller decides whether to publish it.
+            guard difft != nil else { return (Output(content: .text(document), styles: styles), nil) }
+            let entry = DiffResultCache.Entry(
+                document: document, styles: styles, sourceByteCount: sources.old.count + sources.new.count)
+            await resultCache.store(entry, for: key)
+            return (Output(content: .text(document), styles: styles), key)
+        } onCancel: {
+            highlighting.cancel()
+        }
     }
 
     static func isBinary(_ data: Data) -> Bool {

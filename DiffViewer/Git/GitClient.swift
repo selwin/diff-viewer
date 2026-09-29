@@ -58,6 +58,9 @@ struct GitClient: RepoClient {
     }
 
     func status() async throws -> [ChangedFile] {
+        let signposter = PipelineMetrics.signposter
+        let statusState = signposter.beginInterval("status", id: signposter.makeSignpostID())
+        defer { signposter.endInterval("status", statusState) }
         // Exact renames only, and explicit so a user's `status.renames=false` cannot turn
         // detection off.
         let result = try await ProcessRunner.check(

@@ -43,4 +43,62 @@ struct NavigationTests {
         try await Task.sleep(for: .milliseconds(150))
         #expect(fires == 2)
     }
+
+    /// Calls arrive more often than `interval`, so only `maxWait` can end the burst.
+    @MainActor
+    @Test func maxWaitFiresWhileCallsContinueThenStartsANewBurst() async {
+        let clock = ManualClock()
+        let counter = FireCounter()
+        let debouncer = Debouncer(interval: .milliseconds(100), maxWait: .milliseconds(250), clock: clock) {
+            counter.fires += 1
+        }
+
+        // A call at 0, 80, 160 and 240 ms: the quiet timer never reaches 100 ms.
+        for step in 0..<4 {
+            if step > 0 { clock.advance(by: .milliseconds(80)) }
+            debouncer.call()
+            #expect(await eventually { clock.sleeperCount == 2 }, "quiet timer plus the burst deadline")
+        }
+        #expect(counter.fires == 0)
+
+        clock.advance(by: .milliseconds(10))
+        #expect(await eventually { await counter.fires == 1 }, "250 ms after the first call")
+        #expect(clock.sleeperCount == 0)
+
+        // The next call is a new burst whose deadline is 250 ms from itself, not from
+        // the old first call.
+        for _ in 0..<3 {
+            debouncer.call()
+            #expect(await eventually { clock.sleeperCount == 2 })
+            clock.advance(by: .milliseconds(80))
+        }
+        debouncer.call()
+        #expect(await eventually { clock.sleeperCount == 2 })
+        #expect(counter.fires == 1, "240 ms into the new burst, before its deadline")
+
+        clock.advance(by: .milliseconds(10))
+        #expect(await eventually { await counter.fires == 2 }, "250 ms after the new burst's first call")
+    }
+
+    @MainActor
+    @Test func withoutMaxWaitRepeatedCallsKeepPostponing() async {
+        let clock = ManualClock()
+        let counter = FireCounter()
+        let debouncer = Debouncer(interval: .milliseconds(100), clock: clock) { counter.fires += 1 }
+
+        for _ in 0..<12 {
+            debouncer.call()
+            #expect(await eventually { clock.sleeperCount == 1 })
+            clock.advance(by: .milliseconds(80))
+        }
+        #expect(counter.fires == 0)
+
+        clock.advance(by: .milliseconds(20))
+        #expect(await eventually { await counter.fires == 1 }, "100 ms after the last call")
+    }
+}
+
+@MainActor
+private final class FireCounter {
+    var fires = 0
 }

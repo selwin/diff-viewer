@@ -20,7 +20,7 @@ extension WindowState {
             hasMore: history.hasMore,
             isLoadingHistory: isLoadingHistory,
             historyLoadFailed: historyErrorMessage != nil,
-            workingTreeChangeCount: workingTreeChangeCount,
+            workingTreeChangeCount: workingTreeChurn?.changedFileCount,
             unpushedShas: unpushedCommitShas)
     }
 }
