@@ -1,10 +1,12 @@
 import Foundation
 
-/// Syntax runs for both sides of one document. Nil means highlighting is unavailable
-/// (unsupported language, too large, empty, or parser setup failed).
+/// Syntax runs and scope outlines for both sides of one document. Nil means highlighting
+/// is unavailable (unsupported language, too large, empty, or parser setup failed).
 struct SyntaxStyles: Sendable {
     let old: [[StyleRun]]?
     let new: [[StyleRun]]?
+    let oldOutline: ScopeOutline?
+    let newOutline: ScopeOutline?
 }
 
 /// Remembers finished diffs (document plus styles) by content, so reloading an
@@ -51,7 +53,9 @@ actor DiffResultCache {
             self.document = document
             self.styles = styles
             self.sourceByteCount = sourceByteCount
-            cost = Self.cost(of: document) + Self.cost(of: styles.old) + Self.cost(of: styles.new)
+            cost =
+                Self.cost(of: document) + Self.cost(of: styles.old) + Self.cost(of: styles.new)
+                + (styles.oldOutline?.retainedBytes ?? 0) + (styles.newOutline?.retainedBytes ?? 0)
         }
 
         private static func cost(of document: DiffDocument) -> Int {

@@ -484,7 +484,7 @@ enum DebugLaunchOptions {
             let rowRect = NSRect(
                 x: pane.visibleRect.minX, y: pane.layout.y(forRow: index), width: pane.visibleRect.width,
                 height: pane.layout.rowHeight)
-            let rects = pane.controlRects(for: hidden, rowRect: rowRect)
+            let rects = pane.separatorLayout(for: hidden, rowRect: rowRect).layout.controls
             let point: NSPoint
             if let wanted, let hit = rects.first(where: { $0.control == wanted }) {
                 point = NSPoint(x: hit.rect.midX, y: hit.rect.midY)

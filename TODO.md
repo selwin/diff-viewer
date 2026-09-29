@@ -182,31 +182,17 @@ middle of a file, and staging, unstaging and discarding one hunk in a temporary 
 
 ---
 
-### I. Show the function or method a change is in (requested 2026-09-27)
+### I. Show the function or method a change is in, remainder (requested 2026-09-27)
 
-**Goal.** When reading a change, see which function, method or type it belongs to
-without scrolling up to find the signature. Today a change deep inside a long method,
-or just below a collapsed-lines separator, gives no hint of where it is.
+Collapsed-lines separators name the scope of the change below them, up to two levels
+(`Cart › total`), per side, in single-file mode and All changes (2026-09-29). Still open:
 
-**Design.**
-- Take the enclosing scope from the tree-sitter parse the highlighter already runs,
-  not from git's regex-based hunk header: walk up from the change's first row to the
-  nearest function, method, class or similar node, and show its signature line
-  (`func adopt(_ repository:)`, `class WindowState`). Nested scopes read as a path
-  (`WindowState › adopt(_:)`). Which node kinds count is set per grammar in
-  `LanguageRegistry`.
-- Where it shows, to decide:
-  - on each collapsed-lines separator, after the hidden-line count, for the scope of
-    the change below it (the way GitHub puts it in the hunk header);
-  - a sticky line at the top of each pane naming the scope of the top visible row,
-    so it stays current while scrolling (VS Code's sticky scroll). Old and new sides
-    can differ when the change renames or moves the function.
-- Works in single-file mode and in All changes. Files without a grammar show nothing
-  rather than a guess.
-
-**Tests.** The enclosing scope for a row inside a method, inside a nested type, between
-two functions (none), and on a line where the old and new sides name different
-functions.
+- **Compact signatures.** Show `adopt(_:)` rather than `adopt`, per grammar.
+- **Sticky scope line.** A line at the top of each pane naming the scope of the top
+  visible row, so it stays current while scrolling (VS Code's sticky scroll). Old and
+  new sides can differ when the change renames or moves the function.
+- **Accessibility.** The separator has no accessibility element of its own, so the
+  scope name is not announced.
 
 ---
 

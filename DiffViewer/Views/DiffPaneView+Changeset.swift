@@ -73,7 +73,7 @@ extension DiffPaneView {
     /// there is no room at all. Done at draw time, not in the cache, because it depends
     /// on the pane's current width. `color` is the ellipsis colour, which should match
     /// the text it stands in for.
-    private func truncated(
+    func truncated(
         _ line: CTLine, truncation: CTLineTruncationType, availableWidth: CGFloat, color: NSColor
     ) -> CTLine? {
         guard availableWidth > 0 else { return nil }

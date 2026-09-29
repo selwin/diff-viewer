@@ -9,9 +9,10 @@ struct HighlightCacheTests {
         func increment() { calls += 1 }
     }
 
-    private static let runs = [[StyleRun(range: 0..<2, style: .keyword)]]
+    private static let runs = Highlighter.Result(
+        runs: [[StyleRun(range: 0..<2, style: .keyword)]], outline: ScopeOutline())
 
-    private func highlighter(_ cache: HighlightCache, counter: Counter, runs: [[StyleRun]]?)
+    private func highlighter(_ cache: HighlightCache, counter: Counter, runs: Highlighter.Result?)
         -> DiffEngine.Highlight
     {
         cache.highlight(fallback: { _, _ in

@@ -19,18 +19,32 @@ struct PaneModel {
     /// This side's moved line index → index into `moves`. Rebuilt with the model, so an
     /// appended changeset covers its new sections too.
     private let moveIndexByLine: [Int: Int]
+    /// The document's change blocks, and where this side reads each one's scope from.
+    let changeBlocks: [Range<Int>]
+    let scopeAnchors: [ScopeAnchor]
 
+    /// On an append, `reusingScopeAnchors` are the previous revision's anchors; only the
+    /// blocks after them are computed.
     init(
         side: Side, rows: [DiffRow], lines: [String], sections: [ChangesetSection] = [],
-        sectionIndex: SectionIndex? = nil, moves: [DiffMove] = []
+        sectionIndex: SectionIndex? = nil, moves: [DiffMove] = [], changeBlocks: [Range<Int>],
+        reusingScopeAnchors: [ScopeAnchor] = []
     ) {
+        let sectionIndex = sectionIndex ?? SectionIndex(sections: sections)
         self.side = side
         self.rows = rows
         self.lines = lines
         self.sections = sections
-        self.sectionIndex = sectionIndex ?? SectionIndex(sections: sections)
+        self.sectionIndex = sectionIndex
         self.moves = moves
         self.moveIndexByLine = Self.moveIndexByLine(moves, side: side)
+        self.changeBlocks = changeBlocks
+        let reused = reusingScopeAnchors.count <= changeBlocks.count ? reusingScopeAnchors : []
+        self.scopeAnchors =
+            reused
+            + ScopeAnchor.anchors(changeBlocks: changeBlocks, startingAt: reused.count, rows: rows, side: side) {
+                sectionIndex.sectionIndex(containingRow: $0) == sectionIndex.sectionIndex(containingRow: $1)
+            }
     }
 
     /// Maps every line a move covers on `side` to that move's index.
@@ -49,6 +63,22 @@ struct PaneModel {
     /// The section whose `rowRange` contains `row`; nil for a row outside every section.
     func section(containingRow row: Int) -> ChangesetSection? {
         sectionIndex.sectionIndex(containingRow: row).map { sections[$0] }
+    }
+
+    /// The anchor of the first change after a separator's hidden rows; nil when there is
+    /// none, or when it belongs to the next file (a trailing separator).
+    func scopeAnchor(after hidden: Range<Int>) -> ScopeAnchor? {
+        var low = 0
+        var high = changeBlocks.count
+        while low < high {
+            let mid = (low + high) / 2
+            if changeBlocks[mid].lowerBound < hidden.upperBound { low = mid + 1 } else { high = mid }
+        }
+        guard low < changeBlocks.count,
+            sectionIndex.sectionIndex(containingRow: hidden.lowerBound)
+                == sectionIndex.sectionIndex(containingRow: changeBlocks[low].lowerBound)
+        else { return nil }
+        return scopeAnchors[low]
     }
 
     /// Whether this side's `line` was moved; a moved line is tinted by line, never by row,

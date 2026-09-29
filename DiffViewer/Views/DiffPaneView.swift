@@ -35,6 +35,10 @@ final class DiffPaneView: NSView {
         }
     }
 
+    /// Named scopes of this side's lines, for labelling separators. Set with `styles`
+    /// through `setSyntax`.
+    var outline: ScopeOutline?
+
     /// Find hits per document row, in raw UTF-16 offsets on this pane's side.
     var findMatches: [Int: [Range<Int>]] = [:] {
         didSet { needsDisplay = true }
@@ -90,6 +94,7 @@ final class DiffPaneView: NSView {
         switch mode {
         case .replace:
             selection = nil
+            outline = nil  // Outlines are per document.
             findMatches = [:]
             lineCache.removeAll()
             numberCache.removeAll()
@@ -187,11 +192,6 @@ final class DiffPaneView: NSView {
         }
         gutterWidth = max(gutterWidth, width(forDigits: model.gutterDigits))
         contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
-    }
-
-    /// Size the document view should have inside a clip view of the given width.
-    func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
-        NSSize(width: max(contentWidth, clipWidth), height: max(layout.contentHeight, clipHeight))
     }
 
     // MARK: - Drawing
@@ -380,75 +380,6 @@ final class DiffPaneView: NSView {
         context.restoreGState()
     }
 
-    // MARK: - Separators
-
-    /// Control squares for a separator, left to right after the gutter. The same
-    /// geometry is used for drawing and hit testing. `rowRect.minX` is the visible
-    /// left edge, so controls stay put under horizontal scrolling like the gutter.
-    func controlRects(for hidden: Range<Int>, rowRect: NSRect) -> [(control: FoldControl, rect: NSRect)] {
-        guard onFoldAction != nil else { return [] }  // A changeset's separators are inert.
-        let side = rowRect.height - 4
-        var x = rowRect.minX + gutterWidth + textInset
-        let controls = RowFolding.controls(for: hidden, documentRowCount: model?.rows.count ?? 0, options: foldOptions)
-        return controls.map { control in
-            defer { x += side + 4 }
-            return (control, NSRect(x: x, y: rowRect.minY + 2, width: side, height: side))
-        }
-    }
-
-    /// A folded run. Without a fold handler (a changeset) the row is inert: no control
-    /// squares, and a leading ellipsis so it still reads as a gap.
-    private func drawSeparator(_ hidden: Range<Int>, in rowRect: NSRect, context: CGContext) {
-        DiffTheme.foldBackground.setFill()
-        context.fill(fullWidthRect(rowRect))
-        fillGutter(rowRect, color: nil, context: context)
-
-        var textX = rowRect.minX + gutterWidth + textInset
-        for (control, rect) in controlRects(for: hidden, rowRect: rowRect) {
-            DiffTheme.foldControl.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
-            drawChevrons(for: control, in: rect, context: context)
-            textX = rect.maxX + 4
-        }
-
-        let count = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
-        let text = onFoldAction == nil ? "⋯ \(count)" : count
-        let attributed = NSAttributedString(
-            string: text, attributes: [.font: font, .foregroundColor: DiffTheme.foldText])
-        drawLine(
-            CTLineCreateWithAttributedString(attributed), at: CGPoint(x: textX + 6, y: rowRect.minY + 2 + ascent),
-            context: context)
-    }
-
-    private func drawChevrons(for control: FoldControl, in rect: NSRect, context: CGContext) {
-        context.saveGState()
-        context.setStrokeColor(DiffTheme.foldText.cgColor)
-        context.setLineWidth(1.5)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        let halfWidth = rect.width * 0.25
-        let height = rect.height * 0.2
-        // The view is flipped: smaller y is higher on screen.
-        func chevron(pointingUp: Bool, centerY: CGFloat) {
-            let apexY = pointingUp ? centerY - height / 2 : centerY + height / 2
-            let baseY = pointingUp ? centerY + height / 2 : centerY - height / 2
-            context.move(to: CGPoint(x: rect.midX - halfWidth, y: baseY))
-            context.addLine(to: CGPoint(x: rect.midX, y: apexY))
-            context.addLine(to: CGPoint(x: rect.midX + halfWidth, y: baseY))
-        }
-        switch control {
-        case .expandUp:
-            chevron(pointingUp: true, centerY: rect.midY)
-        case .expandDown:
-            chevron(pointingUp: false, centerY: rect.midY)
-        case .expandRun:
-            chevron(pointingUp: true, centerY: rect.midY - rect.height * 0.2)
-            chevron(pointingUp: false, centerY: rect.midY + rect.height * 0.2)
-        }
-        context.strokePath()
-        context.restoreGState()
-    }
-
     // MARK: - Accessibility
 
     /// Buttons for the visible fold controls and move markers, so VoiceOver can use them.
@@ -461,7 +392,7 @@ final class DiffPaneView: NSView {
         var elements: [NSAccessibilityElement] = []
         for index in layout.rows(intersecting: visibleRect.minY, visibleRect.maxY) where index < displayRows.count {
             guard case let .separator(hidden) = displayRows[index] else { continue }
-            for (control, rect) in controlRects(for: hidden, rowRect: rowRect(at: index)) {
+            for (control, rect) in separatorLayout(for: hidden, rowRect: rowRect(at: index)).layout.controls {
                 let action = Self.action(for: control, hidden: hidden)
                 elements.append(
                     ButtonElement(
@@ -552,6 +483,17 @@ final class ButtonElement: NSAccessibilityElement {
 }
 
 extension DiffPaneView {
+    /// Size the document view should have inside a clip view of the given width.
+    func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
+        NSSize(width: max(contentWidth, clipWidth), height: max(layout.contentHeight, clipHeight))
+    }
+
+    /// Runs and outline come from one style snapshot, so they are replaced together.
+    func setSyntax(styles: [[StyleRun]]?, outline: ScopeOutline?) {
+        self.styles = styles
+        self.outline = outline
+    }
+
     fileprivate func width(forDigits digits: Int) -> CGFloat {
         ceil(CGFloat(digits) * charWidth) + 20
     }

@@ -1,3 +1,5 @@
+import Foundation
+import SwiftTreeSitter
 import Testing
 
 @testable import DiffViewer
@@ -31,7 +33,7 @@ struct HighlighterTests {
 
     @Test func swiftKeywordsAndCommentsAreStyled() {
         let lines = ["/* multi", "line */ func foo() {", "    return 42", "}"]
-        let runs = Highlighter.highlight(lines: lines, fileName: "a.swift")
+        let runs = Highlighter.highlight(lines: lines, fileName: "a.swift")?.runs
         #expect(runs?.count == 4)
         #expect(runs?[0].contains { $0.style == .comment && $0.range == 0..<8 } == true)
         #expect(runs?[1].contains { $0.style == .comment && $0.range == 0..<7 } == true)
@@ -47,7 +49,7 @@ struct HighlighterTests {
             "    return msg.trim()",
             "}",
         ]
-        let runs = Highlighter.highlight(lines: lines, fileName: "a.kt")
+        let runs = Highlighter.highlight(lines: lines, fileName: "a.kt")?.runs
         #expect(runs?.count == 5)
         // The annotation name is an attribute, not a type: the later query pattern wins.
         #expect(runs?[0].contains { $0.style == .attribute && $0.range == 0..<11 } == true)
@@ -64,13 +66,13 @@ struct HighlighterTests {
     }
 
     @Test func swiftAttributeNameIsAnAttribute() {
-        let runs = Highlighter.highlight(lines: ["@MainActor final class A {}"], fileName: "a.swift")
+        let runs = Highlighter.highlight(lines: ["@MainActor final class A {}"], fileName: "a.swift")?.runs
         #expect(runs?[0].contains { $0.style == .attribute && $0.range == 0..<10 } == true)
     }
 
     @Test func goKeepsEarlierPatternPrecedenceForCalls() {
         let line = "func main() { fmt.Println(len(xs)) }"
-        let runs = Highlighter.highlight(lines: [line], fileName: "a.go")
+        let runs = Highlighter.highlight(lines: [line], fileName: "a.go")?.runs
         #expect(runs?[0].contains { $0.style == .function && $0.range == 18..<25 } == true)
         #expect(runs?[0].contains { $0.style == .function && $0.range == 26..<29 } == true)
     }
@@ -84,6 +86,31 @@ struct HighlighterTests {
             #expect(config != nil, "\(name) failed to load")
             #expect(config?.queries[.highlights] != nil, "\(name) has no highlights query")
         }
+    }
+
+    private let cart = [
+        "struct Cart {",
+        "    func total() -> Int {",
+        "        return 42",
+        "    }",
+        "}",
+    ]
+
+    @Test func highlightingAlsoOutlinesTheParse() throws {
+        let result = try #require(Highlighter.highlight(lines: cart, fileName: "a.swift"))
+        #expect(result.runs.count == cart.count)
+        #expect(result.runs[1].contains { $0.style == .keyword && $0.range == 4..<8 })
+        #expect(result.outline.name(atLine: 2) == "total")
+    }
+
+    /// With no captures there are no colours, but the outline is still built.
+    @Test func aQueryThatMatchesNothingStillReturnsTheOutline() throws {
+        let config = try #require(LanguageRegistry.configuration(forFileNamed: "a.swift"))
+        let query = try Query(language: config.language, data: Data("(comment) @comment".utf8))
+        let result = try #require(Highlighter.highlight(lines: cart, fileName: "a.swift", highlightQuery: query))
+        #expect(result.runs == Array(repeating: [], count: cart.count))
+        #expect(result.outline == Highlighter.highlight(lines: cart, fileName: "a.swift")?.outline)
+        #expect(result.outline.name(atLine: 2) == "total")
     }
 
     @Test func unknownLanguageReturnsNil() {

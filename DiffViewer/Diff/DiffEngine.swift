@@ -205,7 +205,7 @@ enum DiffEngine {
         !isBinary(sources.old) && !isBinary(sources.new) && sources.old != sources.new
     }
 
-    typealias Highlight = @Sendable ([String], String) async -> [[StyleRun]]?
+    typealias Highlight = @Sendable ([String], String) async -> Highlighter.Result?
 
     static let defaultHighlight: Highlight = { lines, fileName in
         await Task.detached(priority: .userInitiated) {
@@ -266,7 +266,7 @@ enum DiffEngine {
             let old = await highlight(lines.old, sources.fileName)
             try Task.checkCancellation()
             let new = await highlight(lines.new, sources.fileName)
-            return SyntaxStyles(old: old, new: new)
+            return SyntaxStyles(old: old?.runs, new: new?.runs, oldOutline: old?.outline, newOutline: new?.outline)
         }
 
         // The highlight task is unstructured, so the build's cancellation is forwarded to it.

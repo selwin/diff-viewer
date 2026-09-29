@@ -2,16 +2,41 @@ import Foundation
 import SwiftTreeSitter
 
 /// Syntax highlighting for one side of a diff: parses the full text with tree-sitter,
-/// runs the grammar's highlight query, and returns per-line style runs.
+/// runs the grammar's highlight query, and returns per-line style runs plus the scope
+/// outline built from the same parse.
 enum Highlighter {
     /// Texts above this size are left unhighlighted to keep things snappy.
     static let maxBytes = 4_000_000
 
-    static func highlight(lines: [String], fileName: String) -> [[StyleRun]]? {
+    struct Result: Sendable, Equatable {
+        /// One entry per line.
+        let runs: [[StyleRun]]
+        let outline: ScopeOutline
+    }
+
+    static func highlight(lines: [String], fileName: String) -> Result? {
         guard !lines.isEmpty,
             let config = LanguageRegistry.configuration(forFileNamed: fileName),
             let query = config.queries[.highlights]
         else { return nil }
+        return highlight(lines: lines, fileName: fileName, configuration: config, query: query)
+    }
+
+    /// Takes the query so a test can run one that matches nothing.
+    static func highlight(lines: [String], fileName: String, highlightQuery query: Query) -> Result? {
+        guard !lines.isEmpty, let config = LanguageRegistry.configuration(forFileNamed: fileName) else {
+            return nil
+        }
+        return highlight(lines: lines, fileName: fileName, configuration: config, query: query)
+    }
+
+    /// Callers look up the configuration once and pass it in.
+    private static func highlight(
+        lines: [String], fileName: String, configuration config: LanguageConfiguration, query: Query
+    ) -> Result? {
+        guard let rules = LanguageRegistry.scopeRules(forFileNamed: fileName, configuration: config) else {
+            return nil
+        }
 
         let text = lines.joined(separator: "\n")
         guard text.utf8.count <= maxBytes else { return nil }
@@ -20,6 +45,13 @@ enum Highlighter {
         do { try parser.setLanguage(config.language) } catch { return nil }
         PipelineMetrics.countParse()
         guard let tree = parser.parse(text) else { return nil }
+        let outline = ScopeOutline.build(tree: tree, text: text, lines: lines, rules: rules)
+        return Result(runs: runs(of: query, in: tree, text: text, lines: lines, fileName: fileName), outline: outline)
+    }
+
+    private static func runs(
+        of query: Query, in tree: MutableTree, text: String, lines: [String], fileName: String
+    ) -> [[StyleRun]] {
 
         // Collect captures as UTF-16 ranges, then paint in tree-sitter precedence order:
         // earlier start first, wider ranges before nested ones (so inner captures win),
@@ -40,7 +72,6 @@ enum Highlighter {
                 captures.append((range.location, range.location + range.length, match.patternIndex, style))
             }
         }
-        guard !captures.isEmpty else { return Array(repeating: [], count: lines.count) }
         captures.sort {
             if $0.start != $1.start { return $0.start < $1.start }
             if $0.end != $1.end { return $0.end > $1.end }
