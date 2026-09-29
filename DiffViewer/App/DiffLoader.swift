@@ -39,12 +39,18 @@ final class DiffLoader {
 
     private let cache: DifftCache
     private let resultCache: DiffResultCache
+    /// One cache per window, so a save re-highlights only the side that changed.
+    private let highlight: DiffEngine.Highlight
     private var task: Task<Void, Never>?
     private var generation = 0
 
-    init(cache: DifftCache, resultCache: DiffResultCache = DiffResultCache()) {
+    init(
+        cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
+        highlightCache: HighlightCache = HighlightCache()
+    ) {
         self.cache = cache
         self.resultCache = resultCache
+        highlight = highlightCache.highlight()
     }
 
     /// Stops any in-flight diff. Published presentation state stays as it is; the cancelled
@@ -101,12 +107,12 @@ final class DiffLoader {
                     try Task.checkCancellation()
                     output = try await DiffEngine.build(
                         sources, hideWhitespace: hideWhitespace, cache: cache, resultCache: resultCache,
-                        priority: .foreground)
+                        priority: .foreground, highlight: highlight)
                     imageSources = sources
                 } else {
                     output = try await DiffEngine.load(
                         file, repository: repository, client: client, hideWhitespace: hideWhitespace, cache: cache,
-                        resultCache: resultCache, priority: .foreground)
+                        resultCache: resultCache, priority: .foreground, highlight: highlight)
                 }
                 try Task.checkCancellation()
                 // SVG stays a text diff, so it is previewed on its text content too.
@@ -178,7 +184,8 @@ final class DiffLoader {
         let assembler = ChangesetAssembler(
             files: files, repository: repository, client: client, hideWhitespace: hideWhitespace,
             foldOptions: foldOptions,
-            publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache)
+            publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache,
+            highlight: highlight)
         task = Task { [weak self] in
             guard let self else { return }
             let signposter = PipelineMetrics.signposter
