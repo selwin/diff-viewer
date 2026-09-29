@@ -9,12 +9,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Working Tree's row, which has no second line.
     static let singleLineHeight: CGFloat = 32
 
-    private static let nameFont = NSFont.systemFont(ofSize: 13)
     private static let hashFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-    /// Wider than the branch picker's, so the two lines read as separate.
-    private static let lineGap: CGFloat = 4
-    /// Between the copy button and the hash; the button's hover fill already pads the icon.
-    private static let copyGap: CGFloat = 2
     private static let checkmarkSize: CGFloat = 14
 
     /// Set by the table's owner.
@@ -33,7 +28,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         sha == nil ? [] : [copyButton]
     }
 
-    private let name = PickerLabel.make(font: nameFont, color: .labelColor)
+    private let name = PickerLabel.make(font: PickerMetrics.nameFont, color: .labelColor)
     /// The hash on a commit row, the change count on Working Tree's.
     private let trailingLabel = PickerLabel.make(font: hashFont, color: .secondaryLabelColor, alignment: .right)
     private let subtitle = PickerLabel.make(font: PickerMetrics.subtitleFont, color: .secondaryLabelColor)
@@ -82,7 +77,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     }
 
     private func finishConfigure(isSelectedScope: Bool, described: [String]) {
-        name.font = isSelectedScope ? PickerMetrics.currentNameFont : Self.nameFont
+        name.font = isSelectedScope ? PickerMetrics.currentNameFont : PickerMetrics.nameFont
         checkmark.isHidden = !isSelectedScope
         var parts = described
         if isSelectedScope { parts.insert("current", at: 1) }
@@ -146,12 +141,12 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         let nameHeight = PickerViewGeometry.naturalSize(of: name).height
         let hasSecondLine = !subtitle.stringValue.isEmpty || !status.stringValue.isEmpty
         let secondLineHeight = hasSecondLine ? PickerViewGeometry.naturalSize(of: subtitle).height : 0
-        let blockHeight = nameHeight + (hasSecondLine ? Self.lineGap + secondLineHeight : 0)
+        let blockHeight = nameHeight + (hasSecondLine ? PickerMetrics.lineGap + secondLineHeight : 0)
         let top = ((bounds.height - blockHeight) / 2).rounded()
         layoutLine(
             leading: name, trailing: trailingLabel,
             in: NSRect(x: leading, y: top, width: rightEdge - leading, height: nameHeight),
-            reserve: sha == nil ? 0 : PickerCopyButton.side + Self.copyGap)
+            reserve: sha == nil ? 0 : PickerCopyButton.side)
         layoutCopyButton()
         subtitle.isHidden = !hasSecondLine
         status.isHidden = !hasSecondLine
@@ -159,7 +154,8 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         layoutLine(
             leading: subtitle, trailing: status,
             in: NSRect(
-                x: leading, y: name.frame.maxY + Self.lineGap, width: rightEdge - leading, height: secondLineHeight),
+                x: leading, y: name.frame.maxY + PickerMetrics.lineGap, width: rightEdge - leading,
+                height: secondLineHeight),
             reserve: 0)
     }
 
@@ -181,15 +177,13 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         leading.frame = NSRect(x: line.minX, y: line.minY, width: max(textMaxX - line.minX, 0), height: line.height)
     }
 
-    /// Left of the hash, in the room `layout` reserves even while the button is hidden, so
-    /// the subject does not re-truncate as the highlight moves.
+    /// Against the hash, since its hover fill already pads the icon. `layout` keeps its room
+    /// while it is hidden, so the subject does not re-truncate as the highlight moves.
     private func layoutCopyButton() {
         guard sha != nil else { return }
         let side = PickerCopyButton.side
         copyButton.frame = backingAlignedRect(
-            NSRect(
-                x: trailingLabel.frame.minX - Self.copyGap - side, y: name.frame.midY - side / 2, width: side,
-                height: side),
+            NSRect(x: trailingLabel.frame.minX - side, y: name.frame.midY - side / 2, width: side, height: side),
             options: PickerViewGeometry.pixelAlignment)
         // A reused cell's button may have moved out from under the pointer.
         copyButton.refreshHover(animated: false)
