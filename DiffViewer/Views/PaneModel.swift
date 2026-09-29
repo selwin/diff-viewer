@@ -60,6 +60,11 @@ struct PaneModel {
         side == .old ? row.old : row.new
     }
 
+    /// The cell of document `row`; nil for a pad row here or a row outside the document.
+    func cell(atRow row: Int) -> DiffSide? {
+        rows.indices.contains(row) ? cell(rows[row]) : nil
+    }
+
     /// The section whose `rowRange` contains `row`; nil for a row outside every section.
     func section(containingRow row: Int) -> ChangesetSection? {
         sectionIndex.sectionIndex(containingRow: row).map { sections[$0] }

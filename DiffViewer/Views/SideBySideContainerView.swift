@@ -173,9 +173,7 @@ final class SideBySideContainerView: NSView {
         // The anchor is read at the old row height, before the font size changes it.
         let fontChanged = rightPane.fontSize != fontSize
         let anchor = captureAnchor()
-        leftPane.fontSize = fontSize
-        rightPane.fontSize = fontSize
-        connector.rowHeight = rightPane.layout.rowHeight
+        applyFontSize(fontSize)
         switch mode {
         case .replace:
             visibleSectionPublisher.reset()
@@ -214,8 +212,7 @@ final class SideBySideContainerView: NSView {
         leftPane.setSyntax(styles: nil, outline: nil)
         rightPane.setSyntax(styles: nil, outline: nil)
         appliedStylesID = nil
-        overview.rows = incoming.rows
-        overview.changeBlocks = incoming.changeBlocks
+        updateOverviewDocument()
 
         var anchor: Anchor?
         if let previousAnchor, let previousDocument, !isChangeset, !previousWasChangeset {
@@ -237,13 +234,8 @@ final class SideBySideContainerView: NSView {
         document = incoming.document
         changeset = incoming
         installModels(mode: .append)
-        overview.rows = incoming.document.rows
-        overview.changeBlocks = incoming.document.changeBlocks
-        folded = incoming.folded
-        projectionChanged()
-        connector.setMoves(incoming.document.moves, folded: folded)
-        leftPane.displayRows = folded.displayRows
-        rightPane.displayRows = folded.displayRows
+        updateOverviewDocument()
+        installProjection(incoming.folded)
         needsLayout = true
         layoutSubtreeIfNeeded()
         for scroll in [leftScroll, rightScroll] { scroll.reflectScrolledClipView(scroll.contentView) }
@@ -265,10 +257,20 @@ final class SideBySideContainerView: NSView {
     func setFontSize(_ fontSize: CGFloat) {
         guard rightPane.fontSize != fontSize else { return }
         let anchor = captureAnchor()
+        applyFontSize(fontSize)
+        restoreScroll(anchor)
+    }
+
+    private func applyFontSize(_ fontSize: CGFloat) {
         leftPane.fontSize = fontSize
         rightPane.fontSize = fontSize
         connector.rowHeight = rightPane.layout.rowHeight
-        restoreScroll(anchor)
+    }
+
+    private func updateOverviewDocument() {
+        guard let document else { return }
+        overview.rows = document.rows
+        overview.changeBlocks = document.changeBlocks
     }
 
     /// Records the preference. A changeset's projection is fixed, so only a file refolds.
@@ -335,21 +337,28 @@ final class SideBySideContainerView: NSView {
     // MARK: - Projection
 
     private func refold(anchor: Anchor?) {
+        let refolded: FoldedRows
         if let changeset {
-            folded = changeset.folded
+            refolded = changeset.folded
         } else if let document, collapseUnchanged {
-            folded = RowFolding.fold(
+            refolded = RowFolding.fold(
                 changeBlocks: document.changeBlocks, documentRowCount: document.rows.count, state: foldState,
                 options: foldOptions)
         } else {
-            folded = .identity(documentRowCount: document?.rows.count ?? 0)
+            refolded = .identity(documentRowCount: document?.rows.count ?? 0)
         }
+        installProjection(refolded)
+        applyCurrentBlock()
+        restoreScroll(anchor)
+    }
+
+    /// The one place `folded` is assigned, so the report, connector and panes never disagree.
+    private func installProjection(_ folded: FoldedRows) {
+        self.folded = folded
         projectionChanged()
         connector.setMoves(document?.moves ?? [], folded: folded)
         leftPane.displayRows = folded.displayRows
         rightPane.displayRows = folded.displayRows
-        applyCurrentBlock()
-        restoreScroll(anchor)
     }
 
     /// Called wherever `folded` is reassigned. Runs inside `updateNSView`, so the report is
@@ -426,10 +435,15 @@ final class SideBySideContainerView: NSView {
         }
         y = min(max(0, y), maxY)
         for scroll in [leftScroll, rightScroll] {
-            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.origin.x, y: y))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            setClipOrigin(scroll, to: NSPoint(x: scroll.contentView.bounds.origin.x, y: y))
         }
         updateOverviewViewport()
+    }
+
+    /// Moves the clip and tells the scroll view; never clamps, so callers do their own.
+    func setClipOrigin(_ scroll: NSScrollView, to origin: NSPoint) {
+        scroll.contentView.scroll(to: origin)
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 
     private func updateOverviewViewport() {
@@ -466,8 +480,7 @@ final class SideBySideContainerView: NSView {
         let target = max(0, layout.y(forRow: display) - rightScroll.contentView.bounds.height / 3)
         let maxY = max(0, rightPane.frame.height - rightScroll.contentView.bounds.height)
         let y = min(target, maxY)
-        rightScroll.contentView.scroll(to: NSPoint(x: rightScroll.contentView.bounds.origin.x, y: y))
-        rightScroll.reflectScrolledClipView(rightScroll.contentView)
+        setClipOrigin(rightScroll, to: NSPoint(x: rightScroll.contentView.bounds.origin.x, y: y))
     }
 
     // MARK: - Sides
@@ -509,8 +522,7 @@ final class SideBySideContainerView: NSView {
         var origin = target.contentView.bounds.origin
         guard abs(origin.y - y) > 0.5 else { return }
         origin.y = y
-        target.contentView.scroll(to: origin)
-        target.reflectScrolledClipView(target.contentView)
+        setClipOrigin(target, to: origin)
     }
 }
 

@@ -22,6 +22,11 @@ struct PaneSelection: Equatable, Sendable {
     var end: TextPosition { max(anchor, head) }
     var isEmpty: Bool { anchor == head }
 
+    /// The selected range when the selection stays on one row.
+    var singleRowRange: Range<Int>? {
+        start.row == end.row ? start.offset..<end.offset : nil
+    }
+
     /// The selected UTF-16 range within `row`, clamped to `lineLength`. Nil when the
     /// row lies outside the selection.
     func range(forRow row: Int, lineLength: Int) -> Range<Int>? {
@@ -36,6 +41,15 @@ struct PaneSelection: Equatable, Sendable {
 
     /// Whether the selection continues past the end of `row`, i.e. the newline is selected.
     func includesLineEnd(ofRow row: Int) -> Bool { row < end.row }
+}
+
+extension PaneSelection {
+    /// Selects `range` within one row. In an extension so the memberwise init stays.
+    init(row: Int, range: Range<Int>) {
+        self.init(
+            anchor: TextPosition(row: row, offset: range.lowerBound),
+            head: TextPosition(row: row, offset: range.upperBound))
+    }
 }
 
 /// The double-click word rule: letters, digits and `_` form a word; anything else is a
@@ -105,7 +119,7 @@ extension TabExpander {
 extension PaneModel {
     /// UTF-16 length of the line this side shows for `row`; 0 for a pad row.
     func lineLength(ofRow row: Int) -> Int {
-        guard rows.indices.contains(row), let cell = cell(rows[row]) else { return 0 }
+        guard let cell = cell(atRow: row) else { return 0 }
         return lines[cell.lineIndex].utf16.count
     }
 

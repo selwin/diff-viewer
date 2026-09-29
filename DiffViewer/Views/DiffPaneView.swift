@@ -180,7 +180,7 @@ final class DiffPaneView: NSView {
         gutterWidth = width(forDigits: model?.gutterDigits ?? 3)
         maxLineUnits = 0
         for line in model?.lines ?? [] { maxLineUnits = max(maxLineUnits, units(of: line)) }
-        contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
+        contentWidth = documentTextX + CGFloat(maxLineUnits) * charWidth + 40
     }
 
     /// Measures only the lines an append added. The gutter can widen but never shrinks,
@@ -191,7 +191,20 @@ final class DiffPaneView: NSView {
             for line in model.lines[previousLineCount...] { maxLineUnits = max(maxLineUnits, units(of: line)) }
         }
         gutterWidth = max(gutterWidth, width(forDigits: model.gutterDigits))
-        contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
+        contentWidth = documentTextX + CGFloat(maxLineUnits) * charWidth + 40
+    }
+
+    // MARK: - Text geometry
+
+    /// Where text starts in document coordinates, so it scrolls with the content.
+    var documentTextX: CGFloat { gutterWidth + textInset }
+
+    func baselineY(in rowRect: NSRect) -> CGFloat { rowRect.minY + 2 + ascent }
+
+    /// The rectangle behind the text span `x0..<x1` (relative to the text origin), inset one point
+    /// above and below the row.
+    func textSpanRect(x0: CGFloat, x1: CGFloat, in rowRect: NSRect) -> NSRect {
+        NSRect(x: documentTextX + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2)
     }
 
     // MARK: - Drawing
@@ -255,7 +268,7 @@ final class DiffPaneView: NSView {
             drawFindMatches(ofRow: index, cached: cached, in: rowRect, context: context)
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
             drawLine(
-                cached.line, at: CGPoint(x: gutterWidth + textInset, y: rowRect.minY + 2 + ascent), context: context)
+                cached.line, at: CGPoint(x: documentTextX, y: baselineY(in: rowRect)), context: context)
             context.restoreGState()
         } else {
             drawPad(rowRect, context: context)
@@ -317,7 +330,7 @@ final class DiffPaneView: NSView {
         let numberLine = numberLine(for: model.lineNumber(of: cell, inRow: row), changed: gutterColor != nil)
         let width = CTLineGetTypographicBounds(numberLine, nil, nil, nil)
         drawLine(
-            numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: rowRect.minY + 2 + ascent),
+            numberLine, at: CGPoint(x: gutterRect.maxX - 10 - CGFloat(width), y: baselineY(in: rowRect)),
             context: context)
         drawMoveMarker(forLine: cell.lineIndex, rowRect: rowRect, model: model, context: context)
     }
@@ -351,9 +364,7 @@ final class DiffPaneView: NSView {
         for range in highlights {
             let (x0, x1) = horizontalBounds(range, in: cached)
             guard x1 > x0 else { continue }
-            context.fill(
-                NSRect(
-                    x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
+            context.fill(textSpanRect(x0: x0, x1: x1, in: rowRect))
         }
     }
 
@@ -367,8 +378,7 @@ final class DiffPaneView: NSView {
         if selection.includesLineEnd(ofRow: row) { x1 += charWidth }
         guard x1 > x0 else { return }
         NSColor.selectedTextBackgroundColor.setFill()
-        context.fill(
-            NSRect(x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2))
+        context.fill(textSpanRect(x0: x0, x1: x1, in: rowRect))
     }
 
     func drawLine(_ line: CTLine, at point: CGPoint, context: CGContext) {

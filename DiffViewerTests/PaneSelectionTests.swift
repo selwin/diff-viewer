@@ -26,6 +26,12 @@ struct PaneSelectionTests {
         PaneSelection(anchor: start, head: end)
     }
 
+    @Test func oneRowSelectionRoundTripsItsRange() {
+        #expect(PaneSelection(row: 3, range: 2..<7).singleRowRange == 2..<7)
+        let acrossRows = Self.selection(Self.position(1, 2), Self.position(2, 1))
+        #expect(acrossRows.singleRowRange == nil)
+    }
+
     // MARK: - Ordering
 
     @Test func reversedSelectionNormalizes() {

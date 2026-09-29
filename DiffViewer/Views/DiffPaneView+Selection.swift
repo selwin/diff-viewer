@@ -30,10 +30,7 @@ extension DiffPaneView {
     /// gutter and pads.
     private func cursor(at point: NSPoint) -> NSCursor {
         if separatorHidden(at: point) != nil || moveMarkerTarget(at: point) != nil { return .pointingHand }
-        guard let model, !displayRows.isEmpty, point.x >= visibleRect.minX + gutterWidth else { return .arrow }
-        let index = layout.row(atY: point.y)
-        guard index < displayRows.count, case let .documentRow(row) = displayRows[index],
-            model.rows.indices.contains(row), model.cell(model.rows[row]) != nil
+        guard let model, !isOverGutter(point), let (_, row) = documentRow(at: point), model.cell(atRow: row) != nil
         else { return .arrow }
         return .iBeam
     }
@@ -66,19 +63,35 @@ extension DiffPaneView {
             height: layout.rowHeight)
     }
 
+    /// The display row under `y` and the document row it shows. `row(atY:)` clamps, so a
+    /// drag past either end lands on the first or last row; a separator or header is nil.
+    static func documentRow(
+        atY y: CGFloat, layout: PaneLayout, displayRows: [DisplayRow], rowCount: Int
+    ) -> (index: Int, row: Int)? {
+        let index = layout.row(atY: y)
+        guard index < displayRows.count, case let .documentRow(row) = displayRows[index], row >= 0, row < rowCount
+        else { return nil }
+        return (index, row)
+    }
+
+    func documentRow(at point: NSPoint) -> (index: Int, row: Int)? {
+        guard let model else { return nil }
+        return Self.documentRow(
+            atY: point.y, layout: layout, displayRows: displayRows, rowCount: model.rows.count)
+    }
+
+    /// The gutter stays at the visible left edge during horizontal scrolling.
+    func isOverGutter(_ point: NSPoint) -> Bool { point.x < visibleRect.minX + gutterWidth }
+
     /// The document row and raw UTF-16 offset under `point`. Nil when there is no
     /// document or the point is on a separator row; offset 0 over a pad or the gutter.
     func textPosition(at point: NSPoint) -> TextPosition? {
-        guard let model, !displayRows.isEmpty else { return nil }
-        let index = layout.row(atY: point.y)
-        guard index < displayRows.count, case let .documentRow(row) = displayRows[index],
-            model.rows.indices.contains(row)
-        else { return nil }
-        guard let cell = model.cell(model.rows[row]), point.x >= visibleRect.minX + gutterWidth else {
+        guard let model, let (_, row) = documentRow(at: point) else { return nil }
+        guard let cell = model.cell(atRow: row), !isOverGutter(point) else {
             return TextPosition(row: row, offset: 0)
         }
         let cached = cachedLine(for: cell.lineIndex, model: model)
-        let position = CGPoint(x: point.x - (gutterWidth + textInset), y: 0)
+        let position = CGPoint(x: point.x - documentTextX, y: 0)
         var expanded = CTLineGetStringIndexForPosition(cached.line, position)
         if expanded == kCFNotFound { expanded = 0 }
         let raw = cached.map.map { TabExpander.rawIndex(forExpanded: expanded, map: $0) } ?? expanded
@@ -101,13 +114,9 @@ extension DiffPaneView {
         window?.makeFirstResponder(self)
         onInteraction?()
         if event.clickCount >= 3 {
-            selection = PaneSelection(
-                anchor: TextPosition(row: position.row, offset: 0),
-                head: TextPosition(row: position.row, offset: model?.lineLength(ofRow: position.row) ?? 0))
+            selection = PaneSelection(row: position.row, range: 0..<(model?.lineLength(ofRow: position.row) ?? 0))
         } else if event.clickCount == 2, let word = wordRange(at: position) {
-            selection = PaneSelection(
-                anchor: TextPosition(row: position.row, offset: word.lowerBound),
-                head: TextPosition(row: position.row, offset: word.upperBound))
+            selection = PaneSelection(row: position.row, range: word)
         } else {
             selection = PaneSelection(anchor: position, head: position)
         }
@@ -125,9 +134,7 @@ extension DiffPaneView {
     }
 
     private func wordRange(at position: TextPosition) -> Range<Int>? {
-        guard let model, model.rows.indices.contains(position.row),
-            let cell = model.cell(model.rows[position.row])
-        else { return nil }
+        guard let model, let cell = model.cell(atRow: position.row) else { return nil }
         return WordSelection.range(in: model.lines[cell.lineIndex], at: position.offset)
     }
 

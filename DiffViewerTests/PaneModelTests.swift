@@ -45,6 +45,15 @@ struct PaneModelTests {
         return pane.lineNumber(of: cell, inRow: index)
     }
 
+    @Test func cellLookupByRowIsNilOutsideTheDocumentAndOnPads() {
+        let pane = PaneModel(
+            side: .old, rows: [modifiedRow(0, 0), addedRow(1)], lines: ["a"], changeBlocks: [])
+        #expect(pane.cell(atRow: 0)?.lineIndex == 0)
+        #expect(pane.cell(atRow: 1) == nil)
+        #expect(pane.cell(atRow: 2) == nil)
+        #expect(pane.cell(atRow: -1) == nil)
+    }
+
     @Test func emptySectionOnABoundaryIsNeverChosen() {
         let pane = model(.old, sections: sections)
         #expect(pane.section(containingRow: 2)?.file.path == "first.swift")

@@ -33,7 +33,7 @@ extension DiffPaneView {
             NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
             drawChevrons(for: control, in: rect, context: context)
         }
-        let baseline = rowRect.minY + 2 + ascent
+        let baseline = baselineY(in: rowRect)
         if let fitted = truncated(
             count, truncation: .end, availableWidth: layout.countWidth, color: DiffTheme.foldText)
         {
@@ -75,29 +75,40 @@ extension DiffPaneView {
     }
 
     private func drawChevrons(for control: FoldControl, in rect: NSRect, context: CGContext) {
+        let chevrons: [(pointingUp: Bool, center: CGPoint)]
+        switch control {
+        case .expandUp:
+            chevrons = [(true, CGPoint(x: rect.midX, y: rect.midY))]
+        case .expandDown:
+            chevrons = [(false, CGPoint(x: rect.midX, y: rect.midY))]
+        case .expandRun:
+            chevrons = [
+                (true, CGPoint(x: rect.midX, y: rect.midY - rect.height * 0.2)),
+                (false, CGPoint(x: rect.midX, y: rect.midY + rect.height * 0.2)),
+            ]
+        }
+        strokeChevrons(
+            chevrons, halfWidth: rect.width * 0.25, height: rect.height * 0.2, color: DiffTheme.foldText,
+            context: context)
+    }
+
+    /// Strokes all chevrons as one path. The view is flipped, so a chevron pointing up has
+    /// its apex at the smaller y.
+    func strokeChevrons(
+        _ chevrons: [(pointingUp: Bool, center: CGPoint)], halfWidth: CGFloat, height: CGFloat, color: NSColor,
+        context: CGContext
+    ) {
         context.saveGState()
-        context.setStrokeColor(DiffTheme.foldText.cgColor)
+        context.setStrokeColor(color.cgColor)
         context.setLineWidth(1.5)
         context.setLineCap(.round)
         context.setLineJoin(.round)
-        let halfWidth = rect.width * 0.25
-        let height = rect.height * 0.2
-        // The view is flipped: smaller y is higher on screen.
-        func chevron(pointingUp: Bool, centerY: CGFloat) {
-            let apexY = pointingUp ? centerY - height / 2 : centerY + height / 2
-            let baseY = pointingUp ? centerY + height / 2 : centerY - height / 2
-            context.move(to: CGPoint(x: rect.midX - halfWidth, y: baseY))
-            context.addLine(to: CGPoint(x: rect.midX, y: apexY))
-            context.addLine(to: CGPoint(x: rect.midX + halfWidth, y: baseY))
-        }
-        switch control {
-        case .expandUp:
-            chevron(pointingUp: true, centerY: rect.midY)
-        case .expandDown:
-            chevron(pointingUp: false, centerY: rect.midY)
-        case .expandRun:
-            chevron(pointingUp: true, centerY: rect.midY - rect.height * 0.2)
-            chevron(pointingUp: false, centerY: rect.midY + rect.height * 0.2)
+        for (pointingUp, center) in chevrons {
+            let apexY = pointingUp ? center.y - height / 2 : center.y + height / 2
+            let baseY = pointingUp ? center.y + height / 2 : center.y - height / 2
+            context.move(to: CGPoint(x: center.x - halfWidth, y: baseY))
+            context.addLine(to: CGPoint(x: center.x, y: apexY))
+            context.addLine(to: CGPoint(x: center.x + halfWidth, y: baseY))
         }
         context.strokePath()
         context.restoreGState()

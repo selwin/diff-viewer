@@ -5,12 +5,11 @@ extension DiffPaneView {
     /// The x span of `range` in document `row` on this side, in pane coordinates. Nil when
     /// the row has no cell here.
     func horizontalBounds(ofRow row: Int, range: Range<Int>) -> (x0: CGFloat, x1: CGFloat)? {
-        guard let model, model.rows.indices.contains(row), let cell = model.cell(model.rows[row]) else { return nil }
+        guard let model, let cell = model.cell(atRow: row) else { return nil }
         let cached = cachedLine(for: cell.lineIndex, model: model)
         let clamped = min(range.lowerBound, cached.rawLength)..<min(range.upperBound, cached.rawLength)
         let (x0, x1) = horizontalBounds(clamped, in: cached)
-        let origin = gutterWidth + textInset
-        return (origin + x0, origin + x1)
+        return (documentTextX + x0, documentTextX + x1)
     }
 
     /// Over the token highlights and under the selection. A match that is exactly the
@@ -22,8 +21,7 @@ extension DiffPaneView {
             let (x0, x1) = horizontalBounds(range, in: cached)
             guard x1 > x0 else { continue }
             (range == current ? DiffTheme.findCurrentMatch : DiffTheme.findMatch).setFill()
-            let rect = NSRect(
-                x: gutterWidth + textInset + x0, y: rowRect.minY + 1, width: x1 - x0, height: rowRect.height - 2)
+            let rect = textSpanRect(x0: x0, x1: x1, in: rowRect)
             context.addPath(CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil))
             context.fillPath()
         }
@@ -31,8 +29,7 @@ extension DiffPaneView {
 
     /// The selection's range in `row` when it covers exactly one find match there.
     func selectedFindMatch(inRow row: Int) -> Range<Int>? {
-        guard let selection, selection.start.row == row, selection.end.row == row else { return nil }
-        let range = selection.start.offset..<selection.end.offset
+        guard let selection, selection.start.row == row, let range = selection.singleRowRange else { return nil }
         return findMatches[row]?.contains(range) == true ? range : nil
     }
 }

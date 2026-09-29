@@ -66,24 +66,7 @@ struct DiffDetailView: View {
                 // The source view stays in the hierarchy so folds, scroll position and
                 // selection survive a trip through the preview.
                 ZStack {
-                    SideBySideView(
-                        content: .file(document),
-                        styles: loader.styles,
-                        fontSize: preferences.fontSize,
-                        scrollTarget: windowState.scrollTarget,
-                        currentBlock: windowState.currentChangeIndex,
-                        collapseUnchanged: preferences.collapseUnchanged,
-                        foldOptions: preferences.foldOptions,
-                        isHidden: previewing,
-                        findScope: windowState.paneFindScope,
-                        findPresentation: windowState.find.presentation,
-                        findReveal: windowState.find.activeReveal,
-                        paneFocusRequest: windowState.find.paneFocusRequest,
-                        onDisplayedDocumentChange: { windowState.reportDisplayed($0) },
-                        onPaneInteraction: { _ in windowState.find.notePaneInteraction() },
-                        onVisibleRowsChange: { windowState.find.noteVisibleRows($0, contentID: $1) },
-                        onPaneFocusApplied: { windowState.find.acknowledgePaneFocus(id: $0) }
-                    )
+                    DiffPanes(content: .file(document), isHidden: previewing)
                     if previewing, let preview = loader.imagePreview {
                         ImagePreviewView(preview: preview)
                     }
