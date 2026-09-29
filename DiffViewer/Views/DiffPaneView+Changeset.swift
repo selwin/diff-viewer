@@ -23,7 +23,7 @@ extension DiffPaneView {
         context.fill(NSRect(x: fullRect.minX, y: fullRect.minY, width: fullRect.width, height: 1))
 
         let lines = headerLines(section: index, model: model)
-        let baseline = rowRect.minY + 2 + ascent
+        let baseline = baselineY(in: rowRect)
         switch model.side {
         case .old:
             let badgeSize = rowRect.height - 6
@@ -182,7 +182,7 @@ extension DiffPaneView {
                 CTLineCreateWithAttributedString(attributed), truncation: .end,
                 availableWidth: rowRect.maxX - textInset - textX, color: DiffTheme.noticeText)
         else { return }
-        drawLine(line, at: CGPoint(x: textX, y: rowRect.minY + 2 + ascent), context: context)
+        drawLine(line, at: CGPoint(x: textX, y: baselineY(in: rowRect)), context: context)
     }
 
     /// Precondition: a `.text` section has rows and so never produces a notice row.

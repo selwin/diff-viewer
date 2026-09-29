@@ -32,9 +32,7 @@ extension SideBySideContainerView {
         else { return }
         let match = matches.matches[index]
         // Set directly, so neither pane reports an interaction.
-        let selection = PaneSelection(
-            anchor: TextPosition(row: match.documentRow, offset: match.utf16Range.lowerBound),
-            head: TextPosition(row: match.documentRow, offset: match.utf16Range.upperBound))
+        let selection = PaneSelection(row: match.documentRow, range: match.utf16Range)
         pane(for: side).selection = selection
         pane(for: other).selection = nil
         findOwnedSelection = (side, selection)
@@ -53,7 +51,7 @@ extension SideBySideContainerView {
         guard let span = target.horizontalBounds(ofRow: match.documentRow, range: match.utf16Range) else { return }
         let clip = targetScroll.contentView.bounds
         // The gutter is drawn over the left edge of the clip, so text starts after it.
-        let leading = target.gutterWidth + target.textInset
+        let leading = target.documentTextX
         let textMinX = clip.minX + leading
         var x = clip.minX
         if span.x0 < textMinX || span.x1 - span.x0 > clip.maxX - textMinX {
@@ -63,8 +61,7 @@ extension SideBySideContainerView {
         }
         x = min(max(0, x), max(0, target.frame.width - clip.width))
         guard x != clip.minX else { return }
-        targetScroll.contentView.scroll(to: NSPoint(x: x, y: clip.minY))
-        targetScroll.reflectScrolledClipView(targetScroll.contentView)
+        setClipOrigin(targetScroll, to: NSPoint(x: x, y: clip.minY))
     }
 
     /// Replaces any pending request, so nil cancels one that has not landed yet.

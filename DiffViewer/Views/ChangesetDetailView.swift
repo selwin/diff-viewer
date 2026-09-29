@@ -68,24 +68,7 @@ struct ChangesetDetailView: View {
             ContentUnavailableView(
                 "Couldn't load diff", systemImage: "exclamationmark.triangle", description: Text(message))
         } else if case let .changeset(document)? = loader.content {
-            SideBySideView(
-                content: .changeset(document),
-                styles: loader.styles,
-                fontSize: preferences.fontSize,
-                scrollTarget: windowState.scrollTarget,
-                currentBlock: windowState.currentChangeIndex,
-                collapseUnchanged: preferences.collapseUnchanged,
-                foldOptions: preferences.foldOptions,
-                onTopVisibleSectionChange: { topVisibleSection = $0 },
-                findScope: windowState.paneFindScope,
-                findPresentation: windowState.find.presentation,
-                findReveal: windowState.find.activeReveal,
-                paneFocusRequest: windowState.find.paneFocusRequest,
-                onDisplayedDocumentChange: { windowState.reportDisplayed($0) },
-                onPaneInteraction: { _ in windowState.find.notePaneInteraction() },
-                onVisibleRowsChange: { windowState.find.noteVisibleRows($0, contentID: $1) },
-                onPaneFocusApplied: { windowState.find.acknowledgePaneFocus(id: $0) }
-            )
+            DiffPanes(content: .changeset(document), onTopVisibleSectionChange: { topVisibleSection = $0 })
         } else if loader.isLoading {
             // Nothing published yet. The panes appear with the first section rather than
             // flashing an empty state on the way there.
