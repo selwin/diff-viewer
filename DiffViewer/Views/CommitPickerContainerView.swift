@@ -373,7 +373,8 @@ final class CommitPickerContainerView: NSView {
         switch state.items[index] {
         case .header: PickerMetrics.headerRowHeight
         case .message: CommitPickerMessageRowView.height
-        case .workingTree, .commit: PickerMetrics.rowHeight
+        case .workingTree: CommitPickerRowView.singleLineHeight
+        case .commit: PickerMetrics.rowHeight
         }
     }
 

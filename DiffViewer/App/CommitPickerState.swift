@@ -71,7 +71,7 @@ struct CommitPickerState {
         let scope = DiffScope.commit(commit.ref)
         return CommitPickerRow(
             scope: scope, sha: commit.ref.sha, shortSha: commit.ref.shortSha, subject: commit.subject,
-            authorName: commit.author, dateText: grouping.commitDateText(for: commit.committedAt),
+            authorName: commit.author,
             status: snapshot.unpushedShas.contains(commit.ref.sha) ? .notPushed : .none,
             isSelectedScope: scope == snapshot.displayedScope)
     }

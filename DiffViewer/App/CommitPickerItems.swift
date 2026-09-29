@@ -17,7 +17,7 @@ struct CommitPickerSnapshot: Equatable, Sendable {
     var unpushedShas: Set<String>
 }
 
-/// The words on a commit row's right edge.
+/// The words under a commit row's hash.
 enum CommitPickerRowStatus: Equatable {
     case none
     /// On HEAD's branch but missing from its upstream.
@@ -45,7 +45,6 @@ struct CommitPickerRow: Equatable {
     let shortSha: String
     let subject: String
     let authorName: String
-    let dateText: String
     let status: CommitPickerRowStatus
     /// The commit the diff shows, which need not be HEAD.
     let isSelectedScope: Bool
