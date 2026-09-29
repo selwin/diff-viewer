@@ -52,7 +52,9 @@ final class RecordingPrefetcher: Prefetching {
 
     private(set) var events: [Event] = []
 
-    func prefetch(files: [ChangedFile], client: any RepoClient) { events.append(.prefetch(files.map(\.id))) }
+    func prefetch(files: [ChangedFile], repository: RepositoryRoot, client: any RepoClient) {
+        events.append(.prefetch(files.map(\.id)))
+    }
     func cancel() { events.append(.cancel) }
 }
 

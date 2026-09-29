@@ -116,7 +116,7 @@ struct DiffPrefetcherTests {
         let loader = LoaderProbe()
         let (prefetcher, cache) = makePrefetcher(runner: runner, loader: loader)
         let list = files(20)
-        prefetcher.prefetch(files: list, client: TaggedClient())
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
         #expect(prefetcher.dequeuedFileIDs == list.map(\.id))
         #expect(await runner.launches.count == 20)
@@ -137,7 +137,7 @@ struct DiffPrefetcherTests {
         await loader.markBinary("f2.swift")
         await loader.markIdentical("f3.swift")
         let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
-        prefetcher.prefetch(files: files(5), client: TaggedClient())
+        prefetcher.prefetch(files: files(5), repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
         #expect(await loader.calls.count == 5)
         #expect(
@@ -150,7 +150,7 @@ struct DiffPrefetcherTests {
         let loader = LoaderProbe()
         await loader.hold(true)
         let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
-        prefetcher.prefetch(files: files(10), client: TaggedClient())
+        prefetcher.prefetch(files: files(10), repository: testRepository, client: TaggedClient())
         #expect(await eventually { await loader.inFlight == 3 })
         #expect(await loader.calls.count == 3)
         await loader.hold(false)
@@ -165,7 +165,7 @@ struct DiffPrefetcherTests {
         let loader = LoaderProbe()
         await loader.hold(true)
         let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
-        prefetcher.prefetch(files: files(10), client: TaggedClient())
+        prefetcher.prefetch(files: files(10), repository: testRepository, client: TaggedClient())
         #expect(await eventually { await loader.inFlight == 3 })
         prefetcher.cancel()
         await loader.hold(false)
@@ -181,7 +181,7 @@ struct DiffPrefetcherTests {
         let loader = LoaderProbe()
         let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
         let list = files(150)
-        prefetcher.prefetch(files: list, client: TaggedClient())
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
         #expect(prefetcher.dequeuedFileIDs == list.prefix(100).map(\.id))
         #expect(await runner.launches.count == 100)
@@ -192,7 +192,7 @@ struct DiffPrefetcherTests {
         let loader = LoaderProbe()
         await loader.markFailing("f2.swift")
         let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
-        prefetcher.prefetch(files: files(20), client: TaggedClient())
+        prefetcher.prefetch(files: files(20), repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
         #expect(await runner.launches.count == 19)
         #expect(await runner.fileNames.contains("f2.swift") == false)
@@ -207,7 +207,7 @@ struct DiffPrefetcherTests {
         for round in 0..<5 {
             let list = files(10, prefix: "r\(round)-")
             lists.append(list)
-            prefetcher.prefetch(files: list, client: TaggedClient(tag: "r\(round)"))
+            prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient(tag: "r\(round)"))
             #expect(await eventually { await runner.launches.count == 3 })
             #expect(await loader.peakInFlight <= 3)
             #expect(await runner.peakInFlight <= 3)
@@ -231,5 +231,135 @@ struct DiffPrefetcherTests {
         #expect(
             calls.dropFirst(3).map(\.client) == Array(repeating: "r4", count: 10),
             "newly dequeued jobs use the replacement client")
+    }
+
+    // MARK: - Skipping warmed files
+
+    @Test func unchangedFilesAreNotReadAgain() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let list = files(10)
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 10)
+
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 10)
+        #expect(prefetcher.acceptedFileIDs.isEmpty)
+        #expect(prefetcher.dequeuedFileIDs.isEmpty)
+    }
+
+    @Test func binaryAndIdenticalFilesCountAsWarmed() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        await loader.markBinary("f0.swift")
+        await loader.markIdentical("f1.swift")
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let list = files(2)
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 2)
+    }
+
+    @Test func aChangedFingerprintReloadsOnlyThatFile() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        var list = files(5)
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+
+        list[2] = list[2].edited()
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(prefetcher.dequeuedFileIDs == [list[2].id])
+        #expect(await loader.calls.count == 6)
+
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 6, "the new fingerprint is warmed too")
+    }
+
+    @Test func filesWithoutAKnownFingerprintAreReadEveryTime() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let unknownSide = DiffInputFingerprint(
+            old: .unknown, new: .notApplicable, worktree: .file(mtimeNs: 1, ctimeNs: 1, size: 1, inode: 1),
+            kind: .modified, originalPath: nil)
+        let list = [
+            changedFile("none.swift").with(fingerprint: nil),
+            changedFile("unknown.swift").with(fingerprint: unknownSide),
+        ]
+        for _ in 0..<2 {
+            prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+            #expect(await eventually { await prefetcher.isIdle })
+        }
+        #expect(await loader.calls.count == 4)
+    }
+
+    @Test func commitFilesAreKeyedByIdAlone() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let commit = CommitRef(sha: objectID("c1"), shortSha: "c1", firstParentSHA: nil)
+        let list = [changedFile("a.swift", area: .commit(commit))]
+        for _ in 0..<2 {
+            prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+            #expect(await eventually { await prefetcher.isIdle })
+        }
+        #expect(await loader.calls.count == 1)
+    }
+
+    @Test func failedLoadsAndFailedDifftAreRetried() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        await loader.markFailing("f1.swift")
+        await runner.fail(true)
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let list = files(3)
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 3)
+
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 6, "nothing finished warming, so nothing is skipped")
+    }
+
+    @Test func aFileThatFailedIsReloadedWhileItsNeighboursAreSkipped() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        await loader.markFailing("f1.swift")
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let list = files(3)
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(prefetcher.dequeuedFileIDs == [list[1].id])
+        #expect(await loader.calls.count == 4)
+    }
+
+    @Test func theSameFileIDInAnotherRepositoryIsWarmedSeparately() async {
+        let runner = RunnerProbe()
+        let loader = LoaderProbe()
+        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
+        let list = files(3)
+        let other = RepositoryRoot(path: "/other-repo")
+        prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        prefetcher.prefetch(files: list, repository: other, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 6)
+
+        prefetcher.prefetch(files: list, repository: other, client: TaggedClient())
+        #expect(await eventually { await prefetcher.isIdle })
+        #expect(await loader.calls.count == 6)
     }
 }

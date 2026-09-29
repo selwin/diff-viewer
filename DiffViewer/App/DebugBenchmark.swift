@@ -119,7 +119,7 @@ import Foundation
             state.onRefreshPublished = { state, cause, inputsChanged in
                 chained?(state, cause, inputsChanged)
                 guard inputsChanged || cause != .watcher else { return }
-                prefetcher.prefetch(files: state.filesToWarm, client: client)
+                prefetcher.prefetch(files: state.filesToWarm, repository: root, client: client)
             }
             state.selection = [.file(fileID)]
             state.isVisible = true
@@ -127,7 +127,7 @@ import Foundation
                 loader.contentFileID == fileID && loader.content != nil && !loader.isLoading
             }
             // The first prefetch, as when the window becomes key.
-            prefetcher.prefetch(files: state.filesToWarm, client: client)
+            prefetcher.prefetch(files: state.filesToWarm, repository: root, client: client)
             _ = await wait(window: window, timeout: .seconds(120)) { prefetcher.isIdle }
             await settle(window: window)
 
