@@ -86,6 +86,9 @@ final class DiffLoader {
         isLoading = true
         errorMessage = nil
         task = Task {
+            let signposter = PipelineMetrics.signposter
+            let loadState = signposter.beginInterval("singleLoad", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("singleLoad", loadState) }
             do {
                 let oldFormat = ImagePreview.format(for: file.originalPath ?? file.path)
                 let newFormat = ImagePreview.format(for: file.path)
@@ -178,9 +181,12 @@ final class DiffLoader {
             publication: preserved ? .finalOnly : .progressive, cache: cache, resultCache: resultCache)
         task = Task { [weak self] in
             guard let self else { return }
+            let signposter = PipelineMetrics.signposter
+            let loadState = signposter.beginInterval("changesetLoad", id: signposter.makeSignpostID())
             await assembler.run { [self] publication in
                 await publish(publication, generation: gen)
             }
+            signposter.endInterval("changesetLoad", loadState)
             guard gen == generation else { return }
             isLoading = false
             changesetProgress = nil

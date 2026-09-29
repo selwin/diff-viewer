@@ -73,6 +73,7 @@ final class DiffPrefetcher: Prefetching {
             // never sees a worker that is about to exit as available.
             defer { activeWorkers -= 1 }
             while let (file, client) = dequeue() {
+                PipelineMetrics.countPrefetchRead()
                 guard let sources = await Self.candidate(file, client: client, loader: loadSources) else { continue }
                 _ = await cache.result(
                     old: sources.old, new: sources.new, fileName: sources.fileName, priority: .background)

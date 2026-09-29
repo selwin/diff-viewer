@@ -258,6 +258,7 @@ actor ChangesetAssembler {
 
         revision += 1
         publishedCount = prefix
+        if revision == 1 { PipelineMetrics.signposter.emitEvent("firstPublication") }
         let document = ChangesetBuilder.build(
             results: (0..<prefix).map { (files[$0], results[$0]!) }, loadID: loadID, revision: revision,
             foldOptions: foldOptions)

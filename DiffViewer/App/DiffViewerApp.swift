@@ -118,6 +118,9 @@ struct RepositoryWindow: View {
                 services.installAppHooks(delegate: delegate, openWindow: openWindow)
                 services.coordinator.register(state, sceneRoot: sceneRoot) { sceneRoot = $0 }
                 DebugLaunchOptions.apply(to: services)
+                #if DEBUG
+                    DebugBenchmark.start(services: services)
+                #endif
             }
     }
 }

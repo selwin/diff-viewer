@@ -100,6 +100,7 @@ final class RepoWatcher: RepoWatching {
         /// survived, arm the debounce on the main actor.
         func deliver(paths: [String], flags: [FSEventStreamEventFlags]) {
             guard receive(paths: paths, flags: flags) else { return }
+            PipelineMetrics.signposter.emitEvent("watcherEvent")
             Task { @MainActor in
                 // `stop()` may have run while this hop was queued.
                 let debouncer = self.lock.withLock { self.stopped ? nil : self.debouncer }
@@ -150,6 +151,7 @@ final class RepoWatcher: RepoWatching {
         let sink = EventSink(root: root)
         self.sink = sink
         debouncer = Debouncer(interval: interval) {
+            PipelineMetrics.signposter.emitEvent("watcherFire")
             let changes = sink.take()
             if !changes.isEmpty { onChange(changes) }
         }

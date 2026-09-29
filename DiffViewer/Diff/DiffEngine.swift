@@ -83,10 +83,15 @@ enum DiffEngine {
         }
 
         let read: (sources: Sources, matchesFingerprint: Bool)
-        if inputs == nil {
-            read = (try await sources(for: file, client: client), false)
-        } else {
-            read = try await verifiedSources(for: file, client: client)
+        do {
+            let signposter = PipelineMetrics.signposter
+            let readState = signposter.beginInterval("read", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("read", readState) }
+            if inputs == nil {
+                read = (try await sources(for: file, client: client), false)
+            } else {
+                read = try await verifiedSources(for: file, client: client)
+            }
         }
         try Task.checkCancellation()
         // A computation-admission limit, not a memory one: the read has happened, but a
@@ -247,12 +252,16 @@ enum DiffEngine {
         let oldText = String(decoding: sources.old, as: UTF8.self)
         let newText = String(decoding: sources.new, as: UTF8.self)
 
+        let signposter = PipelineMetrics.signposter
+        let difftState = signposter.beginInterval("difft", id: signposter.makeSignpostID())
         let difft = await cache.result(
             for: difftKey, old: sources.old, new: sources.new, fileName: sources.fileName, priority: priority)
+        signposter.endInterval("difft", difftState)
         try Task.checkCancellation()
         let hints = difft?.hints ?? DifftHints()
         let language = difft?.language
 
+        let alignState = signposter.beginInterval("align", id: signposter.makeSignpostID())
         let document = await Task.detached(priority: .userInitiated) {
             let oldLines = TextLines.split(oldText)
             let newLines = TextLines.split(newText)
@@ -262,12 +271,19 @@ enum DiffEngine {
                 oldLines: oldLines, newLines: newLines, rows: rows, hideWhitespace: hideWhitespace)
             return DiffDocument(oldLines: oldLines, newLines: newLines, rows: rows, language: language, moves: moves)
         }.value
+        signposter.endInterval("align", alignState)
         try Task.checkCancellation()
 
         // Sequential, so a caller processing one file at a time runs one parse at a time.
-        let old = await highlight(document.oldLines, sources.fileName)
-        try Task.checkCancellation()
-        let new = await highlight(document.newLines, sources.fileName)
+        let old: [[StyleRun]]?
+        let new: [[StyleRun]]?
+        do {
+            let highlightState = signposter.beginInterval("highlight", id: signposter.makeSignpostID())
+            defer { signposter.endInterval("highlight", highlightState) }
+            old = await highlight(document.oldLines, sources.fileName)
+            try Task.checkCancellation()
+            new = await highlight(document.newLines, sources.fileName)
+        }
         let styles = SyntaxStyles(old: old, new: new)
 
         // Only a successful difft result is kept: `DifftCache` forgets a failure after a

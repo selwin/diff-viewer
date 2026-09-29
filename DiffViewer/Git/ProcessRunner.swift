@@ -28,6 +28,7 @@ final class ProcessGauge: Sendable {
     struct Reading: Sendable, Equatable {
         var running = 0
         var peak = 0
+        var launches = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: Reading())
@@ -37,6 +38,7 @@ final class ProcessGauge: Sendable {
     fileprivate func launched() {
         state.withLock {
             $0.running += 1
+            $0.launches += 1
             $0.peak = max($0.peak, $0.running)
         }
     }
@@ -50,6 +52,9 @@ final class ProcessGauge: Sendable {
 /// concurrently so large outputs never deadlock on a full pipe. `standardInput` is a
 /// file to feed the process; nil gives it `/dev/null`.
 enum ProcessRunner {
+    /// Every subprocess the app launches, for the Debug benchmark.
+    static let allProcesses = ProcessGauge()
+
     static func run(
         _ executable: URL,
         arguments: [String],
@@ -80,6 +85,7 @@ enum ProcessRunner {
 
                     try process.run()
                     gauge?.launched()
+                    allProcesses.launched()
 
                     let group = DispatchGroup()
                     nonisolated(unsafe) var stderrData = Data()
@@ -91,6 +97,7 @@ enum ProcessRunner {
                     let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                     process.waitUntilExit()
                     gauge?.exited()
+                    allProcesses.exited()
                     group.wait()
 
                     return ProcessResult(stdout: stdoutData, stderr: stderrData, status: process.terminationStatus)

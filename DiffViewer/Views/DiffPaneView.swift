@@ -184,17 +184,6 @@ final class DiffPaneView: NSView {
         contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
     }
 
-    private func width(forDigits digits: Int) -> CGFloat {
-        ceil(CGFloat(digits) * charWidth) + 20
-    }
-
-    /// Width of a line in character units, counting a tab as its expansion.
-    private func units(of line: String) -> Int {
-        var units = line.utf16.count
-        if line.utf16.contains(9) { units += line.utf16.count(where: { $0 == 9 }) * (DiffTheme.tabWidth - 1) }
-        return units
-    }
-
     /// Size the document view should have inside a clip view of the given width.
     func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
         NSSize(width: max(contentWidth, clipWidth), height: max(layout.contentHeight, clipHeight))
@@ -203,6 +192,8 @@ final class DiffPaneView: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        let drawStart = DispatchTime.now().uptimeNanoseconds
+        defer { PipelineMetrics.addDrawTime(DispatchTime.now().uptimeNanoseconds - drawStart) }
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         DiffTheme.background.setFill()
         context.fill(bounds.intersection(dirtyRect))
@@ -516,6 +507,7 @@ final class DiffPaneView: NSView {
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
         let cached = CachedLine(line: line, map: expanded.map, width: width, rawLength: raw.utf16.count)
         lineCache[lineIndex] = cached
+        PipelineMetrics.countShapedLine()
         return cached
     }
 
@@ -551,5 +543,18 @@ final class ButtonElement: NSAccessibilityElement {
     override func accessibilityPerformPress() -> Bool {
         onPress()
         return true
+    }
+}
+
+extension DiffPaneView {
+    fileprivate func width(forDigits digits: Int) -> CGFloat {
+        ceil(CGFloat(digits) * charWidth) + 20
+    }
+
+    /// Width of a line in character units, counting a tab as its expansion.
+    fileprivate func units(of line: String) -> Int {
+        var units = line.utf16.count
+        if line.utf16.contains(9) { units += line.utf16.count(where: { $0 == 9 }) * (DiffTheme.tabWidth - 1) }
+        return units
     }
 }
