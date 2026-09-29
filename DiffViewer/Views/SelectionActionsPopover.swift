@@ -115,7 +115,7 @@ private struct SelectionActionsContent: View {
     let run: (FileAction, [ChangedFile]) -> Void
 
     var body: some View {
-        let countText = fileCount == 1 ? "1 file selected" : "\(fileCount) files selected"
+        let countText = "\(FileCountText.make(fileCount)) selected"
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Text(countText)
@@ -151,7 +151,7 @@ private struct SelectionActionsContent: View {
 
     /// Always counted: a lone "Stage" reads well beside a highlighted row, not out loud.
     private static func accessibilityLabel(for action: FileAction, on selected: [ChangedFile]) -> String {
-        let files = selected.count == 1 ? "1 file" : "\(selected.count) files"
+        let files = FileCountText.make(selected.count)
         switch action {
         case .stage: return "Stage \(files)"
         case .unstage: return "Unstage \(files)"

@@ -324,9 +324,7 @@ final class WindowState {
         session?.headStateCheckSerial += 1
         if let session {
             // No further read will publish, so anyone waiting for one is let go.
-            let waiting = session.branchReadWaiters
-            session.branchReadWaiters = []
-            for continuation in waiting { continuation.resume() }
+            resumeBranchReadWaiters(session: session)
             stopWatcher(session: session)
         }
         diffLoader.cancelActiveWork()
@@ -1002,6 +1000,11 @@ extension WindowState {
     /// Records a published branch read and wakes whoever was waiting for one.
     private func publishedBranchRead(session: RepoSession) {
         session.branchReadGeneration += 1
+        resumeBranchReadWaiters(session: session)
+    }
+
+    /// Resumes and clears pending branch-read waiters.
+    private func resumeBranchReadWaiters(session: RepoSession) {
         let waiting = session.branchReadWaiters
         session.branchReadWaiters = []
         for continuation in waiting { continuation.resume() }
@@ -1412,7 +1415,7 @@ extension WindowState {
         // Git would refuse too; this says why in words. One created since the last read
         // still reaches git, whose refusal is reported the same way.
         guard !branches.contains(where: { $0.name == branch.name }) else {
-            errorMessage = "A local branch named \(branch.name) already exists"
+            errorMessage = branch.localNameCollisionMessage
             return
         }
         await startBranchSwitch(session: session) { client in

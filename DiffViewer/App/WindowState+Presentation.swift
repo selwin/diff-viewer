@@ -87,3 +87,10 @@ extension HeadState {
         }
     }
 }
+
+extension RemoteBranch {
+    /// Explains why a remote branch cannot be checked out when its local name exists.
+    var localNameCollisionMessage: String {
+        "A local branch named \(name) already exists"
+    }
+}

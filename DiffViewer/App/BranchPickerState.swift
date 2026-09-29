@@ -341,7 +341,7 @@ struct BranchPickerState {
                 id: .remote(ref: branch.ref), kind: .remoteOnly, source: .remote(branch), name: name,
                 subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
                 status: snapshot.newRemoteBranches.contains(branch.ref) ? .new : .none,
-                blockedReason: collides ? "A local branch named \(branch.name) already exists" : nil)
+                blockedReason: collides ? branch.localNameCollisionMessage : nil)
         }
     }
 
