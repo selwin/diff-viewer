@@ -1,30 +1,58 @@
 import CoreServices
 import Foundation
 
-/// Coalesces rapid calls into one, `interval` after the last call.
+/// Coalesces rapid calls into one, `interval` after the last call. With `maxWait`, a burst
+/// that never goes quiet still fires that long after its first call, so a steady stream of
+/// calls cannot postpone the action forever.
 @MainActor
 final class Debouncer {
     private let interval: Duration
-    private var task: Task<Void, Never>?
+    private let maxWait: Duration?
+    private let clock: any Clock<Duration>
     private let action: @MainActor () -> Void
+    /// Restarted by every call.
+    private var quietTask: Task<Void, Never>?
+    /// Started by the first call of a burst and never restarted, so it needs no clock
+    /// reading: it is the burst's deadline.
+    private var maxWaitTask: Task<Void, Never>?
 
-    init(interval: Duration, action: @escaping @MainActor () -> Void) {
+    init(
+        interval: Duration, maxWait: Duration? = nil, clock: any Clock<Duration> = ContinuousClock(),
+        action: @escaping @MainActor () -> Void
+    ) {
         self.interval = interval
+        self.maxWait = maxWait
+        self.clock = clock
         self.action = action
     }
 
     func call() {
-        task?.cancel()
-        task = Task { [interval, action] in
-            try? await Task.sleep(for: interval)
-            guard !Task.isCancelled else { return }
-            action()
+        quietTask?.cancel()
+        quietTask = schedule(after: interval)
+        if let maxWait, maxWaitTask == nil {
+            maxWaitTask = schedule(after: maxWait)
         }
     }
 
     func cancel() {
-        task?.cancel()
-        task = nil
+        quietTask?.cancel()
+        maxWaitTask?.cancel()
+        quietTask = nil
+        maxWaitTask = nil
+    }
+
+    private func schedule(after delay: Duration) -> Task<Void, Never> {
+        Task { [weak self, clock] in
+            try? await Task.sleep(for: delay, clock: clock)
+            guard !Task.isCancelled else { return }
+            self?.fire()
+        }
+    }
+
+    /// Ends the burst, so the next call starts a new one.
+    private func fire() {
+        cancel()
+        action()
     }
 }
 
@@ -147,10 +175,14 @@ final class RepoWatcher: RepoWatching {
     private let debouncer: Debouncer
     private let queue = DispatchQueue(label: "com.selwin.DiffViewer.RepoWatcher")
 
-    init(root: URL, interval: Duration = .milliseconds(400), onChange: @escaping @MainActor (Set<RepoChange>) -> Void) {
+    /// `maxWait` bounds how long a tool that keeps writing can delay the refresh.
+    init(
+        root: URL, interval: Duration = .milliseconds(400), maxWait: Duration? = .seconds(1),
+        onChange: @escaping @MainActor (Set<RepoChange>) -> Void
+    ) {
         let sink = EventSink(root: root)
         self.sink = sink
-        debouncer = Debouncer(interval: interval) {
+        debouncer = Debouncer(interval: interval, maxWait: maxWait) {
             PipelineMetrics.signposter.emitEvent("watcherFire")
             let changes = sink.take()
             if !changes.isEmpty { onChange(changes) }
