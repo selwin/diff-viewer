@@ -32,12 +32,24 @@ actor HighlighterProbe {
         for continuation in waiters.removeValue(forKey: name) ?? [] { continuation.resume() }
     }
 
-    /// Every line gets one run, so a coloured section is obvious in the snapshot.
-    nonisolated func callback() -> @Sendable ([String], String) async -> [[StyleRun]]? {
+    /// Every line gets one run, so a coloured section is obvious in the snapshot, and one
+    /// scope named after the file spans every line.
+    nonisolated func callback() -> DiffEngine.Highlight {
         { [self] lines, fileName in
             await record(fileName)
             guard fileName.hasSuffix(".swift") else { return nil }
-            return lines.map { _ in [StyleRun(range: 0..<1, style: .keyword)] }
+            // An empty side has no line to span, so it gets no scope.
+            let scopes =
+                lines.isEmpty
+                ? []
+                : [
+                    ScopeOutline.Scope(
+                        lineRange: 0...(lines.count - 1), name: fileName, parent: nil,
+                        claimsFirstLine: true, claimsLastLine: true)
+                ]
+            return Highlighter.Result(
+                runs: lines.map { _ in [StyleRun(range: 0..<1, style: .keyword)] },
+                outline: ScopeOutline(scopes: scopes))
         }
     }
 
@@ -211,7 +223,7 @@ struct ChangesetAssemblerTests {
             difftKey: DifftCache.key(old: Data(), new: Data("x".utf8), fileName: file.fileName), hideWhitespace: true)
         await resultCache.store(
             DiffResultCache.Entry(
-                document: document, styles: SyntaxStyles(old: nil, new: nil),
+                document: document, styles: SyntaxStyles(old: nil, new: nil, oldOutline: nil, newOutline: nil),
                 sourceByteCount: ChangesetLimits.maxSourceBytesPerFile + 1),
             for: key)
         await resultCache.register(
@@ -410,6 +422,23 @@ struct ChangesetAssemblerTests {
         #expect(plainRuns.allSatisfy { $0.isEmpty }, "an unsupported language contributes empty runs")
         let codeRuns = (0..<code.newLineCount).map { styles.new![code.newLineOffset + $0] }
         #expect(codeRuns.allSatisfy { !$0.isEmpty }, "and a supported one keeps its colours")
+    }
+
+    /// Each file's outline is shifted to where its lines start in the joined document.
+    @Test func outlinesAreJoinedAtEachSectionsLineOffset() async {
+        let client = StubRepoClient(files: [])
+        let (_, log, run) = assemble(["a.swift", "b.swift"], client: client)
+        await run().value
+
+        guard let document = await log.lastDocument, let styles = await log.documents.last?.styles else {
+            Issue.record("nothing was published")
+            return
+        }
+        let b = document.sections[1]
+        #expect(b.newLineOffset > 0 && b.oldLineOffset > 0)
+        #expect(styles.newOutline?.name(atLine: b.newLineOffset) == "b.swift")
+        #expect(styles.oldOutline?.name(atLine: b.oldLineOffset) == "b.swift")
+        #expect(styles.newOutline?.name(atLine: b.newLineOffset - 1) == "a.swift")
     }
 
     /// Styles that finish before their section joins the prefix must ride out with it.

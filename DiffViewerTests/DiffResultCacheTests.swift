@@ -14,7 +14,9 @@ private func key(_ name: String, fileName: String = "a.swift", hideWhitespace: B
 private func entry(rows: Int = 4) -> DiffResultCache.Entry {
     guard case let .text(document) = textContent(rows: rows, modified: [0..<1]) else { fatalError("text expected") }
     let runs = document.newLines.map { _ in [StyleRun(range: 0..<1, style: .keyword)] }
-    return DiffResultCache.Entry(document: document, styles: SyntaxStyles(old: runs, new: runs), sourceByteCount: 0)
+    return DiffResultCache.Entry(
+        document: document, styles: SyntaxStyles(old: runs, new: runs, oldOutline: nil, newOutline: nil),
+        sourceByteCount: 0)
 }
 
 struct DiffResultCacheTests {

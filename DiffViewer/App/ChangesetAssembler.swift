@@ -293,20 +293,32 @@ actor ChangesetAssembler {
         await publishNow(startingCooldown: true)
     }
 
-    /// Styles for every line of `document`, in one array per side. A section that is not
-    /// highlighted (unsupported language, nothing to colour) contributes empty runs, so a
-    /// later file's styles never shift onto the wrong lines.
+    /// Styles for every line of `document`, in one array per side, and one outline per
+    /// side. A section without a highlight result contributes empty runs and no
+    /// scopes, so a later file's styles never shift onto the wrong lines.
     private func snapshot(for document: ChangesetDocument) -> DocumentStyles {
         var old: [[StyleRun]] = []
         var new: [[StyleRun]] = []
+        var oldOutline = ScopeOutline()
+        var newOutline = ScopeOutline()
         old.reserveCapacity(document.document.oldLines.count)
         new.reserveCapacity(document.document.newLines.count)
         for (index, section) in document.sections.enumerated() {
             let styles = sectionStyles[index]
             old.append(contentsOf: runs(styles?.old, count: section.oldLineCount))
             new.append(contentsOf: runs(styles?.new, count: section.newLineCount))
+            // An outline carries no line count; it comes from the same highlight result as
+            // its side's runs (one per line), so a matching runs count vouches for it too.
+            if let outline = styles?.oldOutline, styles?.old?.count == section.oldLineCount {
+                oldOutline.append(outline, lineOffset: section.oldLineOffset)
+            }
+            if let outline = styles?.newOutline, styles?.new?.count == section.newLineCount {
+                newOutline.append(outline, lineOffset: section.newLineOffset)
+            }
         }
-        return DocumentStyles(documentID: document.document.id, revision: document.revision, old: old, new: new)
+        return DocumentStyles(
+            documentID: document.document.id, revision: document.revision, old: old, new: new,
+            oldOutline: oldOutline, newOutline: newOutline)
     }
 
     private func runs(_ styles: [[StyleRun]]?, count: Int) -> [[StyleRun]] {

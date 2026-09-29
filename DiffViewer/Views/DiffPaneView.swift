@@ -35,6 +35,10 @@ final class DiffPaneView: NSView {
         }
     }
 
+    /// Named scopes of this side's lines, for labelling separators. Set with `styles`
+    /// through `setSyntax`.
+    var outline: ScopeOutline?
+
     /// Find hits per document row, in raw UTF-16 offsets on this pane's side.
     var findMatches: [Int: [Range<Int>]] = [:] {
         didSet { needsDisplay = true }
@@ -90,6 +94,7 @@ final class DiffPaneView: NSView {
         switch mode {
         case .replace:
             selection = nil
+            outline = nil  // Outlines are per document.
             findMatches = [:]
             lineCache.removeAll()
             numberCache.removeAll()
@@ -187,11 +192,6 @@ final class DiffPaneView: NSView {
         }
         gutterWidth = max(gutterWidth, width(forDigits: model.gutterDigits))
         contentWidth = gutterWidth + textInset + CGFloat(maxLineUnits) * charWidth + 40
-    }
-
-    /// Size the document view should have inside a clip view of the given width.
-    func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
-        NSSize(width: max(contentWidth, clipWidth), height: max(layout.contentHeight, clipHeight))
     }
 
     // MARK: - Drawing
@@ -552,6 +552,17 @@ final class ButtonElement: NSAccessibilityElement {
 }
 
 extension DiffPaneView {
+    /// Size the document view should have inside a clip view of the given width.
+    func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
+        NSSize(width: max(contentWidth, clipWidth), height: max(layout.contentHeight, clipHeight))
+    }
+
+    /// Runs and outline come from one style snapshot, so they are replaced together.
+    func setSyntax(styles: [[StyleRun]]?, outline: ScopeOutline?) {
+        self.styles = styles
+        self.outline = outline
+    }
+
     fileprivate func width(forDigits digits: Int) -> CGFloat {
         ceil(CGFloat(digits) * charWidth) + 20
     }

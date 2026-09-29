@@ -245,13 +245,17 @@ enum LanguageRegistry {
     /// The file's scope rules resolved to grammar symbols, cached per language. Nil when
     /// the language is not bundled; empty when it has no rules.
     static func scopeRules(forFileNamed fileName: String) -> ScopeRules? {
-        guard let spec = spec(forFileNamed: fileName),
-            let config = configuration(forFileNamed: fileName)
-        else { return nil }
+        guard let config = configuration(forFileNamed: fileName) else { return nil }
+        return scopeRules(forFileNamed: fileName, configuration: config)
+    }
+
+    /// As `scopeRules(forFileNamed:)`, for a caller that already holds the configuration.
+    static func scopeRules(forFileNamed fileName: String, configuration: LanguageConfiguration) -> ScopeRules? {
+        guard let spec = spec(forFileNamed: fileName) else { return nil }
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached = scopeRulesCache[spec.name] { return cached }
-        let rules = ScopeRules(spec.scopes, language: config.language)
+        let rules = ScopeRules(spec.scopes, language: configuration.language)
         scopeRulesCache[spec.name] = rules
         return rules
     }

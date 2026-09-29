@@ -210,9 +210,9 @@ final class SideBySideContainerView: NSView {
         appliedFindFills = nil
         findOwnedSelection = nil
         // Styles are applied separately by `setStyles`; the panes must not keep the
-        // previous document's colours until then.
-        leftPane.styles = nil
-        rightPane.styles = nil
+        // previous document's colours or scopes until then.
+        leftPane.setSyntax(styles: nil, outline: nil)
+        rightPane.setSyntax(styles: nil, outline: nil)
         appliedStylesID = nil
         overview.rows = incoming.rows
         overview.changeBlocks = incoming.changeBlocks
@@ -273,8 +273,8 @@ final class SideBySideContainerView: NSView {
     /// still reapplies its styles.
     func setStyles(_ styles: DocumentStyles?) {
         guard let styles, let document, styles.documentID == document.id, styles.id != appliedStylesID else { return }
-        leftPane.styles = styles.old
-        rightPane.styles = styles.new
+        leftPane.setSyntax(styles: styles.old, outline: styles.oldOutline)
+        rightPane.setSyntax(styles: styles.new, outline: styles.newOutline)
         appliedStylesID = styles.id
     }
 

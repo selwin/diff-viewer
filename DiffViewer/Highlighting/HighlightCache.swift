@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Memoizes tree-sitter runs by file name and line content.
+/// Memoizes tree-sitter results by file name and line content.
 ///
 /// A save changes only the working-tree side of a diff, so the index or HEAD side, which
 /// is byte-identical, is looked up here instead of parsed again. The same blob also serves
@@ -18,7 +18,7 @@ actor HighlightCache {
         fileprivate let digest: Data
     }
 
-    private var results: CostBoundedLRU<Key, [[StyleRun]]>
+    private var results: CostBoundedLRU<Key, Highlighter.Result>
 
     init(limits: Limits = Limits()) {
         results = CostBoundedLRU(entries: limits.entries, bytes: limits.bytes, maxEntryCost: limits.maxEntryCost)
@@ -47,18 +47,18 @@ actor HighlightCache {
         { lines, fileName in
             let key = Self.key(lines: lines, fileName: fileName)
             if let hit = await self.lookup(key) { return hit }
-            guard let runs = await fallback(lines, fileName) else { return nil }
-            await self.store(runs, lines: lines.count, for: key)
-            return runs
+            guard let result = await fallback(lines, fileName) else { return nil }
+            await self.store(result, lines: lines.count, for: key)
+            return result
         }
     }
 
-    private func lookup(_ key: Key) -> [[StyleRun]]? {
+    private func lookup(_ key: Key) -> Highlighter.Result? {
         results.value(for: key)
     }
 
-    private func store(_ runs: [[StyleRun]], lines: Int, for key: Key) {
-        let cost = runs.reduce(0) { $0 + $1.count } * 16 + lines * 8
-        _ = results.insert(runs, cost: cost, for: key)
+    private func store(_ result: Highlighter.Result, lines: Int, for key: Key) {
+        let cost = result.runs.reduce(0) { $0 + $1.count } * 16 + lines * 8 + result.outline.retainedBytes
+        _ = results.insert(result, cost: cost, for: key)
     }
 }

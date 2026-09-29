@@ -144,7 +144,8 @@ final class DiffLoader {
                     // so the panes do not reshape lines they already have.
                     if styles?.documentID != document.id {
                         styles = DocumentStyles(
-                            documentID: document.id, revision: 0, old: syntax.old, new: syntax.new)
+                            documentID: document.id, revision: 0, old: syntax.old, new: syntax.new,
+                            oldOutline: syntax.oldOutline, newOutline: syntax.newOutline)
                     }
                 } else {
                     styles = nil
@@ -218,4 +219,6 @@ struct DocumentStyles: Sendable {
     let revision: Int
     let old: [[StyleRun]]?
     let new: [[StyleRun]]?
+    let oldOutline: ScopeOutline?
+    let newOutline: ScopeOutline?
 }

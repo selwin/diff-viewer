@@ -105,6 +105,11 @@ struct ScopeOutline: Sendable, Equatable {
         return chain.reversed()
     }
 
+    /// Estimated bytes held, for cache costs: one stride per scope plus the name bytes.
+    var retainedBytes: Int {
+        scopes.reduce(scopes.count * MemoryLayout<Scope>.stride) { $0 + $1.name.utf8.count }
+    }
+
     /// Adds `other`, whose lines start at `lineOffset`, in place so joining many outlines stays linear.
     mutating func append(_ other: ScopeOutline, lineOffset: Int) {
         let base = scopes.count
