@@ -149,7 +149,8 @@ import Foundation
                 let delta = Sample() - before
                 report(
                     "edit save=\(save) ok=\(loaded) visible=\(ms(visible)) idle=\(ms(idle)) "
-                        + "styled=\(loader.styles != nil) \(delta)")
+                        + "styled=\(loader.styles != nil) \(delta)"
+                        + (loaded ? "" : " windowVisible=\(state.isVisible) stale=\(state.diffStale)"))
             }
         }
 
