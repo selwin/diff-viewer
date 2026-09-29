@@ -23,8 +23,8 @@ struct PaneModel {
     let changeBlocks: [Range<Int>]
     let scopeAnchors: [ScopeAnchor]
 
-    /// `reusingScopeAnchors` are the previous revision's anchors when a changeset is
-    /// appended to; they are kept as they are and only the new blocks are anchored.
+    /// On an append, `reusingScopeAnchors` are the previous revision's anchors; only the
+    /// blocks after them are computed.
     init(
         side: Side, rows: [DiffRow], lines: [String], sections: [ChangesetSection] = [],
         sectionIndex: SectionIndex? = nil, moves: [DiffMove] = [], changeBlocks: [Range<Int>],

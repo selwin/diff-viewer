@@ -4,8 +4,9 @@ import Foundation
 /// right end so they never move for the scope label, which takes the space left of them.
 /// Drawing and hit testing both use it, so a click lands on the control that is drawn.
 struct SeparatorLayout {
-    /// Space between two control squares, and between the last square and the count.
+    /// Space between two control squares.
     static let controlSpacing: CGFloat = 4
+    /// Space between the last control square and the count.
     static let countSpacing: CGFloat = 10
 
     /// Control squares, left to right.
@@ -36,10 +37,9 @@ struct SeparatorLayout {
             // About two characters of space keep the label from running into the controls.
             labelWidth = x - 2 * charWidth - labelX
         } else {
-            // On a narrow row, right-aligned parts would run into the gutter. Start at the
-            // text edge instead and let the count give way. Controls that would leave the
-            // count no room are dropped: a clipped square is hard to hit, and a click
-            // elsewhere on the row expands the whole run anyway.
+            // Right-aligned, they would run into the gutter, so start at the text edge and let
+            // the count shrink. Controls that leave the count no room are dropped; a click
+            // anywhere on the row still expands the whole run.
             if labelX + controlsSpan >= right { shown = [] }
             x = labelX
             countX = labelX + (shown.isEmpty ? 0 : controlsSpan)
@@ -52,10 +52,8 @@ struct SeparatorLayout {
         }
     }
 
-    /// Which names of a scope label to show: all of them, or just the innermost when the full
-    /// `Parent › name` label does not fit. The caller truncates the innermost name if it
-    /// still does not fit. `width` measures the shaped label, since wide glyphs (CJK, emoji)
-    /// draw wider than the monospaced character width.
+    /// All the names, or only the innermost when `Parent › name` does not fit. `width`
+    /// measures the shaped label, because wide glyphs (CJK, emoji) overflow the monospaced cell.
     static func labelNames(_ names: [String], availableWidth: CGFloat, width: ([String]) -> CGFloat) -> [String] {
         guard let innermost = names.last else { return [] }
         return width(names) <= availableWidth ? names : [innermost]

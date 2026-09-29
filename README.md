@@ -39,8 +39,8 @@ experience. We want this to be speedy when reviewing large diffs.
 - **Collapse unchanged lines** (⇧⌘U, on by default): changed hunks plus 5 lines of
   context. Each hidden run is one separator: its arrows reveal 10 lines at a time, a
   click elsewhere on it reveals the whole run, and ⌥-click reveals the whole file.
-  A separator also names the function, method or type that the change below it is in,
-  taken from the tree-sitter parse (each pane names its own side).
+  A separator also names the scope of the change below it, such as `Cart › total`, from
+  the tree-sitter parse; each pane names its own side.
 - **Hide whitespace** (⇧⌘W), meaning exactly git's `-w`.
 - **Find** (⌘F) with ⌘G / ⇧⌘G to step, and a side scope (⌥⌘← / ⌥⌘→) that shows the
   match count on each side.

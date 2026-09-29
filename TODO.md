@@ -184,9 +184,8 @@ middle of a file, and staging, unstaging and discarding one hunk in a temporary 
 
 ### I. Show the function or method a change is in, remainder (requested 2026-09-27)
 
-Collapsed-lines separators name the closest enclosing function, method or type of the
-change below them (2026-09-29), from the tree-sitter parse, per side, in single-file
-mode and All changes. Still open:
+Collapsed-lines separators name the scope of the change below them, up to two levels
+(`Cart › total`), per side, in single-file mode and All changes (2026-09-29). Still open:
 
 - **Compact signatures.** Show `adopt(_:)` rather than `adopt`, per grammar.
 - **Sticky scope line.** A line at the top of each pane naming the scope of the top

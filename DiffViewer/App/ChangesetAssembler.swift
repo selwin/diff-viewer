@@ -307,8 +307,8 @@ actor ChangesetAssembler {
             let styles = sectionStyles[index]
             old.append(contentsOf: runs(styles?.old, count: section.oldLineCount))
             new.append(contentsOf: runs(styles?.new, count: section.newLineCount))
-            // An outline carries no line count; it comes from the same highlight result as
-            // its side's runs (one per line), so a matching runs count vouches for it too.
+            // The outline comes from the same result as the runs, so their line count
+            // vouches for it.
             if let outline = styles?.oldOutline, styles?.old?.count == section.oldLineCount {
                 oldOutline.append(outline, lineOffset: section.oldLineOffset)
             }

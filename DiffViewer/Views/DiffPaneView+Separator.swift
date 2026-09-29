@@ -4,9 +4,9 @@ import CoreText
 /// Separator rows: the scope of the next change on the left, the fold controls and the
 /// hidden-line count on the right.
 extension DiffPaneView {
-    /// The separator's layout and its shaped count. Drawing, clicks and accessibility all
-    /// come through here, so a click lands on the control that is drawn. A changeset's
-    /// separators are inert: no controls, and a leading ellipsis so the row still reads as a gap.
+    /// The separator's layout and its shaped count, shared by drawing, clicks and
+    /// accessibility. A changeset's separators are inert: no controls, and a leading ellipsis
+    /// so the row still reads as a gap.
     func separatorLayout(for hidden: Range<Int>, rowRect: NSRect) -> (layout: SeparatorLayout, count: CTLine) {
         let count = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
         let controls =

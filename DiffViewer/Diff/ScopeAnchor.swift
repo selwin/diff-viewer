@@ -8,9 +8,8 @@ enum ScopeAnchor: Sendable, Equatable {
     /// This side's lines just before and after the block; nil past the file's edge.
     case between(before: Int?, after: Int?)
 
-    /// One anchor per block from `start` on. `sameSection` says whether two rows belong to
-    /// the same file, so a neighbour in another changeset section is not used; that is also
-    /// why an appended section never changes the anchors of the blocks before it.
+    /// One anchor per block from `start` on. A neighbour in another file (`sameSection` is
+    /// false) is not used, which is also why appending a file never changes earlier anchors.
     static func anchors(
         changeBlocks: [Range<Int>], startingAt start: Int = 0, rows: [DiffRow], side: DocumentSide,
         sameSection: (Int, Int) -> Bool
@@ -29,9 +28,9 @@ enum ScopeAnchor: Sendable, Equatable {
         }
     }
 
-    /// The two innermost scope names at the line, outermost first, so a method reads with
-    /// its type. For `.between` it is the scopes containing both neighbours, so a function
-    /// inserted between two methods reads as their type.
+    /// Up to two innermost scope names, outermost first (`Cart`, `total`). For `.between`
+    /// only scopes holding both neighbours count, so a method inserted between two others
+    /// reads as their type.
     func names(in outline: ScopeOutline) -> [String] {
         let chain: [Int]
         switch self {

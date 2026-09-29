@@ -35,7 +35,7 @@ enum LanguageRegistry {
         let name: String
         let bundleName: String
         let precedence: Precedence
-        /// Node kinds that name an enclosing function, method or type.
+        /// Node kinds that are functions, methods or types, and where each finds its name.
         let scopes: [String: ScopeRule]
         let language: @Sendable () -> OpaquePointer?
 
@@ -111,12 +111,12 @@ enum LanguageRegistry {
         return rules
     }()
 
-    /// C function names sit at the end of a `declarator` chain. C++ type specifiers are
-    /// only scopes when they have a body, so `struct Cart *p` and `class Cart;` are not.
+    /// C function names sit at the end of a `declarator` chain.
     private static let cScopes: [String: ScopeRule] = [
         "function_definition": ScopeRule(name: .cDeclaratorIdentifier)
     ]
 
+    /// A class or struct is a scope only with a body, so `struct Cart *p` and `class Cart;` are not.
     private static let cppScopes: [String: ScopeRule] = {
         var rules = cScopes
         rules["namespace_definition"] = ScopeRule(name: .field("name"))
@@ -146,8 +146,8 @@ enum LanguageRegistry {
 
     private static let bashScopes = named("function_definition")
 
-    // Files found by name and by extension share one Spec, because scope rules are cached
-    // per language name: a second Spec with different rules would be ignored or win at random.
+    // Scope rules are cached per language name, so a language found both by file name and
+    // by extension must use one Spec; otherwise whichever file opened first would decide.
     private static let bashSpec = Spec("Bash", scopes: bashScopes, tree_sitter_bash)
     private static let rubySpec = Spec("Ruby", scopes: rubyScopes, tree_sitter_ruby)
     private static let jsonSpec = Spec("JSON", tree_sitter_json)

@@ -73,7 +73,8 @@ struct ScopeOutline: Sendable, Equatable {
         var lineRange: ClosedRange<Int>
         var name: String
         var parent: Int?
-        /// Edge lines shared with other code are left to the enclosing scope.
+        /// False when that edge line also holds other code, so the line goes to the
+        /// enclosing scope instead.
         var claimsFirstLine: Bool
         var claimsLastLine: Bool
 
@@ -105,7 +106,7 @@ struct ScopeOutline: Sendable, Equatable {
         return chain.reversed()
     }
 
-    /// Estimated bytes held, for cache costs: one stride per scope plus the name bytes.
+    /// Estimated bytes held, for cache costs.
     var retainedBytes: Int {
         scopes.reduce(scopes.count * MemoryLayout<Scope>.stride) { $0 + $1.name.utf8.count }
     }
@@ -192,6 +193,7 @@ extension ScopeOutline {
             guard startRow < lines.count else { return nil }
             endRow = min(endRow, lines.count - 1)
 
+            // Point columns count bytes of the UTF-16 text.
             let startColumn = Int(range.lowerBound.column) / 2
             let endColumn = Int(range.upperBound.column) / 2
             return Scope(
@@ -228,12 +230,10 @@ extension ScopeOutline {
             return name
         }
 
-        /// Pointers, arrays and functions nest through `declarator`; C++ references have no
-        /// field, so take their last named child. A conversion operator's `declarator` is
-        /// its abstract parameter list, so the walk stops there. A qualified name yields
-        /// its innermost `name`, because separators show only the closest scope. Anything
-        /// else at the end (a parenthesized function-pointer declarator, a template
-        /// function) is not a plain name.
+        /// Follows `declarator` down to the name. C++ references have no such field, so their
+        /// last named child is taken, and a conversion operator stops the walk because its own
+        /// `declarator` is the parameter list. `Cart::total` yields `total`. Anything else at
+        /// the end (a function pointer, a template function) is not a plain name.
         private static func declaredName(of node: Node) -> Node? {
             var current = node.child(byFieldName: "declarator")
             while let node = current, node.nodeType != "operator_cast" {

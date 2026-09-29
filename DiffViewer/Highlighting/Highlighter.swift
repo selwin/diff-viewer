@@ -30,7 +30,7 @@ enum Highlighter {
         return highlight(lines: lines, fileName: fileName, configuration: config, query: query)
     }
 
-    /// The shared worker: callers look the configuration up once and pass it in.
+    /// Callers look up the configuration once and pass it in.
     private static func highlight(
         lines: [String], fileName: String, configuration config: LanguageConfiguration, query: Query
     ) -> Result? {
