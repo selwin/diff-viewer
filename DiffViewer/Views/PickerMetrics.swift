@@ -16,7 +16,7 @@ enum PickerMetrics {
 
     // MARK: Rows
 
-    static let nameFont = NSFont.systemFont(ofSize: 13, weight: .medium)
+    static let nameFont = NSFont.systemFont(ofSize: 13)
     static let currentNameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     static let subtitleFont = NSFont.systemFont(ofSize: 11)
     static let statusFont = NSFont.systemFont(ofSize: 12)

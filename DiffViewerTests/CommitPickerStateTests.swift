@@ -104,11 +104,10 @@ struct CommitPickerStateTests {
 
     // MARK: Row and header text
 
-    @Test func rowsCarryTheAuthorDateAndNotPushedStatus() {
+    @Test func rowsCarryTheAuthorAndNotPushedStatus() {
         let mine = Self.commit("mine", 19, 9, author: "Ada")
         let picker = state(snapshot(commits: [mine, older], unpushed: [mine.ref.sha]))
         #expect(picker.rows.map(\.authorName) == ["Ada", "Tester"])
-        #expect(picker.rows.map(\.dateText) == ["Today 09:00", "1 Sep"])
         #expect(picker.rows.map(\.status) == [.notPushed, .none])
         #expect(picker.rows.map(\.status.text) == ["Not pushed", ""])
     }

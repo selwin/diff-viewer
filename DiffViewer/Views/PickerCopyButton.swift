@@ -1,10 +1,10 @@
 import AppKit
 
 /// A small borderless button that copies a string, such as a commit's SHA or a branch's
-/// name, and shows a checkmark for a moment after it has. A rounded fill fades in behind
+/// name, and shows a checkmark for a moment after it has. A circular fill fades in behind
 /// the icon while the pointer is over it.
 final class PickerCopyButton: NSButton {
-    /// The hover fill's side; the icon is 11pt, centred in it.
+    /// The hover fill's diameter; the icon is 10pt, centred in it.
     static let side: CGFloat = 20
 
     private static let feedbackDuration: TimeInterval = 1.2
@@ -67,7 +67,7 @@ final class PickerCopyButton: NSButton {
 
     private static func symbol(_ name: String) -> NSImage? {
         NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .regular))
+            .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
     }
 
     /// The icon's side plus the focus ring's margin on both sides.
@@ -84,8 +84,7 @@ final class PickerCopyButton: NSButton {
 
     override func drawFocusRingMask() {
         guard focusMargin > 0 else { return super.drawFocusRingMask() }
-        NSBezierPath(roundedRect: focusRingMaskBounds, xRadius: HoverFillView.radius, yRadius: HoverFillView.radius)
-            .fill()
+        NSBezierPath(ovalIn: focusRingMaskBounds).fill()
     }
 
     /// The fill and icon are decoration: clicks on them belong to the button.
@@ -197,10 +196,8 @@ final class PickerCopyButton: NSButton {
     }
 }
 
-/// The rounded fill behind the copy icon; drawn, so its colour follows the appearance.
+/// The circular fill behind the copy icon; drawn, so its colour follows the appearance.
 private final class HoverFillView: NSView {
-    static let radius: CGFloat = 4
-
     var color = NSColor.clear {
         didSet { if color != oldValue { needsDisplay = true } }
     }
@@ -215,6 +212,6 @@ private final class HoverFillView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         color.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius).fill()
+        NSBezierPath(ovalIn: bounds).fill()
     }
 }

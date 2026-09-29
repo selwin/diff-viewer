@@ -21,7 +21,7 @@ final class PickerTableRowView: NSTableRowView {
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        NSColor.selectedContentBackgroundColor.setFill()
+        NSColor.controlAccentColor.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0), xRadius: PickerMetrics.cornerRadius,
             yRadius: PickerMetrics.cornerRadius

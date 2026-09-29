@@ -1,9 +1,9 @@
 import AppKit
 
 /// The commit picker's header: the displayed scope's title, wrapped in full, over a
-/// detail line that mirrors a row's second line, with the copy button after the shaLabel.
-/// It draws no background of its own, so the header and the list share the popover's
-/// one surface.
+/// detail line. For a commit that is its author, date and hash, then a copy button; for
+/// Working Tree, its change count. It draws no background, so the header and the list
+/// share the popover's one surface.
 final class CommitPickerHeaderView: NSView {
     private typealias Metrics = PickerMetrics.Header
 
