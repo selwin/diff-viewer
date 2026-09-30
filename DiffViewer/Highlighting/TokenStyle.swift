@@ -97,20 +97,22 @@ extension DiffTheme {
         )
     }
 
+    /// Dark hues stay light and off red and green, so text stays readable on the added and
+    /// deleted fills.
     private static let syntaxColors: [TokenStyle: NSColor] = [
-        .keyword: dynamic(light: hex(0x9B2393), dark: hex(0xFC5FA3)),
-        .string: dynamic(light: hex(0xC41A16), dark: hex(0xFC6A5D)),
-        .escape: dynamic(light: hex(0x1C00CF), dark: hex(0xD0BF69)),
-        .comment: dynamic(light: hex(0x5D6C79), dark: hex(0x6C7986)),
-        .type: dynamic(light: hex(0x0B4F79), dark: hex(0x5DD8FF)),
-        .function: dynamic(light: hex(0x326D74), dark: hex(0x67B7A4)),
-        .property: dynamic(light: hex(0x3E8087), dark: hex(0x67B7A4)),
-        .number: dynamic(light: hex(0x1C00CF), dark: hex(0xD0BF69)),
-        .constant: dynamic(light: hex(0x1C00CF), dark: hex(0xD0BF69)),
-        .attribute: dynamic(light: hex(0x643820), dark: hex(0xFD8F3F)),
-        .tag: dynamic(light: hex(0x9B2393), dark: hex(0xFC5FA3)),
-        .label: dynamic(light: hex(0x9B2393), dark: hex(0xFC5FA3)),
-        .heading: dynamic(light: hex(0x0B4F79), dark: hex(0x5DD8FF)),
+        .keyword: dynamic(light: hex(0x9B2393), dark: hex(0xFF9CD2)),
+        .string: dynamic(light: hex(0xC41A16), dark: hex(0xA5D6FF)),
+        .escape: dynamic(light: hex(0x1C00CF), dark: hex(0xE5C07B)),
+        .comment: dynamic(light: hex(0x5D6C79), dark: hex(0x959EA8)),
+        .type: dynamic(light: hex(0x0B4F79), dark: hex(0xFFB86C)),
+        .function: dynamic(light: hex(0x326D74), dark: hex(0xD2A8FF)),
+        .property: dynamic(light: hex(0x3E8087), dark: hex(0xD2A8FF)),
+        .number: dynamic(light: hex(0x1C00CF), dark: hex(0xE5C07B)),
+        .constant: dynamic(light: hex(0x1C00CF), dark: hex(0xE5C07B)),
+        .attribute: dynamic(light: hex(0x643820), dark: hex(0xE5C07B)),
+        .tag: dynamic(light: hex(0x9B2393), dark: hex(0xFF9CD2)),
+        .label: dynamic(light: hex(0x9B2393), dark: hex(0xFF9CD2)),
+        .heading: dynamic(light: hex(0x0B4F79), dark: hex(0xFFB86C)),
     ]
 
     static func color(for style: TokenStyle) -> NSColor {

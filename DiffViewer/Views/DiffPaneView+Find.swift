@@ -18,13 +18,46 @@ extension DiffPaneView {
         guard let ranges = findMatches[row] else { return }
         let current = selectedFindMatch(inRow: row)
         for range in ranges {
-            let (x0, x1) = horizontalBounds(range, in: cached)
-            guard x1 > x0 else { continue }
+            guard let path = findMatchPath(range, cached: cached, in: rowRect) else { continue }
             (range == current ? DiffTheme.findCurrentMatch : DiffTheme.findMatch).setFill()
-            let rect = textSpanRect(x0: x0, x1: x1, in: rowRect)
-            context.addPath(CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            context.addPath(path)
             context.fillPath()
         }
+    }
+
+    /// Repaints match text in black, excluding ordinary selection regions.
+    func drawFindMatchText(
+        ofRow row: Int, lineIndex: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext
+    ) {
+        guard let model, let ranges = findMatches[row], !ranges.isEmpty else { return }
+        let matchClipPath = CGMutablePath()
+        for range in ranges {
+            if let path = findMatchPath(range, cached: cached, in: rowRect) { matchClipPath.addPath(path) }
+        }
+        guard !matchClipPath.isEmpty else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.addPath(matchClipPath)
+        context.clip()
+        if let selected = selectionRect(ofRow: row, cached: cached, in: rowRect) {
+            // Even-odd against the view's bounds leaves everything but the selected span,
+            // which keeps its syntax-coloured text over the selection background.
+            let selectionExclusionPath = CGMutablePath()
+            selectionExclusionPath.addRect(bounds)
+            selectionExclusionPath.addRect(selected)
+            context.addPath(selectionExclusionPath)
+            context.clip(using: .evenOdd)
+        }
+        drawLine(
+            findTextLine(for: lineIndex, model: model),
+            at: CGPoint(x: documentTextX, y: baselineY(in: rowRect)), context: context)
+    }
+
+    private func findMatchPath(_ range: Range<Int>, cached: CachedLine, in rowRect: NSRect) -> CGPath? {
+        let (x0, x1) = horizontalBounds(range, in: cached)
+        guard x1 > x0 else { return nil }
+        let rect = textSpanRect(x0: x0, x1: x1, in: rowRect)
+        return CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil)
     }
 
     /// The selection's range in `row` when it covers exactly one find match there.

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Colors and metrics for the diff panes. All colors are dynamic (light/dark aware).
+/// Colors and metrics for the diff panes. Most colors are dynamic (light/dark aware).
 enum DiffTheme {
     static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { appearance in
@@ -20,13 +20,13 @@ enum DiffTheme {
 
     static let gutterBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(30, 32, 36))
 
-    static let deletedRow = dynamic(light: rgb(255, 235, 233), dark: rgb(248, 81, 73, 0.16))
-    static let deletedToken = dynamic(light: rgb(255, 129, 130, 0.45), dark: rgb(248, 81, 73, 0.42))
-    static let deletedGutter = dynamic(light: rgb(255, 206, 203), dark: rgb(248, 81, 73, 0.30))
+    static let deletedRow = dynamic(light: rgb(255, 235, 233), dark: rgb(248, 81, 73, 0.12))
+    static let deletedToken = dynamic(light: rgb(255, 129, 130, 0.45), dark: rgb(248, 81, 73, 0.28))
+    static let deletedGutter = dynamic(light: rgb(255, 206, 203), dark: rgb(248, 81, 73, 0.24))
 
-    static let addedRow = dynamic(light: rgb(218, 251, 225), dark: rgb(46, 160, 67, 0.16))
-    static let addedToken = dynamic(light: rgb(74, 194, 107, 0.45), dark: rgb(46, 160, 67, 0.42))
-    static let addedGutter = dynamic(light: rgb(172, 238, 187), dark: rgb(46, 160, 67, 0.30))
+    static let addedRow = dynamic(light: rgb(218, 251, 225), dark: rgb(46, 160, 67, 0.12))
+    static let addedToken = dynamic(light: rgb(74, 194, 107, 0.45), dark: rgb(46, 160, 67, 0.28))
+    static let addedGutter = dynamic(light: rgb(172, 238, 187), dark: rgb(46, 160, 67, 0.24))
 
     /// Moved lines. Purple, so they read apart from added, deleted and the blue
     /// current-change bar; the accent draws the gutter marker that jumps to the other end.
@@ -41,10 +41,10 @@ enum DiffTheme {
     static let movedBandMiddle = dynamic(light: rgb(223, 208, 255, 0.6), dark: rgb(163, 113, 247, 0.14))
     static let movedBandMiddleHover = dynamic(light: rgb(200, 178, 250), dark: rgb(163, 113, 247, 0.4))
 
-    /// Find hits, near-opaque so they read on added and deleted rows too. The current
-    /// match is a stronger orange so it stands out while the Find field has focus.
-    static let findMatch = dynamic(light: rgb(255, 229, 110, 0.9), dark: rgb(255, 214, 0, 0.5))
-    static let findCurrentMatch = dynamic(light: rgb(255, 176, 0), dark: rgb(255, 150, 0, 0.8))
+    /// Opaque Find backgrounds paired with black text. Orange marks the selected match.
+    static let findMatch = dynamic(light: rgb(255, 229, 110), dark: rgb(242, 204, 56))
+    static let findCurrentMatch = dynamic(light: rgb(255, 176, 0), dark: rgb(255, 150, 0))
+    static let findMatchText = NSColor.black
 
     static let padBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(28, 30, 34))
     static let padStripe = dynamic(light: rgb(0, 0, 0, 0.06), dark: rgb(255, 255, 255, 0.05))
