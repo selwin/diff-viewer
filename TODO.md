@@ -35,6 +35,81 @@ Where DiffViewer stands versus the bar:
 
 ---
 
+## Priority
+
+Do these first, before the rest of Requested.
+
+### P1. Compare any two commits or branches (requested 2026-09-27)
+
+**Goal.** Pick two refs (commit, branch, tag, or the working tree) and read the diff
+between them, e.g. a feature branch against `main` before opening a PR, or two commits
+of the same branch. Today the commit picker shows one commit against its parent, and
+the working tree against HEAD. This reverses the "Ref-range compare" entry under Not
+doing; README's Not doing list changes with it.
+
+**Design.**
+- A Compare… item (⇧⌘K or similar) opens a sheet with two fields, Base and Compare,
+  each a searchable list of branches (local and remote), recent commits and tags, plus
+  "Working tree" for Compare. Swap button between them.
+- From the commit picker, offer "Compare with…" on a commit and let the user choose
+  another commit. The selected commit fills Base and the second fills Compare; the
+  sheet shows both hashes and subjects before opening the diff. This should work for
+  commits that are not adjacent in the first-parent history.
+- For two selected commits, compare their exact trees (`base..compare`) by default.
+  For branch comparisons, use a merge-base toggle with `base...compare` (what the
+  branch adds, the PR view) by default and `base..compare` when off.
+- The title bar and the pinned row show the comparison (`main … feature/x`), with a
+  way back to the working tree. Staging and discarding are disabled while comparing,
+  as they are for a picked commit.
+- Reuses the commit picker's rows and the All changes loader; only the git arguments
+  and the diff's two sides differ.
+
+**Tests.** The git arguments for each pair (including non-adjacent commits,
+branch/branch with and without the merge base, and branch/working tree), the Base and
+Compare ordering from the commit picker, and name-status parsing of a comparison that
+includes renames.
+
+---
+
+### P2. Merge another branch into the current one (requested 2026-09-30)
+
+**Goal.** Bring `main` (or any branch) into the branch being read, e.g. after reading a
+feature branch against `main` (P1) and seeing `main` has moved. Sublime Merge, Fork,
+Tower and GitHub Desktop all merge from their branch lists; Kaleidoscope and JuxtaCode
+only resolve conflicts from a merge started elsewhere. Today the branch picker's Pull
+runs `git pull --no-edit`, which merges only the current branch's own upstream.
+
+**Scope change.** CLAUDE.md's "Whole files, never contents" list gains "merge another
+branch into the current one". Conflict resolution stays a non-goal: conflicts are
+edited in the user's editor, and the app already finishes the merge (Mark Resolved,
+Commit Merge).
+
+**Design.**
+- Branch picker: a "Merge into <current>" action on every other row, local or remote.
+  A remote row fetches its remote first and merges the remote-tracking ref; a local row
+  merges the local branch as it is.
+- An "Update from main" row at the top of the picker when the current branch is not the
+  default branch: fetch, then merge `origin/<default>`. The default branch comes from
+  `refs/remotes/<remote>/HEAD`, falling back to `main`, then `master`.
+- Confirm first, with the commit count (`git rev-list --count HEAD..<ref>`): "Merge 12
+  commits from origin/main into feature/x?".
+- Run `git merge --no-edit <ref>`, honouring the user's merge config (fast-forward when
+  possible). Hooks run with the login shell's PATH, as commits do. No rebase.
+- Refused while a merge, rebase or cherry-pick is in progress. When git refuses because
+  local changes would be overwritten, show its message in the existing error alert.
+- On conflicts, the conflicted files appear as unmerged, the title shows
+  `feature/x (merging)` (item A), and the staging tray offers Abort Merge
+  (`git merge --abort`, confirmed) next to Commit Merge. Item I covers a resolution
+  that matches HEAD.
+- The fetch shares the remote-call timeout from the Next list.
+
+**Tests.** The git arguments for a local row, a remote row and Update from main; the
+default branch from `origin/HEAD` and each fallback; in a temporary repo, a clean merge
+(fast-forward and merge commit), a conflicting merge leaving unmerged files and
+`MERGE_HEAD`, and Abort Merge restoring the previous HEAD.
+
+---
+
 ## Requested
 
 Items Selwin asked for. They take priority over the "Next" list below. Earlier requests
@@ -74,7 +149,7 @@ file after staging or unstaging have landed; what remains is below.
 
 ---
 
-### E. Redesign how renames and file paths look (requested 2026-09-24)
+### C. Redesign how renames and file paths look (requested 2026-09-24)
 
 **Goal.** Make moved and renamed files, and file paths in general, read clearly in the
 sidebar, the single-file view and the All changes view, and make the three consistent.
@@ -102,10 +177,10 @@ sidebar, the single-file view and the All changes view, and make the three consi
 
 ---
 
-### F. Rework the All changes file header (requested 2026-09-26)
+### D. Rework the All changes file header (requested 2026-09-26)
 
 **Goal.** The per-file section header in All changes needs a redesign. The
-"Renamed without changes" sections look especially bad. Goes with item E, which
+"Renamed without changes" sections look especially bad. Goes with item C, which
 covers rename and path display.
 
 **Today** (screenshot of an Android repo, 2026-09-26).
@@ -118,7 +193,7 @@ covers rename and path display.
   nothing to read.
 - A binary rename says "Binary file" and doesn't mention the rename; only the `R` badge
   shows it (`DiffPaneView+Changeset.swift` `notice`).
-- The old path truncates at the tail, so it loses the file name (see E).
+- The old path truncates at the tail, so it loses the file name (see C).
 
 **To decide.**
 - Whether the header spans both panes as one bar instead of being split at the divider.
@@ -130,33 +205,7 @@ covers rename and path display.
 
 ---
 
-### G. Compare any two commits or branches (requested 2026-09-27)
-
-**Goal.** Pick two refs (commit, branch, tag, or the working tree) and read the diff
-between them, e.g. a feature branch against `main` before opening a PR, or two commits
-of the same branch. Today the commit picker shows one commit against its parent, and
-the working tree against HEAD. This reverses the "Ref-range compare" entry under Not
-doing; README's Not doing list changes with it.
-
-**Design.**
-- A Compare… item (⇧⌘K or similar) opens a sheet with two fields, Base and Compare,
-  each a searchable list of branches (local and remote), recent commits and tags, plus
-  "Working tree" for Compare. Swap button between them.
-- A merge-base toggle: `base...compare` (what the branch adds, the PR view) by default,
-  `base..compare` (the two trees as they are) when off.
-- The title bar and the pinned row show the comparison (`main … feature/x`), with a
-  way back to the working tree. Staging and discarding are disabled while comparing,
-  as they are for a picked commit.
-- Reuses the commit picker's rows and the All changes loader; only the git arguments
-  and the diff's two sides differ.
-
-**Tests.** The git arguments for each pair (commit/commit, branch/branch with and
-without the merge base, branch/working tree), and name-status parsing of a comparison
-that includes renames.
-
----
-
-### H. Hunk-level staging (requested 2026-09-27)
+### E. Hunk-level staging (requested 2026-09-27)
 
 **Goal.** Stage, unstage or discard one change block instead of the whole file, so a
 file with an unrelated edit can be committed in pieces. Sublime Merge has it on every
@@ -182,7 +231,7 @@ middle of a file, and staging, unstaging and discarding one hunk in a temporary 
 
 ---
 
-### I. Show the function or method a change is in, remainder (requested 2026-09-27)
+### F. Show the function or method a change is in, remainder (requested 2026-09-27)
 
 Collapsed-lines separators name the scope of the change below them, up to two levels
 (`Cart › total`), per side, in single-file mode and All changes (2026-09-29). Still open:
@@ -196,7 +245,7 @@ Collapsed-lines separators name the scope of the change below them, up to two le
 
 ---
 
-### J. Don't highlight unchanged lines for difft's re-nested delimiters (requested 2026-09-27)
+### G. Don't highlight unchanged lines for difft's re-nested delimiters (requested 2026-09-27)
 
 **Goal.** A line whose text didn't change shouldn't light up as a change just because
 difftastic re-paired its brackets. Found in a scratch repo where a top-level
@@ -232,7 +281,7 @@ a non-delimiter token (unchanged behaviour).
 
 ---
 
-### K. Title bar pickers and commit picker design (requested 2026-09-28)
+### H. Title bar pickers and commit picker design (requested 2026-09-28)
 
 **Goal.** Refine how the branch and commit pickers look in the title bar, and redesign
 the commit picker popover to match the branch picker.
@@ -253,7 +302,7 @@ screenshot.
 
 ---
 
-### L. Explain a resolved conflict that matches HEAD (requested 2026-09-28)
+### I. Explain a resolved conflict that matches HEAD (requested 2026-09-28)
 
 **Goal.** A conflicted file whose resolution equals HEAD shouldn't read as a
 contradiction. Found while merging `main` into `consolidate-quick-wins` (PR #41): the
@@ -295,6 +344,46 @@ real diff, so only the matches-HEAD case needs new wording.
 **Tests.** `compactTitle` for an unmerged file, a batch of unmerged files, and a mix
 with a modified file (falls back to "Stage N files"). The empty-state text is UI,
 checked by screenshot with the repro above.
+
+---
+
+### J. Collapse and expand a file in All changes (requested 2026-09-30)
+
+**Goal.** Fold a file's section in All changes down to its header, so a file already
+read, or a noisy one such as a lockfile, stops taking up the scroll. GitHub's Files
+changed page collapses per file; Sublime Merge users have asked for it (issue #1593).
+
+**Today.**
+- `ChangesetProjection.build` emits a spacer, a header and every folded row for each
+  section. The projection is fixed per revision: `ChangesetDocument` builds it with the
+  load's fold options, and the view never re-folds a changeset.
+- The changeset is rebuilt whenever the file list changes, so section indices are not
+  stable. `ChangedFile.id` (area plus path) is, and `ChangesetAnchor` already matches
+  headers across revisions by it.
+
+**Design.**
+- A disclosure chevron at the leading edge of the file header. Clicking the header
+  (outside its buttons) toggles; ⌥-click collapses or expands every file.
+- The projection takes a set of collapsed `ChangedFile.ID`s and emits only the spacer
+  and header for those sections. Toggling re-projects the current changeset; nothing is
+  diffed or highlighted again.
+- The set lives on the window and survives changeset rebuilds and live refreshes. It is
+  not persisted across launches. A file that leaves the list drops out of the set.
+- Collapsing the section that holds the top visible row puts its header at the top.
+  Collapsing or expanding a section above the viewport keeps the visible rows still.
+- A collapsed file's changes drop out of ⌘↓ / ⌘↑ and the overview strip.
+- Later: collapse lockfiles and `linguist-generated` files by default, and a Viewed mark
+  that collapses a file until it changes again (both from the September 2026 research).
+
+**To decide.**
+- Whether Find searches collapsed files and expands the file when it lands on a match,
+  or skips them.
+- A keyboard shortcut for the file at the top of the scroll.
+
+**Tests.** The projection with a collapsed section (header and spacer only; the other
+sections' rows and separators unchanged); the collapsed set carried across a changeset
+rebuild by file id; which row stays at the top after collapsing a section above,
+containing, and below the top visible row.
 
 ---
 
@@ -412,9 +501,9 @@ Roughly in priority order.
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
 - **Folder compare, blame, file history.** Non-goals in CLAUDE.md. Sublime Merge's blame
   is a git-client feature, not a viewer feature. Comparing two refs is now requested
-  (item G), and commit browsing shipped as the commit picker.
+  (priority item P1), and commit browsing shipped as the commit picker.
 - **Hunk cherry-picking** (Sublime Merge). Hunk-level staging and discarding are now
-  requested (item H); moving hunks between commits is not.
+  requested (item E); moving hunks between commits is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it
   changes what the diff *is*; a viewer should show what git sees. Revisit only if
   whitespace handling proves insufficient.

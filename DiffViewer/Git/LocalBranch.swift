@@ -60,8 +60,8 @@ enum UpstreamTracking: Sendable, Equatable {
         return .counts(ahead: ahead, behind: behind)
     }
 
-    /// The words the branch picker shows after the name, or nil when there is nothing to
-    /// say.
+    /// How far the branch is from its upstream, in words, for the picker's rows and the
+    /// title bar's tooltip. Nil when there is nothing to say.
     var summary: String? {
         switch self {
         case .gone:

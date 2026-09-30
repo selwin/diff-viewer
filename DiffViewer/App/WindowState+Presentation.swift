@@ -34,10 +34,9 @@ extension WindowState {
         headState?.displayTitle ?? ""
     }
 
-    /// The branch picker's suffix: how far the current branch is from its upstream, or
-    /// nil when in sync, untracked, or detached. Counts are as old as the last fetch.
-    var branchTrackingSummary: String? {
-        currentBranch?.upstream?.tracking.summary
+    /// What the title bar pill's Pull and Push show. Nil when HEAD's branch isn't known.
+    var currentBranchSync: CurrentBranchSyncPresentation? {
+        CurrentBranchSyncPresentation.make(snapshot: branchPickerSnapshot)
     }
 
     /// The branch picker's help: the upstream, named whenever there is one, and where the
@@ -75,6 +74,62 @@ extension WindowState {
             || (overlay != .commitPicker && isCommitPickerPresented)
             || (overlay != .branchPicker && isBranchPickerPresented)
             || (overlay != .newBranchSheet && isNewBranchSheetPresented)
+    }
+}
+
+/// The title bar pill's Pull and Push for the current branch. Its button states come from
+/// the same rules as the picker header's.
+struct CurrentBranchSyncPresentation: Equatable {
+    let branch: String
+    let buttons: RowSyncButtons
+    /// Nil unless the branch tracks a remote upstream with counts, so no count reads as 0.
+    let target: SyncTarget?
+
+    /// Nil unless the read landed and HEAD's branch is listed: a failed read keeps a stale
+    /// HEAD and list.
+    static func make(snapshot: BranchPickerSnapshot) -> CurrentBranchSyncPresentation? {
+        guard snapshot.readStatus == .loaded, case let .named(name)? = snapshot.headState,
+            let branch = snapshot.branches.first(where: { $0.name == name })
+        else { return nil }
+        return CurrentBranchSyncPresentation(
+            branch: name,
+            buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
+            target: SyncPolicy.target(for: branch, readStatus: snapshot.readStatus))
+    }
+
+    var isPublish: Bool { buttons.pushOperation == .publish }
+
+    var showsSegments: Bool { buttons.pull != .hidden || buttons.push != .hidden }
+
+    /// Commits a pull would take, or nil when there are none to show. Nil while running
+    /// too: the refresh behind the spinner may zero the counts.
+    var pullCount: Int? { Self.count(target?.behind, state: buttons.pull) }
+
+    /// Commits a push would send, nil as for `pullCount`. Always nil for a publish, which
+    /// has no upstream to count against.
+    var pushCount: Int? { isPublish ? nil : Self.count(target?.ahead, state: buttons.push) }
+
+    var pullAccessibilityLabel: String {
+        if buttons.pull == .running { return "Pulling \(branch), in progress" }
+        guard let count = pullCount else { return "Pull into \(branch)" }
+        return "Pull \(Self.commits(count)) into \(branch)"
+    }
+
+    var pushAccessibilityLabel: String {
+        let running = buttons.push == .running
+        if isPublish { return running ? "Publishing \(branch), in progress" : "Publish \(branch)" }
+        if running { return "Pushing \(branch), in progress" }
+        guard let count = pushCount else { return "Push \(branch)" }
+        return "Push \(Self.commits(count)) from \(branch)"
+    }
+
+    private static func count(_ count: Int?, state: PickerButtonState) -> Int? {
+        guard state != .hidden, state != .running, let count, count > 0 else { return nil }
+        return count
+    }
+
+    private static func commits(_ count: Int) -> String {
+        count == 1 ? "1 commit" : "\(count) commits"
     }
 }
 

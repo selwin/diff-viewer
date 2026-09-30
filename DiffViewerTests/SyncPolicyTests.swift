@@ -241,7 +241,7 @@ struct SyncPolicyTests {
     private let untracked = localBranch("feature")
 
     private func publish(_ push: PickerButtonState, _ action: PublishAction? = nil) -> RowSyncButtons {
-        RowSyncButtons(pull: .hidden, push: push, pushTitle: "Publish", publish: action)
+        RowSyncButtons(pull: .hidden, push: push, pushOperation: .publish, publish: action)
     }
 
     @Test func aBranchThatTracksNothingOffersPublish() {
