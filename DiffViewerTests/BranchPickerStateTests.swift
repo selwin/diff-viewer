@@ -653,7 +653,7 @@ struct BranchPickerStateTests {
         #expect(picker.rows.map(\.status) == [.notPublished, .notPublished])
         #expect(
             picker.syncButtons(forTableRow: row)
-                == RowSyncButtons(pull: .hidden, push: .enabled, pushTitle: "Publish", publish: .remote("origin")))
+                == RowSyncButtons(pull: .hidden, push: .enabled, pushOperation: .publish, publish: .remote("origin")))
 
         let hidden = snapshot(
             branches: [main, feature], remotes: ["origin"], configuredUpstreamRemotes: ["feature": "origin"])
@@ -665,7 +665,7 @@ struct BranchPickerStateTests {
             picker.syncButtons(forTableRow: row)
                 == RowSyncButtons(
                     pull: .hidden, push: .disabled(reason: "Tracks origin, but fetch settings don't fetch it"),
-                    pushTitle: "Publish"))
+                    pushOperation: .publish))
     }
 
     @Test func theEmptyStateFollowsTheReadStatus() {

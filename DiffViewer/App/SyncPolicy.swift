@@ -61,12 +61,15 @@ enum PublishAction: Equatable {
 struct RowSyncButtons: Equatable {
     var pull: PickerButtonState
     var push: PickerButtonState
-    var pushTitle = "Push"
+    /// What the Push slot runs: `.push`, or `.publish` on a branch that tracks nothing.
+    var pushOperation = SyncOperation.push
     /// Set only on an enabled Publish.
     var publish: PublishAction?
     var delete: PickerButtonState = .hidden
 
     static let hidden = RowSyncButtons(pull: .hidden, push: .hidden)
+
+    var pushTitle: String { pushOperation == .publish ? "Publish" : "Push" }
 }
 
 /// A publish as the reader asked for it. Checked again before it runs, so a branch that
@@ -192,7 +195,7 @@ enum SyncPolicy {
             switch active.operation {
             case .pull: return RowSyncButtons(pull: .running, push: showsPush ? .disabled(reason: "Pulling…") : .hidden)
             case .push: return RowSyncButtons(pull: showsPull ? .disabled(reason: "Pushing…") : .hidden, push: .running)
-            case .publish: return RowSyncButtons(pull: .hidden, push: .running, pushTitle: "Publish")
+            case .publish: return RowSyncButtons(pull: .hidden, push: .running, pushOperation: .publish)
             case .delete: return RowSyncButtons(pull: .hidden, push: .hidden, delete: .running)
             }
         }
@@ -280,12 +283,12 @@ enum SyncPolicy {
         if let hiddenRemote {
             return RowSyncButtons(
                 pull: .hidden, push: .disabled(reason: "Tracks \(hiddenRemote), but fetch settings don't fetch it"),
-                pushTitle: "Publish")
+                pushOperation: .publish)
         }
         let fetching = isFetching(remote: waitRemote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         if let waiting = busy ?? (fetching ? "Fetching…" : nil) {
-            return RowSyncButtons(pull: .hidden, push: .disabled(reason: waiting), pushTitle: "Publish")
+            return RowSyncButtons(pull: .hidden, push: .disabled(reason: waiting), pushOperation: .publish)
         }
-        return RowSyncButtons(pull: .hidden, push: .enabled, pushTitle: "Publish", publish: action)
+        return RowSyncButtons(pull: .hidden, push: .enabled, pushOperation: .publish, publish: action)
     }
 }
