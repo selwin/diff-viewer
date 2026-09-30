@@ -76,6 +76,7 @@ final class DiffPaneView: NSView {
         didSet {
             if fontSize != oldValue {
                 lineCache.removeAll()
+                findTextCache.removeAll()
                 numberCache.removeAll()
                 headerCache.removeAll()
                 recomputeMetrics()
@@ -97,6 +98,7 @@ final class DiffPaneView: NSView {
             outline = nil  // Outlines are per document.
             findMatches = [:]
             lineCache.removeAll()
+            findTextCache.removeAll()
             numberCache.removeAll()
             headerCache.removeAll()
             recomputeMetrics()
@@ -117,6 +119,9 @@ final class DiffPaneView: NSView {
     /// Widest line measured so far, in character units; an append only extends it.
     private var maxLineUnits = 0
     private var lineCache: [Int: CachedLine] = [:]
+    /// Black text for find hits, keyed by source line index (unlike `findMatches`, which is
+    /// keyed by document row). Independent of syntax styles, so a style change keeps it.
+    private var findTextCache: [Int: CTLine] = [:]
     private var numberCache: [Int: CTLine] = [:]
     /// The shaped header text per changeset section index, for this pane's side.
     var headerCache: [Int: HeaderLines] = [:]
@@ -157,6 +162,7 @@ final class DiffPaneView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         lineCache.removeAll()
+        findTextCache.removeAll()
         numberCache.removeAll()
         headerCache.removeAll()
         needsDisplay = true
@@ -269,6 +275,8 @@ final class DiffPaneView: NSView {
             drawSelection(ofRow: index, cached: cached, in: rowRect, context: context)
             drawLine(
                 cached.line, at: CGPoint(x: documentTextX, y: baselineY(in: rowRect)), context: context)
+            drawFindMatchText(
+                ofRow: index, lineIndex: cell.lineIndex, cached: cached, in: rowRect, context: context)
             context.restoreGState()
         } else {
             drawPad(rowRect, context: context)
@@ -369,16 +377,23 @@ final class DiffPaneView: NSView {
     }
 
     /// The selected span of one row, drawn over the token highlights and under the text.
-    /// A row whose newline is selected extends one character past the end of the line.
     private func drawSelection(ofRow row: Int, cached: CachedLine, in rowRect: NSRect, context: CGContext) {
+        guard let rect = selectionRect(ofRow: row, cached: cached, in: rowRect) else { return }
+        NSColor.selectedTextBackgroundColor.setFill()
+        context.fill(rect)
+    }
+
+    /// Where the ordinary selection is drawn in one row; nil when the selection is the current
+    /// find match, which draws as that match instead. A row whose newline is selected extends
+    /// one character past the end of the line.
+    func selectionRect(ofRow row: Int, cached: CachedLine, in rowRect: NSRect) -> NSRect? {
         guard let selection, let range = selection.range(forRow: row, lineLength: cached.rawLength),
             selectedFindMatch(inRow: row) == nil
-        else { return }
+        else { return nil }
         var (x0, x1) = horizontalBounds(range, in: cached)
         if selection.includesLineEnd(ofRow: row) { x1 += charWidth }
-        guard x1 > x0 else { return }
-        NSColor.selectedTextBackgroundColor.setFill()
-        context.fill(textSpanRect(x0: x0, x1: x1, in: rowRect))
+        guard x1 > x0 else { return nil }
+        return textSpanRect(x0: x0, x1: x1, in: rowRect)
     }
 
     func drawLine(_ line: CTLine, at point: CGPoint, context: CGContext) {
@@ -428,19 +443,13 @@ final class DiffPaneView: NSView {
         if let cached = lineCache[lineIndex] { return cached }
         if lineCache.count > 4000 { lineCache.removeAll(keepingCapacity: true) }
         let raw = model.lines[lineIndex]
-        let expanded = TabExpander.expand(raw, tabWidth: DiffTheme.tabWidth)
-        let attributed = NSMutableAttributedString(
-            string: expanded.text,
-            attributes: [
-                .font: font,
-                .foregroundColor: DiffTheme.text,
-            ])
+        let (attributed, map) = attributedText(forRaw: raw, color: DiffTheme.text)
         if let styles, lineIndex < styles.count {
             let runs = styles[lineIndex]
             let length = attributed.length
             for run in runs {
-                let lower = TabExpander.expandedIndex(forRaw: run.range.lowerBound, map: expanded.map)
-                let upper = TabExpander.expandedIndex(forRaw: run.range.upperBound, map: expanded.map)
+                let lower = TabExpander.expandedIndex(forRaw: run.range.lowerBound, map: map)
+                let upper = TabExpander.expandedIndex(forRaw: run.range.upperBound, map: map)
                 let clampedLower = min(max(lower, 0), length)
                 let clampedUpper = min(max(upper, clampedLower), length)
                 guard clampedUpper > clampedLower else { continue }
@@ -451,10 +460,31 @@ final class DiffPaneView: NSView {
         }
         let line = CTLineCreateWithAttributedString(attributed)
         let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        let cached = CachedLine(line: line, map: expanded.map, width: width, rawLength: raw.utf16.count)
+        let cached = CachedLine(line: line, map: map, width: width, rawLength: raw.utf16.count)
         lineCache[lineIndex] = cached
         PipelineMetrics.countShapedLine()
         return cached
+    }
+
+    /// The line in find-hit black, drawn over the syntax-coloured line and clipped to the hits.
+    func findTextLine(for lineIndex: Int, model: PaneModel) -> CTLine {
+        if let line = findTextCache[lineIndex] { return line }
+        if findTextCache.count > 1000 { findTextCache.removeAll(keepingCapacity: true) }
+        let (attributed, _) = attributedText(forRaw: model.lines[lineIndex], color: DiffTheme.findMatchText)
+        let line = CTLineCreateWithAttributedString(attributed)
+        findTextCache[lineIndex] = line
+        PipelineMetrics.countShapedLine()
+        return line
+    }
+
+    /// A line's text with tabs expanded, in one colour. `map` translates raw offsets to expanded ones.
+    private func attributedText(forRaw raw: String, color: NSColor) -> (
+        text: NSMutableAttributedString, map: [Int]?
+    ) {
+        let expanded = TabExpander.expand(raw, tabWidth: DiffTheme.tabWidth)
+        let attributed = NSMutableAttributedString(
+            string: expanded.text, attributes: [.font: font, .foregroundColor: color])
+        return (attributed, expanded.map)
     }
 
     private func numberLine(for number: Int, changed: Bool) -> CTLine {

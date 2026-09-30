@@ -282,8 +282,7 @@ final class SideBySideContainerView: NSView {
         refold(anchor: anchor)
     }
 
-    /// Headers and dimming only change frames and alpha, never the clip's origin, so the
-    /// top row stays put as the panes shrink or grow beneath the headers.
+    /// Showing or hiding Find headers preserves the top visible row.
     func setFindScope(_ scope: PaneFindScope?) {
         guard scope != findScope else { return }
         findScope = scope
@@ -293,15 +292,11 @@ final class SideBySideContainerView: NSView {
             leftHeader.configure(label: scope.labels.old, isSearched: scope.searchedSide == .old)
             rightHeader.configure(label: scope.labels.new, isSearched: scope.searchedSide == .new)
         }
-        leftScroll.alphaValue = scope.map { $0.searchedSide == .old ? 1 : Self.unsearchedAlpha } ?? 1
-        rightScroll.alphaValue = scope.map { $0.searchedSide == .new ? 1 : Self.unsearchedAlpha } ?? 1
         needsLayout = true
         // The clips change height, so the viewport the overview and find read changes too.
         layoutSubtreeIfNeeded()
         updateOverviewViewport()
     }
-
-    private static let unsearchedAlpha: CGFloat = 0.45
 
     /// Hides the panes without tearing them down, so folds, scroll position and selection
     /// survive. Resigns first responder on the way out so Copy and Select All cannot act
