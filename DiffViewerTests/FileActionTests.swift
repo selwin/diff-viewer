@@ -83,55 +83,51 @@ struct FileActionTests {
 
     // MARK: The menu for a selection
 
-    @Test func unstagedFilesAllGetTheirWrites() {
-        let a = changedFile("a.txt", kind: .modified)
-        let b = changedFile("b.txt", kind: .modified)
-        #expect(
-            FileAction.writeGroups(for: [a, b]) == [
-                .init(action: .stage, files: [a, b]),
-                .init(action: .discard, files: [a, b]),
-            ])
+    struct WriteGroupCase: CustomTestStringConvertible {
+        let name: String
+        let files: [ChangedFile]
+        /// The writes every row offers; each runs on the whole selection.
+        let actions: [FileAction]
+
+        var testDescription: String { name }
     }
 
-    @Test func stagedFilesOnlyUnstage() {
-        let a = changedFile("a.txt", area: .staged, kind: .modified)
-        let b = changedFile("b.txt", area: .staged, kind: .added)
-        #expect(FileAction.writeGroups(for: [a, b]) == [.init(action: .unstage, files: [a, b])])
-    }
+    static let writeGroupCases: [WriteGroupCase] = [
+        WriteGroupCase(
+            name: "unstaged files all get their writes",
+            files: [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .modified)],
+            actions: [.stage, .discard]),
+        WriteGroupCase(
+            name: "staged files only unstage",
+            files: [
+                changedFile("a.txt", area: .staged, kind: .modified), changedFile("b.txt", area: .staged, kind: .added),
+            ],
+            actions: [.unstage]),
+        // Stage and Unstage each fit only half of a mixed selection, so neither is offered.
+        WriteGroupCase(
+            name: "a mixed selection offers no writes",
+            files: [changedFile("b.txt", kind: .modified), changedFile("a.txt", area: .staged, kind: .modified)],
+            actions: []),
+        // Discard fits only the modified file and Trash only the untracked one; Stage fits both.
+        WriteGroupCase(
+            name: "untracked and modified share only stage",
+            files: [changedFile("a.txt", kind: .modified), changedFile("b.txt", kind: .untracked)],
+            actions: [.stage]),
+        WriteGroupCase(name: "an empty selection offers no writes", files: [], actions: []),
+        // Discarding a conflict resolution is not a one-click action, even in a batch.
+        WriteGroupCase(
+            name: "a conflict offers only stage", files: [changedFile("a.txt", kind: .unmerged)], actions: [.stage]),
+        WriteGroupCase(
+            name: "commit scope offers no writes",
+            files: [
+                changedFile("a.txt", area: commit, kind: .modified), changedFile("b.txt", area: commit, kind: .deleted),
+            ],
+            actions: []),
+    ]
 
-    /// Stage and Unstage each fit only half of a mixed selection, so neither is offered.
-    @Test func aMixedSelectionOffersNoWrites() {
-        let staged = changedFile("a.txt", area: .staged, kind: .modified)
-        let unstaged = changedFile("b.txt", kind: .modified)
-        #expect(FileAction.writeGroups(for: [unstaged, staged]) == [])
-    }
-
-    /// Discard fits only the modified file and Trash only the untracked one; Stage fits both.
-    @Test func untrackedAndModifiedShareOnlyStage() {
-        let modified = changedFile("a.txt", kind: .modified)
-        let untracked = changedFile("b.txt", kind: .untracked)
-        #expect(
-            FileAction.writeGroups(for: [modified, untracked]) == [
-                .init(action: .stage, files: [modified, untracked])
-            ])
-    }
-
-    @Test func anEmptySelectionOffersNoWrites() {
-        #expect(FileAction.writeGroups(for: []) == [])
-    }
-
-    /// Discarding a conflict resolution is not a one-click action, even in a batch.
-    @Test func aConflictOffersOnlyStage() {
-        let conflicted = changedFile("a.txt", kind: .unmerged)
-        #expect(FileAction.writeGroups(for: [conflicted]) == [.init(action: .stage, files: [conflicted])])
-    }
-
-    @Test func commitScopeOffersNoWriteGroups() {
-        let files = [
-            changedFile("a.txt", area: Self.commit, kind: .modified),
-            changedFile("b.txt", area: Self.commit, kind: .deleted),
-        ]
-        #expect(FileAction.writeGroups(for: files) == [])
+    @Test(arguments: writeGroupCases) func aSelectionOffersTheWritesEveryRowOffers(_ testCase: WriteGroupCase) {
+        let expected = testCase.actions.map { FileAction.WriteGroup(action: $0, files: testCase.files) }
+        #expect(FileAction.writeGroups(for: testCase.files) == expected)
     }
 
     /// Non-write items act on the whole selection, so one row missing from disk drops
@@ -153,25 +149,23 @@ struct FileActionTests {
 
     // MARK: Titles
 
-    @Test func stageIsNamedForWhatItDoes() {
-        #expect(FileAction.stage.title(for: changedFile("a.txt", kind: .modified)) == "Stage")
-        #expect(FileAction.stage.title(for: changedFile("a.txt", kind: .untracked)) == "Stage")
-        #expect(FileAction.stage.title(for: changedFile("a.txt", kind: .deleted)) == "Stage Deletion")
-        #expect(FileAction.stage.title(for: changedFile("a.txt", kind: .unmerged)) == "Mark Resolved")
-    }
-
-    @Test func discardIsNamedRestoreForADeletedFile() {
-        #expect(FileAction.discard.title(for: changedFile("a.txt", kind: .modified)) == "Discard Changes…")
-        #expect(FileAction.discard.title(for: changedFile("a.txt", kind: .deleted)) == "Restore File")
-    }
-
-    @Test func remainingTitles() {
-        let file = changedFile("a.txt")
-        #expect(FileAction.unstage.title(for: file) == "Unstage")
-        #expect(FileAction.trash.title(for: file) == "Delete File…")
-        #expect(FileAction.revealInFinder.title(for: file) == "Reveal in Finder")
-        #expect(FileAction.openInEditor.title(for: file) == "Open in Default Editor")
-        #expect(FileAction.copyPath.title(for: file) == "Copy Path")
+    @Test(arguments: [
+        (action: FileAction.stage, kind: ChangedFile.Kind.modified, title: "Stage"),
+        (action: .stage, kind: .untracked, title: "Stage"),
+        // `git add` records a deletion and resolves a conflict as well as staging an edit.
+        (action: .stage, kind: .deleted, title: "Stage Deletion"),
+        (action: .stage, kind: .unmerged, title: "Mark Resolved"),
+        (action: .discard, kind: .modified, title: "Discard Changes…"),
+        // `git restore` brings a deleted file back as well as throwing edits away.
+        (action: .discard, kind: .deleted, title: "Restore File"),
+        (action: .unstage, kind: .modified, title: "Unstage"),
+        (action: .trash, kind: .modified, title: "Delete File…"),
+        (action: .revealInFinder, kind: .modified, title: "Reveal in Finder"),
+        (action: .openInEditor, kind: .modified, title: "Open in Default Editor"),
+        (action: .copyPath, kind: .modified, title: "Copy Path"),
+    ])
+    func aFileTitleIsNamedForWhatTheCommandDoesToIt(action: FileAction, kind: ChangedFile.Kind, title: String) {
+        #expect(action.title(for: changedFile("a.txt", kind: kind)) == title)
     }
 
     /// A batch is counted rather than named, and Copy Path counts paths: a file with both

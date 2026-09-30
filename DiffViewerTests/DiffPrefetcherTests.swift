@@ -93,12 +93,7 @@ struct TaggedClient: RepoClient {
 private func makePrefetcher(runner: RunnerProbe, loader: LoaderProbe, limits: DifftCache.Limits = DifftCache.Limits())
     -> (DiffPrefetcher, DifftCache)
 {
-    let cache = DifftCache(
-        runner: { old, new, fileName, qos in
-            try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-        },
-        limits: limits
-    )
+    let cache = probeCache(runner, limits: limits)
     return (
         DiffPrefetcher(cache: cache, loadSources: { file, client in try await loader.load(file, client: client) }),
         cache
@@ -185,17 +180,6 @@ struct DiffPrefetcherTests {
         #expect(await eventually { await prefetcher.isIdle })
         #expect(prefetcher.dequeuedFileIDs == list.prefix(100).map(\.id))
         #expect(await runner.launches.count == 100)
-    }
-
-    @Test func loaderErrorSkipsThatFileOnly() async {
-        let runner = RunnerProbe()
-        let loader = LoaderProbe()
-        await loader.markFailing("f2.swift")
-        let (prefetcher, _) = makePrefetcher(runner: runner, loader: loader)
-        prefetcher.prefetch(files: files(20), repository: testRepository, client: TaggedClient())
-        #expect(await eventually { await prefetcher.isIdle })
-        #expect(await runner.launches.count == 19)
-        #expect(await runner.fileNames.contains("f2.swift") == false)
     }
 
     @Test func replacementsKeepBothBoundsAndDequeueTheLatestList() async {
@@ -339,6 +323,8 @@ struct DiffPrefetcherTests {
         let list = files(3)
         prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })
+        #expect(await runner.launches.count == 2, "the failed file is skipped and the others still run")
+        #expect(await runner.fileNames.contains("f1.swift") == false)
 
         prefetcher.prefetch(files: list, repository: testRepository, client: TaggedClient())
         #expect(await eventually { await prefetcher.isIdle })

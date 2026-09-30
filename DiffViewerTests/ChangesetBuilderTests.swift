@@ -20,48 +20,6 @@ struct ChangesetBuilderTests {
 
     // MARK: Offsets
 
-    @Test func rowsAndLinesAreConcatenatedWithOffsets() {
-        let a = text(
-            ["a0", "a1"], ["a0", "A1"],
-            [.equal(old: 0, new: 0), modifiedRow(1, 1, highlights: [0..<2])])
-        let b = text(
-            ["b0", "b1", "b2"], ["b0", "b1"], [.equal(old: 0, new: 0), .equal(old: 1, new: 1), deletedRow(2)])
-        let changeset = build([(changedFile("a.swift"), a), (changedFile("b.swift"), b)])
-
-        #expect(changeset.document.rows.count == 5)
-        #expect(changeset.document.oldLines == ["a0", "a1", "b0", "b1", "b2"])
-        #expect(changeset.document.newLines == ["a0", "A1", "b0", "b1"])
-        #expect(changeset.document.language == nil)
-        #expect(changeset.loadID == loadID)
-
-        #expect(changeset.sections.map(\.rowRange) == [0..<2, 2..<5])
-        #expect(changeset.sections[1].oldLineOffset == 2)
-        #expect(changeset.sections[1].newLineOffset == 2)
-        #expect(changeset.sections[1].oldLineCount == 3)
-        #expect(changeset.sections[1].newLineCount == 2)
-        #expect(changeset.sections[1].outcome == .text(language: "Swift"))
-
-        // B's rows point at B's lines in the flat arrays.
-        #expect(changeset.document.rows[2].new?.lineIndex == 2)
-        #expect(changeset.document.rows[4].old?.lineIndex == 4)
-        #expect(changeset.document.oldLines[4] == "b2")
-        // Token highlights survive the shift.
-        #expect(changeset.document.rows[1].old?.highlights == [0..<2])
-    }
-
-    @Test func lineOffsetsGiveFileLocalNumbers() {
-        let a = text(["a0", "a1"], ["a0", "A1"], [.equal(old: 0, new: 0), modifiedRow(1, 1)])
-        let b = text(
-            ["b0", "b1", "b2"], ["b0", "b1"], [.equal(old: 0, new: 0), .equal(old: 1, new: 1), deletedRow(2)])
-        let changeset = build([(changedFile("a.swift"), a), (changedFile("b.swift"), b)])
-        let section = changeset.sections[1]
-
-        let deleted = changeset.document.rows[4]
-        #expect(deleted.old.map { $0.lineIndex - section.oldLineOffset + 1 } == 3)
-        let firstRow = changeset.document.rows[2]
-        #expect(firstRow.new.map { $0.lineIndex - section.newLineOffset + 1 } == 1)
-    }
-
     @Test func unequalOffsetsShiftEachSideIndependently() {
         // A shrinks 4 old lines to 1 new one, so the two sides shift by different amounts.
         let a = text(
@@ -73,6 +31,13 @@ struct ChangesetBuilderTests {
         let changeset = build([(changedFile("a.swift"), a), (changedFile("b.swift"), b)])
         let section = changeset.sections[1]
 
+        #expect(changeset.loadID == loadID)
+        #expect(changeset.document.language == nil)
+        #expect(changeset.document.rows.count == 7)
+        #expect(changeset.document.oldLines == ["a0", "a1", "a2", "a3", "b0", "b1"])
+        #expect(changeset.document.newLines == ["a0", "b0", "B1", "b2"])
+        #expect(changeset.sections.map(\.rowRange) == [0..<4, 4..<7])
+        #expect(section.outcome == .text(language: "Swift"))
         #expect(section.oldLineOffset == 4)
         #expect(section.newLineOffset == 1)
         #expect(section.oldLineCount == 2)
@@ -146,12 +111,6 @@ struct ChangesetBuilderTests {
         #expect(changeset.document.changeBlocks == [0..<1, 1..<2])
     }
 
-    @Test func blocksInsideOneFileStillMerge() {
-        let a = text(["a0", "a1"], ["A0", "A1"], [modifiedRow(0, 0), modifiedRow(1, 1)])
-        let changeset = build([(changedFile("a.swift"), a)])
-        #expect(changeset.document.changeBlocks == [0..<2])
-    }
-
     // MARK: Sections that contribute nothing
 
     @Test func nonTextSectionsAreEmptyAndCountFromNumstat() {
@@ -214,23 +173,5 @@ struct ChangesetBuilderTests {
         #expect(
             changeset.folded.displayRows
                 == ChangesetProjection.build(document: changeset, options: FoldOptions()).displayRows)
-        #expect(changeset.folded.displayRows.first == .fileHeader(section: 0))
-        #expect(changeset.folded.displayRows.contains(.spacer(section: 1)))
-    }
-
-    // MARK: Identity
-
-    @Test func aPathInBothAreasYieldsTwoSections() {
-        let staged = changedFile("a.swift", area: .staged)
-        let unstaged = changedFile("a.swift", area: .unstaged)
-        let changeset = build([
-            (staged, text(["a0"], ["A0"], [modifiedRow(0, 0)])),
-            (unstaged, text(["A0"], ["B0"], [modifiedRow(0, 0)])),
-        ])
-
-        #expect(changeset.sections.count == 2)
-        #expect(changeset.sections[0].file.id != changeset.sections[1].file.id)
-        #expect(changeset.sections.map(\.rowRange) == [0..<1, 1..<2])
-        #expect(changeset.document.changeBlocks == [0..<1, 1..<2])
     }
 }

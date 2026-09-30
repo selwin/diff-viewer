@@ -50,30 +50,10 @@ struct LineStatsStateTests {
 
     // MARK: decide
 
-    @Test func firstRequestStarts() {
-        var state = LineStatsState()
-        #expect(state.decide(desired: request(), cause: .initial) == .start(token: 1, cancelActive: false))
-        #expect(state.activeRequest?.request == request())
-    }
-
     @Test func equalKnownRequestReusesLastOutcome() {
         var state = completed(request())
         #expect(state.decide(desired: request(), cause: .watcher) == .reuseLastOutcome(cancelActive: false))
         #expect(state.activeRequest == nil)
-    }
-
-    @Test func equalActiveRequestIsKept() {
-        var state = LineStatsState()
-        _ = state.decide(desired: request(), cause: .initial)
-        #expect(state.decide(desired: request(), cause: .watcher) == .keepActive)
-    }
-
-    @Test func differentRequestWhileActiveStartsAndCancels() {
-        var state = LineStatsState()
-        _ = state.decide(desired: request(), cause: .initial)
-        let edited = request([changedFile("a.swift").edited()])
-        #expect(state.decide(desired: edited, cause: .watcher) == .start(token: 2, cancelActive: true))
-        #expect(state.activeRequest?.token == 2)
     }
 
     @Test func returningToCompletedRequestReusesAndInvalidatesActive() {
@@ -183,13 +163,11 @@ struct LineStatsStateTests {
     @Test func invalidateActiveReturnsTokenAndClears() {
         var state = LineStatsState()
         #expect(state.invalidateActive() == nil)
-        guard case let .start(token, _) = state.decide(desired: request(), cause: .initial) else {
-            Issue.record("expected a start")
-            return
-        }
-        #expect(state.invalidateActive() == token)
+        #expect(state.decide(desired: request(), cause: .initial) == .start(token: 1, cancelActive: false))
+        #expect(state.activeRequest?.request == request())
+        #expect(state.invalidateActive() == 1)
         #expect(state.activeRequest == nil)
-        let recorded = state.record(outcome(request()), token: token)
+        let recorded = state.record(outcome(request()), token: 1)
         #expect(!recorded)
     }
 }

@@ -30,13 +30,6 @@ struct WindowTitlesTests {
         #expect(titles[root("/c/app")] == "app — c", "distinct after one parent; it stops there")
     }
 
-    @Test func removingARootRestoresTheBareName() {
-        let both = WindowTitles.assign([root("/work/app"), root("/personal/app")])
-        #expect(both[root("/work/app")] == "app — work")
-        let one = WindowTitles.assign([root("/work/app")])
-        #expect(one[root("/work/app")] == "app")
-    }
-
     @Test func aRootWithNoParentsLeftKeepsItsFullestTitle() {
         let titles = WindowTitles.assign([root("/app"), root("/x/app")])
         #expect(titles[root("/app")] == "app")

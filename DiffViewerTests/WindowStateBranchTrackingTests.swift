@@ -7,16 +7,13 @@ import Testing
 struct WindowStateBranchTrackingTests {
     /// A window adopted with `branches` in the list and HEAD at `headState`, waited on
     /// past the first file list and the branch read, so the picker's values are settled.
-    private typealias Window = (h: Harness, state: WindowState, client: StubRepoClient, root: RepositoryRoot)
-
     private func settled(branches: [LocalBranch], headState: HeadState) async throws -> Window {
         let h = Harness()
         let state = h.makeState()
-        let repo = h.repo("A", files: [changedFile("a.swift")])
-        await repo.client.set(localBranches: branches)
-        await repo.client.set(headState: headState)
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await h.published.count == 1 })
+        let repo = await h.adopt(state, "A", files: [changedFile("a.swift")]) { client in
+            await client.set(localBranches: branches)
+            await client.set(headState: headState)
+        }
         #expect(await eventually { await state.localBranches == branches.map(\.name) })
         #expect(state.headState == headState)
         return (h, state, repo.client, repo.root)

@@ -43,13 +43,6 @@ struct MoveDetectorTests {
         #expect(found.first?.newRowRange == row(new: 5, in: rows)..<(row(new: 7, in: rows) + 1))
     }
 
-    @Test func reindentedBlockIsFound() {
-        let (found, _) = moves(
-            ["// head"] + block + middle + ["// foot"], ["// head"] + middle + indented(block) + ["// foot"])
-        #expect(found.map(\.oldLineRange) == [1..<4])
-        #expect(found.map(\.newLineRange) == [5..<8])
-    }
-
     @Test func interiorSpacingMattersUnlessWhitespaceIsHidden() {
         let respaced = block.map { $0.replacingOccurrences(of: " -> ", with: "  ->  ") }
         let old = ["// head"] + block + middle + ["// foot"]

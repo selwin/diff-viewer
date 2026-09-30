@@ -11,14 +11,9 @@ struct WindowStateCommitPickerTests {
     /// Adopts a repository whose HEAD is the first of `commits`, and waits for both the
     /// file list and the commit list to arrive.
     private func adopt(_ h: Harness, _ state: WindowState, commits: [CommitSummary]) async -> StubRepoClient {
-        let repo = h.repo("A", files: workingFiles)
-        await repo.client.set(head: commits.first?.ref.sha)
-        await repo.client.set(commits: commits)
-        let before = h.published.count
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await h.published.count > before })
+        let client = await h.adoptWithHistory(state, files: workingFiles, commits: commits)
         #expect(await eventually { await !state.isLoadingHistory })
-        return repo.client
+        return client
     }
 
     /// A page and one more, so `hasMore` holds after the first page.
@@ -28,12 +23,15 @@ struct WindowStateCommitPickerTests {
 
     // MARK: Snapshot
 
+    /// The picker has to tick what is on screen even after the page stops listing it, so
+    /// the selected commit is kept in the rows until it is deselected.
     @Test func snapshotKeepsTheDisplayedCommitWhenThePageDropsIt() async {
         let h = Harness()
         let state = h.makeState()
         let first = commitSummary("c1")
         let second = commitSummary("c2")
         let client = await adopt(h, state, commits: [first])
+        #expect(state.selectableCommits == [first])
 
         state.select(commit: first)
         #expect(await eventually { await h.published.last?.cause == .scope })
@@ -41,12 +39,17 @@ struct WindowStateCommitPickerTests {
         await client.set(head: second.ref.sha)
         h.watcherChangeCallbacks.values.first?([.refs])
         #expect(await eventually { await state.history.commits == [second] })
+        #expect(state.selectableCommits == [first, second])
 
         let snapshot = state.commitPickerSnapshot
         #expect(snapshot.displayedScope == .commit(first.ref))
         #expect(snapshot.displayedCommit == first)
         #expect(snapshot.commits == [second], "the page alone; the list gives the selection its own section")
         #expect(!snapshot.historyLoadFailed)
+
+        state.selectWorkingTree()
+        #expect(state.selectableCommits == [second])
+        #expect(await eventually { await state.files.count == workingFiles.count })
     }
 
     @Test func snapshotReportsAFailedLoadMoreOverALoadedPage() async {
@@ -83,10 +86,10 @@ struct WindowStateCommitPickerTests {
 
         // First retry, held so it can be failed again after it asked.
         await client.fail(history: false)
-        await client.holdHistory(true)
+        await client.hold(.history)
         let heads = await client.headCalls
         state.retryHistoryLoad()
-        #expect(await eventually { await client.heldHistoryCount == 1 })
+        #expect(await eventually { await client.heldCount(.history) == 1 })
         #expect(await client.headCalls == heads + 1, "HEAD is read again")
         #expect(await client.lastHistorySkip == page)
         #expect(state.isLoadingHistory)
@@ -94,11 +97,11 @@ struct WindowStateCommitPickerTests {
         state.retryHistoryLoad()
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await client.headCalls == heads + 1, "no retry while one is running")
-        #expect(await client.heldHistoryCount == 1)
+        #expect(await client.heldCount(.history) == 1)
 
         await client.fail(history: true)
-        await client.holdHistory(false)
-        await client.releaseHistory()
+        await client.hold(.history, false)
+        await client.release(.history)
         #expect(await eventually { await state.historyErrorMessage != nil })
 
         // Second retry succeeds at the same limit.
@@ -130,12 +133,12 @@ struct WindowStateCommitPickerTests {
         await client.set(head: newHead)
 
         // The reload the checkout triggers reaches `git log`, which fails.
-        await client.holdHistory(true)
+        await client.hold(.history)
         h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await client.heldHistoryCount == 1 })
+        #expect(await eventually { await client.heldCount(.history) == 1 })
         await client.fail(history: true)
-        await client.holdHistory(false)
-        await client.releaseHistory()
+        await client.hold(.history, false)
+        await client.release(.history)
         #expect(await eventually { await state.historyErrorMessage != nil })
         #expect(state.history.revision == first.ref.sha, "the last good page stays")
 
@@ -152,11 +155,16 @@ struct WindowStateCommitPickerTests {
 
     // MARK: Paging
 
+    /// Each page asks for one commit more than it shows, which is how `hasMore` is known,
+    /// and pages the revision on show.
     @Test func loadMoreAppendsOnlyTheNextPage() async {
         let h = Harness()
         let state = h.makeState()
         let client = await adopt(h, state, commits: twoPages)
         let revision = state.history.revision
+        #expect(state.history.commits.count == WindowState.commitPageSize)
+        #expect(state.history.hasMore)
+        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
 
         state.loadMoreCommits()
         #expect(await eventually { await state.history.commits.count == WindowState.commitPageSize * 2 })
@@ -165,6 +173,12 @@ struct WindowStateCommitPickerTests {
         #expect(state.history.revision == revision)
         #expect(await client.lastHistorySkip == WindowState.commitPageSize)
         #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
+        #expect(await client.lastHistoryRevision == revision, "paging stays on the loaded revision")
+
+        state.loadMoreCommits()
+        #expect(await eventually { await state.history.commits.count == WindowState.commitPageSize * 2 + 1 })
+        #expect(state.history.commits == twoPages)
+        #expect(!state.history.hasMore, "the last page has no extra commit")
     }
 
     /// A Retry after HEAD moved must not append the old revision's next page to a list
@@ -192,19 +206,19 @@ struct WindowStateCommitPickerTests {
         let h = Harness()
         let state = h.makeState()
         let client = await adopt(h, state, commits: twoPages)
-        await client.holdHistory(true)
+        await client.hold(.history)
         state.loadMoreCommits()
-        #expect(await eventually { await client.heldHistoryCount == 1 })
+        #expect(await eventually { await client.heldCount(.history) == 1 })
 
         let moved = (0...WindowState.commitPageSize).map { commitSummary("m\($0)") }
         await client.set(head: objectID("moved"))
         await client.set(commits: moved)
         h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await client.heldHistoryCount == 2 })
+        #expect(await eventually { await client.heldCount(.history) == 2 })
         #expect(await client.lastHistorySkip == 0)
 
-        await client.holdHistory(false)
-        await client.releaseHistory()
+        await client.hold(.history, false)
+        await client.release(.history)
         #expect(await eventually { await !state.isLoadingHistory })
         #expect(state.history.revision == objectID("moved"))
         #expect(state.history.commits == Array(moved.prefix(WindowState.commitPageSize)))
@@ -212,24 +226,12 @@ struct WindowStateCommitPickerTests {
 
     // MARK: Presentation guards
 
-    @Test func thePickerAndTheCommitSheetNeverStack() async {
+    @Test func closingClearsTheCommitPicker() async {
         let h = Harness()
         let state = h.makeState()
         _ = await adopt(h, state, commits: [commitSummary("c1")])
-        #expect(await eventually { await state.canOpenCommitSheet })
-        #expect(state.canOpenCommitPicker)
-
-        state.isCommitSheetPresented = true
-        #expect(!state.canOpenCommitPicker)
-        state.isCommitSheetPresented = false
-        #expect(state.canOpenCommitPicker)
-
         state.isCommitPickerPresented = true
-        #expect(!state.canOpenCommitSheet)
-        state.isCommitPickerPresented = false
-        #expect(state.canOpenCommitSheet)
 
-        state.isCommitPickerPresented = true
         state.close()
         #expect(!state.isCommitPickerPresented)
         #expect(!state.canOpenCommitPicker)

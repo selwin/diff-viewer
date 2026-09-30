@@ -45,23 +45,37 @@ struct DiffFinderTests {
         #expect(oldSide == [match(0, 0..<3), match(1, 0..<3), match(3, 0..<3)])
     }
 
-    @Test func adjacentOccurrencesDoNotOverlap() throws {
-        #expect(try find("aa", in: equalDocument(["aaaa"])) == [match(0, 0..<2), match(0, 2..<4)])
+    struct MatchCase: CustomTestStringConvertible {
+        let name: String
+        let query: String
+        let lines: [String]
+        let expected: [FindMatch]
+
+        var testDescription: String { name }
     }
 
-    @Test func matchesIgnoreCase() throws {
-        let found = try find("Foo", in: equalDocument(["foo", "FOO", "fOo"]))
-        #expect(found == [match(0, 0..<3), match(1, 0..<3), match(2, 0..<3)])
+    private static func hit(_ row: Int, _ range: Range<Int>) -> FindMatch {
+        FindMatch(documentRow: row, utf16Range: range)
     }
 
-    @Test func rangesAreUTF16() throws {
-        let doc = equalDocument(["héllo 😀 foo"])
-        #expect(try find("foo", in: doc) == [match(0, 9..<12)])
-        #expect(try find("😀", in: doc) == [match(0, 6..<8)])
-    }
+    static let matchCases: [MatchCase] = [
+        MatchCase(
+            name: "adjacent occurrences do not overlap", query: "aa", lines: ["aaaa"],
+            expected: [hit(0, 0..<2), hit(0, 2..<4)]),
+        MatchCase(
+            name: "matches ignore case", query: "Foo", lines: ["foo", "FOO", "fOo"],
+            expected: [hit(0, 0..<3), hit(1, 0..<3), hit(2, 0..<3)]),
+        MatchCase(
+            name: "ranges are UTF-16 after accents and emoji", query: "foo", lines: ["héllo 😀 foo"],
+            expected: [hit(0, 9..<12)]),
+        MatchCase(
+            name: "an emoji query spans two UTF-16 units", query: "😀", lines: ["héllo 😀 foo"],
+            expected: [hit(0, 6..<8)]),
+        MatchCase(name: "an empty query matches nothing", query: "", lines: ["anything"], expected: []),
+    ]
 
-    @Test func emptyQueryMatchesNothing() throws {
-        #expect(try find("", in: equalDocument(["anything"])).isEmpty)
+    @Test(arguments: matchCases) func matchesAreFoundInTheRawLine(_ testCase: MatchCase) throws {
+        #expect(try find(testCase.query, in: equalDocument(testCase.lines)) == testCase.expected)
     }
 
     @Test func resultsGroupRangesByRowForBothSides() throws {

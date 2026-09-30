@@ -33,16 +33,31 @@ struct LineDiffTests {
         if let expectedEdits { #expect(edits == expectedEdits) }
     }
 
-    @Test func identical() { verify(["a", "b", "c"], ["a", "b", "c"], expectedEdits: 0) }
-    @Test func empty() { verify([], [], expectedEdits: 0) }
-    @Test func allInserted() { verify([], ["a", "b"], expectedEdits: 2) }
-    @Test func allDeleted() { verify(["a", "b"], [], expectedEdits: 2) }
-    @Test func replaceMiddle() { verify(["a", "b", "c"], ["a", "x", "c"], expectedEdits: 2) }
-    @Test func insertMiddle() { verify(["a", "c"], ["a", "b", "c"], expectedEdits: 1) }
-    @Test func classicMyersExample() {
-        verify(["a", "b", "c", "a", "b", "b", "a"], ["c", "b", "a", "b", "a", "c"], expectedEdits: 5)
+    struct Case: CustomTestStringConvertible {
+        let name: String
+        let old: [String]
+        let new: [String]
+        let edits: Int
+
+        var testDescription: String { name }
     }
-    @Test func completelyDifferent() { verify(["a", "b"], ["c", "d"], expectedEdits: 4) }
+
+    static let cases: [Case] = [
+        Case(name: "identical", old: ["a", "b", "c"], new: ["a", "b", "c"], edits: 0),
+        Case(name: "empty", old: [], new: [], edits: 0),
+        Case(name: "all inserted", old: [], new: ["a", "b"], edits: 2),
+        Case(name: "all deleted", old: ["a", "b"], new: [], edits: 2),
+        Case(name: "replace middle", old: ["a", "b", "c"], new: ["a", "x", "c"], edits: 2),
+        Case(name: "insert middle", old: ["a", "c"], new: ["a", "b", "c"], edits: 1),
+        Case(
+            name: "classic Myers example", old: ["a", "b", "c", "a", "b", "b", "a"],
+            new: ["c", "b", "a", "b", "a", "c"], edits: 5),
+        Case(name: "completely different", old: ["a", "b"], new: ["c", "d"], edits: 4),
+    ]
+
+    @Test(arguments: cases) func smallDiffsAreMinimalAndReproduceTheNewSide(_ testCase: Case) {
+        verify(testCase.old, testCase.new, expectedEdits: testCase.edits)
+    }
 
     @Test func randomizedAgainstLCS() {
         var generator = SplitMix64(seed: 42)

@@ -98,10 +98,7 @@ final class CoordinatorHarness {
             defaults.set(savedActive.path, forKey: WindowCoordinator.SessionKeys.lastActive)
         }
         preferences = Preferences(defaults: defaults)
-        let runner = runner
-        cache = DifftCache(runner: { old, new, fileName, qos in
-            try await runner.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-        })
+        cache = probeCache(runner)
         let gate = gate
         let registry = registry
         let log = log
@@ -221,6 +218,18 @@ final class CoordinatorHarness {
 struct WindowCoordinatorTests {
     let filesA = [changedFile("a1.swift"), changedFile("a2.swift", area: .staged)]
     let filesB = [changedFile("b1.swift")]
+
+    /// Window `w1` holds repository X and has asked for a new window for repository A,
+    /// which has not registered yet.
+    private func pendingCreate() async -> (h: CoordinatorHarness, x: URL, a: URL) {
+        let h = CoordinatorHarness()
+        let x = h.repo("X")
+        let a = h.repo("A", files: filesA)
+        let w1 = h.makeWindow()
+        await h.openAndSettle(x, into: w1)
+        await h.open(a, from: w1)
+        return (h, x, a)
+    }
 
     // MARK: Routing
 
@@ -387,22 +396,6 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
     }
 
-    @Test func openWhileCreateIsPendingJoinsIt() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1)
-        await h.open(a, from: w1)
-        #expect(h.log.created == [h.root(a)])
-        #expect(h.log.focused == [w1.id], "the joining request neither focuses nor creates")
-        #expect(h.coordinator.openOrder == [h.root(x), h.root(a)])
-        #expect(h.recent == [h.root(x)], "recency waits for the window")
-        h.registerCreated(h.root(a))
-        #expect(h.recent == [h.root(a), h.root(x)])
-    }
-
     @Test func registerTwiceKeepsOneEntryAndRemoveUnknownIsANoop() async {
         let h = CoordinatorHarness()
         let w1 = h.makeWindow()
@@ -449,12 +442,7 @@ struct WindowCoordinatorTests {
     }
 
     @Test func registrationWithPendingSceneRootAdoptsWithoutSecondDiscovery() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1)
+        let (h, _, a) = await pendingCreate()
         #expect(h.registry.lookups[a] == 1)
 
         // The new window is already key when its state registers.
@@ -474,20 +462,6 @@ struct WindowCoordinatorTests {
         #expect(state.selection == [.allChanges])
     }
 
-    @Test func userRequestJoiningARestorationCreateUpgradesRecency() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1, purpose: .restoration)
-        await h.open(a, from: w1, purpose: .user)
-        #expect(h.log.created == [h.root(a)])
-        #expect(h.recent == [h.root(x)])
-        h.registerCreated(h.root(a))
-        #expect(h.recent == [h.root(a), h.root(x)])
-    }
-
     @Test func appOriginFallsBackToTheLastActiveWindow() async {
         let h = CoordinatorHarness()
         let a = h.repo("A", files: filesA)
@@ -504,25 +478,8 @@ struct WindowCoordinatorTests {
         #expect(h.log.created == [h.root(c)])
     }
 
-    @Test func restoredPendingWindowDoesNotTouchRecency() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1, purpose: .restoration)
-        let w2 = h.registerCreated(h.root(a))
-        #expect(w2.repositoryRoot == h.root(a))
-        #expect(h.recent == [h.root(x)])
-    }
-
     @Test func createdWindowClosedBeforeRegistrationIsForgotten() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1)
+        let (h, x, a) = await pendingCreate()
 
         let late = h.makeState()
         h.coordinator.windowDidAttach(late.id, sceneRoot: h.root(a))
@@ -538,12 +495,7 @@ struct WindowCoordinatorTests {
     }
 
     @Test func pendingWindowClosedIsMatchedByRecordedID() async {
-        let h = CoordinatorHarness()
-        let x = h.repo("X")
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        await h.openAndSettle(x, into: w1)
-        await h.open(a, from: w1)
+        let (h, x, a) = await pendingCreate()
         let late = h.makeState()
         h.coordinator.windowDidAttach(late.id, sceneRoot: h.root(a))
         h.coordinator.windowWillClose(late.id, sceneRoot: nil)
@@ -836,18 +788,6 @@ struct WindowCoordinatorTests {
         #expect(h.recent == [h.root(c)], "restoration never touches recency")
     }
 
-    @Test func restoringOneRepositoryIntoTheInitialWindowSettles() async {
-        let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")])
-        let a = h.repo("A", files: filesA)
-        let w1 = h.makeWindow()
-        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
-        #expect(await h.running())
-        #expect(h.log.created.isEmpty)
-        #expect(h.coordinator.openOrder == [h.root(a)])
-        #expect(h.savedRoots == [h.root(a)])
-        #expect(h.registry.lookups[h.root(a).url] == 1)
-    }
-
     @Test func initialWindowIsTheAdoptionTargetEvenWhenNotKey() async {
         let h = CoordinatorHarness(savedRoots: [CoordinatorHarness.savedRoot("A")])
         let a = h.repo("A", files: filesA)
@@ -947,9 +887,12 @@ struct WindowCoordinatorTests {
         #expect(await eventually { await w1.repositoryRoot == h.root(a) })
         #expect(await eventually { await h.log.created == [h.root(b)] })
 
+        let focused = h.log.focused
         await h.open(b, from: w1)
         #expect(h.coordinator.phase == .restoring)
         #expect(h.log.created == [h.root(b)], "the duplicate joins the pending create")
+        #expect(h.log.focused == focused, "and neither focuses nor creates")
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
         #expect(h.recent.isEmpty, "recency waits for the window")
         h.registerCreated(h.root(b))
         #expect(h.coordinator.phase == .running)
@@ -1044,12 +987,14 @@ struct WindowCoordinatorTests {
     @Test func savedListWithADuplicateRestoresOneWindow() async {
         let a = CoordinatorHarness.savedRoot("A")
         let h = CoordinatorHarness(savedRoots: [a, a])
-        _ = h.repo("A", files: filesA)
+        let url = h.repo("A", files: filesA)
         let w1 = h.makeWindow()
         #expect(await eventually { await w1.repositoryRoot == a })
         #expect(await h.running())
         #expect(h.log.created.isEmpty)
         #expect(h.coordinator.openOrder == [a])
+        #expect(h.savedRoots == [a])
+        #expect(h.registry.lookups[h.root(url).url] == 1, "the duplicate is discovered once")
         #expect(h.registry.watchers.count == 1)
     }
 

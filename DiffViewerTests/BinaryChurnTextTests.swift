@@ -14,75 +14,53 @@ struct BinaryChurnTextTests {
         #expect(presentation(old: nil, new: nil) == nil)
     }
 
-    @Test func addedShowsSignedNewSize() {
-        let result = presentation(old: nil, new: 4_500)
-        #expect(result?.kind == .added)
-        #expect(result?.primaryText == "+4 kB")
-        #expect(result?.deltaText == nil)
-        #expect(result?.helpText == "Added, 4,500 bytes")
+    struct Case: CustomTestStringConvertible {
+        let name: String
+        let old: Int64?
+        let new: Int64?
+        let kind: BinaryChurnText.ChangeKind
+        let primaryText: String
+        let deltaText: String?
+        let helpText: String
+
+        var testDescription: String { name }
     }
 
-    @Test func deletedShowsSignedOldSize() {
-        let result = presentation(old: 4_500, new: nil)
-        #expect(result?.kind == .deleted)
-        #expect(result?.primaryText == "−4 kB")
-        #expect(result?.deltaText == nil)
-        #expect(result?.helpText == "Deleted, 4,500 bytes")
-    }
+    static let cases: [Case] = [
+        Case(
+            name: "added shows the signed new size", old: nil, new: 4_500, kind: .added, primaryText: "+4 kB",
+            deltaText: nil, helpText: "Added, 4,500 bytes"),
+        Case(
+            name: "deleted shows the signed old size", old: 4_500, new: nil, kind: .deleted, primaryText: "−4 kB",
+            deltaText: nil, helpText: "Deleted, 4,500 bytes"),
+        Case(
+            name: "grown shows the new size and a positive delta", old: 12_345, new: 12_645, kind: .grown,
+            primaryText: "13 kB", deltaText: "+300 bytes", helpText: "12,345 bytes → 12,645 bytes"),
+        Case(
+            name: "shrunk shows the new size and a negative delta", old: 12_600, new: 12_300, kind: .shrunk,
+            primaryText: "12 kB", deltaText: "−300 bytes", helpText: "12,600 bytes → 12,300 bytes"),
+        Case(
+            name: "the same size shows the size without a delta", old: 12_345, new: 12_345, kind: .sameSize,
+            primaryText: "12 kB", deltaText: nil, helpText: "12,345 bytes, size unchanged"),
+        Case(
+            name: "a zero-byte addition is not spelled out", old: nil, new: 0, kind: .added, primaryText: "+0 bytes",
+            deltaText: nil, helpText: "Added, 0 bytes"),
+        Case(
+            name: "a zero-byte deletion is not spelled out", old: 0, new: nil, kind: .deleted,
+            primaryText: "−0 bytes", deltaText: nil, helpText: "Deleted, 0 bytes"),
+        Case(
+            name: "a one-byte delta is singular", old: 0, new: 1, kind: .grown, primaryText: "1 byte",
+            deltaText: "+1 byte", helpText: "0 bytes → 1 byte"),
+        Case(
+            name: "growth across a unit boundary uses the larger unit", old: 999_000, new: 1_200_000, kind: .grown,
+            primaryText: "1.2 MB", deltaText: "+201 kB", helpText: "999,000 bytes → 1,200,000 bytes"),
+    ]
 
-    @Test func grownShowsNewSizeAndPositiveDelta() {
-        let result = presentation(old: 12_345, new: 12_645)
-        #expect(result?.kind == .grown)
-        #expect(result?.primaryText == "13 kB")
-        #expect(result?.deltaText == "+300 bytes")
-        #expect(result?.helpText == "12,345 bytes → 12,645 bytes")
-    }
-
-    @Test func shrunkShowsNewSizeAndNegativeDelta() {
-        let result = presentation(old: 12_600, new: 12_300)
-        #expect(result?.kind == .shrunk)
-        #expect(result?.primaryText == "12 kB")
-        #expect(result?.deltaText == "−300 bytes")
-        #expect(result?.helpText == "12,600 bytes → 12,300 bytes")
-    }
-
-    @Test func sameSizeShowsSizeWithoutDelta() {
-        let result = presentation(old: 12_345, new: 12_345)
-        #expect(result?.kind == .sameSize)
-        #expect(result?.primaryText == "12 kB")
-        #expect(result?.deltaText == nil)
-        #expect(result?.helpText == "12,345 bytes, size unchanged")
-    }
-
-    @Test func zeroByteAdditionIsNotSpelledOut() {
-        let result = presentation(old: nil, new: 0)
-        #expect(result?.kind == .added)
-        #expect(result?.primaryText == "+0 bytes")
-        #expect(result?.primaryText.contains("Zero") == false)
-        #expect(result?.helpText == "Added, 0 bytes")
-    }
-
-    @Test func zeroByteDeletionIsNotSpelledOut() {
-        let result = presentation(old: 0, new: nil)
-        #expect(result?.kind == .deleted)
-        #expect(result?.primaryText == "−0 bytes")
-        #expect(result?.primaryText.contains("Zero") == false)
-        #expect(result?.helpText == "Deleted, 0 bytes")
-    }
-
-    @Test func oneByteDeltaIsSingular() {
-        let result = presentation(old: 0, new: 1)
-        #expect(result?.kind == .grown)
-        #expect(result?.primaryText == "1 byte")
-        #expect(result?.deltaText == "+1 byte")
-        #expect(result?.helpText == "0 bytes → 1 byte")
-    }
-
-    @Test func growthAcrossUnitBoundaryUsesLargerUnit() {
-        let result = presentation(old: 999_000, new: 1_200_000)
-        #expect(result?.kind == .grown)
-        #expect(result?.primaryText == "1.2 MB")
-        #expect(result?.deltaText == "+201 kB")
-        #expect(result?.helpText == "999,000 bytes → 1,200,000 bytes")
+    @Test(arguments: cases) func aFilePresentsItsSizeChange(_ testCase: Case) {
+        let result = presentation(old: testCase.old, new: testCase.new)
+        #expect(result?.kind == testCase.kind)
+        #expect(result?.primaryText == testCase.primaryText)
+        #expect(result?.deltaText == testCase.deltaText)
+        #expect(result?.helpText == testCase.helpText)
     }
 }

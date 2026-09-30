@@ -6,19 +6,6 @@ import Testing
 struct ChangesetProjectionTests {
     private let options = FoldOptions(contextLines: 5, expansionStep: 20, minimumHiddenRun: 4)
 
-    private func changeset(_ results: [(file: ChangedFile, result: ChangesetBuilder.FileResult)]) -> ChangesetDocument {
-        ChangesetBuilder.build(results: results, loadID: UUID(), revision: 1)
-    }
-
-    /// One text file of `rows` rows with a change at 50..<52, folded to context 5.
-    private func textFile(_ path: String) -> (file: ChangedFile, result: ChangesetBuilder.FileResult) {
-        (changedFile(path), .content(textContent(rows: 100, modified: [50..<52])))
-    }
-
-    private func binaryFile(_ path: String) -> (file: ChangedFile, result: ChangesetBuilder.FileResult) {
-        (changedFile(path), .content(.binary))
-    }
-
     private func project(_ document: ChangesetDocument) -> FoldedRows {
         ChangesetProjection.build(document: document, options: options)
     }
@@ -75,22 +62,6 @@ struct ChangesetProjectionTests {
         #expect(isMonotonic(folded))
     }
 
-    @Test func aGapStraddlingTwoFilesIsTwoSeparators() {
-        let folded = project(changeset([textFile("a.swift"), textFile("b.swift")]))
-        let separators = folded.displayRows.compactMap { row -> Range<Int>? in
-            if case let .separator(hidden) = row { return hidden }
-            return nil
-        }
-        // The equal rows 57..<145 straddle the boundary at 100 and never merge.
-        #expect(separators == [0..<45, 57..<100, 100..<145, 157..<200])
-    }
-
-    @Test func noSpacerBeforeTheFirstSection() {
-        let folded = project(changeset([textFile("a.swift")]))
-        #expect(shape(folded).first == "hdr 0")
-        #expect(folded.displayRows.contains(.spacer(section: 0)) == false)
-    }
-
     // MARK: Mapping
 
     @Test func displayToDocumentCoversSourceRowsSeparatorsAndSyntheticRows() {
@@ -106,24 +77,6 @@ struct ChangesetProjectionTests {
         #expect(folded.documentRow(forDisplayIndex: 16) == 100)  // its header
         #expect(folded.documentRow(forDisplayIndex: 18) == 145)
         #expect(folded.documentRow(forDisplayIndex: 30) == 157)
-    }
-
-    @Test func documentToDisplayIsUnchangedForSourceRows() {
-        let folded = project(changeset([textFile("a.swift"), textFile("b.swift")]))
-        #expect(folded.documentRowCount == 200)
-        #expect(folded.displayIndex(forDocumentRow: 0) == 1)
-        #expect(folded.displayIndex(forDocumentRow: 45) == 2)
-        #expect(folded.displayIndex(forDocumentRow: 57) == 14)
-        #expect(folded.displayIndex(forDocumentRow: 100) == 17)
-        #expect(folded.displayIndex(forDocumentRow: 145) == 18)
-        #expect(folded.displayIndex(forDocumentRow: 199) == 30)
-        #expect(folded.displayRange(forDocumentRange: 150..<152) == 23..<25)
-    }
-
-    @Test func aRangeOfOnlySyntheticRowsIsEmptyAtItsBoundary() {
-        let folded = project(changeset([textFile("a.swift"), textFile("b.swift")]))
-        #expect(folded.documentRange(forDisplayRange: 15..<17) == 100..<100)
-        #expect(folded.documentRange(forDisplayRange: 0..<1) == 0..<0)
     }
 
     @Test func aRangeEndingOnSourceRowsIgnoresSyntheticOnes() {

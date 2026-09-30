@@ -171,6 +171,59 @@ func textContent(rows count: Int, modified: [Range<Int>], language: String? = "S
     return .text(DiffDocument(oldLines: lines, newLines: lines, rows: rows, language: language))
 }
 
+// MARK: Changesets
+
+func changeset(_ results: [(file: ChangedFile, result: ChangesetBuilder.FileResult)]) -> ChangesetDocument {
+    ChangesetBuilder.build(results: results, loadID: UUID(), revision: 1)
+}
+
+/// A text file of `rows` rows with one change block, so the section folds.
+func textFile(_ path: String, rows: Int = 100, modified: Range<Int> = 50..<52)
+    -> (file: ChangedFile, result: ChangesetBuilder.FileResult)
+{
+    (changedFile(path), .content(textContent(rows: rows, modified: [modified])))
+}
+
+func binaryFile(_ path: String) -> (file: ChangedFile, result: ChangesetBuilder.FileResult) {
+    (changedFile(path), .content(.binary))
+}
+
+/// The changeset `content` holds, or nil when it holds anything else.
+func changesetDocument(_ content: DiffContent?) -> ChangesetDocument? {
+    guard case let .changeset(document)? = content else { return nil }
+    return document
+}
+
+// MARK: Difft caches
+
+/// A cache whose difft always fails, so every file falls back to the plain line diff.
+func plainDifftCache() -> DifftCache {
+    DifftCache(runner: { _, _, _, _ in throw ProcessError.failed(command: "difft", status: 1, stderr: "no difft") })
+}
+
+/// A cache whose difft is `probe`.
+func probeCache(_ probe: RunnerProbe, limits: DifftCache.Limits = DifftCache.Limits()) -> DifftCache {
+    DifftCache(
+        runner: { old, new, fileName, qos in
+            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
+        },
+        limits: limits)
+}
+
+// MARK: Repository reads
+
+/// A numstat line counting `added` and `deleted` lines of `path`.
+func counted(_ path: String, _ added: Int, _ deleted: Int) -> NumstatEntry {
+    NumstatEntry(path: path, stats: .counted(added: added, deleted: deleted))
+}
+
+/// What git suggests while a merge is in progress.
+func merging(_ text: String) -> CommitDefaults {
+    CommitDefaults(suggestion: CommitDefaults.Suggestion(text: text, source: .merge), isMerging: true)
+}
+
+// MARK: Commits
+
 /// A 40-character object id from a short seed, so tests can use readable names where
 /// git would use a hash.
 func objectID(_ seed: String) -> String {

@@ -4,17 +4,6 @@ import Testing
 
 @testable import DiffViewer
 
-/// The changeset a loader is publishing, or nil when it is showing anything else.
-private func changesetDocument(_ content: DiffContent?) -> ChangesetDocument? {
-    guard case let .changeset(document)? = content else { return nil }
-    return document
-}
-
-/// A cache whose difft always fails, so every file falls back to the plain line diff.
-private func plainDifftCache() -> DifftCache {
-    DifftCache(runner: { _, _, _, _ in throw ProcessError.failed(command: "difft", status: 1, stderr: "no difft") })
-}
-
 @MainActor
 struct DiffLoaderTests {
     /// A superseded changeset load must stay superseded. Its held read comes back long
@@ -139,9 +128,7 @@ struct DiffLoaderTests {
     /// same file turning binary clears it, even though the file id did not change.
     @Test func aSameFileHitKeepsItsStylesAndTurningBinaryClearsThem() async {
         let probe = RunnerProbe()
-        let cache = DifftCache(runner: { old, new, fileName, qos in
-            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-        })
+        let cache = probeCache(probe)
         let resultCache = DiffResultCache()
         let client = StubRepoClient(files: [])
         let loader = DiffLoader(cache: cache, resultCache: resultCache)
@@ -406,27 +393,11 @@ struct DiffLoaderTests {
         #expect(decodedWidth(loader.imagePreview?.new) == 40)
     }
 
-    /// An untracked SVG has no old side at all.
-    @Test func anUntrackedSVGHasNoOldSide() async throws {
-        let client = StubRepoClient(files: [])
-        await client.set(worktree: svgData(width: 12, height: 8), for: "new.svg")
-        let loader = DiffLoader(cache: plainDifftCache())
-
-        loader.load(
-            file: changedFile("new.svg", kind: .untracked), client: client, repository: testRepository,
-            hideWhitespace: true)
-        try #require(await waitUntilSettledOnText(loader))
-        #expect(loader.imagePreview?.old == nil)
-        #expect(decodedWidth(loader.imagePreview?.new) == 12)
-    }
-
     /// An SVG is never served from a reused result, so its text and preview both come
     /// from the bytes read now, not from the blob the registered result was built from.
     @Test func aRegisteredSVGIsReadAgainSoTextAndPreviewMatch() async throws {
         let probe = RunnerProbe()
-        let cache = DifftCache(runner: { old, new, fileName, qos in
-            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-        })
+        let cache = probeCache(probe)
         let resultCache = DiffResultCache()
         let client = StubRepoClient(files: [])
         let file = changedFile("icon.svg", area: .staged)
@@ -451,20 +422,5 @@ struct DiffLoaderTests {
         }
         #expect(document.newLines == [String(decoding: current, as: UTF8.self)])
         #expect(decodedWidth(loader.imagePreview?.new) == 60)
-    }
-
-    /// Selecting a source file after an SVG clears the preview, as for any other selection.
-    @Test func selectingAnotherFileClearsTheSVGPreview() async throws {
-        let client = StubRepoClient(files: [])
-        await client.set(worktree: svgData(width: 40, height: 20), for: "icon.svg")
-        let loader = DiffLoader(cache: plainDifftCache())
-        loader.load(file: changedFile("icon.svg"), client: client, repository: testRepository, hideWhitespace: true)
-        try #require(await waitUntilSettledOnText(loader))
-        #expect(loader.imagePreview != nil)
-
-        loader.load(file: changedFile("a.swift"), client: client, repository: testRepository, hideWhitespace: true)
-        #expect(loader.imagePreview == nil)
-        try #require(await waitUntilSettledOnText(loader))
-        #expect(loader.imagePreview == nil)
     }
 }

@@ -91,39 +91,22 @@ struct NewBranchNameValidationTests {
             exists: { existing.contains($0) }, check: { await held.check($0) }, debounce: debounce)
     }
 
-    @Test func aBlankNameDisablesCreateWithoutAskingGit() {
+    /// Blank, option-like and taken names are judged locally, so git is never asked.
+    @Test(arguments: [
+        (text: "   ", status: NewBranchNameValidation.Status.empty, message: String?.none),
+        (text: "-x", status: .invalid, message: "Not a valid branch name"),
+        (text: " main ", status: .exists, message: "A branch named main already exists"),
+    ])
+    func aNameJudgedLocallyNeverAsksGit(text: String, status: NewBranchNameValidation.Status, message: String?) {
         let held = HeldCheck()
         let validation = model(held)
 
-        validation.update("   ")
+        validation.update(text)
 
-        #expect(validation.status == .empty)
+        #expect(validation.status == status)
         #expect(!validation.canCreate)
-        #expect(validation.message == nil)
+        #expect(validation.message == message)
         #expect(validation.pendingCheck == nil)
-    }
-
-    @Test func aLeadingDashIsInvalidWithoutAskingGit() {
-        let held = HeldCheck()
-        let validation = model(held)
-
-        validation.update("-x")
-
-        #expect(validation.status == .invalid)
-        #expect(validation.message == "Not a valid branch name")
-        #expect(validation.pendingCheck == nil)
-        #expect(held.asked.isEmpty)
-    }
-
-    @Test func anExistingNameCountsAsExisting() {
-        let held = HeldCheck()
-        let validation = model(held)
-
-        validation.update(" main ")
-
-        #expect(validation.status == .exists)
-        #expect(!validation.canCreate)
-        #expect(validation.message == "A branch named main already exists")
         #expect(held.asked.isEmpty)
     }
 

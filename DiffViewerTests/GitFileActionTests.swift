@@ -4,30 +4,35 @@ import Testing
 @testable import DiffViewer
 
 struct GitFileActionTests {
-    @Test func stageAddsThePath() {
-        #expect(
-            GitFileAction.stage.arguments(for: ["src/a.swift"]) == ["--literal-pathspecs", "add", "--", "src/a.swift"])
+    struct Case: CustomTestStringConvertible {
+        let name: String
+        let action: GitFileAction
+        let paths: [String]
+        let expected: [String]
+
+        var testDescription: String { name }
     }
 
-    /// `reset`, not `restore --staged`: the latter cannot resolve HEAD in a repository
-    /// with no commits, which is exactly where every staged file is a staged add.
-    @Test func unstageResetsTheIndexEntry() {
-        #expect(
-            GitFileAction.unstage.arguments(for: ["src/a.swift"])
-                == ["--literal-pathspecs", "reset", "-q", "--", "src/a.swift"])
-    }
+    static let cases: [Case] = [
+        Case(
+            name: "stage adds the path", action: .stage, paths: ["src/a.swift"],
+            expected: ["--literal-pathspecs", "add", "--", "src/a.swift"]),
+        // `reset`, not `restore --staged`: the latter cannot resolve HEAD in a repository
+        // with no commits, which is exactly where every staged file is a staged add.
+        Case(
+            name: "unstage resets the index entry", action: .unstage, paths: ["src/a.swift"],
+            expected: ["--literal-pathspecs", "reset", "-q", "--", "src/a.swift"]),
+        Case(
+            name: "discard restores the worktree", action: .discard, paths: ["src/a.swift"],
+            expected: ["--literal-pathspecs", "restore", "--", "src/a.swift"]),
+        // A batch is one command with every path after `--`, in the order given.
+        Case(
+            name: "several paths follow the separator in order", action: .stage, paths: ["a.swift", "b.swift"],
+            expected: ["--literal-pathspecs", "add", "--", "a.swift", "b.swift"]),
+    ]
 
-    @Test func discardRestoresTheWorktree() {
-        #expect(
-            GitFileAction.discard.arguments(for: ["src/a.swift"])
-                == ["--literal-pathspecs", "restore", "--", "src/a.swift"])
-    }
-
-    /// A batch is one command with every path after `--`, in the order given.
-    @Test func severalPathsFollowTheSeparatorInOrder() {
-        #expect(
-            GitFileAction.stage.arguments(for: ["a.swift", "b.swift"])
-                == ["--literal-pathspecs", "add", "--", "a.swift", "b.swift"])
+    @Test(arguments: cases) func actionsBecomeGitArguments(_ testCase: Case) {
+        #expect(testCase.action.arguments(for: testCase.paths) == testCase.expected)
     }
 
     /// A path that looks like a glob or an option must reach git as a plain file name,

@@ -33,78 +33,112 @@ struct RowFoldingTests {
 
     // MARK: Folding
 
-    @Test func noChangeBlocksShowsAllRows() {
-        let folded = fold([], rows: 10)
-        #expect(shape(folded) == ["rows 0..<10"])
-        #expect(folded.displayRows.count == folded.documentRowCount)
+    struct ShapeCase: CustomTestStringConvertible {
+        let name: String
+        let blocks: [Range<Int>]
+        let rows: Int
+        var contextLines = 5
+        let shape: [String]
+        /// Nothing is folded, so every document row is its own display row.
+        var showsEveryRow = false
+
+        var testDescription: String { name }
     }
 
-    @Test func contextSurroundsBlockWithSeparatorsAtBothEnds() {
-        let folded = fold([50..<52], rows: 100)
-        #expect(shape(folded) == ["sep 0..<45", "rows 45..<57", "sep 57..<100"])
+    static let shapeCases: [ShapeCase] = [
+        ShapeCase(
+            name: "no change blocks shows all rows", blocks: [], rows: 10, shape: ["rows 0..<10"],
+            showsEveryRow: true),
+        ShapeCase(
+            name: "context surrounds a block with separators at both ends", blocks: [50..<52], rows: 100,
+            shape: ["sep 0..<45", "rows 45..<57", "sep 57..<100"]),
+        ShapeCase(
+            name: "block at file start has no leading separator", blocks: [0..<3], rows: 100,
+            shape: ["rows 0..<8", "sep 8..<100"]),
+        ShapeCase(
+            name: "block at file end has no trailing separator", blocks: [97..<100], rows: 100,
+            shape: ["sep 0..<92", "rows 92..<100"]),
+        // A gap of 10 rows is 2 * context: fully covered, no separator between.
+        ShapeCase(
+            name: "hunks merge when the gap is within context", blocks: [20..<21, 31..<32], rows: 100,
+            shape: ["sep 0..<15", "rows 15..<37", "sep 37..<100"]),
+        // A gap of 11 rows leaves one hidden row, below the minimum run, so it is shown.
+        ShapeCase(
+            name: "hunks merge when one row is left hidden", blocks: [20..<21, 32..<33], rows: 100,
+            shape: ["sep 0..<15", "rows 15..<38", "sep 38..<100"]),
+        ShapeCase(
+            name: "a hidden gap of exactly the minimum run folds", blocks: [20..<21, 35..<36], rows: 100,
+            shape: ["sep 0..<15", "rows 15..<26", "sep 26..<30", "rows 30..<41", "sep 41..<100"]),
+        ShapeCase(
+            name: "a hidden gap below the minimum run is shown", blocks: [20..<21, 34..<35], rows: 100,
+            shape: ["sep 0..<15", "rows 15..<40", "sep 40..<100"]),
+        ShapeCase(
+            name: "zero context keeps only changed rows", blocks: [50..<52], rows: 100, contextLines: 0,
+            shape: ["sep 0..<50", "rows 50..<52", "sep 52..<100"]),
+    ]
+
+    @Test(arguments: shapeCases) func foldingKeepsChangesAndContext(_ testCase: ShapeCase) {
+        let options = FoldOptions(contextLines: testCase.contextLines, expansionStep: 20, minimumHiddenRun: 4)
+        let folded = fold(testCase.blocks, rows: testCase.rows, options: options)
+        #expect(shape(folded) == testCase.shape)
+        if testCase.showsEveryRow { #expect(folded.displayRows.count == folded.documentRowCount) }
     }
 
-    @Test func blockAtFileStartHasNoLeadingSeparator() {
-        #expect(shape(fold([0..<3], rows: 100)) == ["rows 0..<8", "sep 8..<100"])
+    /// One user reveal, applied to a 100-row document.
+    enum Reveal {
+        case down(Range<Int>)
+        case up(Range<Int>)
+        case run(Range<Int>)
+        case all
+
+        func apply(to state: inout FoldState, step: Int) {
+            switch self {
+            case let .down(hidden): state.expandDown(hidden, step: step)
+            case let .up(hidden): state.expandUp(hidden, step: step)
+            case let .run(hidden): state.expandRun(hidden)
+            case .all: state.expandAll(documentRowCount: 100)
+            }
+        }
     }
 
-    @Test func blockAtFileEndHasNoTrailingSeparator() {
-        #expect(shape(fold([97..<100], rows: 100)) == ["sep 0..<92", "rows 92..<100"])
+    struct ExpansionCase: CustomTestStringConvertible {
+        let name: String
+        let blocks: [Range<Int>]
+        let reveal: Reveal
+        let shape: [String]
+        var showsEveryRow = false
+
+        var testDescription: String { name }
     }
 
-    @Test func adjacentHunksMergeWhenGapWithinContext() {
-        // Gap of 10 rows == 2 * context: fully covered, no separator between.
-        #expect(shape(fold([20..<21, 31..<32], rows: 100)) == ["sep 0..<15", "rows 15..<37", "sep 37..<100"])
-        // Gap of 11 rows leaves one hidden row, below the minimum run, so it is shown.
-        #expect(shape(fold([20..<21, 32..<33], rows: 100)) == ["sep 0..<15", "rows 15..<38", "sep 38..<100"])
-    }
+    static let expansionCases: [ExpansionCase] = [
+        ExpansionCase(
+            name: "expand down reveals the first step", blocks: [50..<52], reveal: .down(57..<100),
+            shape: ["sep 0..<45", "rows 45..<77", "sep 77..<100"]),
+        ExpansionCase(
+            name: "expand up reveals the last step", blocks: [50..<52], reveal: .up(0..<45),
+            shape: ["sep 0..<25", "rows 25..<57", "sep 57..<100"]),
+        ExpansionCase(
+            name: "expanding a run removes its separator", blocks: [50..<52], reveal: .run(0..<45),
+            shape: ["rows 0..<57", "sep 57..<100"]),
+        ExpansionCase(
+            name: "expanding everything is the identity", blocks: [50..<52], reveal: .all,
+            shape: ["rows 0..<100"], showsEveryRow: true),
+        // A hidden run of 22: one step of 20 leaves 2, which is shown rather than folded.
+        ExpansionCase(
+            name: "a residual below the minimum is revealed", blocks: [50..<52, 84..<85], reveal: .down(57..<79),
+            shape: ["sep 0..<45", "rows 45..<90", "sep 90..<100"]),
+        ExpansionCase(
+            name: "revealed rows outside the document are ignored", blocks: [50..<52], reveal: .run(90..<500),
+            shape: ["sep 0..<45", "rows 45..<57", "sep 57..<90", "rows 90..<100"]),
+    ]
 
-    @Test func smallGapsAreShownNotFolded() {
-        // Hidden gap of exactly minimumHiddenRun (4) folds; 3 does not.
-        #expect(
-            shape(fold([20..<21, 35..<36], rows: 100)) == [
-                "sep 0..<15", "rows 15..<26", "sep 26..<30", "rows 30..<41", "sep 41..<100",
-            ])
-        #expect(shape(fold([20..<21, 34..<35], rows: 100)) == ["sep 0..<15", "rows 15..<40", "sep 40..<100"])
-    }
-
-    @Test func zeroContextKeepsOnlyChangedRows() {
-        let zero = FoldOptions(contextLines: 0, expansionStep: 20, minimumHiddenRun: 4)
-        #expect(shape(fold([50..<52], rows: 100, options: zero)) == ["sep 0..<50", "rows 50..<52", "sep 52..<100"])
-    }
-
-    @Test func expandDownRevealsFirstStep() {
+    @Test(arguments: expansionCases) func revealedRowsJoinTheVisibleOnes(_ testCase: ExpansionCase) {
         var state = FoldState()
-        state.expandDown(57..<100, step: 20)
-        #expect(shape(fold([50..<52], rows: 100, state: state)) == ["sep 0..<45", "rows 45..<77", "sep 77..<100"])
-    }
-
-    @Test func expandUpRevealsLastStep() {
-        var state = FoldState()
-        state.expandUp(0..<45, step: 20)
-        #expect(shape(fold([50..<52], rows: 100, state: state)) == ["sep 0..<25", "rows 25..<57", "sep 57..<100"])
-    }
-
-    @Test func expandRunRemovesSeparator() {
-        var state = FoldState()
-        state.expandRun(0..<45)
-        #expect(shape(fold([50..<52], rows: 100, state: state)) == ["rows 0..<57", "sep 57..<100"])
-    }
-
-    @Test func expandAllYieldsIdentity() {
-        var state = FoldState()
-        state.expandAll(documentRowCount: 100)
-        let folded = fold([50..<52], rows: 100, state: state)
-        #expect(shape(folded) == ["rows 0..<100"])
-        #expect(folded.displayRows.count == folded.documentRowCount)
-    }
-
-    @Test func residualBelowMinimumAutoReveals() {
-        // Hidden run of 22: one step of 20 leaves 2, which is shown rather than folded.
-        var state = FoldState()
-        state.expandDown(57..<79, step: 20)
-        #expect(
-            shape(fold([50..<52, 84..<85], rows: 100, state: state)) == ["sep 0..<45", "rows 45..<90", "sep 90..<100"])
+        testCase.reveal.apply(to: &state, step: 20)
+        let folded = fold(testCase.blocks, rows: 100, state: state)
+        #expect(shape(folded) == testCase.shape)
+        if testCase.showsEveryRow { #expect(folded.displayRows.count == folded.documentRowCount) }
     }
 
     @Test func stepsClampToTheRun() {
@@ -112,15 +146,6 @@ struct RowFoldingTests {
         state.expandDown(10..<15, step: 20)
         state.expandUp(30..<35, step: 20)
         #expect(state.revealedDocumentRows == IndexSet(integersIn: 10..<15).union(IndexSet(integersIn: 30..<35)))
-    }
-
-    @Test func revealedRowsOutsideDocumentAreIgnored() {
-        var state = FoldState()
-        state.expandRun(90..<500)
-        #expect(
-            shape(fold([50..<52], rows: 100, state: state)) == [
-                "sep 0..<45", "rows 45..<57", "sep 57..<90", "rows 90..<100",
-            ])
     }
 
     @Test func controlsDependOnRunSizeAndPosition() {
@@ -217,12 +242,6 @@ struct RowFoldingTests {
         #expect(folded.documentRange(forDisplayRange: 0..<1) == 0..<45)
         #expect(folded.documentRange(forDisplayRange: 1..<3) == 45..<47)
         #expect(folded.documentRange(forDisplayRange: 12..<14) == 56..<100)
-    }
-
-    @Test func rangesEndingOnSeparatorMapToItsUpperBound() {
-        let folded = fold([50..<52], rows: 100)
-        #expect(folded.documentRange(forDisplayRange: 10..<14) == 54..<100)
-        #expect(folded.documentRange(forDisplayRange: 0..<14) == 0..<100)
     }
 
     @Test func emptyRangesStayEmpty() {

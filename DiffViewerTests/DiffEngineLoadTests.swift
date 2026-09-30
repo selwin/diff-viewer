@@ -5,10 +5,7 @@ import Testing
 
 /// A difft that always succeeds, so finished results are stored and can be reused.
 private func succeedingCache() -> DifftCache {
-    let probe = RunnerProbe()
-    return DifftCache(runner: { old, new, fileName, qos in
-        try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-    })
+    probeCache(RunnerProbe())
 }
 
 /// Makes every side of `file` verifiable: its blobs exist and its worktree stat still

@@ -45,35 +45,38 @@ import Testing
 
     // MARK: Ranking
 
-    @Test func locationsAndErrorTokensAreSpecific() {
-        #expect(CommitFailurePrompt.rank("Sources/a.swift:24:5: warning: long line") == .specific)
-        #expect(CommitFailurePrompt.rank("ERROR: commit message too short") == .specific)
-        #expect(CommitFailurePrompt.rank("fatal: cannot lock ref") == .specific)
+    struct RankCase: CustomTestStringConvertible {
+        let name: String
+        let line: String
+        let rank: CommitFailurePrompt.Rank?
+
+        var testDescription: String { name }
     }
 
-    @Test func bareFailuresAreGeneric() {
-        #expect(CommitFailurePrompt.rank("swiftlint: Failed") == .generic)
-        #expect(CommitFailurePrompt.rank("push rejected by policy") == .generic)
-        #expect(CommitFailurePrompt.rank("✗ lint") == .generic)
-    }
+    static let rankCases: [RankCase] = [
+        RankCase(
+            name: "a file location is specific", line: "Sources/a.swift:24:5: warning: long line", rank: .specific),
+        RankCase(name: "an error token is specific", line: "ERROR: commit message too short", rank: .specific),
+        RankCase(name: "a fatal token is specific", line: "fatal: cannot lock ref", rank: .specific),
+        RankCase(name: "a hook that failed is generic", line: "swiftlint: Failed", rank: .generic),
+        RankCase(name: "a rejection is generic", line: "push rejected by policy", rank: .generic),
+        RankCase(name: "a cross mark is generic", line: "✗ lint", rank: .generic),
+        // Zero counts and passed hooks never count as failures.
+        RankCase(name: "zero errors is not a diagnostic", line: "Found 0 errors", rank: nil),
+        RankCase(name: "zero errors and failures is not a diagnostic", line: "no errors, 0 failures", rank: nil),
+        RankCase(name: "a passed hook is not a diagnostic", line: "check for failed merges: Passed", rank: nil),
+        RankCase(name: "a progress line is not a diagnostic", line: "Linting Swift files", rank: nil),
+        // A zero count beside a real failure does not hide the failure.
+        RankCase(
+            name: "a zero count beside a failure still ranks", line: "Check failed: 0 errors, 1 warning",
+            rank: .generic),
+        RankCase(name: "a zero failed count after passes is not a diagnostic", line: "12 passed, 0 failed", rank: nil),
+        // Word-bounded: an error type's name is not an `error:` token.
+        RankCase(name: "the error token is word-bounded", line: "LintError: see above", rank: nil),
+    ]
 
-    /// Zero counts and passed hooks never count as failures.
-    @Test func successSummariesAreNotDiagnostics() {
-        #expect(CommitFailurePrompt.rank("Found 0 errors") == nil)
-        #expect(CommitFailurePrompt.rank("no errors, 0 failures") == nil)
-        #expect(CommitFailurePrompt.rank("check for failed merges: Passed") == nil)
-        #expect(CommitFailurePrompt.rank("Linting Swift files") == nil)
-    }
-
-    /// A zero count beside a real failure does not hide the failure.
-    @Test func failureWithAZeroCountStillRanks() {
-        #expect(CommitFailurePrompt.rank("Check failed: 0 errors, 1 warning") == .generic)
-        #expect(CommitFailurePrompt.rank("12 passed, 0 failed") == nil)
-    }
-
-    /// Word-bounded: an error type's name is not an `error:` token.
-    @Test func errorTokenIsWordBounded() {
-        #expect(CommitFailurePrompt.rank("LintError: see above") == nil)
+    @Test(arguments: rankCases) func aLineIsRankedByHowSpecificItsFailureIs(_ testCase: RankCase) {
+        #expect(CommitFailurePrompt.rank(testCase.line) == testCase.rank)
     }
 
     // MARK: Fallback

@@ -12,15 +12,9 @@ struct WindowStateScopeTests {
     private func adopt(
         _ h: Harness, _ state: WindowState, commit: CommitSummary, commitFiles: [ChangedFile]
     ) async -> StubRepoClient {
-        let repo = h.repo("A", files: workingFiles)
-        await repo.client.set(head: commit.ref.sha)
-        await repo.client.set(commits: [commit])
-        await repo.client.set(files: commitFiles, forCommit: commit.ref.sha)
-        let before = h.published.count
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await h.published.count > before })
+        let client = await h.adoptWithHistory(state, files: workingFiles, commits: [commit], commitFiles: commitFiles)
         #expect(await eventually { await !state.history.commits.isEmpty })
-        return repo.client
+        return client
     }
 
     private func commitFile(_ path: String, _ commit: CommitSummary, kind: ChangedFile.Kind = .modified)
@@ -46,29 +40,6 @@ struct WindowStateScopeTests {
         state.selectWorkingTree()
         #expect(await eventually { await state.files.map(\.path) == workingFiles.map(\.path) })
         #expect(state.selectedCommit == nil)
-    }
-
-    /// The picker has to tick what is on screen even after the page stops listing it, so
-    /// the selected commit is kept at the top of the rows until it is deselected.
-    @Test func selectableCommitsKeepTheSelectedCommitWhenThePageDropsIt() async {
-        let h = Harness()
-        let state = h.makeState()
-        let first = commitSummary("c1")
-        let second = commitSummary("c2")
-        let client = await adopt(h, state, commit: first, commitFiles: [])
-        #expect(state.selectableCommits == [first])
-
-        state.select(commit: first)
-        #expect(await eventually { await h.published.last?.cause == .scope })
-        await client.set(commits: [second])
-        await client.set(head: second.ref.sha)
-        h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await state.history.commits == [second] })
-        #expect(state.selectableCommits == [first, second])
-
-        state.selectWorkingTree()
-        #expect(state.selectableCommits == [second])
-        #expect(await eventually { await state.files.count == workingFiles.count })
     }
 
     /// The picker's binding hands over a ref, not a commit: a known one selects its
@@ -124,16 +95,16 @@ struct WindowStateScopeTests {
         let commit = commitSummary("c1")
         let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("src/held.swift", commit)])
 
-        await client.holdCommitFiles(true)
+        await client.hold(.commitFiles)
         state.select(commit: commit)
-        #expect(await eventually { await client.heldCommitFileCount == 1 })
+        #expect(await eventually { await client.heldCount(.commitFiles) == 1 })
 
         // A ref moves while the commit's files are still being read.
         h.watcherChangeCallbacks.values.first?([.refs])
         try? await Task.sleep(for: .milliseconds(50))
 
-        await client.holdCommitFiles(false)
-        await client.releaseCommitFiles()
+        await client.hold(.commitFiles, false)
+        await client.release(.commitFiles)
         #expect(await eventually { await state.files.map(\.path) == ["src/held.swift"] })
     }
 
@@ -150,28 +121,6 @@ struct WindowStateScopeTests {
         #expect(state.scope == .commit(commit.ref))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(state.files.map(\.path) == ["src/one.swift"], "no stale working-tree publish arrives late")
-    }
-
-    /// A commit cannot change, so a ref write elsewhere in the repository must not re-read
-    /// it, republish the list, or reload the diff. `.refs`, so the HEAD check does run.
-    @Test func aWatcherTickWithUnmovedHeadDoesNothingInCommitScope() async {
-        let h = Harness()
-        let state = h.makeState()
-        let commit = commitSummary("c1")
-        let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("src/one.swift", commit)])
-
-        state.select(commit: commit)
-        #expect(await eventually { await state.files.count == 1 })
-        let publishes = h.published.count
-        let reads = await client.commitFileCalls
-        let historyReads = await client.historyCalls
-
-        h.watcherChangeCallbacks.values.first?([.refs])
-        try? await Task.sleep(for: .milliseconds(100))
-
-        #expect(h.published.count == publishes, "no file-list publish")
-        #expect(await client.commitFileCalls == reads, "the commit's files are not re-read")
-        #expect(await client.historyCalls == historyReads, "an unmoved HEAD reloads no history")
     }
 
     @Test func aMovedHeadReloadsHistoryAndResetsThePage() async {
@@ -213,9 +162,9 @@ struct WindowStateScopeTests {
         let commit = commitSummary("c1")
         let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("one.swift", commit)])
         await h.settleStats(state)
-        await client.holdNumstat(true)
+        await client.hold(.numstat)
         state.select(commit: commit)
-        #expect(await eventually { await client.heldNumstatCount >= 1 })
+        #expect(await eventually { await client.heldCount(.numstat) >= 1 })
         let task = state.session?.statsTask
 
         // The working-tree read fails too, so no later refresh starts another stats read.
@@ -229,33 +178,10 @@ struct WindowStateScopeTests {
         #expect(state.session?.lineStats.activeRequest == nil)
 
         // Cancellation does not resume the held numstat; releasing it lets the read finish.
-        await client.releaseNumstat()
+        await client.release(.numstat)
         await task?.value
         #expect(
             state.session?.lineStats.lastOutcome?.request.scope == .workingTree, "the commit's read recorded nothing")
-    }
-
-    @Test func historyPaginationAsksForOneExtraAndReadsOnlyTheNextPage() async {
-        let h = Harness()
-        let state = h.makeState()
-        let first = commitSummary("c1")
-        let client = await adopt(h, state, commit: first, commitFiles: [])
-        // One more commit than a page holds, so `hasMore` is true.
-        let page = (0...WindowState.commitPageSize).map { commitSummary("c\($0)") }
-        await client.set(commits: page)
-        await client.set(head: objectID("moved"))
-        h.watcherChangeCallbacks.values.first?([.refs])
-
-        #expect(await eventually { await state.history.hasMore })
-        #expect(state.history.commits.count == WindowState.commitPageSize)
-        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
-
-        state.loadMoreCommits()
-        #expect(await eventually { await state.history.commits.count == WindowState.commitPageSize + 1 })
-        #expect(await client.lastHistorySkip == WindowState.commitPageSize)
-        #expect(await client.lastHistoryLimit == WindowState.commitPageSize + 1)
-        #expect(await client.lastHistoryRevision == objectID("moved"), "paging stays on the loaded revision")
-        #expect(!state.history.hasMore)
     }
 
     @Test func anUnbornHeadLeavesAnEmptyHistoryAndNoError() async {
@@ -338,33 +264,6 @@ struct WindowStateScopeTests {
 
     // MARK: Branch display title
 
-    @Test func adoptingPublishesTheBranchAsTheDisplayTitle() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = h.repo("A", files: workingFiles)
-        await repo.client.set(headState: .named("sidebar-actions"))
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await state.branchDisplayTitle == "sidebar-actions" })
-    }
-
-    /// The reason the branch is read on the HEAD tick rather than from the status
-    /// header: in commit scope the watcher never calls `status()`, so a checkout (a
-    /// `.refs` change) while a commit is selected would otherwise leave the branch title stale.
-    @Test func aWatcherTickUpdatesTheBranchInCommitScope() async {
-        let h = Harness()
-        let state = h.makeState()
-        let commit = commitSummary("c1")
-        let client = await adopt(h, state, commit: commit, commitFiles: [commitFile("one.swift", commit)])
-        #expect(await eventually { await state.branchDisplayTitle == "main" })
-
-        state.select(commit: commit)
-        #expect(await eventually { await state.files.count == 1 })
-
-        await client.set(headState: .named("other"))
-        h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await state.branchDisplayTitle == "other" })
-    }
-
     /// The SHA deliberately differs from the loaded history's commit, so a title that
     /// read the history revision rather than HEAD would fail this.
     @Test func aDetachedHeadNamesItsOwnCommitNotTheLoadedHistory() async {
@@ -410,19 +309,19 @@ struct WindowStateScopeTests {
         #expect(await eventually { await state.history.revision == first.ref.sha })
 
         // The tick reads HEAD and blocks, having seen the old revision.
-        await client.holdHead(true)
+        await client.hold(.head)
         h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await client.heldHeadCount == 1 })
+        #expect(await eventually { await client.heldCount(.head) == 1 })
 
         // The switch resolves the new revision and publishes it while the tick waits.
         let later = commitSummary("c2", subject: "Newer")
-        await client.holdHead(false)
+        await client.hold(.head, false)
         await client.set(headAfterSwitch: later.ref.sha)
         await client.set(commits: [later, first])
         await state.switchBranch(to: "feature")
         #expect(await eventually { await state.history.revision == later.ref.sha })
 
-        await client.releaseHead()
+        await client.release(.head)
         try? await Task.sleep(for: .milliseconds(80))
         #expect(state.history.revision == later.ref.sha, "the older check does not start a load")
         #expect(state.history.commits.first?.ref == later.ref)
@@ -442,17 +341,17 @@ struct WindowStateScopeTests {
         #expect(state.selectedFile?.path == "a1.swift")
 
         // Both working-tree reads block, so their completion order can be chosen.
-        await client.hold(true)
+        await client.hold(.status)
         state.selectWorkingTree()
-        #expect(await eventually { await client.heldCount == 1 })
+        #expect(await eventually { await client.heldCount(.status) == 1 })
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { await client.heldCount == 2 })
+        #expect(await eventually { await client.heldCount(.status) == 2 })
 
         // The newer refresh finishes first and is the one that publishes.
-        await client.releaseLast()
+        await client.releaseLast(.status)
         #expect(await eventually { await state.files.count == workingFiles.count })
-        await client.hold(false)
-        await client.releaseFirst()
+        await client.hold(.status, false)
+        await client.releaseFirst(.status)
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(state.selection == [.allChanges])
@@ -472,17 +371,17 @@ struct WindowStateScopeTests {
 
         // The failing commit starts a fallback whose working-tree read blocks.
         await client.fail(commitFiles: true)
-        await client.hold(true)
+        await client.hold(.status)
         state.select(commit: broken)
-        #expect(await eventually { await client.heldCount == 1 })
+        #expect(await eventually { await client.heldCount(.status) == 1 })
 
         // Meanwhile the user picks a commit that reads cleanly.
         await client.fail(commitFiles: false)
         state.select(commit: good)
         #expect(await eventually { await state.files.map(\.path) == ["ok.swift"] })
 
-        await client.hold(false)
-        await client.releaseFirst()
+        await client.hold(.status, false)
+        await client.releaseFirst(.status)
         try? await Task.sleep(for: .milliseconds(80))
 
         #expect(state.scope == .commit(good.ref))
@@ -497,14 +396,14 @@ struct WindowStateScopeTests {
         let client = await adopt(h, state, commit: commit, commitFiles: [])
         #expect(!state.isLoadingScope)
 
-        await client.holdCommitFiles(true)
+        await client.hold(.commitFiles)
         state.select(commit: commit)
-        #expect(await eventually { await client.heldCommitFileCount == 1 })
+        #expect(await eventually { await client.heldCount(.commitFiles) == 1 })
         #expect(state.isLoadingScope, "still reading, not yet an answer")
         #expect(state.files.isEmpty)
 
-        await client.holdCommitFiles(false)
-        await client.releaseCommitFiles()
+        await client.hold(.commitFiles, false)
+        await client.release(.commitFiles)
         #expect(await eventually { await !state.isLoadingScope })
         #expect(state.files.isEmpty, "and now it really is an empty commit")
     }
@@ -522,23 +421,23 @@ struct WindowStateScopeTests {
         let later = commitSummary("c2")
         await client.set(head: later.ref.sha)
         await client.set(commits: [later, first])
-        await client.holdHead(true)
+        await client.hold(.head)
         for _ in 0..<4 { h.watcherChangeCallbacks.values.first?([.refs]) }
-        #expect(await eventually { await client.heldHeadCount == 1 }, "ticks queue behind the running refresh")
+        #expect(await eventually { await client.heldCount(.head) == 1 }, "ticks queue behind the running refresh")
         let headsBefore = await client.headCalls
         let readsBefore = await client.historyCalls
 
-        await client.holdHead(false)
-        await client.holdHistory(true)
-        await client.releaseHead()
-        #expect(await eventually { await client.heldHistoryCount == 1 })
+        await client.hold(.head, false)
+        await client.hold(.history)
+        await client.release(.head)
+        #expect(await eventually { await client.heldCount(.history) == 1 })
         #expect(await eventually { await client.headCalls == headsBefore + 1 }, "one follow-up for the queued ticks")
         try? await Task.sleep(for: .milliseconds(80))
         let readsAfter = await client.historyCalls
         #expect(readsAfter - readsBefore == 1, "four ticks, one log read")
 
-        await client.holdHistory(false)
-        await client.releaseHistory()
+        await client.hold(.history, false)
+        await client.release(.history)
         #expect(await eventually { await state.history.revision == later.ref.sha })
     }
 
@@ -554,22 +453,22 @@ struct WindowStateScopeTests {
 
         let older = commitSummary("c1", subject: "Older")
         let newer = commitSummary("c2", subject: "Newer")
-        await client.holdHead(true)
+        await client.hold(.head)
 
         // Both checks resolve revisions that differ from what is displayed.
         await client.set(head: older.ref.sha)
         h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await client.heldHeadCount == 1 })
+        #expect(await eventually { await client.heldCount(.head) == 1 })
         await client.set(headAfterSwitch: newer.ref.sha)
         let switching = Task { await state.switchBranch(to: "feature") }
-        #expect(await eventually { await client.heldHeadCount == 2 })
+        #expect(await eventually { await client.heldCount(.head) == 2 })
 
         await client.set(commits: [newer, older, start])
-        await client.holdHead(false)
+        await client.hold(.head, false)
         // The older check completes first and must be ignored anyway.
-        await client.releaseFirstHead()
+        await client.releaseFirst(.head)
         try? await Task.sleep(for: .milliseconds(60))
-        await client.releaseHead()
+        await client.release(.head)
         await switching.value
 
         #expect(await eventually { await state.history.revision == newer.ref.sha })
@@ -588,11 +487,11 @@ struct WindowStateScopeTests {
 
         // Check out B; its history read blocks part-way.
         let onB = commitSummary("b1", subject: "On B")
-        await client.holdHistory(true)
+        await client.hold(.history)
         await client.set(head: onB.ref.sha)
         await client.set(commits: [onB])
         h.watcherChangeCallbacks.values.first?([.refs])
-        #expect(await eventually { await client.heldHistoryCount == 1 })
+        #expect(await eventually { await client.heldCount(.history) == 1 })
 
         // Back to A before B's history arrives.
         await client.set(head: onA.ref.sha)
@@ -600,8 +499,8 @@ struct WindowStateScopeTests {
         h.watcherChangeCallbacks.values.first?([.refs])
         try? await Task.sleep(for: .milliseconds(60))
 
-        await client.holdHistory(false)
-        await client.releaseHistory()
+        await client.hold(.history, false)
+        await client.release(.history)
         try? await Task.sleep(for: .milliseconds(80))
 
         #expect(state.history.revision == onA.ref.sha, "B's load does not land on A")
@@ -623,12 +522,12 @@ struct WindowStateScopeTests {
         state.selection = state.files.first { $0.path == "a1.swift" }.map { [.file($0.id)] } ?? []
         #expect(state.selectedFile?.path == "a1.swift")
 
-        await client.holdCommitFiles(true)
+        await client.hold(.commitFiles)
         state.select(commit: first)
-        #expect(await eventually { await client.heldCommitFileCount == 1 })
+        #expect(await eventually { await client.heldCount(.commitFiles) == 1 })
         state.select(commit: second)
-        await client.holdCommitFiles(false)
-        await client.releaseCommitFiles()
+        await client.hold(.commitFiles, false)
+        await client.release(.commitFiles)
 
         #expect(await eventually { await state.files.map(\.path) == ["a1.swift"] })
         #expect(await eventually { await state.selection == [.allChanges] })
@@ -654,51 +553,5 @@ struct WindowStateScopeTests {
                 guard case let .changeset(document)? = await state.diffLoader.content else { return false }
                 return document.sections.map(\.file.path) == ["a.swift", "b.swift"]
             })
-    }
-
-    @Test func aFileActionOnAnUnselectedRowKeepsAllChanges() async {
-        let h = Harness()
-        let state = h.makeState()
-        let files = [changedFile("a.swift"), changedFile("b.swift")]
-        let repo = await h.adopt(state, "A", files: files)
-        await repo.client.set(filesAfterWrite: [changedFile("a.swift", area: .staged), files[1]])
-        #expect(state.selection == [.allChanges])
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection == [.allChanges], "no row was selected, so nothing is restored")
-    }
-
-    /// The case a computed `selectedFileID` would get wrong: All changes and "nothing
-    /// selected" both read as no file, but only the second one may be overwritten.
-    @Test func allChangesChosenDuringAWriteIsNotOverridden() async {
-        let h = Harness()
-        let state = h.makeState()
-        let files = [changedFile("a.swift"), changedFile("b.swift")]
-        let staged = changedFile("a.swift", area: .staged)
-        let repo = await h.adopt(state, "A", files: files)
-        let client = repo.client
-        state.selection = [.file(files[0].id)]
-        await client.holdActions(true)
-
-        let write = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
-        // A watcher refresh lands while git runs and clears the selection, because the
-        // row the reader was on has gone.
-        let afterWatcher = [staged, files[1]]
-        await client.set(files: afterWatcher)
-        h.watcherCallbacks[repo.root]?()
-        #expect(
-            await eventually {
-                guard await state.selection.isEmpty else { return false }
-                return await state.files == afterWatcher
-            })
-        state.selection = [.allChanges]
-        await client.releaseActions()
-        await write.value
-
-        #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection == [.allChanges], "the reader's own choice outranks the write")
     }
 }

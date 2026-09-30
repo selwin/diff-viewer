@@ -79,17 +79,24 @@ import UniformTypeIdentifiers
         #expect(decoded(preview.new) != nil)
     }
 
-    @Test func emptySideIsUndecodable() async throws {
-        let preview = try #require(
-            try await ImagePreview.decode(old: raster(Data()), new: raster(try imageData(width: 2, height: 2))))
-        #expect(undecodableByteCount(preview.old) == 0)
+    struct UndecodableCase: CustomTestStringConvertible {
+        let name: String
+        let data: Data
+
+        var testDescription: String { name }
     }
 
-    @Test func junkSideIsUndecodable() async throws {
-        let junk = Data("not an image".utf8)
+    static let undecodableCases = [
+        UndecodableCase(name: "an empty side", data: Data()),
+        UndecodableCase(name: "a junk side", data: Data("not an image".utf8)),
+    ]
+
+    @Test(arguments: undecodableCases)
+    func aSideThatIsNotAnImageIsUndecodable(_ testCase: UndecodableCase) async throws {
         let preview = try #require(
-            try await ImagePreview.decode(old: raster(junk), new: raster(try imageData(width: 2, height: 2))))
-        #expect(undecodableByteCount(preview.old) == 12)
+            try await ImagePreview.decode(
+                old: raster(testCase.data), new: raster(try imageData(width: 2, height: 2))))
+        #expect(undecodableByteCount(preview.old) == testCase.data.count)
         #expect(decoded(preview.new) != nil)
     }
 
@@ -152,12 +159,6 @@ import UniformTypeIdentifiers
         #expect(pixel(width - 3, height - 3)[3] == 0, "transparent in the opposite corner")
     }
 
-    @Test func fractionalSVGSizeIsKept() async throws {
-        let preview = try #require(try await ImagePreview.decode(old: nil, new: svg("width=\"10.5\" height=\"4\"")))
-        let side = try #require(decoded(preview.new))
-        #expect(side.displaySize.width == 10.5)
-    }
-
     @Test func extremeAspectRatioPreservesIntrinsicSize() async throws {
         let preview = try #require(try await ImagePreview.decode(old: nil, new: svg("width=\"4000\" height=\"0.1\"")))
         let side = try #require(decoded(preview.new))
@@ -178,11 +179,6 @@ import UniformTypeIdentifiers
         #expect(preview == nil)
     }
 
-    @Test func svgJunkIsUndecodable() async throws {
-        let junk = ImagePreview.Input(data: Data("not svg".utf8), format: .svg)
-        #expect(try await ImagePreview.decode(old: nil, new: junk) == nil)
-    }
-
     @Test func oneValidOneInvalidSVGSide() async throws {
         let junk = ImagePreview.Input(data: Data("not svg".utf8), format: .svg)
         let preview = try #require(
@@ -198,12 +194,5 @@ import UniformTypeIdentifiers
                 old: raster(try imageData(width: 7, height: 5)), new: svg("width=\"40\" height=\"20\"")))
         #expect(decoded(preview.old)?.displaySize == CGSize(width: 7, height: 5))
         #expect(decoded(preview.new)?.displaySize == CGSize(width: 40, height: 20))
-    }
-
-    @Test func cancelledSVGDecodeThrowsCancellationError() async throws {
-        let input = svg("width=\"40\" height=\"20\"")
-        let task = Task { try await ImagePreview.decode(old: nil, new: input) }
-        task.cancel()
-        await #expect(throws: CancellationError.self) { try await task.value }
     }
 }

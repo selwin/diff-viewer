@@ -60,12 +60,6 @@ actor HighlighterProbe {
     }
 }
 
-/// A cache whose difft always fails, so every file falls back to the plain line diff.
-/// The assembler's job is ordering and publication, not difft.
-private func plainCache() -> DifftCache {
-    DifftCache(runner: { _, _, _, _ in throw ProcessError.failed(command: "difft", status: 1, stderr: "no difft") })
-}
-
 private func files(_ names: [String]) -> [ChangedFile] {
     names.map { changedFile($0) }
 }
@@ -76,7 +70,7 @@ struct ChangesetAssemblerTests {
         client: StubRepoClient,
         clock: ManualClock = ManualClock(),
         highlighter: HighlighterProbe = HighlighterProbe(),
-        cache: DifftCache = plainCache(),
+        cache: DifftCache = plainDifftCache(),
         resultCache: DiffResultCache = DiffResultCache(),
         publication: ChangesetAssembler.PublicationMode = .progressive
     ) -> (assembler: ChangesetAssembler, log: PublicationLog, run: () -> Task<Void, Never>) {
@@ -137,42 +131,11 @@ struct ChangesetAssemblerTests {
         #expect(documents[0].document.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift"])
         #expect(documents[0].completed == 3)
         #expect(documents[0].total == 3)
-    }
-
-    /// Every revision is the previous one plus sections appended at the end, down to the
-    /// rows, the lines and each section's offsets.
-    @Test func revisionsOnlyAppend() async {
-        let client = StubRepoClient(files: [])
-        await client.hold(worktree: ["b.swift", "d.swift"])
-        let clock = ManualClock()
-        let (assembler, log, run) = assemble(
-            ["a.swift", "b.swift", "c.swift", "d.swift"], client: client, clock: clock)
-        let task = run()
-
-        #expect(await eventually { await log.documents.count == 1 })
-        let first = await log.documents[0].document
-        #expect(first.sections.map(\.file.path) == ["a.swift"], "the held file stops the prefix")
-
-        // The second revision is flushed at the deadline, the third when the group drains.
-        #expect(await eventually { clock.sleeperCount == 1 })
-        await client.release(worktree: "b.swift")
-        #expect(await eventually { await assembler.completedCount == 3 })
-        clock.advance(by: .milliseconds(150))
-        #expect(await eventually { await log.documents.count == 2 })
-
-        await client.release(worktree: "d.swift")
-        await task.value
-        let documents = await log.documents
-        #expect(documents.count == 3)
-        let last = documents[2].document
-        #expect(last.loadID == first.loadID)
-        #expect(documents.map(\.document.revision) == [1, 2, 3])
-        #expect(documents[1].document.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift"])
-        #expect(last.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift", "d.swift"])
-        for (earlier, later) in zip(documents, documents.dropFirst()) {
-            expectPrefix(earlier.document, of: later.document)
-        }
-        for document in documents { expectMatchingStyles(document.document, document.styles) }
+        // Styles that finished before their section joined the prefix ride out with it.
+        expectMatchingStyles(documents[0].document, documents[0].styles)
+        let b = documents[0].document.sections[1]
+        let runs = (0..<b.newLineCount).map { documents[0].styles.new![b.newLineOffset + $0] }
+        #expect(runs.allSatisfy { !$0.isEmpty }, "the early styles are in the first revision that holds the section")
     }
 
     // MARK: Failures and limits
@@ -261,7 +224,9 @@ struct ChangesetAssemblerTests {
     // MARK: Cadence
 
     /// A section that completes inside the throttle window goes out when the window ends,
-    /// without waiting for the worker that is still busy.
+    /// without waiting for the worker that is still busy. Every revision is the previous
+    /// one plus sections appended at the end, down to the rows, the lines and each
+    /// section's offsets.
     @Test func aSectionCompletingInsideTheWindowIsPublishedAtTheDeadline() async {
         let client = StubRepoClient(files: [])
         await client.hold(worktree: ["b.swift", "d.swift"])
@@ -271,6 +236,8 @@ struct ChangesetAssemblerTests {
         let task = run()
 
         #expect(await eventually { await log.documents.count == 1 }, "the first section publishes at once")
+        let first = await log.documents[0].document
+        #expect(first.sections.map(\.file.path) == ["a.swift"], "the held file stops the prefix")
         #expect(await eventually { clock.sleeperCount == 1 }, "and starts the throttle window")
 
         // The second file finishes inside the window: it is recorded, but the
@@ -284,9 +251,18 @@ struct ChangesetAssemblerTests {
         #expect(await log.documents[1].document.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift"])
         #expect(await client.waitingWorktreePaths.contains("d.swift"), "and a worker is still busy")
 
+        // The last revision is flushed when the task group drains.
         await client.release(worktree: "d.swift")
         await task.value
-        #expect(await log.lastDocument?.sections.count == 4)
+        let documents = await log.documents
+        #expect(documents.count == 3)
+        #expect(documents.map(\.document.revision) == [1, 2, 3])
+        #expect(documents.allSatisfy { $0.document.loadID == documents[0].document.loadID })
+        #expect(documents[2].document.sections.map(\.file.path) == ["a.swift", "b.swift", "c.swift", "d.swift"])
+        for (earlier, later) in zip(documents, documents.dropFirst()) {
+            expectPrefix(earlier.document, of: later.document)
+        }
+        for document in documents { expectMatchingStyles(document.document, document.styles) }
     }
 
     /// Cancelling must stop the pending flush at the moment of cancellation, not when the
@@ -343,8 +319,6 @@ struct ChangesetAssemblerTests {
         #expect(await log.lastDocument?.sections.count == 6)
     }
 
-    /// Three files are read at once, never more: the worker holds its slot through
-    /// highlighting, so that bound covers the whole pipeline.
     @Test func neverMoreThanThreeFilesAreReadAtOnce() async {
         let names = (0..<6).map { "f\($0).swift" }
         let client = StubRepoClient(files: [])
@@ -441,46 +415,6 @@ struct ChangesetAssemblerTests {
         #expect(styles.newOutline?.name(atLine: b.newLineOffset - 1) == "a.swift")
     }
 
-    /// Styles that finish before their section joins the prefix must ride out with it.
-    @Test func stylesFinishedEarlyAppearWithTheirSection() async {
-        let client = StubRepoClient(files: [])
-        await client.hold(worktree: ["a.swift"])
-        let (assembler, log, run) = assemble(["a.swift", "b.swift"], client: client)
-        let task = run()
-
-        #expect(await eventually { await assembler.completedCount == 1 })
-        #expect(await log.isEmpty)
-
-        await client.release(worktree: "a.swift")
-        await task.value
-        guard let first = await log.documents.first else {
-            Issue.record("nothing was published")
-            return
-        }
-        expectMatchingStyles(first.document, first.styles)
-        let b = first.document.sections[1]
-        let runs = (0..<b.newLineCount).map { first.styles.new![b.newLineOffset + $0] }
-        #expect(runs.allSatisfy { !$0.isEmpty }, "the early styles are in the first revision that holds the section")
-    }
-
-    /// A section appended after the first publication ships a snapshot that fits the new
-    /// document, whether or not it brought colours of its own.
-    @Test func anAppendedSectionStillGetsAMatchingSnapshot() async {
-        let client = StubRepoClient(files: [])
-        await client.hold(worktree: ["b.txt"])
-        let (_, log, run) = assemble(["a.swift", "b.txt"], client: client)
-        let task = run()
-
-        #expect(await eventually { await log.documents.count == 1 })
-        await client.release(worktree: "b.txt")
-        await task.value
-
-        let documents = await log.documents
-        #expect(documents.count == 2)
-        for document in documents { expectMatchingStyles(document.document, document.styles) }
-        #expect(documents[1].document.sections.count == 2)
-    }
-
     // MARK: Result cache
 
     /// A second load of the same files against one result store neither diffs nor
@@ -488,9 +422,7 @@ struct ChangesetAssemblerTests {
     @Test func aSecondLoadOfTheSameFilesIsServedFromTheResultCache() async {
         let names = ["a.swift", "b.swift", "c.swift"]
         let probe = RunnerProbe()
-        let cache = DifftCache(runner: { old, new, fileName, qos in
-            try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-        })
+        let cache = probeCache(probe)
         let resultCache = DiffResultCache()
         let highlighter = HighlighterProbe()
 

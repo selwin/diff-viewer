@@ -4,21 +4,6 @@ import Testing
 @testable import DiffViewer
 
 struct ChangesetAnchorTests {
-    private func changeset(_ results: [(file: ChangedFile, result: ChangesetBuilder.FileResult)]) -> ChangesetDocument {
-        ChangesetBuilder.build(results: results, loadID: UUID(), revision: 1)
-    }
-
-    /// A text file of `rows` rows with one change block, so the section folds.
-    private func textFile(_ path: String, rows: Int = 100, modified: Range<Int> = 50..<52)
-        -> (file: ChangedFile, result: ChangesetBuilder.FileResult)
-    {
-        (changedFile(path), .content(textContent(rows: rows, modified: [modified])))
-    }
-
-    private func binaryFile(_ path: String) -> (file: ChangedFile, result: ChangesetBuilder.FileResult) {
-        (changedFile(path), .content(.binary))
-    }
-
     /// `count` rows of which row `deletedAt` exists on the old side only, so the new side
     /// runs one line short.
     private func deletionFile(_ path: String, rows count: Int, deletedAt: Int)

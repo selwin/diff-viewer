@@ -17,43 +17,6 @@ struct ChangesetChurnTests {
         ChangesetChurn.total(sections: sections, files: files)
     }
 
-    @Test func textSectionsSumTheirOwnCounts() {
-        let a = changedFile("a.swift").with(lineStats: .counted(added: 100, deleted: 100))
-        let b = changedFile("b.swift")
-        let sections = [
-            section(a, outcome: .text(language: "Swift"), added: 3, deleted: 1),
-            section(b, outcome: .text(language: nil), added: 2, deleted: 4),
-        ]
-        // The file's own stats are ignored: the rows are the truth for text.
-        #expect(total(sections, files: [a, b]) == (added: 5, deleted: 5))
-        #expect(total(sections, files: []) == (added: 5, deleted: 5))
-    }
-
-    @Test func binarySectionUsesCurrentStatsWhenFingerprintMatches() {
-        let file = changedFile("image.png")
-        let current = file.with(lineStats: .counted(added: 7, deleted: 2))
-        #expect(total([section(file, outcome: .binary)], files: [current]) == (added: 7, deleted: 2))
-    }
-
-    @Test func sectionWhoseFileMovedOnContributesNothing() {
-        let file = changedFile("a.swift")
-        let edited = file.edited().with(lineStats: .counted(added: 7, deleted: 2))
-        #expect(file.fingerprint != edited.fingerprint)
-        #expect(total([section(file, outcome: .tooLarge)], files: [edited]) == (added: 0, deleted: 0))
-    }
-
-    @Test func fileMissingFromListContributesNothing() {
-        let file = changedFile("a.swift").with(lineStats: .counted(added: 7, deleted: 2))
-        #expect(total([section(file, outcome: .notShown)], files: [changedFile("b.swift")]) == (added: 0, deleted: 0))
-    }
-
-    @Test func uncountedStatsContributeNothing() {
-        let file = changedFile("a.swift")
-        let sections = [section(file, outcome: .tooLarge)]
-        #expect(total(sections, files: [file.with(lineStats: .binary(nil))]) == (added: 0, deleted: 0))
-        #expect(total(sections, files: [file.with(lineStats: nil)]) == (added: 0, deleted: 0))
-    }
-
     /// Equal unknown fingerprints prove nothing: an unmerged file's HEAD side is unknown,
     /// so its content can change without the fingerprint moving.
     @Test func equalUnknownWorkingTreeFingerprintsContributeNothing() {
@@ -61,19 +24,6 @@ struct ChangesetChurnTests {
         #expect(file.fingerprint?.isKnown == false)
         let current = file.with(lineStats: .counted(added: 7, deleted: 2))
         #expect(total([section(file, outcome: .tooLarge)], files: [current]) == (added: 0, deleted: 0))
-    }
-
-    @Test func nilWorkingTreeFingerprintsContributeNothing() {
-        let file = changedFile("a.swift").with(fingerprint: nil)
-        let current = file.with(lineStats: .counted(added: 7, deleted: 2))
-        #expect(total([section(file, outcome: .binary)], files: [current]) == (added: 0, deleted: 0))
-    }
-
-    @Test func commitScopeFilesWithoutFingerprintsMatch() {
-        let commit = CommitRef(sha: objectID("c1"), shortSha: "c1", firstParentSHA: objectID("c0"))
-        let file = changedFile("a.swift", area: .commit(commit)).with(fingerprint: nil)
-        let current = file.with(lineStats: .counted(added: 4, deleted: 1))
-        #expect(total([section(file, outcome: .notShown)], files: [current]) == (added: 4, deleted: 1))
     }
 
     @Test func textSectionStatsAreItsOwnCountsWhateverTheFileSays() {
@@ -106,15 +56,22 @@ struct ChangesetChurnTests {
         let text = changedFile("a.swift")
         let binary = changedFile("b.bin")
         let stale = changedFile("c.swift")
+        let uncounted = changedFile("d.bin")
+        let unknown = changedFile("e.swift")
         let sections = [
             section(text, outcome: .text(language: "Swift"), added: 10, deleted: 5),
             section(binary, outcome: .binary),
             section(stale, outcome: .tooLarge),
+            section(uncounted, outcome: .binary),
+            section(unknown, outcome: .tooLarge),
         ]
         let files = [
             text,
             binary.with(lineStats: .counted(added: 1, deleted: 1)),
             stale.edited().with(lineStats: .counted(added: 100, deleted: 100)),
+            // Matching inputs, but numstat has no line counts to add (binary, or never read).
+            uncounted.with(lineStats: .binary(nil)),
+            unknown.with(lineStats: nil),
         ]
         #expect(total(sections, files: files) == (added: 11, deleted: 6))
     }

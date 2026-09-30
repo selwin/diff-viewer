@@ -295,13 +295,6 @@ struct BranchPickerStateTests {
         #expect(picker.apply(taken).rows == BranchTableChange.none)
     }
 
-    @Test func aReadStatusChangeLeavesTheRowsAlone() {
-        var picker = state(snapshot(branches: [main, feature]))
-        let items = picker.items
-        #expect(picker.apply(snapshot(branches: [main, feature], readStatus: .failed)).rows == BranchTableChange.none)
-        #expect(picker.items == items)
-    }
-
     /// The cells hold whether a row can activate, so a switch starting or ending has to
     /// reach every visible cell even though no row's content moved.
     @Test func aSwitchFlagChangeRefreshesEveryRowInPlace() throws {
@@ -406,48 +399,33 @@ struct BranchPickerStateTests {
         #expect(matched == [["fe"], ["fe"], ["fe"], ["fe"], ["fe"]])
     }
 
+    /// Only a snapshot's changes animate: a narrowing query, all removals, still reloads.
     @Test func clearingTheQueryBringsTheSectionsBack() {
-        var picker = state(snapshot(branches: [main, feature, old]))
-        _ = picker.setQuery("a")
-        #expect(layout(picker) == ["main", "feature"])
-        _ = picker.setQuery("")
-        #expect(layout(picker) == ["# Today", "main", "feature", "# Yesterday", "old"])
-        #expect(picker.rows.map(\.matchedRanges) == [[], [], []])
-    }
-
-    @Test func aQueryHighlightsTheFirstRowAndClearingItTheCurrentBranch() {
         let aiTools = localBranch("ai-tools", tipCommittedAt: Self.at(19, 12))
-        var picker = state(snapshot(branches: [main, aiTools]))
-        _ = picker.setQuery("ai")
+        var picker = state(snapshot(branches: [main, aiTools, old]))
+        let sections = ["# Today", "main", "ai-tools", "# Yesterday", "old"]
+
+        #expect(picker.setQuery("ai") == .reloadAll)
         #expect(layout(picker) == ["ai-tools", "main"])
         #expect(picker.highlightedRow == .local(name: "ai-tools"), "the best match, though main is current")
-        _ = picker.setQuery("")
-        #expect(picker.highlightedRow == .local(name: "main"))
-    }
-
-    /// Only a snapshot's changes animate: a narrowing query, all removals, still reloads.
-    @Test func aQueryChangeReloadsEverything() {
-        var picker = state(snapshot(branches: [main, feature, old]))
-        #expect(picker.setQuery("a") == .reloadAll)
-        #expect(layout(picker) == ["main", "feature"])
-        #expect(picker.setQuery("fe") == .reloadAll)
-        #expect(layout(picker) == ["feature"])
+        #expect(picker.setQuery("ai-t") == .reloadAll)
+        #expect(layout(picker) == ["ai-tools"])
         #expect(picker.setQuery("") == .reloadAll)
+        #expect(layout(picker) == sections)
+        #expect(picker.rows.map(\.matchedRanges) == [[], [], []])
+        #expect(picker.highlightedRow == .local(name: "main"), "clearing the query goes back to the current branch")
     }
 
     @Test func theSameNormalizedQueryChangesNothing() {
-        var picker = state(snapshot(branches: [main, feature]))
-        #expect(picker.setQuery("fe") == .reloadAll)
-        #expect(picker.setQuery(" fe ") == BranchTableChange.none)
-        #expect(picker.query == "fe")
-    }
-
-    @Test func aSpacesOnlyQueryIsNoQuery() {
         var picker = state(snapshot(branches: [main, feature, old]))
-        #expect(picker.setQuery("   ") == BranchTableChange.none)
+        #expect(picker.setQuery("   ") == BranchTableChange.none, "spaces alone are no query")
         #expect(layout(picker) == ["# Today", "main", "feature", "# Yesterday", "old"])
         #expect(picker.highlightedRow == .local(name: "main"))
         #expect(picker.emptyState == nil)
+
+        #expect(picker.setQuery("fe") == .reloadAll)
+        #expect(picker.setQuery(" fe ") == BranchTableChange.none)
+        #expect(picker.query == "fe")
     }
 
     @Test func aSnapshotDuringASearchKeepsTheFilter() {
@@ -607,6 +585,7 @@ struct BranchPickerStateTests {
     @Test func fetchNewsLeavesTheRowsAlone() {
         var picker = state(snapshot(branches: [main, feature]))
         let items = picker.items
+        #expect(picker.apply(snapshot(branches: [main, feature], readStatus: .failed)).rows == BranchTableChange.none)
         #expect(
             picker.apply(snapshot(branches: [main, feature], fetchStatus: .discovering)).rows
                 == BranchTableChange.none)

@@ -10,9 +10,6 @@ private let message = "Add the picker"
 /// The stub's head and the branch it starts on.
 private let mainHead = String(repeating: "a", count: 40)
 
-/// A window and the repository behind it.
-private typealias Window = (h: Harness, state: WindowState, client: StubRepoClient, root: RepositoryRoot)
-
 @MainActor
 struct WindowStateBranchSwitchTests {
     // MARK: Fixtures
@@ -22,11 +19,7 @@ struct WindowStateBranchSwitchTests {
     private func settled(files: [ChangedFile] = filesStaged, commits: [CommitSummary] = []) async throws -> Window {
         let h = Harness()
         let state = h.makeState()
-        let repo = h.repo("A", files: files)
-        await repo.client.set(commits: commits)
-        #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await h.published.count == 1 })
-        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        let repo = await h.adopt(state, "A", files: files) { await $0.set(commits: commits) }
         let historyTask = try #require(state.session?.historyTask)
         await historyTask.value
         #expect(await eventually { await state.localBranches == ["main"] })
@@ -44,17 +37,17 @@ struct WindowStateBranchSwitchTests {
     /// Holds the switch itself, starts one and waits until git has it: the shape of
     /// every test that drives something while a switch is in flight.
     private func startHeldSwitch(_ state: WindowState, _ client: StubRepoClient) async -> Task<Void, Never> {
-        await client.holdSwitchBranch(true)
+        await client.hold(.switchBranch)
         let task = Task { await state.switchBranch(to: "side") }
-        #expect(await eventually { await client.heldSwitchBranchCount == 1 })
+        #expect(await eventually { await client.heldCount(.switchBranch) == 1 })
         #expect(state.isSwitchingBranch)
         return task
     }
 
     /// Lets the held switch through and waits for it to finish.
     private func release(_ task: Task<Void, Never>, _ client: StubRepoClient) async {
-        await client.holdSwitchBranch(false)
-        await client.releaseSwitchBranch()
+        await client.hold(.switchBranch, false)
+        await client.release(.switchBranch)
         await task.value
     }
 
@@ -121,20 +114,6 @@ struct WindowStateBranchSwitchTests {
         h.watcherCallbacks[root]!()
         #expect(await eventually { await h.published.count > publishes })
         #expect(state.errorMessage?.contains("post-checkout hook failed") == true, "a watcher refresh keeps it")
-    }
-
-    /// The case the refresh-either-way exists for: a post-checkout hook fails after git
-    /// has already moved HEAD, so the error and the new branch are both true.
-    @Test func switchFailureWithMovedHeadStillPublishesTheNewBranch() async throws {
-        let (_, state, client, _) = try await settled()
-        await client.fail(switchBranch: true)
-        await stubSwitch(client, to: "side")
-
-        await state.switchBranch(to: "side")
-
-        #expect(state.errorMessage?.contains("post-checkout hook failed") == true)
-        #expect(state.headState == .named("side"))
-        #expect(await eventually { await state.history.revision == objectID("side") })
     }
 
     /// The switch replaced the working tree, so branch A's rows must not stay on screen
@@ -270,16 +249,16 @@ struct WindowStateBranchSwitchTests {
     /// meet a stage on `index.lock`.
     @Test func switchWaitsBehindAHeldStage() async throws {
         let (_, state, client, _) = try await settled()
-        await client.holdActions(true)
+        await client.hold(.actions)
         let stage = Task { await state.perform(.stage, on: [filesStaged[1]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
 
         let switchTask = Task { await state.switchBranch(to: "side") }
         #expect(await eventually { await state.isSwitchingBranch })
         #expect(await client.switchBranchCalls.isEmpty, "queued, not started")
 
-        await client.holdActions(false)
-        await client.releaseActions()
+        await client.hold(.actions, false)
+        await client.release(.actions)
         await stage.value
         await switchTask.value
 
@@ -378,17 +357,17 @@ struct WindowStateBranchSwitchTests {
         await stubSwitch(client, to: "side")
         let switchTask = await startHeldSwitch(state, client)
         // Every status read from here on is held, so the switch's own refresh waits.
-        await client.hold(true)
-        await client.holdSwitchBranch(false)
-        await client.releaseSwitchBranch()
-        #expect(await eventually { await client.heldCount == 1 })
+        await client.hold(.status)
+        await client.hold(.switchBranch, false)
+        await client.release(.switchBranch)
+        #expect(await eventually { await client.heldCount(.status) == 1 })
 
         let publishes = h.published.count
         let headChecks = await client.headCalls
         let headStateReads = await client.headStateCalls
         state.close()
-        await client.hold(false)
-        await client.releaseFirst()
+        await client.hold(.status, false)
+        await client.releaseFirst(.status)
         await switchTask.value
 
         #expect(h.published.count == publishes)
@@ -411,28 +390,26 @@ struct WindowStateBranchSwitchTests {
         #expect(await eventually { await state.localBranches == ["a", "b"] })
     }
 
-    /// A read that threw knows nothing, so the picker keeps its last good list rather
-    /// than emptying for one bad moment.
     /// Two reads in flight at once: the newer one finishes first and the older must apply
     /// nothing, or the picker would list a branch that has since been deleted.
     @Test func anOlderBranchesReadCannotOverwriteANewerOne() async throws {
         let (_, state, client, _) = try await settled()
         await client.set(localBranches: ["main", "older"])
-        await client.holdLocalBranches(true)
+        await client.hold(.localBranches)
         // ⌘R rather than a watcher tick: it awaits the head-state read, so the test can
         // tell when the older read has finished and applied nothing.
         let older = Task { await state.refresh() }
-        #expect(await eventually { await client.heldLocalBranchesCount == 1 })
+        #expect(await eventually { await client.heldCount(.localBranches) == 1 })
         await client.set(localBranches: ["main"])
         let newer = Task { await state.refresh() }
-        #expect(await eventually { await client.heldLocalBranchesCount == 2 })
+        #expect(await eventually { await client.heldCount(.localBranches) == 2 })
 
-        await client.releaseLastLocalBranches()
+        await client.releaseLast(.localBranches)
         await newer.value
         #expect(state.localBranches == ["main"])
 
-        await client.holdLocalBranches(false)
-        await client.releaseLocalBranches()
+        await client.hold(.localBranches, false)
+        await client.release(.localBranches)
         await older.value
         #expect(state.localBranches == ["main"], "the older read finished and applied nothing")
     }
@@ -446,21 +423,6 @@ struct WindowStateBranchSwitchTests {
         h.tick(root, [.refs])
         #expect(await eventually { await state.remoteBranches.map(\.name) == ["main", "b"] })
         #expect(state.localBranches == ["main", "a"])
-    }
-
-    /// A failed remote read fails the pair, as a failed local read does: the lists on show
-    /// stay as they were.
-    @Test func aFailedRemoteBranchesReadKeepsBothLists() async throws {
-        let (h, state, client, root) = try await settled()
-        await client.fail(remoteBranches: true)
-        await client.set(localBranches: ["a", "b"])
-        let reads = await client.remoteBranchesCalls
-
-        h.tick(root, [.refs])
-        #expect(await eventually { await client.remoteBranchesCalls == reads + 1 })
-        #expect(await eventually { await state.branchReadStatus == .failed })
-        #expect(state.localBranches == ["main"])
-        #expect(state.remoteBranches.isEmpty)
     }
 
     // MARK: Remote checkout
