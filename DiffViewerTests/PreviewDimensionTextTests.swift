@@ -4,25 +4,32 @@ import Testing
 @testable import DiffViewer
 
 @Suite struct PreviewDimensionTextTests {
-    private let locale = Locale(identifier: "en_US")
+    struct Case: CustomTestStringConvertible {
+        let name: String
+        let value: CGFloat
+        let format: ImagePreview.Format
+        let locale: String
+        let expected: String
 
-    @Test func rasterSizesAreWholePixels() {
-        #expect(PreviewDimensionText.string(200, format: .raster, locale: locale) == "200")
+        var testDescription: String { name }
     }
 
-    @Test func svgSizesKeepUpToTwoDecimals() {
-        #expect(PreviewDimensionText.string(200, format: .svg, locale: locale) == "200")
-        #expect(PreviewDimensionText.string(10.5, format: .svg, locale: locale) == "10.5")
-        #expect(PreviewDimensionText.string(0.1, format: .svg, locale: locale) == "0.1")
-    }
+    static let cases: [Case] = [
+        Case(name: "raster sizes are whole pixels", value: 200, format: .raster, locale: "en_US", expected: "200"),
+        Case(name: "a whole SVG size has no decimals", value: 200, format: .svg, locale: "en_US", expected: "200"),
+        Case(name: "an SVG size keeps a decimal", value: 10.5, format: .svg, locale: "en_US", expected: "10.5"),
+        Case(name: "an SVG size keeps a small decimal", value: 0.1, format: .svg, locale: "en_US", expected: "0.1"),
+        // A hairline the decoder accepts must never read as zero.
+        Case(name: "a tiny SVG size keeps its digit", value: 0.001, format: .svg, locale: "en_US", expected: "0.001"),
+        Case(
+            name: "a tiny SVG size keeps two significant digits", value: 0.00123, format: .svg, locale: "en_US",
+            expected: "0.0012"),
+        Case(name: "SVG decimals follow the locale", value: 10.5, format: .svg, locale: "de_DE", expected: "10,5"),
+    ]
 
-    /// A hairline the decoder accepts must never read as zero.
-    @Test func tinySVGSizesKeepSignificantDigits() {
-        #expect(PreviewDimensionText.string(0.001, format: .svg, locale: locale) == "0.001")
-        #expect(PreviewDimensionText.string(0.00123, format: .svg, locale: locale) == "0.0012")
-    }
-
-    @Test func svgDecimalsFollowTheLocale() {
-        #expect(PreviewDimensionText.string(10.5, format: .svg, locale: Locale(identifier: "de_DE")) == "10,5")
+    @Test(arguments: cases) func aDimensionIsFormattedForItsFormatAndLocale(_ testCase: Case) {
+        let text = PreviewDimensionText.string(
+            testCase.value, format: testCase.format, locale: Locale(identifier: testCase.locale))
+        #expect(text == testCase.expected)
     }
 }

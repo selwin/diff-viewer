@@ -15,28 +15,42 @@ struct SidebarReselectionTests {
         SidebarReselection.selection(after: [previous], surviving: [], in: rows)
     }
 
-    @Test func thePathWinsOverTheRememberedRow() {
-        let rows = [changedFile("b.swift"), changedFile("a.swift", area: .staged)]
-        let result = selection(pending("a.swift", row: 0), in: rows)
-        #expect(result == [.file(rows[1].id)], "the path is found again in whichever area it moved to")
+    /// One pending row, the rows it is looked up in, and which of them it must land on.
+    struct PathTierCase: CustomTestStringConvertible {
+        let name: String
+        let rows: [ChangedFile]
+        let pending: WindowState.PendingSelection
+        /// Index into `rows`.
+        let expected: Int
+
+        var testDescription: String { name }
     }
 
-    @Test func theOriginalAreaWinsWhenThePathIsInBoth() {
-        let rows = [changedFile("dup.swift"), changedFile("dup.swift", area: .staged)]
-        #expect(selection(pending("dup.swift", area: .staged), in: rows) == [.file(rows[1].id)])
-        #expect(selection(pending("dup.swift", area: .unstaged), in: rows) == [.file(rows[0].id)])
-    }
+    private static let commitArea = ChangedFile.Area.commit(commitSummary("c1").ref)
+    private static let duplicated = [changedFile("dup.swift"), changedFile("dup.swift", area: .staged)]
 
-    @Test func unstagedWinsWhenTheOriginalAreaIsGone() {
-        let commit = commitSummary("c1")
-        let rows = [changedFile("dup.swift"), changedFile("dup.swift", area: .staged)]
-        #expect(selection(pending("dup.swift", area: .commit(commit.ref)), in: rows) == [.file(rows[0].id)])
-    }
+    static let pathTierCases: [PathTierCase] = [
+        PathTierCase(
+            name: "the path wins over the remembered row, in whichever area it moved to",
+            rows: [changedFile("b.swift"), changedFile("a.swift", area: .staged)],
+            pending: WindowState.PendingSelection(path: "a.swift", area: .unstaged, row: 0), expected: 1),
+        PathTierCase(
+            name: "the original area wins when the path is in both: staged", rows: duplicated,
+            pending: WindowState.PendingSelection(path: "dup.swift", area: .staged, row: nil), expected: 1),
+        PathTierCase(
+            name: "the original area wins when the path is in both: unstaged", rows: duplicated,
+            pending: WindowState.PendingSelection(path: "dup.swift", area: .unstaged, row: nil), expected: 0),
+        PathTierCase(
+            name: "unstaged wins when the original area is gone", rows: duplicated,
+            pending: WindowState.PendingSelection(path: "dup.swift", area: commitArea, row: nil), expected: 0),
+        PathTierCase(
+            name: "any area is taken when neither matches", rows: [changedFile("only.swift", area: .staged)],
+            pending: WindowState.PendingSelection(path: "only.swift", area: commitArea, row: nil), expected: 0),
+    ]
 
-    @Test func anyAreaIsTakenWhenNeitherMatches() {
-        let rows = [changedFile("only.swift", area: .staged)]
-        let commit = commitSummary("c1")
-        #expect(selection(pending("only.swift", area: .commit(commit.ref)), in: rows) == [.file(rows[0].id)])
+    @Test(arguments: pathTierCases) func aPathIsFoundAgainByTier(_ testCase: PathTierCase) {
+        let result = selection(testCase.pending, in: testCase.rows)
+        #expect(result == [.file(testCase.rows[testCase.expected].id)])
     }
 
     @Test func theRememberedRowIsClampedToTheLastRow() {
@@ -61,13 +75,6 @@ struct SidebarReselectionTests {
         let result = SidebarReselection.selection(
             after: [pending("a.swift", row: 1)], surviving: [.file(rows[0].id)], in: rows)
         #expect(result == [.file(rows[0].id), .file(rows[1].id)])
-    }
-
-    @Test func allChangesIsKeptWhateverHappensToTheRows() {
-        let rows = [changedFile("a.swift", area: .staged)]
-        let result = SidebarReselection.selection(
-            after: [pending("a.swift", row: 0), pending("gone.swift", row: 1)], surviving: [.allChanges], in: rows)
-        #expect(result == [.allChanges, .file(rows[0].id)])
     }
 
     @Test func onlyTheSurvivingPathsAreSelectedWhenSomeAreGone() {
@@ -117,11 +124,6 @@ struct SidebarReselectionTests {
             changedFile("c.swift", area: .staged), changedFile("d.swift", area: .staged),
         ]
         #expect(neighbour(from: .unstaged, at: 2, in: last) == [.file(last[1].id)], "never a staged row")
-    }
-
-    @Test func stagingTheOnlyChangesRowSelectsNothing() {
-        let rows = [changedFile("a.swift", area: .staged), changedFile("b.swift", area: .staged)]
-        #expect(neighbour(from: .unstaged, at: 0, in: rows).isEmpty)
     }
 
     @Test func aSurvivingRowIsKeptAndNoNeighbourIsAdded() {

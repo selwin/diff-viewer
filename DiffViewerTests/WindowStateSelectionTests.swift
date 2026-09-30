@@ -126,24 +126,9 @@ struct WindowStateSelectionTests {
 
     // MARK: Survivors
 
-    @Test func aRefreshKeepsTheSelectedFilesThatAreStillThere() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        state.selection = Set(files.map { DiffSelection.file($0.id) })
-        await awaitChangeset(files, in: state)
-
-        let remaining = [files[0], files[2]]
-        await repo.client.set(files: remaining)
-        await state.refresh()
-
-        #expect(state.selection == [.file(files[0].id), .file(files[2].id)])
-        #expect(state.detailSelection == .files)
-        await awaitChangeset(remaining, in: state)
-    }
-
-    /// Pruning a selection draws a different set of rows, so change navigation has to
-    /// start over: its index and scroll target address the document being replaced.
+    /// A refresh keeps the selected files that are still there. Pruning the rest draws a
+    /// different set of rows, so change navigation has to start over: its index and
+    /// scroll target address the document being replaced.
     @Test func aRefreshThatPrunesTheSelectionResetsChangeNavigation() async {
         let h = Harness()
         let state = h.makeState()
@@ -162,8 +147,10 @@ struct WindowStateSelectionTests {
 
         #expect(await eventually { await state.files.map(\.id) == remaining.map(\.id) })
         #expect(state.selection == [.file(files[1].id), .file(files[2].id)])
+        #expect(state.detailSelection == .files)
         #expect(state.currentChangeIndex == nil)
         #expect(state.scrollTarget == nil)
+        await awaitChangeset(remaining, in: state)
     }
 
     // MARK: Error lifetime

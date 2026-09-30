@@ -95,7 +95,10 @@ enum ErrorAlert {
         scrollView.clipsToBounds = true
         scrollView.borderType = .bezelBorder
         scrollView.hasVerticalScroller = true
-        let textView = NSTextView(frame: NSRect(origin: .zero, size: scrollView.contentSize))
+        // TextKit 1: TextKit 2 draws through fragment subviews, and freeing them while the
+        // alert scrolled crashed AppKit in `-[NSView _removeFromKeyViewLoop]`.
+        let textView = NSTextView(usingTextLayoutManager: false)
+        textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
         textView.autoresizingMask = [.width]
         textView.isVerticallyResizable = true
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)

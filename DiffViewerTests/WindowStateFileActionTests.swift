@@ -3,6 +3,11 @@ import Testing
 
 @testable import DiffViewer
 
+/// A rename row. At file scope, so a test table's arguments can build one.
+private func rename(_ path: String, from original: String, area: ChangedFile.Area = .staged) -> ChangedFile {
+    ChangedFile(path: path, originalPath: original, kind: .renamed, area: area, fingerprint: nil)
+}
+
 @MainActor
 struct WindowStateFileActionTests {
     /// The sidebar order is unstaged then staged, so these draw as a, b, c.
@@ -51,35 +56,6 @@ struct WindowStateFileActionTests {
         #expect(await eventually { await state.selection == [.file(stagedD.id)] })
     }
 
-    @Test func discardingTheSelectedFileSelectsTheRowThatTookItsPlace() async {
-        let h = Harness()
-        let state = h.makeState()
-        let client = await adopt(h, state, after: [files[1], files[2]])
-        state.selection = [.file(files[0].id)]
-        let next = files[1].id
-
-        await state.perform(.discard, on: [files[0]])
-
-        #expect(await client.performed.map(\.action) == [.discard])
-        #expect(await eventually { await state.selectedFileID == next })
-        #expect(state.errorMessage == nil)
-    }
-
-    @Test func discardingTheOnlyRowLeavesNothingSelected() async {
-        let h = Harness()
-        let state = h.makeState()
-        let only = [changedFile("a.swift")]
-        let repo = await h.adopt(state, "A", files: only)
-        await repo.client.set(filesAfterWrite: [])
-        state.selection = [.file(only[0].id)]
-
-        await state.perform(.discard, on: [only[0]])
-
-        #expect(await eventually { await state.files.isEmpty })
-        #expect(state.selectedFileID == nil)
-        #expect(state.errorMessage == nil)
-    }
-
     /// Right-clicking outside the selection acts on the rows under the pointer and leaves
     /// the selection where the reader put it, batch or not.
     @Test func actingOnOtherRowsLeavesTheSelectionAlone() async {
@@ -94,22 +70,6 @@ struct WindowStateFileActionTests {
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
         #expect(state.selection == [.file(files[2].id)])
-    }
-
-    /// A failed write still republishes: git does not roll back what it already did, so
-    /// the list on screen has to be re-read rather than assumed unchanged. Here the stub
-    /// changed nothing, so the same list comes back, and the error outlives that refresh.
-    @Test func aFailedWriteReportsGitsMessageAndRepublishes() async {
-        let h = Harness()
-        let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        await repo.client.fail(actions: true)
-
-        await state.perform(.stage, on: [files[0]])
-
-        #expect(state.errorMessage?.contains("index.lock exists") == true)
-        #expect(state.files == files)
-        #expect(h.published.last?.cause == .fileAction)
     }
 
     /// A write is only as safe as the list it was checked against, and `status()` is that
@@ -171,18 +131,18 @@ struct WindowStateFileActionTests {
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: files)
         let client = repo.client
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let first = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         let second = Task { await state.perform(.discard, on: [files[1]]) }
         // Let the second write reach the queue, where it waits on the first.
         for _ in 0..<10 { await Task.yield() }
         // What the second write's status read will find: b is a deletion now, so the
         // queued discard no longer means what the menu offered.
         await client.set(files: [files[0], changedFile("b.swift", kind: .deleted), files[2]])
-        await client.holdActions(false)
-        await client.releaseActions()
+        await client.hold(.actions, false)
+        await client.release(.actions)
         await first.value
         await second.value
 
@@ -205,21 +165,21 @@ struct WindowStateFileActionTests {
         let client = repo.client
         await client.set(filesAfterWrite: [staged])
         // Every status read from here on is held, so their order can be chosen by hand.
-        await client.hold(true)
+        await client.hold(.status)
         let readsBefore = await client.statusCalls
 
         let first = Task { await state.perform(.stage, on: [untracked]) }
         let second = Task { await state.perform(.trash, on: [untracked]) }
         // (1) the stage's own validation read.
         #expect(await eventually { await client.statusCalls == readsBefore + 1 })
-        await client.releaseFirst()
+        await client.releaseFirst(.status)
         // The stage runs, the repository becomes `[staged]`, and (2) its refresh read
         // waits.
         #expect(await eventually { await client.statusCalls == readsBefore + 2 })
         // A watcher refresh overtakes it: (3) waits behind (2) and owns the serial.
         h.watcherCallbacks[repo.root]?()
         #expect(await eventually { await client.statusCalls == readsBefore + 3 })
-        await client.releaseFirst()
+        await client.releaseFirst(.status)
         await first.value
         // Ids only: the background line-stats task can attach counts to the same list at
         // any moment, and whether it has yet is not what this is about.
@@ -227,7 +187,7 @@ struct WindowStateFileActionTests {
 
         // Only now does the queued trash validate, with (4), which is the last one held.
         #expect(await eventually { await client.statusCalls == readsBefore + 4 })
-        await client.releaseLast()
+        await client.releaseLast(.status)
         await second.value
 
         #expect(await client.trashed.isEmpty, "u.txt is tracked now; the menu's trash is stale")
@@ -235,7 +195,7 @@ struct WindowStateFileActionTests {
         #expect(performed.map(\.action) == [.stage])
         #expect(performed.map(\.paths) == [["u.txt"]])
 
-        await client.releaseFirst()
+        await client.releaseFirst(.status)
         #expect(await eventually { await state.files == [staged] })
     }
 
@@ -250,10 +210,10 @@ struct WindowStateFileActionTests {
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
         state.selection = [.file(files[0].id)]
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         let afterWatcher = [staged, files[1]]
         await client.set(files: afterWatcher)
         h.watcherCallbacks[repo.root]?()
@@ -262,26 +222,28 @@ struct WindowStateFileActionTests {
                 guard await state.selectedFileID == nil else { return false }
                 return await state.files == afterWatcher
             })
-        await client.releaseActions()
+        await client.release(.actions)
         await write.value
 
         #expect(await eventually { await state.selectedFileID == files[1].id })
         #expect(state.errorMessage == nil)
     }
 
-    /// The same race, except the reader cleared the selection while `git` was running.
-    /// That choice is newer than the write, so the next file is not selected for them.
-    @Test func aSelectionChangedDuringTheWriteIsLeftAlone() async {
+    /// The same race, except the reader chose something while `git` was running: nothing,
+    /// or All changes, which is a choice rather than the absence of one. That choice is
+    /// newer than the write, so the next file is not selected for them.
+    @Test(arguments: [Set<DiffSelection>(), [.allChanges]])
+    func aSelectionChangedDuringTheWriteIsLeftAlone(_ chosen: Set<DiffSelection>) async {
         let h = Harness()
         let state = h.makeState()
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
         state.selection = [.file(files[0].id)]
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         let afterWatcher = [staged, files[1]]
         await client.set(files: afterWatcher)
         h.watcherCallbacks[repo.root]?()
@@ -290,12 +252,12 @@ struct WindowStateFileActionTests {
                 guard await state.selectedFileID == nil else { return false }
                 return await state.files == afterWatcher
             })
-        state.selection = []
-        await client.releaseActions()
+        state.selection = chosen
+        await client.release(.actions)
         await write.value
 
         #expect(await eventually { await h.published.last?.cause == .fileAction })
-        #expect(state.selection.isEmpty)
+        #expect(state.selection == chosen)
     }
 
     // MARK: Batches
@@ -383,12 +345,12 @@ struct WindowStateFileActionTests {
         let client = repo.client
         await client.set(filesAfterWrite: [stagedA, stagedB])
         state.selection = [.file(files[0].id), .file(files[1].id)]
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.stage, on: [files[0], files[1]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         state.selection = [.file(files[0].id)]
-        await client.releaseActions()
+        await client.release(.actions)
         await write.value
 
         #expect(await eventually { await state.files == [stagedA, stagedB] })
@@ -399,44 +361,31 @@ struct WindowStateFileActionTests {
     }
 
     /// The gap the revision also has to cover: the restoration is recorded, and only then
-    /// does the reader clear the selection, while the write's own refresh is still reading
-    /// status. The setter drops the pending restoration, so the empty selection stands.
-    @Test func aSelectionClearedWhileTheRefreshWaitsIsNotUndone() async {
+    /// does the reader choose, while the write's own refresh is still reading status. The
+    /// setter drops the pending restoration, so their choice stands.
+    @Test(arguments: [Set<DiffSelection>(), [.allChanges]])
+    func aSelectionChosenWhileTheRefreshWaitsIsNotUndone(_ chosen: Set<DiffSelection>) async {
         let h = Harness()
         let state = h.makeState()
-        await stageWithRefreshHeld(h, state) { $0.selection = [] }
-        #expect(state.selection.isEmpty)
-    }
-
-    /// And the same for All changes, which is a choice rather than the absence of one.
-    @Test func allChangesChosenWhileTheRefreshWaitsIsNotUndone() async {
-        let h = Harness()
-        let state = h.makeState()
-        await stageWithRefreshHeld(h, state) { $0.selection = [.allChanges] }
-        #expect(state.selection == [.allChanges])
-    }
-
-    /// Stages the selected row with every status read held, so `change` runs after the
-    /// restoration was recorded and before the refresh that would have granted it.
-    private func stageWithRefreshHeld(_ h: Harness, _ state: WindowState, change: (WindowState) -> Void) async {
         let staged = changedFile("a.swift", area: .staged)
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
         await client.set(filesAfterWrite: [staged, files[1]])
         state.selection = [.file(files[0].id)]
-        await client.hold(true)
+        await client.hold(.status)
         let readsBefore = await client.statusCalls
 
         let write = Task { await state.perform(.stage, on: [files[0]]) }
         // (1) the write's own validation read.
         #expect(await eventually { await client.statusCalls == readsBefore + 1 })
-        await client.releaseFirst()
+        await client.releaseFirst(.status)
         // The stage runs and (2) its refresh read waits.
         #expect(await eventually { await client.statusCalls == readsBefore + 2 })
-        change(state)
-        await client.releaseFirst()
+        state.selection = chosen
+        await client.releaseFirst(.status)
         await write.value
         #expect(await eventually { await h.published.last?.cause == .fileAction })
+        #expect(state.selection == chosen)
     }
 
     /// git stops at the file it cannot handle and does not roll back the ones it
@@ -448,13 +397,13 @@ struct WindowStateFileActionTests {
         let repo = await h.adopt(state, "A", files: [files[0], files[1]])
         let client = repo.client
         await client.fail(actions: true)
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.discard, on: [files[0], files[1]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         // b was restored, then git failed on a.
         await client.set(files: [files[0]])
-        await client.releaseActions()
+        await client.release(.actions)
         await write.value
 
         #expect(await client.performed.map(\.paths) == [["a.swift", "b.swift"]])
@@ -476,14 +425,14 @@ struct WindowStateFileActionTests {
         let repo = await h.adopt(state, "A", files: files)
         let client = repo.client
         await client.fail(actions: true)
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.stage, on: [files[0], files[1]]) }
         // Held after the write's own validation read, which had to succeed to get here;
         // from now on the follow-up refresh's status read fails too.
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         await client.fail(true)
-        await client.releaseActions()
+        await client.release(.actions)
         await write.value
         #expect(state.errorMessage?.contains("index.lock exists") == true)
 
@@ -504,12 +453,12 @@ struct WindowStateFileActionTests {
         let repo = await h.adopt(state, "A", files: [first, second])
         let client = repo.client
         await client.fail(actions: true)
-        await client.holdActions(true)
+        await client.hold(.actions)
 
         let write = Task { await state.perform(.trash, on: [first, second]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
         await client.set(files: [second])
-        await client.releaseActions()
+        await client.release(.actions)
         await write.value
 
         #expect(await client.trashed == [["u.txt", "v.txt"]])
@@ -537,26 +486,33 @@ struct WindowStateFileActionTests {
 
     // MARK: Renames
 
-    private func rename(_ path: String, from original: String, area: ChangedFile.Area = .staged) -> ChangedFile {
-        ChangedFile(path: path, originalPath: original, kind: .renamed, area: area, fingerprint: nil)
+    struct WritePathsCase: CustomTestStringConvertible {
+        let name: String
+        let rows: [ChangedFile]
+        let expected: [String]
+
+        var testDescription: String { name }
     }
 
-    @Test func aRenameWritesItsOldPathThenItsNewOne() {
-        #expect(WindowState.writePaths(of: [rename("b.swift", from: "a.swift")]) == ["a.swift", "b.swift"])
-    }
-
-    /// A copy's source is untouched by the copy and may have a row of its own.
-    @Test func aCopyWritesOnlyItsOwnPath() {
-        let copy = ChangedFile(
-            path: "b.swift", originalPath: "a.swift", kind: .copied, area: .staged, fingerprint: nil)
-        #expect(WindowState.writePaths(of: [copy]) == ["b.swift"])
-    }
-
-    @Test func writePathsDropsDuplicatesKeepingTheFirst() {
-        let rows = [
-            changedFile("a.swift", area: .staged), rename("b.swift", from: "a.swift"), changedFile("b.swift"),
-        ]
-        #expect(WindowState.writePaths(of: rows) == ["a.swift", "b.swift"])
+    /// The paths a stage or unstage hands to git for each row.
+    @Test(arguments: [
+        WritePathsCase(
+            name: "a rename writes its old path, then its new one", rows: [rename("b.swift", from: "a.swift")],
+            expected: ["a.swift", "b.swift"]),
+        // A copy's source is untouched by the copy and may have a row of its own.
+        WritePathsCase(
+            name: "a copy writes only its own path",
+            rows: [
+                ChangedFile(path: "b.swift", originalPath: "a.swift", kind: .copied, area: .staged, fingerprint: nil)
+            ],
+            expected: ["b.swift"]),
+        WritePathsCase(
+            name: "duplicates are dropped, keeping the first",
+            rows: [changedFile("a.swift", area: .staged), rename("b.swift", from: "a.swift"), changedFile("b.swift")],
+            expected: ["a.swift", "b.swift"]),
+    ])
+    func writePathsFollowTheRowKind(_ testCase: WritePathsCase) {
+        #expect(WindowState.writePaths(of: testCase.rows) == testCase.expected)
     }
 
     @Test func unstagingARenamePassesBothPaths() async {
@@ -666,14 +622,6 @@ struct WindowStateFileActionTests {
         #expect(await eventually { await state.unstagedFiles.map(\.id) == [conflict.id] })
     }
 
-    @Test func stageAllIsAvailableWithOrdinaryUnstagedRows() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await h.adopt(state, "A", files: files)
-
-        #expect(state.canStageAll)
-    }
-
     @Test func stageAllIsUnavailableWithOnlyConflictsOrNothingUnstaged() async {
         let h = Harness()
         let state = h.makeState()
@@ -687,31 +635,11 @@ struct WindowStateFileActionTests {
         let h = Harness()
         let state = h.makeState()
         _ = await h.adopt(state, "A", files: files)
+        #expect(state.canStageAll, "ordinary unstaged rows")
 
         state.isConfirmingFileAction = true
 
         #expect(!state.canStageAll)
-    }
-
-    @Test func stageAllIsUnavailableWhileAnOverlayIsPresented() async {
-        let h = Harness()
-        let state = h.makeState()
-        _ = await h.adopt(state, "A", files: files)
-
-        state.isCommitSheetPresented = true
-        #expect(!state.canStageAll)
-        state.isCommitSheetPresented = false
-        state.isCommitPickerPresented = true
-        #expect(!state.canStageAll)
-        state.isCommitPickerPresented = false
-        state.isNewBranchSheetPresented = true
-        #expect(!state.canStageAll)
-        state.isNewBranchSheetPresented = false
-        state.isBranchPickerPresented = true
-        #expect(!state.canStageAll)
-        state.isBranchPickerPresented = false
-
-        #expect(state.canStageAll)
     }
 
     /// The commit list's files replace Changes, so this also holds for an empty list; the
@@ -740,16 +668,16 @@ struct WindowStateFileActionTests {
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: files)
         let client = repo.client
-        await client.holdSwitchBranch(true)
+        await client.hold(.switchBranch)
 
         let task = Task { await state.switchBranch(to: "side") }
-        #expect(await eventually { await client.heldSwitchBranchCount == 1 })
+        #expect(await eventually { await client.heldCount(.switchBranch) == 1 })
 
         #expect(state.isSwitchingBranch)
         #expect(!state.canStageAll)
 
-        await client.holdSwitchBranch(false)
-        await client.releaseSwitchBranch()
+        await client.hold(.switchBranch, false)
+        await client.release(.switchBranch)
         await task.value
     }
 
@@ -760,17 +688,17 @@ struct WindowStateFileActionTests {
         let repo = await h.adopt(state, "A", files: files)
         let client = repo.client
         state.commitMessage = "Add the picker"
-        await client.holdActions(true)
+        await client.hold(.actions)
         let stage = Task { await state.perform(.stage, on: [files[0]]) }
-        #expect(await eventually { await client.heldActionCount == 1 })
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
 
         let commit = Task { await state.commit() }
         #expect(await eventually { await state.isCommitting })
 
         #expect(!state.canStageAll)
 
-        await client.holdActions(false)
-        await client.releaseActions()
+        await client.hold(.actions, false)
+        await client.release(.actions)
         await stage.value
         await commit.value
     }

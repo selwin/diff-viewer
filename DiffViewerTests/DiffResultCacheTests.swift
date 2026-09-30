@@ -66,12 +66,6 @@ struct DiffResultCacheTests {
 
 // MARK: - DiffEngine.build
 
-private func probeCache(_ probe: RunnerProbe) -> DifftCache {
-    DifftCache(runner: { old, new, fileName, qos in
-        try await probe.run(old: old, new: new, fileName: fileName, qualityOfService: qos)
-    })
-}
-
 private func sources(_ fileName: String) -> DiffEngine.Sources {
     DiffEngine.Sources(old: Data("a\nb\n".utf8), new: Data("a\nc\n".utf8), fileName: fileName)
 }

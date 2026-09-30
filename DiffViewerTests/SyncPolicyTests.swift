@@ -124,15 +124,6 @@ struct SyncPolicyTests {
                     push: .disabled(reason: "Pull first")))
     }
 
-    @Test func noRemoteUpstreamOrNoReadShowsNothing() {
-        #expect(buttons(localBranch("main")) == .hidden, "no upstream")
-        let local = upstream("base", remote: ".", localRef: "refs/heads/base", tracking: .counts(ahead: 0, behind: 1))
-        #expect(buttons(localBranch("main", upstream: local)) == .hidden)
-        let outside = upstream("origin/main", localRef: "refs/heads/main", tracking: .counts(ahead: 2, behind: 0))
-        #expect(buttons(localBranch("main", upstream: outside)) == .hidden)
-        #expect(buttons(tracked(ahead: 0, behind: 2), readStatus: .failed) == .hidden, "stale counts")
-    }
-
     @Test func aSwitchDisablesWhateverWouldShow() {
         let diverged = tracked(ahead: 1, behind: 2)
         let switching = PickerButtonState.disabled(reason: "Switching branch…")

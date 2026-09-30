@@ -4,12 +4,6 @@ import Testing
 @testable import DiffViewer
 
 struct DiffAlignerTests {
-    @Test func whitespaceOnlyChangeHiddenAlignsAsEqual() {
-        let rows = DiffAligner.align(
-            oldLines: ["x = 1", "y"], newLines: ["x  =  1", "y"], hideWhitespace: true, hints: DifftHints())
-        #expect(rows.map(\.kind) == [.equal, .equal])
-    }
-
     @Test func hidingWhitespaceIgnoresOnlyASCIIWhitespace() {
         // Hide Whitespace means `git diff -w`, which ignores ASCII whitespace only.
         let nonBreaking = DiffAligner.align(

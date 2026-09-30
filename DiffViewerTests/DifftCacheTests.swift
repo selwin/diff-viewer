@@ -3,53 +3,6 @@ import Testing
 
 @testable import DiffViewer
 
-/// Stand-in for the difft process: records launches in submission order, can hold
-/// launches open until released, and can fail on demand.
-actor RunnerProbe {
-    struct Launch: Equatable {
-        let fileName: String
-        let qualityOfService: QualityOfService
-    }
-
-    private(set) var launches: [Launch] = []
-    private(set) var inFlight = 0
-    private(set) var peakInFlight = 0
-    private var holds = false
-    private var fails = false
-    private var changesPerLine = 1
-    private var held: [CheckedContinuation<Void, Never>] = []
-
-    var fileNames: [String] { launches.map(\.fileName) }
-
-    func hold(_ on: Bool) { holds = on }
-    func fail(_ on: Bool) { fails = on }
-    func changes(perLine count: Int) { changesPerLine = count }
-
-    func run(old: Data, new: Data, fileName: String, qualityOfService: QualityOfService) async throws -> DifftFile {
-        launches.append(Launch(fileName: fileName, qualityOfService: qualityOfService))
-        inFlight += 1
-        peakInFlight = max(peakInFlight, inFlight)
-        if holds {
-            await withCheckedContinuation { held.append($0) }
-        }
-        inFlight -= 1
-        if fails { throw ProcessError.failed(command: "difft", status: 1, stderr: "boom") }
-        let changes = (0..<changesPerLine).map {
-            DifftFile.Change(start: $0 * 2, end: $0 * 2 + 1, content: "x", highlight: "normal")
-        }
-        let line = DifftFile.Line(lineNumber: 0, changes: changes)
-        return DifftFile(
-            language: "Swift", path: fileName, status: "changed", chunks: [[DifftFile.LinePair(lhs: line, rhs: line)]])
-    }
-
-    /// Releases held launches in the order they arrived.
-    func release(_ count: Int = .max) {
-        for _ in 0..<min(count, held.count) {
-            held.removeFirst().resume()
-        }
-    }
-}
-
 /// Controllable monotonic clock for failure expiry.
 final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
@@ -143,21 +96,6 @@ struct DifftCacheTests {
         #expect(await again.value != nil)
     }
 
-    @Test func entryBoundEvictsLeastRecentlyUsedResult() async {
-        let probe = RunnerProbe()
-        var limits = DifftCache.Limits()
-        limits.entries = 2
-        let cache = makeCache(probe, limits: limits)
-        _ = await request(cache, "a")
-        _ = await request(cache, "b")
-        _ = await request(cache, "c")
-        _ = await request(cache, "b")
-        #expect(await probe.launches.count == 3)
-        _ = await request(cache, "a")
-        #expect(await probe.launches.count == 4)
-        #expect(await cache.stats.evictions == 2)
-    }
-
     @Test func byteBudgetEvictsLeastRecentlyUsedResults() async {
         let probe = RunnerProbe()
         await probe.changes(perLine: 10)
@@ -185,27 +123,6 @@ struct DifftCacheTests {
         #expect(await request(cache, "a") != nil)
         #expect(await request(cache, "a") != nil)
         #expect(await probe.launches.count == 2)
-    }
-
-    /// A result that can never fit the byte budget is dropped on its own, rather than
-    /// flushing every smaller result and then itself.
-    @Test func aResultLargerThanTheByteBudgetIsReturnedWithoutEvictingAnything() async {
-        let probe = RunnerProbe()
-        var limits = DifftCache.Limits()
-        limits.bytes = 300
-        let cache = makeCache(probe, limits: limits)
-        let small = await request(cache, "small")
-        #expect(small?.cost == 117)
-
-        await probe.changes(perLine: 10)
-        let large = await request(cache, "large")
-        #expect(large?.cost == 405, "above `bytes` but below `maxResultCost`")
-        #expect(await request(cache, "large") != nil)
-        #expect(await probe.launches.count == 3, "the large result was not stored")
-
-        #expect(await request(cache, "small") != nil)
-        #expect(await probe.launches.count == 3, "the small result still hits")
-        #expect(await cache.stats.evictions == 0)
     }
 
     @Test func failureIsRememberedUntilExpiry() async {

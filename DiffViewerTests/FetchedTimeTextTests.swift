@@ -11,25 +11,19 @@ struct FetchedTimeTextTests {
         FetchedTimeText.make(at: now - secondsAgo, now: now, timeZone: utc)
     }
 
-    @Test func underAMinuteIsJustNow() {
-        #expect(text(secondsAgo: 0) == "just now")
-        #expect(text(secondsAgo: 59) == "just now")
-        #expect(text(secondsAgo: -30) == "just now", "a clock that moved backwards")
-    }
-
-    @Test func underAnHourIsWholeMinutes() {
-        #expect(text(secondsAgo: 60) == "1 min ago")
-        #expect(text(secondsAgo: 119) == "1 min ago")
-        #expect(text(secondsAgo: 3599) == "59 min ago")
-    }
-
-    @Test func underADayIsWholeHours() {
-        #expect(text(secondsAgo: 3600) == "1 h ago")
-        #expect(text(secondsAgo: 86_399) == "23 h ago")
-    }
-
-    @Test func aDayOrMoreIsTheDate() {
-        #expect(text(secondsAgo: 86_400) == "12 Sep")
-        #expect(text(secondsAgo: 40 * 86_400) == "4 Aug")
+    @Test(arguments: [
+        (secondsAgo: 0, expected: "just now"),
+        (secondsAgo: 59, expected: "just now"),
+        (secondsAgo: -30, expected: "just now"),  // A clock that moved backwards.
+        (secondsAgo: 60, expected: "1 min ago"),
+        (secondsAgo: 119, expected: "1 min ago"),
+        (secondsAgo: 3_599, expected: "59 min ago"),
+        (secondsAgo: 3_600, expected: "1 h ago"),
+        (secondsAgo: 86_399, expected: "23 h ago"),
+        (secondsAgo: 86_400, expected: "12 Sep"),
+        (secondsAgo: 40 * 86_400, expected: "4 Aug"),
+    ])
+    func theTextGrowsFromJustNowToTheDate(secondsAgo: Int, expected: String) {
+        #expect(text(secondsAgo: TimeInterval(secondsAgo)) == expected)
     }
 }

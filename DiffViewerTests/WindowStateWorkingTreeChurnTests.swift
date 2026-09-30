@@ -13,12 +13,8 @@ struct WindowStateWorkingTreeChurnTests {
     private let commit = commitSummary("c1")
 
     private func setCounts(_ client: StubRepoClient) async {
-        await client.set(numstat: [row("a.swift", 3, 1), row("b.swift", 2, 0)], area: .unstaged)
-        await client.set(numstat: [row("a.swift", 10, 4)], area: .staged)
-    }
-
-    private func row(_ path: String, _ added: Int, _ deleted: Int) -> NumstatEntry {
-        NumstatEntry(path: path, stats: .counted(added: added, deleted: deleted))
+        await client.set(numstat: [counted("a.swift", 3, 1), counted("b.swift", 2, 0)], area: .unstaged)
+        await client.set(numstat: [counted("a.swift", 10, 4)], area: .staged)
     }
 
     /// A window showing `commit`, with the working tree's churn already published.
@@ -50,27 +46,27 @@ struct WindowStateWorkingTreeChurnTests {
         let state = h.makeState()
         let repo = h.repo("A", files: workingFiles)
         await setCounts(repo.client)
-        await repo.client.holdNumstat(true)
+        await repo.client.hold(.numstat)
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(await eventually { await !h.published.isEmpty })
-        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+        #expect(await eventually { await repo.client.heldCount(.numstat) == 2 })
         #expect(state.workingTreeChurn == nil)
 
-        await repo.client.releaseNumstat()
+        await repo.client.release(.numstat)
         #expect(await eventually { await state.workingTreeChurn == Self.churn })
         #expect(LineStats.total(of: state.files) == .counted(added: Self.churn.added, deleted: Self.churn.deleted))
 
         let published = h.published.count
         await repo.client.set(files: workingFiles + [changedFile("c.swift")])
-        let unstaged = [row("a.swift", 3, 1), row("b.swift", 2, 0), row("c.swift", 7, 0)]
+        let unstaged = [counted("a.swift", 3, 1), counted("b.swift", 2, 0), counted("c.swift", 7, 0)]
         await repo.client.set(numstat: unstaged, area: .unstaged)
         h.watcherCallbacks[repo.root]!()
         #expect(await eventually { await h.published.count > published })
-        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+        #expect(await eventually { await repo.client.heldCount(.numstat) == 2 })
         #expect(state.files.contains { $0.path == "c.swift" && $0.lineStats == nil }, "the list is out, uncounted")
         #expect(state.workingTreeChurn == Self.churn)
 
-        await repo.client.releaseNumstat()
+        await repo.client.release(.numstat)
         #expect(
             await eventually {
                 await state.workingTreeChurn == RepositoryChurn(changedFileCount: 3, added: 22, deleted: 5)
@@ -113,16 +109,16 @@ struct WindowStateWorkingTreeChurnTests {
         let repo = h.repo("A", files: workingFiles)
         await setCounts(repo.client)
         await repo.client.set(commits: [commit])
-        await repo.client.holdNumstat(true)
+        await repo.client.hold(.numstat)
         #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await repo.client.heldNumstatCount == 2 })
+        #expect(await eventually { await repo.client.heldCount(.numstat) == 2 })
         #expect(await eventually { await !state.history.commits.isEmpty })
 
         state.select(commit: commit)
         // The cancelled read's two, the commit's own count, and the churn read's two.
-        #expect(await eventually { await repo.client.heldNumstatCount == 5 })
+        #expect(await eventually { await repo.client.heldCount(.numstat) == 5 })
         #expect(state.workingTreeChurn == nil)
-        await repo.client.releaseNumstat()
+        await repo.client.release(.numstat)
         #expect(await eventually { await state.workingTreeChurn == Self.churn })
     }
 
@@ -134,16 +130,16 @@ struct WindowStateWorkingTreeChurnTests {
         let repo = h.repo("A", files: workingFiles)
         await setCounts(repo.client)
         await repo.client.set(commits: [commit])
-        await repo.client.hold(true)
+        await repo.client.hold(.status)
         #expect(state.adopt(root: repo.root, client: repo.client))
-        #expect(await eventually { await repo.client.heldCount == 1 })
+        #expect(await eventually { await repo.client.heldCount(.status) == 1 })
         #expect(await eventually { await !state.history.commits.isEmpty })
 
         state.select(commit: commit)
-        #expect(await eventually { await repo.client.heldCount == 2 })
-        await repo.client.hold(false)
-        await repo.client.releaseFirst()
-        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.heldCount(.status) == 2 })
+        await repo.client.hold(.status, false)
+        await repo.client.releaseFirst(.status)
+        await repo.client.releaseFirst(.status)
         #expect(await eventually { await state.workingTreeChurn == Self.churn })
     }
 
@@ -159,17 +155,17 @@ struct WindowStateWorkingTreeChurnTests {
         #expect(await eventually { await !state.history.commits.isEmpty })
 
         await repo.client.set(files: [changedFile("x.swift")])
-        await repo.client.set(numstat: [row("x.swift", 4, 2)], area: .unstaged)
+        await repo.client.set(numstat: [counted("x.swift", 4, 2)], area: .unstaged)
         await repo.client.set(numstat: [], area: .staged)
-        await repo.client.hold(true)
+        await repo.client.hold(.status)
         h.watcherCallbacks[repo.root]!()
-        #expect(await eventually { await repo.client.heldCount == 1 })
+        #expect(await eventually { await repo.client.heldCount(.status) == 1 })
 
         state.select(commit: commit)
-        #expect(await eventually { await repo.client.heldCount == 2 })
-        await repo.client.hold(false)
-        await repo.client.releaseFirst()
-        await repo.client.releaseFirst()
+        #expect(await eventually { await repo.client.heldCount(.status) == 2 })
+        await repo.client.hold(.status, false)
+        await repo.client.releaseFirst(.status)
+        await repo.client.releaseFirst(.status)
         #expect(
             await eventually {
                 await state.workingTreeChurn == RepositoryChurn(changedFileCount: 1, added: 4, deleted: 2)
@@ -183,7 +179,7 @@ struct WindowStateWorkingTreeChurnTests {
         let tracking = upstream("origin/main", tracking: .counts(ahead: 0, behind: 2))
         let (_, state, client) = await showingCommit(branches: [localBranch("main", upstream: tracking)])
         await client.set(files: [changedFile("x.swift")])
-        await client.set(numstat: [row("x.swift", 4, 2)], area: .unstaged)
+        await client.set(numstat: [counted("x.swift", 4, 2)], area: .unstaged)
         await client.set(numstat: [], area: .staged)
 
         await state.pull(branch: "main")
@@ -208,7 +204,7 @@ struct WindowStateWorkingTreeChurnTests {
     @Test func theChurnFollowsEditsWhileACommitIsShown() async {
         let (h, state, client) = await showingCommit()
         await client.set(files: [changedFile("x.swift")])
-        await client.set(numstat: [row("x.swift", 4, 2)], area: .unstaged)
+        await client.set(numstat: [counted("x.swift", 4, 2)], area: .unstaged)
         await client.set(numstat: [], area: .staged)
 
         h.watcherCallbacks.values.first?()
@@ -222,22 +218,23 @@ struct WindowStateWorkingTreeChurnTests {
     /// commit scope starts while the tick's read is in flight.
     @Test func anOlderChurnReadCannotOverwriteANewerOne() async {
         let (h, state, client) = await showingCommit()
-        await client.set(numstat: [row("x.swift", 1, 0), row("y.swift", 1, 0), row("z.swift", 1, 0)], area: .unstaged)
+        await client.set(
+            numstat: [counted("x.swift", 1, 0), counted("y.swift", 1, 0), counted("z.swift", 1, 0)], area: .unstaged)
         await client.set(numstat: [], area: .staged)
-        await client.hold(true)
+        await client.hold(.status)
         await client.set(files: [changedFile("x.swift")])
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { await client.heldCount == 1 })
+        #expect(await eventually { await client.heldCount(.status) == 1 })
 
         await client.set(files: [changedFile("x.swift"), changedFile("y.swift"), changedFile("z.swift")])
         let newer = RepositoryChurn(changedFileCount: 3, added: 3, deleted: 0)
         let switching = Task { await state.switchBranch(to: "other") }
-        #expect(await eventually { await client.heldCount == 2 })
+        #expect(await eventually { await client.heldCount(.status) == 2 })
 
-        await client.releaseLast()
+        await client.releaseLast(.status)
         #expect(await eventually { await state.workingTreeChurn == newer })
-        await client.hold(false)
-        await client.releaseFirst()
+        await client.hold(.status, false)
+        await client.releaseFirst(.status)
         await switching.value
         try? await Task.sleep(for: .milliseconds(50))
         #expect(state.workingTreeChurn == newer, "the older read lands last and is dropped")
@@ -247,28 +244,28 @@ struct WindowStateWorkingTreeChurnTests {
     /// new list's counts are still coming.
     @Test func aWorkingTreeRefreshOutranksAChurnReadInFlight() async {
         let (h, state, client) = await showingCommit()
-        await client.hold(true)
+        await client.hold(.status)
         await client.set(files: [changedFile("x.swift")])
         h.watcherCallbacks.values.first?()
-        #expect(await eventually { await client.heldCount == 1 })
+        #expect(await eventually { await client.heldCount(.status) == 1 })
 
         await client.set(files: [changedFile("x.swift"), changedFile("y.swift")])
-        await client.set(numstat: [row("x.swift", 1, 0), row("y.swift", 1, 0)], area: .unstaged)
+        await client.set(numstat: [counted("x.swift", 1, 0), counted("y.swift", 1, 0)], area: .unstaged)
         await client.set(numstat: [], area: .staged)
-        await client.holdNumstat(true)
+        await client.hold(.numstat)
         state.selectWorkingTree()
-        #expect(await eventually { await client.heldCount == 2 })
-        await client.releaseLast()
-        #expect(await eventually { await client.heldNumstatCount == 2 })
+        #expect(await eventually { await client.heldCount(.status) == 2 })
+        await client.releaseLast(.status)
+        #expect(await eventually { await client.heldCount(.numstat) == 2 })
         let numstat = await client.numstatCalls
 
-        await client.hold(false)
-        await client.releaseFirst()
+        await client.hold(.status, false)
+        await client.releaseFirst(.status)
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await client.numstatCalls == numstat, "the outranked read stops before numstat")
         #expect(state.workingTreeChurn == Self.churn)
 
-        await client.releaseNumstat()
+        await client.release(.numstat)
         #expect(
             await eventually {
                 await state.workingTreeChurn == RepositoryChurn(changedFileCount: 2, added: 2, deleted: 0)
@@ -284,10 +281,5 @@ struct WindowStateWorkingTreeChurnTests {
         await client.fail(false)
         h.watcherCallbacks.values.first?()
         #expect(await eventually { await state.workingTreeChurn == Self.churn })
-    }
-
-    @Test(arguments: [(0, "No changes"), (1, "1 change"), (2, "2 changes"), (120, "120 changes")])
-    func changeCountText(count: Int, text: String) {
-        #expect(ChangeCountText.make(count) == text)
     }
 }

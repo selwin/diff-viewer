@@ -141,20 +141,20 @@ struct LineStatsJoinerTests {
         for (index, path) in paths.enumerated() {
             await client.set(worktree: Data(String(repeating: "x\n", count: index + 1).utf8), for: path)
         }
-        await client.holdReads(true)
+        await client.hold(.reads)
 
         let files = paths.map { changedFile($0, kind: .untracked) }
         let joining = Task { await LineStatsJoiner.attach(numstat: [:], to: files, client: client) }
 
-        #expect(await eventually { await client.heldReadCount == 8 })
+        #expect(await eventually { await client.heldCount(.reads) == 8 })
         try? await Task.sleep(for: .milliseconds(100))
-        #expect(await client.heldReadCount == 8)
+        #expect(await client.heldCount(.reads) == 8)
 
         // releaseReads only resumes the reads held right now, so the last four need a
         // second release once the top-up tasks have parked.
-        await client.releaseReads()
-        #expect(await eventually { await client.heldReadCount == 4 })
-        await client.releaseReads()
+        await client.release(.reads)
+        #expect(await eventually { await client.heldCount(.reads) == 4 })
+        await client.release(.reads)
 
         let joined = await joining.value
         for (index, path) in paths.enumerated() {
@@ -381,14 +381,14 @@ struct LineStatsJoinerTests {
     @Test func cancellationBeforeTheBatchLeavesBinaryWithoutSizes() async {
         let client = StubRepoClient(files: [])
         await client.set(objectSize: 1_000, for: objectID("index-a.png"))
-        await client.holdReads(true)
+        await client.hold(.reads)
         let files = [changedFile("new.txt", kind: .untracked), changedFile("a.png")]
         let joining = Task {
             await LineStatsJoiner.attach(numstat: [.unstaged: [binaryRow("a.png")]], to: files, client: client)
         }
-        #expect(await eventually { await client.heldReadCount == 1 })
+        #expect(await eventually { await client.heldCount(.reads) == 1 })
         joining.cancel()
-        await client.releaseReads()
+        await client.release(.reads)
 
         let joined = await joining.value
         #expect(stats(joined, "unstaged:a.png") == .binary(nil))
