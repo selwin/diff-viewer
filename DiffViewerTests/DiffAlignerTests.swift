@@ -85,6 +85,18 @@ struct DiffAlignerTests {
         #expect(rows[0].new?.highlights == [12..<14])
     }
 
+    @Test func equalLinesIgnoreDifftHints() {
+        // difft treats a multiline string as one atom and flags every line in it.
+        var hints = DifftHints()
+        hints.oldChanges = [0: [0..<1], 1: [0..<1], 2: [0..<1]]
+        hints.newChanges = [0: [0..<1], 1: [0..<1], 2: [0..<1]]
+        let rows = DiffAligner.align(
+            oldLines: ["a", "b", "c"], newLines: ["a", "x", "c"], hideWhitespace: false, hints: hints)
+        #expect(rows.map(\.kind) == [.equal, .modified, .equal])
+        #expect(rows[0].old?.highlights == [] && rows[0].new?.highlights == [])
+        #expect(rows[2].old?.highlights == [] && rows[2].new?.highlights == [])
+    }
+
     @Test func pureAdditionProducesPadRows() {
         let rows = DiffAligner.align(
             oldLines: ["a", "c"], newLines: ["a", "b", "c"], hideWhitespace: true, hints: DifftHints())
