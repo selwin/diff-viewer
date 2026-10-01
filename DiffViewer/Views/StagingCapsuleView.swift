@@ -12,10 +12,13 @@ struct StagingCapsuleView: View {
         Button {
             FileActionRunner.runStagingAction(capsule.action, in: windowState, services: services)
         } label: {
-            HStack(spacing: 7) {
+            // One baseline: symbols are drawn to sit on it, so the arrow, title and keycap
+            // line up optically, which centring their differently sized frames does not.
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                // Neutral like the title: blue is the Commit button's.
                 Image(systemName: capsule.symbol)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(.primary)
                     .contentTransition(.symbolEffect(.replace))
                 Text(capsule.title)
                     .font(.system(size: 12, weight: .semibold))

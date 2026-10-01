@@ -57,9 +57,9 @@ experience. We want this to be speedy when reviewing large diffs.
   restore a delete, or move an untracked file to the Trash, plus Reveal in Finder, Open in
   Default Editor, and Copy Path. A selection runs as one git command with one
   confirmation; destructive actions ask first.
-- **Keyboard staging**: ⌘S Stage Selected, ⇧⌘S Unstage Selected, ⌥⌘S Stage All. Staging
-  moves the selection on to the next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G,
-  ⌘Return.
+- **Keyboard staging**: ⌘S stages the selection, or everything when nothing is selected;
+  ⇧⌘S unstages the selection; ⌥⌘S always stages everything. Staging moves the selection
+  on to the next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G, ⌘Return.
 - **Commit picker** (⌘K): see what any commit on the branch changed against its first
   parent. A commit's diffs never change, so nothing reloads until HEAD moves.
 - **Branch picker** (⌘B) in the title bar: switch local branches. A row offers Push or

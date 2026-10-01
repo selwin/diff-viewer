@@ -24,8 +24,8 @@ struct StagingCapsule: Equatable {
 
     var shortcut: String {
         switch action {
-        case .stageAll: "⌥⌘S"
-        case .stage: "⌘S"
+        // One button, one shortcut: Stage All and Stage N Files are the same control.
+        case .stageAll, .stage: "⌘S"
         case .unstage: "⇧⌘S"
         }
     }
@@ -47,8 +47,7 @@ struct StagingCapsule: Equatable {
     var accessibilityLabel: String {
         let keys =
             switch action {
-            case .stageAll: "Option Command S"
-            case .stage: "Command S"
+            case .stageAll, .stage: "Command S"
             case .unstage: "Shift Command S"
             }
         return "\(title), \(keys)"
