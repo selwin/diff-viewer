@@ -98,13 +98,8 @@ enum DiffAligner {
             switch op {
             case let .equal(o, n):
                 flush()
-                let oldSide = side(old: o)
-                let newSide = side(new: n)
-                if oldSide.highlights.isEmpty, newSide.highlights.isEmpty {
-                    rows.append(DiffRow(kind: .equal, old: oldSide, new: newSide))
-                } else {
-                    rows.append(DiffRow(kind: .modified, old: oldSide, new: newSide))
-                }
+                // Difft may flag whole multiline atoms; lines equal under the comparison key remain unchanged.
+                rows.append(.equal(old: o, new: n))
             case let .delete(o):
                 pendingDeletes.append(o)
             case let .insert(n):

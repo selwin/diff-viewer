@@ -85,25 +85,27 @@ struct MoveDetectorTests {
         ]
         let old = receipt + [""] + discount
         let new = discount + [""] + receipt
-        // difft reports receipt as removed and re-added, so its lines align as modified rows
-        // side by side, while discount is deleted below and added above: one change block.
+        // difft reports receipt as removed and re-added, but its text is unchanged, so it stays
+        // equal while discount is added above and deleted below: two change blocks.
         var hints = DifftHints()
         for line in 0..<receipt.count {
             hints.oldChanges[line] = [0..<old[line].utf8.count]
             hints.newChanges[line + 5] = [0..<new[line + 5].utf8.count]
         }
         let (found, rows) = moves(old, new, hints: hints)
-        #expect(DiffDocument(oldLines: old, newLines: new, rows: rows, language: nil).changeBlocks.count == 1)
+        #expect(DiffDocument(oldLines: old, newLines: new, rows: rows, language: nil).changeBlocks.count == 2)
         // Line for line, except receipt's closing brace, which Myers pairs with discount's.
         for line in 0..<(receipt.count - 1) {
+            #expect(rows[row(old: line, in: rows)].kind == .equal)
             #expect(row(old: line, in: rows) == row(new: line + 5, in: rows))
         }
+        // That equal brace pair is not a changed line, so the move stops before it.
         #expect(
             found == [
                 DiffMove(
-                    oldLineRange: 9..<13, newLineRange: 0..<4,
-                    oldRowRange: row(old: 9, in: rows)..<(row(old: 12, in: rows) + 1),
-                    newRowRange: row(new: 0, in: rows)..<(row(new: 3, in: rows) + 1))
+                    oldLineRange: 9..<12, newLineRange: 0..<3,
+                    oldRowRange: row(old: 9, in: rows)..<(row(old: 11, in: rows) + 1),
+                    newRowRange: row(new: 0, in: rows)..<(row(new: 2, in: rows) + 1))
             ])
     }
 
