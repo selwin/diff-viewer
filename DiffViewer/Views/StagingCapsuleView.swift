@@ -39,7 +39,7 @@ struct StagingCapsuleView: View {
             .animation(reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.2), value: capsule.title)
         }
         .buttonStyle(StagingCapsuleButtonStyle())
-        // A click leaves the keyboard on the list, where the shortcut and arrows still work.
+        // A click leaves the keyboard on the list, so the arrow keys still move the selection.
         .focusable(false)
         .focusEffectDisabled()
         .disabled(!windowState.canStartStagingAction)
@@ -74,8 +74,8 @@ private struct StagingCapsuleButtonStyle: ButtonStyle {
                 .onHover { isHovered = $0 }
         }
 
-        /// Dark mode uses the design's warm greys; light mode follows the system control
-        /// colour, darkened by the same steps on hover and press.
+        /// Dark mode uses the design's warm greys; light mode uses the system control colour,
+        /// darkened slightly on hover and more on press.
         @ViewBuilder
         private func fill(isDark: Bool) -> some View {
             let pressed = isEnabled && configuration.isPressed

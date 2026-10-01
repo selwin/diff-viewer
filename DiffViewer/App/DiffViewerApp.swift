@@ -257,9 +257,9 @@ struct RepositoryCommands: Commands {
 }
 
 /// The Changes menu: the sidebar's writes on the selected rows. Stage Selected, Unstage
-/// Selected and Stage All act on the focused window, so they work while the diff pane has
-/// focus, and agree with the staging capsule. Discard and Move to Trash require list
-/// focus and have no shortcut, since they lose work.
+/// Selected and Stage All act on the focused window, so they also work from the diff pane,
+/// and match the staging capsule. Discard and Move to Trash need list focus and have no
+/// shortcut, since they lose work.
 struct ChangesCommands: Commands {
     let services: AppServices
     @FocusedValue(\.fileListWindowState) private var windowState

@@ -50,10 +50,8 @@ extension WindowState {
         return selection.subtracting([.allChanges])
     }
 
-    /// `selection` narrowed to one sidebar list when it holds rows of both: the list of the
-    /// rows just added (`selection` minus `previous`), or of the first of them in `rows`
-    /// when they span both. Selecting in one list clears the other, so every multi-selection
-    /// is one list's and has one staging action.
+    /// `selection` kept to one sidebar list, so it always has one staging action. When it
+    /// holds rows of both, the list of the first newly added row (not in `previous`) wins.
     static func withinOneList(
         _ selection: Set<DiffSelection>, previous: Set<DiffSelection>, rows: [ChangedFile]
     ) -> Set<DiffSelection> {
@@ -91,8 +89,8 @@ extension WindowState {
     }
 
     /// The file actions that write (stage, unstage, discard, trash) available to the
-    /// selected file rows, for the Changes menu. Empty for All changes,
-    /// which is a view rather than files and is only ever selected alone.
+    /// selected file rows, for the Changes menu. Empty for All changes, which is a view
+    /// rather than files and is only ever selected alone.
     var selectedWriteGroups: [FileAction.WriteGroup] {
         switch detailSelection {
         case .file, .files: FileAction.writeGroups(for: selectedFiles)

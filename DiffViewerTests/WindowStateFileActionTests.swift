@@ -327,7 +327,7 @@ struct WindowStateFileActionTests {
 
     /// A row that came back with another kind means something else than the menu offered,
     /// so it leaves the batch while the rest of it runs. It stays selected, since nothing
-    /// was done to it, and the row that was staged does not.
+    /// was done to it; the row that was staged does not.
     @Test func aRowWhoseKindChangedLeavesTheBatchAtTheFirstPass() async {
         let h = Harness()
         let state = h.makeState()

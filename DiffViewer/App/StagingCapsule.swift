@@ -13,7 +13,7 @@ struct StagingCapsule: Equatable {
     let action: Action
     let files: [ChangedFile]
 
-    /// Title Case, like the menu item it mirrors: "Stage All", "Stage 1 File", "Unstage 3 Files".
+    /// "Stage All", "Stage 1 File", "Unstage 3 Files".
     var title: String {
         switch action {
         case .stageAll: "Stage All"
@@ -43,7 +43,7 @@ struct StagingCapsule: Equatable {
         action == .unstage ? "arrow.up" : "arrow.down"
     }
 
-    /// The shortcut spelled out, since VoiceOver reads the glyphs poorly.
+    /// The title and the shortcut in words, since VoiceOver reads the glyphs poorly.
     var accessibilityLabel: String {
         let keys =
             switch action {
@@ -60,8 +60,8 @@ struct StagingCapsule: Equatable {
 }
 
 extension WindowState {
-    /// The capsule for the current selection, or nil when there is nothing to offer: a
-    /// selection that can neither stage nor unstage, or a commit, whose files are settled.
+    /// The capsule for the current selection, or nil when there is nothing to stage or
+    /// unstage. Always nil for a commit, whose files are settled.
     var stagingCapsule: StagingCapsule? {
         guard scope == .workingTree else { return nil }
         let groups = selectedWriteGroups

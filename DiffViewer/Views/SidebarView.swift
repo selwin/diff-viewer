@@ -145,9 +145,8 @@ struct SidebarView: View {
     }
 }
 
-/// What both sidebar lists do alike: take part in focus and the
-/// Changes menu, clear the selection on Escape or a blank click, and
-/// offer the file context menu.
+/// What both sidebar lists do alike: take part in focus and the Changes menu, clear the
+/// selection on Escape or a blank click, and offer the file context menu.
 struct SidebarListBehavior: ViewModifier {
     let list: SidebarList
     var focusedList: FocusState<SidebarList?>.Binding

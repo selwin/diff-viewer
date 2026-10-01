@@ -3,8 +3,8 @@ import Foundation
 /// Where the selection lands after the sidebar's list is replaced.
 ///
 /// A discard, a trash, or a branch switch keeps the reader on the files they were looking
-/// at; a stage moves them on to the next file in Changes, and an unstage back to All
-/// changes. The rules are pure functions that `WindowState` calls and tests can exercise
+/// at; a stage moves them on to the next file in Changes, and an unstage clears the
+/// selection. The rules are pure functions that `WindowState` calls and tests can exercise
 /// without a repository.
 enum SidebarReselection {
     /// Where the selection lands for `pending`; with nothing pending, what survived.
