@@ -304,11 +304,13 @@ struct WindowStateTests {
     @Test func selectingFilesAfterAllChangesStartsFromEmpty() async {
         let h = Harness()
         let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: filesA)
+        // Both in Changes: a selection holds one list's rows.
+        let unstaged = [filesA[0], changedFile("a2.swift")]
+        let repo = await h.adopt(state, "A", files: unstaged)
         #expect(changesetDocument(state.diffLoader.content) != nil)
 
         await repo.client.hold(worktree: ["a1.swift"])
-        state.selection = [.file(filesA[0].id), .file(filesA[1].id)]
+        state.selection = [.file(unstaged[0].id), .file(unstaged[1].id)]
         #expect(state.diffLoader.content == nil, "the All-changes document is not kept for another selection")
 
         await repo.client.release(worktree: "a1.swift")
@@ -316,7 +318,7 @@ struct WindowStateTests {
         #expect(selected?.sections.map(\.file.path) == ["a1.swift", "a2.swift"])
 
         await repo.client.hold(worktree: ["a1.swift"])
-        await repo.client.set(files: [filesA[0].edited(), filesA[1]])
+        await repo.client.set(files: [unstaged[0].edited(), unstaged[1]])
         h.watcherCallbacks[repo.root]!()
         #expect(await eventually { await repo.client.waitingWorktreePaths.contains("a1.swift") })
         #expect(

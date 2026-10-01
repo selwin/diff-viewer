@@ -43,7 +43,8 @@ struct WindowStateFileActionTests {
         #expect(state.errorMessage == nil)
     }
 
-    @Test func unstagingTheSelectedFileSelectsTheNextStagedFile() async {
+    /// Unstaging backs out of the tray rather than working down it.
+    @Test func unstagingTheSelectedFileClearsTheSelection() async {
         let h = Harness()
         let state = h.makeState()
         let stagedD = changedFile("d.swift", area: .staged)
@@ -53,7 +54,34 @@ struct WindowStateFileActionTests {
 
         await state.perform(.unstage, on: [files[2]])
 
-        #expect(await eventually { await state.selection == [.file(stagedD.id)] })
+        #expect(await eventually { await state.selection.isEmpty })
+    }
+
+    /// The reader lands below the last staged row, wherever the others were.
+    @Test func stagingSeveralRowsSelectsTheRowBelowTheLast() async {
+        let h = Harness()
+        let state = h.makeState()
+        let rows = ["1", "2", "3", "4", "5"].map { changedFile("\($0).swift") }
+        let repo = await h.adopt(state, "A", files: rows)
+        let staged = [changedFile("1.swift", area: .staged), changedFile("3.swift", area: .staged)]
+        await repo.client.set(filesAfterWrite: [rows[1], rows[3], rows[4]] + staged)
+        state.selection = [.file(rows[0].id), .file(rows[2].id)]
+
+        await state.perform(.stage, on: [rows[0], rows[2]])
+
+        #expect(await eventually { await state.selection == [.file(rows[3].id)] })
+    }
+
+    @Test func stagingTheLastRowSelectsTheNewLast() async {
+        let h = Harness()
+        let state = h.makeState()
+        let client = await adopt(h, state, after: [files[0], changedFile("b.swift", area: .staged), files[2]])
+        state.selection = [.file(files[1].id)]
+
+        await state.perform(.stage, on: [files[1]])
+
+        #expect(await eventually { await state.selection == [.file(files[0].id)] })
+        #expect(await client.performed.map(\.paths) == [["b.swift"]])
     }
 
     /// Right-clicking outside the selection acts on the rows under the pointer and leaves
@@ -299,20 +327,19 @@ struct WindowStateFileActionTests {
 
     /// A row that came back with another kind means something else than the menu offered,
     /// so it leaves the batch while the rest of it runs. It stays selected, since nothing
-    /// was done to it, and the rows that were staged do not.
+    /// was done to it, and the row that was staged does not.
     @Test func aRowWhoseKindChangedLeavesTheBatchAtTheFirstPass() async {
         let h = Harness()
         let state = h.makeState()
         let stagedA = changedFile("a.swift", area: .staged)
-        let stagedB = changedFile("b.swift", area: .staged)
-        let client = await adopt(h, state, after: [stagedA, stagedB, files[2]])
-        let staleC = changedFile("c.swift", area: .staged, kind: .deleted)
-        state.selection = [.file(files[0].id), .file(files[1].id), .file(files[2].id)]
+        let client = await adopt(h, state, after: [stagedA, files[1], files[2]])
+        let staleB = changedFile("b.swift", kind: .deleted)
+        state.selection = [.file(files[0].id), .file(files[1].id)]
 
-        await state.perform(.stage, on: [files[0], files[1], staleC])
+        await state.perform(.stage, on: [files[0], staleB])
 
-        #expect(await client.performed.map(\.paths) == [["a.swift", "b.swift"]])
-        #expect(await eventually { await state.selection == [.file(files[2].id)] })
+        #expect(await client.performed.map(\.paths) == [["a.swift"]])
+        #expect(await eventually { await state.selection == [.file(files[1].id)] })
     }
 
     /// The same, one pass later: `files` still agrees with the menu, and the fresh status
@@ -321,16 +348,15 @@ struct WindowStateFileActionTests {
         let h = Harness()
         let state = h.makeState()
         let stagedA = changedFile("a.swift", area: .staged)
-        let stagedB = changedFile("b.swift", area: .staged)
-        let client = await adopt(h, state, after: [stagedA, stagedB, files[2]])
-        // What the write's own validation read will find: c is a deletion now.
-        await client.set(files: [files[0], files[1], changedFile("c.swift", area: .staged, kind: .deleted)])
-        state.selection = [.file(files[0].id), .file(files[1].id), .file(files[2].id)]
+        let client = await adopt(h, state, after: [stagedA, files[1], files[2]])
+        // What the write's own validation read will find: b is a deletion now.
+        await client.set(files: [files[0], changedFile("b.swift", kind: .deleted), files[2]])
+        state.selection = [.file(files[0].id), .file(files[1].id)]
 
-        await state.perform(.stage, on: [files[0], files[1], files[2]])
+        await state.perform(.stage, on: [files[0], files[1]])
 
-        #expect(await client.performed.map(\.paths) == [["a.swift", "b.swift"]])
-        #expect(await eventually { await state.selection == [.file(files[2].id)] })
+        #expect(await client.performed.map(\.paths) == [["a.swift"]])
+        #expect(await eventually { await state.selection == [.file(files[1].id)] })
     }
 
     /// Narrowing the selection while git runs is the reader's own choice and outranks the
@@ -414,6 +440,31 @@ struct WindowStateFileActionTests {
         h.watcherCallbacks[repo.root]?()
         #expect(await eventually { await h.published.last?.cause == .watcher })
         #expect(state.errorMessage?.contains("index.lock exists") == true, "an action's error outlives a refresh")
+    }
+
+    /// A partly done discard can leave one selected file with only its staged row and the
+    /// other with only its unstaged one. Path restoration finds both, but a selection keeps
+    /// to one list, so the first in sidebar order wins and the capsule still has an action.
+    @Test func aPartlyDoneDiscardRestoresRowsFromOneListOnly() async {
+        let h = Harness()
+        let state = h.makeState()
+        let stagedA = changedFile("a.swift", area: .staged)
+        let repo = await h.adopt(state, "A", files: [files[0], files[1], stagedA])
+        let client = repo.client
+        await client.fail(actions: true)
+        await client.hold(.actions)
+        state.selection = [.file(files[0].id), .file(files[1].id)]
+
+        let write = Task { await state.perform(.discard, on: [files[0], files[1]]) }
+        #expect(await eventually { await client.heldCount(.actions) == 1 })
+        // a's worktree edit was discarded, leaving its staged row, then git failed on b.
+        await client.set(files: [files[1], stagedA])
+        await client.release(.actions)
+        await write.value
+
+        #expect(await eventually { await Set(state.files.map(\.id)) == [files[1].id, stagedA.id] })
+        #expect(state.selection == [.file(files[1].id)])
+        #expect(state.stagingCapsule?.action == .stage)
     }
 
     /// The failed write's own refresh can fail too, so the refresh's error is on screen

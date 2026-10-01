@@ -3,8 +3,8 @@ import Foundation
 /// Where the selection lands after the sidebar's list is replaced.
 ///
 /// A discard, a trash, or a branch switch keeps the reader on the files they were looking
-/// at; a stage or unstage moves them on to the next file in the list they are working
-/// down. The rules are pure functions that `WindowState` calls and tests can exercise
+/// at; a stage moves them on to the next file in Changes, and an unstage back to All
+/// changes. The rules are pure functions that `WindowState` calls and tests can exercise
 /// without a repository.
 enum SidebarReselection {
     /// Where the selection lands for `pending`; with nothing pending, what survived.
@@ -15,6 +15,7 @@ enum SidebarReselection {
         case let .paths(selections)?: selection(after: selections, surviving: surviving, in: rows)
         case let .neighbour(sourceArea, sourceIndex)?:
             neighbour(from: sourceArea, at: sourceIndex, surviving: surviving, in: rows)
+        case .clear?: []
         case nil: surviving
         }
     }
@@ -42,11 +43,10 @@ enum SidebarReselection {
         return [.file(row)]
     }
 
-    /// Where the selection lands after a stage or unstage moved selected rows out of
-    /// `area`: whatever survived stays, and only when nothing did is it the row now at
-    /// `index` among `area`'s rows, where the topmost moved row was. Clamped within `area`
-    /// alone, so staging the last unstaged file selects the new last one and never a
-    /// staged row; an area left empty selects nothing.
+    /// Where the selection lands after a stage moved selected rows out of `area`: whatever
+    /// survived stays, and only when nothing did is it the row now at `index` among
+    /// `area`'s rows. Clamped within `area` alone, so staging the last unstaged file selects
+    /// the new last one and never a staged row; an area left empty selects nothing.
     static func neighbour(
         from area: ChangedFile.Area, at index: Int, surviving: Set<DiffSelection>, in rows: [ChangedFile]
     ) -> Set<DiffSelection> {

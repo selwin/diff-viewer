@@ -5,8 +5,8 @@ import SwiftUI
 /// plain click on no row calls `onBlankClick`.
 ///
 /// Clicking a row of SwiftUI's sidebar List does not take first responder back from an
-/// AppKit view such as the diff pane, so the selection would stay grey and the popover and
-/// the Changes menu would stay off. The List also keeps its selection on a click below the
+/// AppKit view such as the diff pane, so the selection would stay grey and the Changes
+/// menu would stay off. The List also keeps its selection on a click below the
 /// last row and passes no gesture through, so the window's mouse-downs are watched instead.
 /// Placed behind the List, this view's frame is the List's, which bounds the clicks it
 /// looks at.

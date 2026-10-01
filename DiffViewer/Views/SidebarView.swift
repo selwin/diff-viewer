@@ -4,34 +4,44 @@ import SwiftUI
 /// to commit. Both lists share one selection; each has its own focus and scroll position.
 struct SidebarView: View {
     @Environment(WindowState.self) private var windowState
-    @Environment(AppServices.self) private var services
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
 
     var body: some View {
-        // The selection popover points at this row, so it alone measures its frame.
-        let firstSelectedID = windowState.selectedFiles.first?.id
         let isTrayExpanded =
             windowState.repositoryRoot.map { windowState.preferences.isStagingTrayExpanded(for: $0) } ?? false
+        let capsule = windowState.stagingCapsule
         // A collapsed tray leaves its list out, which also moves focus off it below.
         let stagedListHeight =
             isTrayExpanded
             ? StagingTrayLayout.listHeight(
                 rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
-                holdsSelection: windowState.selectedFiles.contains { $0.area == .staged })
+                holdsSelection: windowState.selectedFiles.contains { $0.area == .staged }, hasCapsule: capsule != nil)
             : 0
         let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
         VStack(spacing: 0) {
-            changesList(firstSelectedID: firstSelectedID)
+            changesList
             if windowState.showsStagingTray {
                 StagingTrayView(
-                    listHeight: stagedListHeight, isExpanded: isTrayExpanded, firstSelectedID: firstSelectedID,
-                    focusedList: focusedList
+                    listHeight: stagedListHeight, isExpanded: isTrayExpanded,
+                    hasCapsule: capsule != nil, focusedList: focusedList
                 )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .alignmentGuide(.stagingCapsule) { $0[.top] }
+                // Under Reduce Motion nothing slides: the tray fades in place, with its own
+                // animation since the layout ones below are off.
+                .transition(
+                    reduceMotion
+                        ? .opacity.animation(.easeInOut(duration: 0.2)) : .move(edge: .bottom).combined(with: .opacity))
             }
         }
+        // Above both lists, and placed by layout, so it rides the tray as it slides and grows.
+        .overlay(alignment: Alignment(horizontal: .center, vertical: .stagingCapsule)) {
+            stagingCapsule(capsule)
+        }
+        // The capsule's entrance, and the tray making room for it in the same beat.
+        .animation(reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.2), value: capsule != nil)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
         } action: {
@@ -40,32 +50,37 @@ struct SidebarView: View {
         // Keyed on the ids, not the files: staging moves a row between the lists and should
         // slide, while line counts arriving for the same rows should not start a transaction.
         // A merge shows the tray with no staged ids changing.
-        .animation(.default, value: windowState.files.map(\.id))
-        .animation(.default, value: windowState.showsStagingTray)
+        .animation(reduceMotion ? nil : .default, value: windowState.files.map(\.id))
+        .animation(reduceMotion ? nil : .default, value: windowState.showsStagingTray)
         // A focused list that goes away would leave the keyboard nowhere in the sidebar.
         .onChange(of: showsStagedList) { _, shows in
             if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
         }
     }
 
-    /// The guard repeats `.disabled`, which only reflects the state at the last render.
-    private func stageAll() {
-        guard windowState.canStageAll else { return }
-        let files = windowState.stageableUnstagedFiles
-        let runner = FileActionRunner(windowState: windowState, services: services)
-        Task { await runner.run(.stage, on: files) }
+    /// Centred on the tray's top edge, or floating 14pt above the sidebar's foot without one.
+    /// One view whether it reads Stage or Unstage, so only coming and going run the entrance.
+    private func stagingCapsule(_ capsule: StagingCapsule?) -> some View {
+        let showsTray = windowState.showsStagingTray
+        return ZStack {
+            if let capsule {
+                StagingCapsuleView(capsule: capsule)
+                    .transition(
+                        reduceMotion
+                            ? .opacity.animation(.easeInOut(duration: 0.2))
+                            : .opacity.combined(with: .offset(y: 12)).combined(with: .scale(scale: 0.94)))
+            }
+        }
+        .alignmentGuide(.stagingCapsule) { showsTray ? $0[VerticalAlignment.center] : $0[.bottom] + 14 }
     }
 
-    private func changesList(firstSelectedID: ChangedFile.ID?) -> some View {
+    private var changesList: some View {
         @Bindable var windowState = windowState
-        // Both lists bind the one selection. The intent: a plain click in either replaces
-        // it, ⌘-click keeps the other list's rows, ⇧-click extends within the clicked list
-        // and keeps the other's, and the arrow keys stay within one list. If AppKit drops
-        // the rows its table does not hold on ⌘- or ⇧-click, the fallback is one list at a
-        // time: each list's getter filters the selection to its own rows and its setter
-        // replaces the selection with them. ⌘A selects every row of the focused list and
-        // drops the other list's; the model's setter then drops All changes from a
-        // multi-selection, so ⌘A and a ⇧-click range from the top select only files.
+        // Both lists bind the one selection, and the model's setter keeps it to one list:
+        // a click, ⌘-click or ⇧-click in either clears the other's rows, so a selection
+        // always has one staging action. The arrow keys stay within one list. The setter
+        // also drops All changes from a multi-selection, so ⌘A and a ⇧-click range from
+        // the top select only files.
         return List(selection: $windowState.selection) {
             if !windowState.isEmpty, windowState.files.isEmpty {
                 // A scope change empties the list before the read that refills it
@@ -103,69 +118,47 @@ struct SidebarView: View {
             if !windowState.unstagedFiles.isEmpty {
                 Section {
                     ForEach(windowState.unstagedFiles) {
-                        SidebarFileRow(file: $0, isFirstSelected: $0.id == firstSelectedID)
+                        SidebarFileRow(file: $0)
                     }
                 } header: {
-                    HStack {
-                        HStack(spacing: 4) {
-                            Text("Changes")
-                            Text("\(windowState.unstagedFiles.count)")
-                        }
-                        .foregroundStyle(.secondary)
-                        Spacer()
-                        // Nothing to stage but conflicts: no dead button.
-                        if !windowState.stageableUnstagedFiles.isEmpty {
-                            Button("Stage All") { stageAll() }
-                                .buttonStyle(HeaderLinkButtonStyle())
-                                .disabled(!windowState.canStageAll)
-                                .accessibilityHint("Excludes conflicts")
-                                .help("Stage all changes except conflicts (⌥⌘S)")
-                            Text("⌥⌘S").foregroundStyle(.secondary)
-                        }
+                    HStack(spacing: 4) {
+                        Text("Changes")
+                        Text("\(windowState.unstagedFiles.count)")
                     }
+                    .foregroundStyle(.secondary)
                     .font(.system(size: 11, weight: .semibold))
-                    // Section headers run to the sidebar's edge; the rows' counts stop short of it.
-                    .padding(.trailing, 12)
                 }
             }
             // A commit has one list: its own staging is long settled.
             if !windowState.commitFiles.isEmpty {
                 Section("Changed (\(windowState.commitFiles.count))") {
                     ForEach(windowState.commitFiles) {
-                        SidebarFileRow(file: $0, isFirstSelected: $0.id == firstSelectedID)
+                        SidebarFileRow(file: $0)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        // Room for the last row to scroll clear of the staging capsule.
+        .safeAreaPadding(.bottom, 64)
         .modifier(SidebarListBehavior(list: .changes, focusedList: focusedList))
     }
 }
 
-/// What both sidebar lists do alike: report their viewport to the selection popover, take
-/// part in focus and the Changes menu, clear the selection on Escape or a blank click, and
+/// What both sidebar lists do alike: take part in focus and the
+/// Changes menu, clear the selection on Escape or a blank click, and
 /// offer the file context menu.
 struct SidebarListBehavior: ViewModifier {
     let list: SidebarList
     var focusedList: FocusState<SidebarList?>.Binding
     @Environment(AppServices.self) private var services
     @Environment(WindowState.self) private var windowState
-    @Environment(SidebarRowFrames.self) private var rowFrames
 
     func body(content: Content) -> some View {
         content
-            // The proxy's frame already leaves out the toolbar's safe area, so a row
-            // scrolled under the toolbar falls outside it and counts as out of sight.
-            .onGeometryChange(for: CGRect.self) { proxy in
-                proxy.frame(in: .global)
-            } action: { frame in
-                rowFrames.visibleListFrames[list] = frame
-            }
-            .onDisappear { rowFrames.visibleListFrames[list] = nil }
             .focused(focusedList, equals: list)
-            // Only while a list or a row control has focus, so the Changes menu's
-            // shortcuts never fire from the find bar or the commit sheet, where S and U
-            // are typed.
+            // Only while a list or a row control has focus, so Discard and Move to Trash
+            // never act on rows the reader is not looking at.
             .focusedValue(\.fileListWindowState, windowState)
             .onExitCommand { windowState.selection = [] }
             // A row click takes focus back from the diff pane, and a click below the
@@ -232,13 +225,7 @@ struct SidebarFileContextMenu: View {
 
 struct SidebarFileRow: View {
     let file: ChangedFile
-    /// The selection popover points at this row.
-    let isFirstSelected: Bool
     var showsChurn = true
-    @Environment(SidebarRowFrames.self) private var rowFrames
-    /// Kept for a row the List hides and shows again in place: its frame has not changed,
-    /// so the geometry callback stays quiet, but hiding it cleared the store.
-    @State private var measuredFrame: CGRect?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -266,28 +253,8 @@ struct SidebarFileRow: View {
                 ChurnLabel(stats: file.lineStats)
             }
         }
-        // Every other row returns nil, so only the first selected row ever reports.
-        .onGeometryChange(for: CGRect?.self) { proxy in
-            isFirstSelected ? proxy.frame(in: .global) : nil
-        } action: { frame in
-            measuredFrame = frame
-            publishFrame()
-        }
-        .onChange(of: isFirstSelected) { _, isFirst in
-            if !isFirst { rowFrames.clearFirstSelectedRow(ifOwnedBy: file.id) }
-        }
-        .onAppear {
-            rowFrames.rowAppeared(file.id)
-            publishFrame()
-        }
-        .onDisappear { rowFrames.rowDisappeared(file.id) }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
-    }
-
-    private func publishFrame() {
-        guard isFirstSelected, let measuredFrame else { return }
-        rowFrames.firstSelectedRow = SidebarRowFrames.RowFrame(id: file.id, frame: measuredFrame)
     }
 
     /// Truncated at the head so the file name at the end stays visible.
@@ -296,34 +263,11 @@ struct SidebarFileRow: View {
     }
 }
 
-/// A tinted text button for a section header. The hover fill says it is clickable; the
-/// negative padding lets the fill grow past the label without moving it.
-private struct HeaderLinkButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HoverFill(configuration: configuration)
+extension VerticalAlignment {
+    /// Where the staging capsule docks: the tray's top edge, or the sidebar's foot without a tray.
+    private enum StagingCapsuleDock: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[.bottom] }
     }
 
-    private struct HoverFill: View {
-        let configuration: ButtonStyleConfiguration
-        @Environment(\.isEnabled) private var isEnabled
-        @State private var isHovered = false
-
-        var body: some View {
-            configuration.label
-                .foregroundStyle(.tint)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(background, in: .capsule)
-                .contentShape(.rect)
-                .onHover { isHovered = $0 }
-                .padding(.horizontal, -6)
-                .padding(.vertical, -2)
-                .opacity(isEnabled ? 1 : 0.5)
-        }
-
-        private var background: AnyShapeStyle {
-            guard isEnabled, isHovered || configuration.isPressed else { return AnyShapeStyle(.clear) }
-            return AnyShapeStyle(.tint.opacity(configuration.isPressed ? 0.2 : 0.12))
-        }
-    }
+    fileprivate static let stagingCapsule = VerticalAlignment(StagingCapsuleDock.self)
 }

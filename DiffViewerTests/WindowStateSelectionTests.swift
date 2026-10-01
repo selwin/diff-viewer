@@ -31,14 +31,14 @@ struct WindowStateSelectionTests {
         let state = h.makeState()
         await h.adopt(state, "A", files: files)
 
-        // Picked bottom-up, which is what a ⌘-click from the staged section does.
-        state.selection = [.file(files[2].id), .file(files[0].id)]
+        // Picked bottom-up, which is what a ⌘-click upwards does.
+        state.selection = [.file(files[1].id), .file(files[0].id)]
         #expect(state.detailSelection == .files)
-        await awaitChangeset([files[0], files[2]], in: state)
+        await awaitChangeset([files[0], files[1]], in: state)
 
         // The other order is the same set, so it is also the same changeset.
-        state.selection = [.file(files[0].id), .file(files[2].id)]
-        await awaitChangeset([files[0], files[2]], in: state)
+        state.selection = [.file(files[0].id), .file(files[1].id)]
+        await awaitChangeset([files[0], files[1]], in: state)
     }
 
     @Test func oneOfSeveralIsASingleFileDiffAgain() async {
@@ -68,6 +68,49 @@ struct WindowStateSelectionTests {
         #expect(state.selection == [.file(unstaged[0].id), .file(unstaged[1].id)])
         #expect(state.detailSelection == .files)
         #expect(state.selectedWriteGroups.contains(.init(action: .stage, files: unstaged)))
+    }
+
+    // MARK: One list at a time
+
+    @Test func addingAStagedRowToAnUnstagedSelectionKeepsOnlyTheStagedRow() async {
+        let h = Harness()
+        let state = h.makeState()
+        await h.adopt(state, "A", files: files)
+        state.selection = [.file(files[0].id), .file(files[1].id)]
+
+        // What a ⌘-click on the staged row writes.
+        state.selection = [.file(files[0].id), .file(files[1].id), .file(files[2].id)]
+
+        #expect(state.selection == [.file(files[2].id)])
+    }
+
+    @Test func addingAnUnstagedRowToAStagedSelectionKeepsOnlyTheUnstagedRow() async {
+        let h = Harness()
+        let state = h.makeState()
+        await h.adopt(state, "A", files: files)
+        state.selection = [.file(files[2].id)]
+
+        state.selection = [.file(files[2].id), .file(files[1].id)]
+
+        #expect(state.selection == [.file(files[1].id)])
+    }
+
+    @Test func aMultiSelectionWithinOneListIsKeptWhole() async {
+        let h = Harness()
+        let state = h.makeState()
+        await h.adopt(state, "A", files: files)
+        state.selection = [.file(files[0].id)]
+
+        state.selection = [.file(files[0].id), .file(files[1].id)]
+
+        #expect(state.selection == [.file(files[0].id), .file(files[1].id)])
+    }
+
+    /// Rows of both lists added at once: the first in sidebar order decides.
+    @Test func addedRowsSpanningBothListsKeepTheFirstRowsList() {
+        let result = WindowState.withinOneList(
+            [.file(files[2].id), .file(files[1].id)], previous: [.allChanges], rows: files)
+        #expect(result == [.file(files[1].id)])
     }
 
     @Test func aWatcherRefreshRebuildsAllChangesWhenARowDisappears() async {
@@ -132,21 +175,23 @@ struct WindowStateSelectionTests {
     @Test func aRefreshThatPrunesTheSelectionResetsChangeNavigation() async {
         let h = Harness()
         let state = h.makeState()
-        let repo = await h.adopt(state, "A", files: files)
-        state.selection = Set(files.map { DiffSelection.file($0.id) })
-        await awaitChangeset(files, in: state)
+        // All in Changes: a selection holds one list's rows.
+        let unstaged = [changedFile("a.swift"), changedFile("b.swift"), changedFile("d.swift")]
+        let repo = await h.adopt(state, "A", files: unstaged)
+        state.selection = Set(unstaged.map { DiffSelection.file($0.id) })
+        await awaitChangeset(unstaged, in: state)
         #expect(state.changeBlockCount > 0)
 
         state.nextChange()
         #expect(state.currentChangeIndex != nil)
         #expect(state.scrollTarget != nil)
 
-        let remaining = [files[1], files[2]]
+        let remaining = [unstaged[1], unstaged[2]]
         await repo.client.set(files: remaining)
         h.watcherCallbacks[repo.root]?()
 
         #expect(await eventually { await state.files.map(\.id) == remaining.map(\.id) })
-        #expect(state.selection == [.file(files[1].id), .file(files[2].id)])
+        #expect(state.selection == [.file(unstaged[1].id), .file(unstaged[2].id)])
         #expect(state.detailSelection == .files)
         #expect(state.currentChangeIndex == nil)
         #expect(state.scrollTarget == nil)

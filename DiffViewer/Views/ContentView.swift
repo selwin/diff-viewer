@@ -18,7 +18,6 @@ struct ContentView: View {
     /// Which sidebar list has focus, if either; the sidebar moves it between the two.
     @FocusState private var focusedSidebarList: SidebarList?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var rowFrames = SidebarRowFrames()
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -29,10 +28,6 @@ struct ContentView: View {
         } detail: {
             detail
         }
-        .overlay {
-            SelectionActionsPopover(isAllowed: isSelectionPopoverAllowed, isDimmed: !appearsActive)
-        }
-        .environment(rowFrames)
         .navigationTitle(windowState.title)
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
@@ -134,20 +129,6 @@ struct ContentView: View {
                     windowState.isNewBranchSheetPresented = false
                 })
         }
-    }
-
-    /// The selection popover's conditions apart from where the row is. Write groups exist
-    /// only for a `.file` or `.files` selection, so they also rule out All changes. The
-    /// focus test is what hides it for the diff pane and the find bar; AppKit keeps the
-    /// first responder when the window resigns key, so an inactive window keeps it.
-    private var isSelectionPopoverAllowed: Bool {
-        guard focusedSidebarList != nil, columnVisibility != .detailOnly, !windowState.selectedWriteGroups.isEmpty
-        else {
-            return false
-        }
-        return !windowState.isCommitSheetPresented && !windowState.isCommitPickerPresented
-            && !windowState.isBranchPickerPresented && !windowState.isNewBranchSheetPresented && !isPresentingError
-            && !windowState.isConfirmingFileAction
     }
 
     /// Consumes the confirmed submission after the sheet is gone, so the commit's error

@@ -50,6 +50,24 @@ extension WindowState {
         return selection.subtracting([.allChanges])
     }
 
+    /// `selection` narrowed to one sidebar list when it holds rows of both: the list of the
+    /// rows just added (`selection` minus `previous`), or of the first of them in `rows`
+    /// when they span both. Selecting in one list clears the other, so every multi-selection
+    /// is one list's and has one staging action.
+    static func withinOneList(
+        _ selection: Set<DiffSelection>, previous: Set<DiffSelection>, rows: [ChangedFile]
+    ) -> Set<DiffSelection> {
+        guard selection.count > 1 else { return selection }
+        let listOfID = Dictionary(
+            rows.map { ($0.id, SidebarList(area: $0.area)) }, uniquingKeysWith: { first, _ in first })
+        func list(of item: DiffSelection) -> SidebarList? { item.fileID.flatMap { listOfID[$0] } }
+        guard Set(selection.compactMap(list)).count > 1 else { return selection }
+        let added = selection.subtracting(previous)
+        guard let firstAdded = rows.first(where: { added.contains(.file($0.id)) }) else { return selection }
+        let kept = SidebarList(area: firstAdded.area)
+        return selection.filter { list(of: $0).map { $0 == kept } ?? true }
+    }
+
     var detailSelection: DetailSelection {
         guard !selection.contains(.allChanges) else { return .allChanges }
         let ids = selection.compactMap(\.fileID)
@@ -73,7 +91,7 @@ extension WindowState {
     }
 
     /// The file actions that write (stage, unstage, discard, trash) available to the
-    /// selected file rows, for the Changes menu and the popover. Empty for All changes,
+    /// selected file rows, for the Changes menu. Empty for All changes,
     /// which is a view rather than files and is only ever selected alone.
     var selectedWriteGroups: [FileAction.WriteGroup] {
         switch detailSelection {
@@ -102,28 +120,22 @@ extension WindowState {
     /// The selected commit's files. Empty in working-tree scope.
     var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
 
-    /// Whether Stage All can run: the window is idle (no write, confirmation or overlay in
-    /// progress) and Changes holds something to stage.
-    var canStageAll: Bool {
-        guard session != nil, !isClosed, scope == .workingTree, !isSwitchingBranch, !isConfirmingFileAction,
-            !isCommitting, !isCommitSheetPresented, !isCommitPickerPresented, !isBranchPickerPresented,
-            !isNewBranchSheetPresented
-        else { return false }
-        return !stageableUnstagedFiles.isEmpty
+    /// Whether a staging control (the capsule, Stage Selected, Stage All) may start: the
+    /// working tree is shown and no branch switch, confirmation, commit or overlay is in
+    /// progress. Other repository writes may still be queued; this does not wait for them.
+    var canStartStagingAction: Bool {
+        session != nil && !isClosed && scope == .workingTree && !isSwitchingBranch && !isConfirmingFileAction
+            && !isCommitting && !isCommitSheetPresented && !isCommitPickerPresented && !isBranchPickerPresented
+            && !isNewBranchSheetPresented
     }
+
+    /// Whether Stage All can run: a staging action can start and Changes holds something to stage.
+    var canStageAll: Bool { canStartStagingAction && !stageableUnstagedFiles.isEmpty }
 
     /// The files in the order the sidebar draws them, which is not the order of `files`:
     /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.
     /// Any rule that speaks of "the row above" or "the next row" means an index here.
     var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
-
-    /// The rows `list` draws, in sidebar order.
-    func rows(in list: SidebarList) -> [ChangedFile] {
-        switch list {
-        case .changes: unstagedFiles + commitFiles
-        case .staged: stagedFiles
-        }
-    }
 
     /// The sidebar docks the staged files and the commit button below the other rows. A
     /// merge keeps it with nothing staged, because the merge itself is still to commit.

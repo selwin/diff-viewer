@@ -10,7 +10,7 @@ import Foundation
 /// - `DIFFVIEWER_WINDOW_SIZE=<w>x<h>` resizes the window's content, then
 ///   `DIFFVIEWER_SIDEBAR_SCROLL=<points>|bottom` scrolls the file list, and
 ///   `DIFFVIEWER_FOCUS_LIST=1` makes it first responder, all after the selection, so the
-///   selection popover can be screenshotted.
+///   sidebar can be screenshotted at a given size, scroll and focus.
 /// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
 ///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
 ///   commit's sidebar and diffs can be screenshotted.

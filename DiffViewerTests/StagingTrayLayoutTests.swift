@@ -10,25 +10,41 @@ struct StagingTrayLayoutTests {
 
     @Test func threeRowsShowInFull() {
         #expect(
-            StagingTrayLayout.listHeight(rowCount: 3, sidebarHeight: Self.tall, holdsSelection: false) == 3 * Self.row)
+            StagingTrayLayout.listHeight(
+                rowCount: 3, sidebarHeight: Self.tall, holdsSelection: false, hasCapsule: false) == 3 * Self.row)
     }
 
     @Test func twelveRowsAreCappedAtFive() {
         #expect(
-            StagingTrayLayout.listHeight(rowCount: 12, sidebarHeight: Self.tall, holdsSelection: false) == 5 * Self.row)
+            StagingTrayLayout.listHeight(
+                rowCount: 12, sidebarHeight: Self.tall, holdsSelection: false, hasCapsule: false) == 5 * Self.row)
     }
 
     /// Changes keeps its floor; the staged list takes what is left.
     @Test func aShortSidebarClampsTheListAboveTheChangesFloor() {
         let sidebar = StagingTrayLayout.trayChrome + StagingTrayLayout.changesFloor + 100
-        #expect(StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: false) == 100)
+        #expect(
+            StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: false, hasCapsule: false)
+                == 100)
     }
 
     /// Too short for one row, the list goes, unless it holds the selection: then one row
     /// stays and Changes gives way.
     @Test func tooShortForOneRowShowsNoneWithoutTheSelectionAndOneWithIt() {
         let sidebar = StagingTrayLayout.trayChrome + StagingTrayLayout.changesFloor + 20
-        #expect(StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: false) == 0)
-        #expect(StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: true) == Self.row)
+        #expect(
+            StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: false, hasCapsule: false)
+                == 0)
+        #expect(
+            StagingTrayLayout.listHeight(rowCount: 5, sidebarHeight: sidebar, holdsSelection: true, hasCapsule: false)
+                == Self.row)
+    }
+
+    /// The capsule's clearance comes out of the staged list, not the Changes floor.
+    @Test func theCapsuleClearanceShortensTheListInAShortSidebar() {
+        let sidebar = StagingTrayLayout.trayChrome + StagingTrayLayout.changesFloor + 100
+        let height = StagingTrayLayout.listHeight(
+            rowCount: 5, sidebarHeight: sidebar, holdsSelection: false, hasCapsule: true)
+        #expect(height == 100 - StagingTrayLayout.capsuleClearance)
     }
 }

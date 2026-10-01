@@ -84,4 +84,11 @@ extension FileActionRunner {
     init(windowState: WindowState, services: AppServices) {
         self.init(windowState: windowState, preferences: services.preferences, window: services.windows[windowState.id])
     }
+
+    /// Runs the staging capsule's `action` for the capsule and the Changes menu alike.
+    static func runStagingAction(_ action: StagingCapsule.Action, in windowState: WindowState, services: AppServices) {
+        guard let capsule = windowState.stagingCapsule(offering: action) else { return }
+        let runner = FileActionRunner(windowState: windowState, services: services)
+        Task { await runner.run(capsule.fileAction, on: capsule.files) }
+    }
 }

@@ -7,7 +7,8 @@ struct StagingTrayView: View {
     /// button show.
     let listHeight: CGFloat
     let isExpanded: Bool
-    let firstSelectedID: ChangedFile.ID?
+    /// Whether the staging capsule sits on the tray's top edge, reaching 15pt into it.
+    let hasCapsule: Bool
     var focusedList: FocusState<SidebarList?>.Binding
     @Environment(WindowState.self) private var windowState
     @Environment(\.displayScale) private var displayScale
@@ -28,7 +29,7 @@ struct StagingTrayView: View {
             }
             commitButton(summary)
         }
-        .padding(.top, 6)
+        .padding(.top, 6 + (hasCapsule ? StagingTrayLayout.capsuleClearance : 0))
         .padding(.bottom, 8)
         // A bottom sheet across the sidebar's full width, so the rows get all of it.
         .background {
@@ -84,7 +85,7 @@ struct StagingTrayView: View {
         return List(selection: $windowState.selection) {
             ForEach(staged) { file in
                 // No per-file counts: the tray is narrow, and the header carries the total.
-                SidebarFileRow(file: file, isFirstSelected: file.id == firstSelectedID, showsChurn: false)
+                SidebarFileRow(file: file, showsChurn: false)
                     .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
             }
         }
