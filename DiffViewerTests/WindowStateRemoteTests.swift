@@ -1024,14 +1024,12 @@ struct WindowStatePublishTests {
     private let main = localBranch("main", upstream: upstream("origin/main"))
     private let feature = localBranch("feature")
 
-    /// Opens the picker, which reads the remotes Publish chooses from, and waits for its
-    /// fetches to finish.
+    /// Opens the picker and waits for its fetch round to finish.
     private func openPicker(_ state: WindowState, remotes: [String]) async {
+        // Await the opening round directly; remotes may already be loaded from adoption.
         state.isBranchPickerPresented = true
-        #expect(
-            await eventually { @MainActor in
-                state.remotes == remotes && state.fetchStatus == .idle
-            })
+        await state.fetchForBranchPicker()
+        #expect(state.remotes == remotes)
     }
 
     @Test func aPublishSendsTheBranchToTheChosenRemote() async {
