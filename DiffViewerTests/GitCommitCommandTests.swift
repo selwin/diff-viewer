@@ -68,6 +68,34 @@ import Testing
         #expect(files.first?.area == .unstaged)
     }
 
+    // MARK: Staged patch
+
+    /// The hunk lines of `patchWithStat`, past the stat and file headers.
+    private func hunkLines(_ patchWithStat: String) -> [Substring] {
+        let lines = patchWithStat.split(separator: "\n", omittingEmptySubsequences: false)
+        guard let hunk = lines.firstIndex(where: { $0.hasPrefix("@@") }) else { return [] }
+        return Array(lines[(hunk + 1)...])
+    }
+
+    /// The context size is git's own `-U`: more of it surrounds the same change.
+    @Test func stagedPatchCarriesTheRequestedContext() async throws {
+        let numbered = (1...30).map { "line \($0)" }
+        let repo = try await committableRepo(committing: ["a.txt": numbered.joined(separator: "\n") + "\n"])
+        var changed = numbered
+        changed[14] = "changed 15"
+        try repo.write("a.txt", changed.joined(separator: "\n") + "\n")
+        try await repo.git(["add", "a.txt"])
+
+        let narrow = hunkLines(try await repo.client.stagedPatch(contextLines: 3))
+        let wide = hunkLines(try await repo.client.stagedPatch(contextLines: 10))
+
+        #expect(narrow.filter { $0.hasPrefix(" ") }.count == 6)
+        #expect(wide.filter { $0.hasPrefix(" ") }.count == 20)
+        let changes = { (lines: [Substring]) in lines.filter { $0.hasPrefix("-") || $0.hasPrefix("+") } }
+        #expect(changes(narrow) == ["-line 15", "+changed 15"])
+        #expect(changes(wide) == changes(narrow))
+    }
+
     /// Git refuses an empty commit outside a merge, and the refusal has to reach the caller
     /// rather than passing for a commit that was made. Git explains it on stdout, and the
     /// label must not leak the temporary message file's path.

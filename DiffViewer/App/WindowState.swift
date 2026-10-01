@@ -1350,6 +1350,24 @@ extension WindowState {
         commitDraftRevision += 1
     }
 
+    /// The staged patch from the first of `contextLineSteps` whose patch fits the model's
+    /// budget, else the smallest-context one, which the prompt truncates. Nil when the run
+    /// was cancelled or the window closed between reads.
+    private func stagedPatchWithPreferredContext(session: RepoSession) async throws -> String? {
+        let budget = commitMessageGenerator.characterBudget
+        var patchWithStat = ""
+        for contextLines in CommitMessagePrompt.contextLineSteps {
+            patchWithStat = try await session.client.stagedPatch(contextLines: contextLines)
+            guard isLive(session), !Task.isCancelled else { return nil }
+            // Less context cannot add a change, so there is nothing more to ask for.
+            if !CommitMessagePrompt.hasPatch(patchWithStat) { return patchWithStat }
+            if CommitMessagePrompt.patchFitsWithoutTruncation(patchWithStat, characterBudget: budget) {
+                return patchWithStat
+            }
+        }
+        return patchWithStat
+    }
+
     /// Reads the staged patch, then streams the model's answer into the draft.
     private func runCommitMessageGeneration(note: String?, branch: String?, session: RepoSession) async {
         // A cancelled run was already settled by whoever cancelled it, and a newer run may
@@ -1357,8 +1375,7 @@ extension WindowState {
         defer { if !Task.isCancelled { isGeneratingCommitMessage = false } }
         func isCurrent() -> Bool { isLive(session) && !Task.isCancelled }
         do {
-            let patchWithStat = try await session.client.stagedPatch()
-            guard isCurrent() else { return }
+            guard let patchWithStat = try await stagedPatchWithPreferredContext(session: session) else { return }
             // A merge whose tree already equals HEAD stages nothing: the sheet opens for
             // it, but there is no patch to describe.
             guard CommitMessagePrompt.hasPatch(patchWithStat) else {

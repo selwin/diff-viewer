@@ -76,8 +76,8 @@ protocol RepoClient: Sendable {
     /// in progress. Throws when the repository's own state cannot be read.
     func commitDefaults() async throws -> CommitDefaults
     /// The staged changes as `git diff --cached --patch-with-stat` prints them: a stat,
-    /// then the patch.
-    func stagedPatch() async throws -> String
+    /// then the patch, with `contextLines` lines of context around each change.
+    func stagedPatch(contextLines: Int) async throws -> String
     /// Records the index as a commit with `message`: `git commit --cleanup=strip -F <file>`.
     /// Throws git's and the hooks' diagnostics when it refuses (nothing staged, a failing
     /// hook, no identity).

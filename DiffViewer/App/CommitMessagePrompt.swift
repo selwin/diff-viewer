@@ -5,7 +5,8 @@ import Foundation
 enum CommitMessagePrompt {
     /// System instructions: the model's job and the shape of its answer.
     static let instructions = """
-        You write git commit messages. Reply with the commit message only: no preamble, \
+        You write git commit messages. Generated commit messages should be concise, \
+        accurate and easy to understand. Reply with the commit message only: no preamble, \
         no explanation, no markdown headings, no code fences, no surrounding quotes.
 
         The first line is a summary in the imperative mood ("Add", "Fix", "Rename"), \
@@ -34,6 +35,10 @@ enum CommitMessagePrompt {
     private static let subjectCharacterLimit = 80
     /// A note is a hint about intent; past this it starts crowding out the patch.
     private static let draftNoteCharacterLimit = 500
+    /// Lines of context around each change, largest first; the first whose patch fits whole
+    /// is used.
+    static let contextLineSteps = [10, 6, 3]
+    private static let statTruncationMarker = "[stat truncated]"
     /// Branch names that say nothing about the work and invite "Update main".
     private static let uninformativeBranches: Set<String> = ["main", "master", "trunk", "develop"]
 
@@ -92,7 +97,7 @@ enum CommitMessagePrompt {
         if let note {
             sections.append("The author's note about this change, in their own words:\n\(note)")
         }
-        let statText = truncated(stat, budget: characterBudget / 4, marker: "[stat truncated]")
+        let statText = truncated(stat, budget: characterBudget / 4, marker: statTruncationMarker)
         sections.append("The staged changes to describe:\n\n\(statText)")
         sections.append(truncated(patch, budget: characterBudget - statText.count, marker: "[patch truncated]"))
         if note == nil {
@@ -107,31 +112,50 @@ enum CommitMessagePrompt {
         return sections.joined(separator: "\n\n")
     }
 
+    /// Whether the patch fits whole beside the stat as `prompt` renders it. A cut stat does
+    /// not count against it, since less context never shrinks the stat. Works on slices, not
+    /// copies: it runs on the main actor.
+    static func patchFitsWithoutTruncation(_ patchWithStat: String, characterBudget: Int) -> Bool {
+        let patchStart = firstDiffHeader(in: patchWithStat) ?? patchWithStat.endIndex
+        let stat = patchWithStat[..<patchStart]
+        let statLength: Int
+        if let cut = cutIndex(in: stat, budget: characterBudget / 4) {
+            statLength = stat[..<cut].count + statTruncationMarker.count
+        } else {
+            statLength = stat.count
+        }
+        return cutIndex(in: patchWithStat[patchStart...], budget: characterBudget - statLength) == nil
+    }
+
     /// `text` cut to `budget` characters on a line boundary, plus a `marker` line when
     /// anything was dropped. The marker is not counted, so a cut result can exceed the
-    /// budget slightly. Whole lines only: half a hunk line reads as a change that isn't
-    /// there. Stops at the budget, so a huge patch is never scanned in full.
+    /// budget slightly.
     static func truncated(_ text: String, budget: Int, marker: String) -> String {
+        guard let cut = cutIndex(in: text[...], budget: budget) else { return text }
+        return String(text[..<cut]) + marker
+    }
+
+    /// Where the first line that does not fit `budget` characters starts, or nil when all of
+    /// `text` fits. Whole lines only: half a hunk line reads as a change that isn't there.
+    /// One pass that stops at the first character past the budget, so a huge patch is never
+    /// scanned in full.
+    private static func cutIndex(in text: Substring, budget: Int) -> String.Index? {
         var lineStart = text.startIndex
-        var used = 0
-        while lineStart < text.endIndex {
-            // Look one character past the remaining budget: a newline in reach means the
-            // line fits; none means it does not, and the rest of it is never scanned.
-            let limit = text.index(lineStart, offsetBy: budget - used + 1, limitedBy: text.endIndex) ?? text.endIndex
-            guard let lineEnd = text[lineStart..<limit].firstIndex(where: \.isNewline) else {
-                // No newline in reach: the last line, which costs only its characters, or
-                // a line too long to keep.
-                guard limit == text.endIndex, used + text.distance(from: lineStart, to: limit) <= budget else {
-                    return String(text[..<lineStart]) + marker
-                }
-                break
+        var used = 0  // characters of the lines before this one, each with its newline
+        var lineLength = 0
+        for index in text.indices {
+            if text[index].isNewline {
+                guard used + lineLength + 1 <= budget else { return lineStart }
+                used += lineLength + 1
+                lineLength = 0
+                lineStart = text.index(after: index)
+            } else {
+                lineLength += 1
+                // The line cannot fit even as the last one, which costs no newline.
+                guard used + lineLength <= budget else { return lineStart }
             }
-            let cost = text.distance(from: lineStart, to: lineEnd) + 1  // the newline that rejoins it
-            guard used + cost <= budget else { return String(text[..<lineStart]) + marker }
-            used += cost
-            lineStart = text.index(after: lineEnd)
         }
-        return text
+        return nil
     }
 
     /// Strips what a model wraps around a message it was asked for bare: a code fence, a

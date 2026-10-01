@@ -495,7 +495,7 @@ struct WindowStateCommitTests {
         #expect(await eventually { await !state.isGeneratingCommitMessage })
         #expect(state.commitMessage == "Add the picker")
         #expect(state.commitGenerationError == nil)
-        #expect(await client.stagedPatchCalls == 1)
+        #expect(await client.stagedPatchContextLines == [10])
 
         await client.set(commitDefaults: merging(mergeText))
         try await refreshSettled(state)
@@ -545,7 +545,7 @@ struct WindowStateCommitTests {
         state.generateCommitMessage()
         #expect(!state.isGeneratingCommitMessage)
         #expect(state.commitMessage == "")
-        #expect(await client.stagedPatchCalls == 0)
+        #expect(await client.stagedPatchContextLines.isEmpty)
     }
 
     /// The reader typing over what the model is writing takes the draft back: the run
@@ -642,6 +642,119 @@ struct WindowStateCommitTests {
         #expect(await eventually { await state.commitGenerationError == "No staged changes to summarize" })
         #expect(state.commitMessage == mergeText)
         #expect(!state.isGeneratingCommitMessage)
+        #expect(channel.generateCalls == 0)
+    }
+
+    // MARK: How much context the patch carries
+
+    /// A patch whose header carries `name`, so a test can tell which context size it came
+    /// from, padded by `extraLines` added lines to push it past a small budget.
+    private func patch(_ name: String, extraLines: Int = 0) -> String {
+        stagedPatch.replacingOccurrences(of: "a.swift", with: "\(name).swift")
+            + (0..<extraLines).map { "\n+line \($0)" }.joined()
+    }
+
+    /// Budget small enough that a hundred added lines never fit and the bare fixture does.
+    private func generatorWithSmallBudget(_ channel: StubGenerationChannel) -> StubCommitMessageGenerator {
+        var generator = StubCommitMessageGenerator(channel: channel)
+        generator.characterBudget = 1_000
+        return generator
+    }
+
+    @Test func aPatchThatFitsAtTenLinesIsTheOnlyOneAskedFor() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        await client.set(stagedPatch: patch("ten"), forContextLines: 10)
+
+        await generate(state, channel, writing: message)
+        #expect(await client.stagedPatchContextLines == [10])
+        #expect(channel.lastRequest?.patchWithStat == patch("ten"))
+    }
+
+    @Test func aTooBigPatchFallsBackToSixLines() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        await client.set(stagedPatch: patch("ten", extraLines: 100), forContextLines: 10)
+        await client.set(stagedPatch: patch("six"), forContextLines: 6)
+
+        await generate(state, channel, writing: message)
+        #expect(await client.stagedPatchContextLines == [10, 6])
+        #expect(channel.lastRequest?.patchWithStat == patch("six"))
+    }
+
+    /// Three lines is git's default and the last resort: it is used even when it is cut.
+    @Test func theThreeLinePatchIsUsedEvenWhenItDoesNotFit() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        await client.set(stagedPatch: patch("ten", extraLines: 100), forContextLines: 10)
+        await client.set(stagedPatch: patch("six", extraLines: 100), forContextLines: 6)
+        await client.set(stagedPatch: patch("three", extraLines: 100), forContextLines: 3)
+
+        await generate(state, channel, writing: message)
+        #expect(await client.stagedPatchContextLines == [10, 6, 3])
+        #expect(channel.lastRequest?.patchWithStat == patch("three", extraLines: 100))
+    }
+
+    /// Less context cannot add a change, so an empty patch is not asked for again.
+    @Test func anEmptyPatchIsAskedForOnce() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        await client.set(stagedPatch: "")
+
+        state.generateCommitMessage()
+        #expect(await eventually { await state.commitGenerationError == "No staged changes to summarize" })
+        #expect(await client.stagedPatchContextLines == [10])
+        #expect(channel.generateCalls == 0)
+    }
+
+    /// Less context would not shrink the stat, so a cut stat alone never asks for another read.
+    @Test func anOversizedStatDoesNotAskForLessContext() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        let stat = (1...100).map { " file\($0).swift | 2 +-" }.joined(separator: "\n") + "\n\n"
+        let text = stat + patch("ten")
+        await client.set(stagedPatch: text, forContextLines: 10)
+
+        await generate(state, channel, writing: message)
+        #expect(await client.stagedPatchContextLines == [10])
+        #expect(channel.lastRequest?.patchWithStat == text)
+    }
+
+    /// Starts a generation whose first patch is too big to keep and holds that read, so the
+    /// walk would go on to the next step if nothing stopped it.
+    private func generationHeldOnFirstRead(
+        _ state: WindowState, _ client: StubRepoClient
+    ) async throws -> Task<Void, Never> {
+        await client.set(stagedPatch: patch("ten", extraLines: 100), forContextLines: 10)
+        await client.hold(.stagedPatch)
+        state.generateCommitMessage()
+        #expect(await eventually { await client.heldCount(.stagedPatch) == 1 })
+        let task = try #require(state.session?.commitGenerationTask)
+        await client.hold(.stagedPatch, false)
+        return task
+    }
+
+    @Test func cancellingDuringTheFirstReadStopsTheWalk() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        let task = try await generationHeldOnFirstRead(state, client)
+
+        state.cancelCommitMessageGeneration()
+        await client.release(.stagedPatch)
+        await task.value
+        #expect(await client.stagedPatchContextLines == [10])
+        #expect(channel.generateCalls == 0)
+    }
+
+    @Test func closingDuringTheFirstReadStopsTheWalk() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: generatorWithSmallBudget(channel))
+        let task = try await generationHeldOnFirstRead(state, client)
+
+        state.close()
+        await client.release(.stagedPatch)
+        await task.value
+        #expect(await client.stagedPatchContextLines == [10])
         #expect(channel.generateCalls == 0)
     }
 

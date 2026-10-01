@@ -386,6 +386,37 @@ containing, and below the top visible row.
 
 ---
 
+### K. Group changed files by directory (requested 2026-10-01)
+
+**Goal.** Show the sidebar's files in a directory tree, as GitHub's pull request
+Files changed view does, so a change spread over a few folders reads at a glance.
+Kaleidoscope 6.7 has a flat / outline toggle; Sublime Merge users have asked for it.
+
+**Today.**
+- `SidebarView` lists each section's files flat: the file name, with its directory (or a
+  rename's old path) as a caption under it (`SidebarFileRow`).
+- Files are sorted by full path string (`GitClient.swift`, `GitNameStatusParser`), and
+  All changes and next-file selection follow that sidebar order.
+
+**Design (GitHub's).**
+- A folder row per directory with a chevron to collapse it; files indented under it,
+  showing only their name (the caption goes, except a rename's old path).
+- A chain of folders with only one child folder and no files collapses into one row
+  (`docs/rq_internals`).
+- Applies to the Changes, staging tray and commit file lists alike. Folder rows are not
+  selectable as diffs; churn on a folder row is optional.
+
+**To decide.**
+- Tree only, or a flat / tree toggle (persisted).
+- Folders before files at each level, or one alphabetical order. Folders first changes
+  the order All changes and next-file selection walk, so they must follow the tree.
+- What a folder row's context menu and multi-selection do (stage the whole folder?).
+
+**Tests.** Building the tree from a path list: nesting, single-child chain compression,
+ordering, and a rename placed under its new directory.
+
+---
+
 ## Next: high-value features the competitors have and we lack
 
 Roughly in priority order.
@@ -445,8 +476,6 @@ Roughly in priority order.
 - **Sidebar filtering.** Live filename filter field, filter by extension, filter by
   change kind (toggle the badge icons, as Kaleidoscope does). Sublime Merge users have
   asked for this since 2018.
-- **Sidebar folder outline.** Toggle between flat list (default) and a collapsible tree
-  grouped by directory (Kaleidoscope 6.7). Cheap with `OutlineGroup`.
 - **Wrap long lines toggle.** Kaleidoscope and Sublime Merge have it. This breaks the
   fixed-row-height assumption in `PaneLayout`; needs per-row heights with a prefix-sum
   table so both panes stay aligned (the taller side wins per row).

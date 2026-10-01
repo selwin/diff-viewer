@@ -416,10 +416,10 @@ struct GitClient: RepoClient {
 
     /// The staged changes as one text: the stat first, then the patch. `--no-ext-diff`
     /// keeps a configured external differ out of it, so the text is always a git patch.
-    func stagedPatch() async throws -> String {
+    func stagedPatch(contextLines: Int) async throws -> String {
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["diff", "--cached", "--patch-with-stat", "--no-color", "--no-ext-diff"],
+            arguments: ["diff", "--cached", "--patch-with-stat", "-U\(contextLines)", "--no-color", "--no-ext-diff"],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )

@@ -6,6 +6,9 @@ import FoundationModels
 protocol CommitMessageGenerator: Sendable {
     /// Nil when generation can run; otherwise a one-line reason for the button's help.
     var unavailableReason: String? { get }
+    /// An estimated allowance for the stat and patch, in roughly characters rather than an
+    /// exact token limit. A retry may use less.
+    var characterBudget: Int { get }
     /// Each element is the whole message so far, not a delta.
     func generate(_ request: CommitMessagePrompt.Request) -> AsyncThrowingStream<String, any Error>
 }
@@ -28,6 +31,10 @@ struct FoundationModelsCommitMessageGenerator: CommitMessageGenerator {
         }
     }
 
+    var characterBudget: Int {
+        CommitMessagePrompt.characterBudget(contextSize: SystemLanguageModel.default.contextSize)
+    }
+
     /// A response cap keeps the message short; a low temperature keeps it close to what
     /// the patch says.
     private static let options = GenerationOptions(temperature: 0.3, maximumResponseTokens: 400)
@@ -35,8 +42,7 @@ struct FoundationModelsCommitMessageGenerator: CommitMessageGenerator {
     func generate(_ request: CommitMessagePrompt.Request) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                let model = SystemLanguageModel.default
-                let characterBudget = CommitMessagePrompt.characterBudget(contextSize: model.contextSize)
+                let characterBudget = self.characterBudget
                 do {
                     do {
                         try await stream(request, characterBudget: characterBudget, into: continuation)

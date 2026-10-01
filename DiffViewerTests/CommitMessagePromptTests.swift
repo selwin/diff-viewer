@@ -64,6 +64,46 @@ import Testing
         #expect(CommitMessagePrompt.truncated(line, budget: 200, marker: "[cut]") == "[cut]")
     }
 
+    // MARK: Fitting
+
+    @Test func patchFitsWhenNothingWouldBeCut() {
+        #expect(CommitMessagePrompt.patchFitsWithoutTruncation(patchWithStat, characterBudget: 10_000))
+    }
+
+    /// `patchFitsWithoutTruncation` and `prompt` cut at the same places: the patch is one line past the budget.
+    @Test func patchDoesNotFitWhenItWouldBeCut() {
+        let long = patchWithStat + "\n" + (1...200).map { "+line \($0)" }.joined(separator: "\n")
+        #expect(!CommitMessagePrompt.patchFitsWithoutTruncation(long, characterBudget: 400))
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: long, recentSubjects: []), characterBudget: 400)
+        #expect(prompt.contains("[patch truncated]"))
+    }
+
+    /// A stat past its quarter of the budget is cut, but less context would not shrink it,
+    /// so the patch still counts as fitting.
+    @Test func patchFitsWhenOnlyTheStatWouldBeCut() {
+        let stat = (1...200).map { " file\($0).swift | 2 +-" }.joined(separator: "\n") + "\n\n"
+        let text = stat + CommitMessagePrompt.split(patchWithStat).patch
+        #expect(CommitMessagePrompt.patchFitsWithoutTruncation(text, characterBudget: 4_000))
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: text, recentSubjects: []), characterBudget: 4_000)
+        #expect(prompt.contains("[stat truncated]"))
+        #expect(!prompt.contains("[patch truncated]"))
+    }
+
+    /// The patch is measured beside the stat as it will be shown, marker included: a patch
+    /// that fits the whole budget alone is cut once a cut stat takes its quarter.
+    @Test func patchIsMeasuredBesideTheTruncatedStat() {
+        let stat = (1...200).map { " file\($0).swift | 2 +-" }.joined(separator: "\n") + "\n\n"
+        let patch = "diff --git a/a b/a\n" + (1...30).map { "+line \($0)" }.joined(separator: "\n")
+        let budget = patch.count + 10
+        #expect(CommitMessagePrompt.patchFitsWithoutTruncation(patch, characterBudget: budget))
+        #expect(!CommitMessagePrompt.patchFitsWithoutTruncation(stat + patch, characterBudget: budget))
+        let prompt = CommitMessagePrompt.prompt(
+            for: .init(patchWithStat: stat + patch, recentSubjects: []), characterBudget: budget)
+        #expect(prompt.contains("[patch truncated]"))
+    }
+
     // MARK: Building the prompt
 
     @Test func promptKeepsTheStatAndThePatchWhenTheyFit() {

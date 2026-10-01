@@ -23,6 +23,7 @@ enum StubCall {
     case publish
     case fastForward
     case commitDefaults
+    case stagedPatch
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -169,7 +170,9 @@ actor StubRepoClient: RepoClient {
     private var failsCommitDefaults = false
     private(set) var commitDefaultsCalls = 0
     private var stubbedStagedPatch = ""
-    private(set) var stagedPatchCalls = 0
+    private var stubbedStagedPatches: [Int: String] = [:]
+    /// The context size of every staged patch asked for, in order.
+    private(set) var stagedPatchContextLines: [Int] = []
 
     init(files: [ChangedFile]) { self.files = files }
 
@@ -578,11 +581,16 @@ actor StubRepoClient: RepoClient {
         return snapshot
     }
 
+    /// The patch for every context size without one of its own.
     func set(stagedPatch text: String) { stubbedStagedPatch = text }
+    func set(stagedPatch text: String, forContextLines contextLines: Int) {
+        stubbedStagedPatches[contextLines] = text
+    }
 
-    func stagedPatch() async throws -> String {
-        stagedPatchCalls += 1
-        return stubbedStagedPatch
+    func stagedPatch(contextLines: Int) async throws -> String {
+        stagedPatchContextLines.append(contextLines)
+        if isHeld(.stagedPatch) { await park(.stagedPatch) }
+        return stubbedStagedPatches[contextLines] ?? stubbedStagedPatch
     }
 
     /// Held and released with the other writes, so a commit can be queued behind a stage.
@@ -638,6 +646,7 @@ struct StubCommitMessageGenerator: CommitMessageGenerator {
     var failure: StubGenerationError?
     var unavailableReason: String?
     var channel: StubGenerationChannel?
+    var characterBudget = 100_000
 
     func generate(_ request: CommitMessagePrompt.Request) -> AsyncThrowingStream<String, any Error> {
         AsyncThrowingStream { continuation in
