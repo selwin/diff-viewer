@@ -216,7 +216,7 @@ final class WindowState {
     /// The remotes the running round fetches. They stay here until the round's branch read
     /// publishes, so nothing acts on counts from before the round.
     private(set) var fetchingRemotes: Set<String> = []
-    /// The repository's remotes, as the last fetch round listed them.
+    /// The repository's last successfully read remote names.
     private(set) var remotes: [String] = []
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
     /// branches whose upstream the fetch mapping doesn't cover.
@@ -969,7 +969,8 @@ extension WindowState {
     }
 
     /// Re-reads where HEAD points and the local and remote branch lists, on its own serial
-    /// so a commit-list load cannot cancel it or be cancelled.
+    /// so a commit-list load cannot cancel it or be cancelled. When HEAD's branch has no
+    /// upstream, also re-reads the remotes and upstream config that Publish depends on.
     ///
     /// Returns whether this read published anything: a failure that publishes `.failed`
     /// counts, a superseded or closed one does not. The fetch waits on that, so a read of
@@ -1009,11 +1010,23 @@ extension WindowState {
             return true
         }
         guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
+        var remoteNames: [String]?
+        var upstreamRemotesByBranch: [String: String]?
+        // Title-bar Publish needs remote names and upstream config before the picker opens.
+        if case let .named(name) = state, list.contains(where: { $0.name == name && $0.upstream == nil }) {
+            // Keep the last known values if either read fails.
+            remoteNames = try? await session.client.remoteNames()
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
+            upstreamRemotesByBranch = try? await session.client.configuredUpstreamRemotes()
+            guard isCurrentHeadStateRead(session: session, ticket: ticket) else { return false }
+        }
         guard let unpushed = await readUnpushedCommits(session: session, ticket: ticket, head: state, branches: list)
         else { return false }
         headState = state
         branches = list
         remoteBranches = remoteList
+        if let remoteNames { remotes = remoteNames }
+        if let upstreamRemotesByBranch { configuredUpstreamRemotes = upstreamRemotesByBranch }
         if unpushed != unpushedCommitShas { unpushedCommitShas = unpushed }
         branchReadStatus = .loaded
         publishPendingFetchRound(session: session)
