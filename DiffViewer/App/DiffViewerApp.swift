@@ -256,8 +256,8 @@ struct RepositoryCommands: Commands {
     }
 }
 
-/// The Changes menu: the sidebar's writes on the selected rows. Stage Selected, Unstage
-/// Selected and Stage All act on the focused window, so they also work from the diff pane,
+/// The Changes menu: the sidebar's writes on the selected rows. The staging items act on
+/// the focused window, so they also work from the diff pane,
 /// and match the staging capsule. Discard and Move to Trash need list focus and have no
 /// shortcut, since they lose work.
 struct ChangesCommands: Commands {
@@ -270,9 +270,12 @@ struct ChangesCommands: Commands {
         let groups = availableGroups
         let capsule = selectedCapsule
         CommandMenu("Changes") {
-            Button("Stage Selected") { run(.stage) }
+            // The capsule's own shortcut, so it follows the capsule: Stage All with no file
+            // selected, the selection otherwise. Titled to match it.
+            let stage = capsule.flatMap { $0.action == .unstage ? nil : $0 }
+            Button(stage?.title ?? "Stage Selected") { stage.map { run($0.action) } }
                 .keyboardShortcut("s")
-                .disabled(capsule?.action != .stage)
+                .disabled(stage == nil)
             Button("Unstage Selected") { run(.unstage) }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(capsule?.action != .unstage)

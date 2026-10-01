@@ -118,7 +118,7 @@ extension WindowState {
     /// The selected commit's files. Empty in working-tree scope.
     var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
 
-    /// Whether a staging control (the capsule, Stage Selected, Stage All) may start: the
+    /// Whether a staging control (the capsule and the Changes menu's staging items) may start: the
     /// working tree is shown and no branch switch, confirmation, commit or overlay is in
     /// progress. Other repository writes may still be queued; this does not wait for them.
     var canStartStagingAction: Bool {

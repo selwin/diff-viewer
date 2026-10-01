@@ -134,8 +134,8 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 ### B. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. The
-Changes menu (Stage Selected ⌘S, Unstage Selected ⇧⌘S, Discard Changes…, Move to
-Trash…), the floating stage capsule that replaced the selection popover, and moving the
+Changes menu (Stage ⌘S, which stages everything with nothing selected, Unstage
+Selected ⇧⌘S, Discard Changes…, Move to Trash…), the floating stage capsule that replaced the selection popover, and moving the
 selection on to the next file after staging have landed. What remains is below.
 
 **Design.**
