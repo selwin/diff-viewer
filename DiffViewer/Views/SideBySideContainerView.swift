@@ -141,6 +141,9 @@ final class SideBySideContainerView: NSView {
         }
         // After the sync, so the bands are drawn against both clips' new origins.
         connector.redrawIfScrolledVertically()
+        // Scrolling moves rows under a still pointer without a mouse event.
+        leftPane.refreshSeparatorHover()
+        rightPane.refreshSeparatorHover()
     }
 
     /// The gutter is drawn at the visible left edge, and a layer-backed clip view only

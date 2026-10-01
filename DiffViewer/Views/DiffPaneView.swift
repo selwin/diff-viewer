@@ -47,7 +47,11 @@ final class DiffPaneView: NSView {
     /// Folded projection of `model.rows`. Only the row count changes; caches are
     /// keyed by line index and stay valid.
     var displayRows: [DisplayRow] = [] {
-        didSet { layout.rowCount = displayRows.count; needsDisplay = true }
+        didSet {
+            layout.rowCount = displayRows.count
+            needsDisplay = true
+            scheduleHoverRefresh()
+        }
     }
 
     /// The text selected in this pane, in document rows and raw UTF-16 offsets.
@@ -81,6 +85,7 @@ final class DiffPaneView: NSView {
                 headerCache.removeAll()
                 recomputeMetrics()
                 needsDisplay = true
+                scheduleHoverRefresh()
             }
         }
     }
@@ -95,6 +100,11 @@ final class DiffPaneView: NSView {
         switch mode {
         case .replace:
             selection = nil
+            isSelectingText = false
+            documentGeneration += 1
+            copyFeedbackTimer?.invalidate()
+            copyFeedbackTimer = nil
+            copiedScopeRange = nil
             outline = nil  // Outlines are per document.
             findMatches = [:]
             lineCache.removeAll()
@@ -173,6 +183,43 @@ final class DiffPaneView: NSView {
     /// Clip origin at the last horizontal-scroll redraw; owned by `SideBySideView`.
     var lastClipX: CGFloat = 0
 
+    // MARK: - Scope copy state
+
+    /// The separator row (display index) under the pointer; only it shows the copy icon.
+    var hoveredSeparatorRow: Int? {
+        didSet {
+            guard hoveredSeparatorRow != oldValue else { return }
+            for index in [oldValue, hoveredSeparatorRow].compactMap({ $0 }) { setNeedsDisplay(rowRect(at: index)) }
+        }
+    }
+
+    /// Whether the pointer is on the hovered separator's copy icon, which then gets a fill.
+    var isPointerOnScopeCopy = false {
+        didSet {
+            guard isPointerOnScopeCopy != oldValue, let hoveredSeparatorRow else { return }
+            setNeedsDisplay(rowRect(at: hoveredSeparatorRow))
+        }
+    }
+
+    /// The separator whose icon shows a checkmark after a copy. Matched by hidden range,
+    /// so the feedback survives appends and shows only while that separator exists.
+    var copiedScopeRange: Range<Int>? {
+        didSet { if copiedScopeRange != oldValue { setNeedsDisplay(visibleRect) } }
+    }
+
+    /// Clears `copiedScopeRange`; replaced by each copy so the latest one gets the full interval.
+    var copyFeedbackTimer: Timer?
+
+    /// Set when a mouse down starts a text selection, so a drag after any other click
+    /// neither selects nor autoscrolls.
+    var isSelectingText = false
+
+    /// Bumped by each new document, so an accessibility press captured before it copies nothing.
+    private(set) var documentGeneration = 0
+
+    /// Coalesces hover refreshes scheduled within one main-queue turn.
+    var isHoverRefreshPending = false
+
     // MARK: - Metrics
 
     /// Measures everything from scratch: a new document, or the same one at a new font size.
@@ -231,7 +278,7 @@ final class DiffPaneView: NSView {
             case let .documentRow(rowIndex):
                 drawDocumentRow(model.rows[rowIndex], at: rowIndex, in: rowRect, model: model, context: context)
             case let .separator(hidden):
-                drawSeparator(hidden, in: rowRect, context: context)
+                drawSeparator(hidden, at: displayIndex, in: rowRect, context: context)
             case let .fileHeader(section):
                 drawFileHeader(section: section, in: rowRect, model: model, context: context)
             case .spacer:
@@ -405,38 +452,6 @@ final class DiffPaneView: NSView {
         context.restoreGState()
     }
 
-    // MARK: - Accessibility
-
-    /// Buttons for the visible fold controls and move markers, so VoiceOver can use them.
-    override func accessibilityChildren() -> [Any]? {
-        foldControlElements() + moveMarkerElements()
-    }
-
-    private func foldControlElements() -> [NSAccessibilityElement] {
-        guard let onFoldAction else { return [] }
-        var elements: [NSAccessibilityElement] = []
-        for index in layout.rows(intersecting: visibleRect.minY, visibleRect.maxY) where index < displayRows.count {
-            guard case let .separator(hidden) = displayRows[index] else { continue }
-            for (control, rect) in separatorLayout(for: hidden, rowRect: rowRect(at: index)).layout.controls {
-                let action = Self.action(for: control, hidden: hidden)
-                elements.append(
-                    ButtonElement(
-                        parent: self, frame: rect, label: accessibilityLabel(for: control, hidden: hidden),
-                        onPress: { onFoldAction(action) }))
-            }
-        }
-        return elements
-    }
-
-    private func accessibilityLabel(for control: FoldControl, hidden: Range<Int>) -> String {
-        let step = min(foldOptions.expansionStep, hidden.count)
-        switch control {
-        case .expandUp: return "Show \(step) lines before the next change"
-        case .expandDown: return "Show \(step) lines after the previous change"
-        case .expandRun: return "Show all \(hidden.count) unchanged lines"
-        }
-    }
-
     // MARK: - Caches
 
     func cachedLine(for lineIndex: Int, model: PaneModel) -> CachedLine {
@@ -503,25 +518,6 @@ final class DiffPaneView: NSView {
     }
 }
 
-/// An accessibility button for a control the pane draws itself.
-final class ButtonElement: NSAccessibilityElement {
-    private let onPress: () -> Void
-
-    init(parent: NSView, frame: NSRect, label: String, onPress: @escaping () -> Void) {
-        self.onPress = onPress
-        super.init()
-        setAccessibilityRole(.button)
-        setAccessibilityParent(parent)
-        setAccessibilityFrameInParentSpace(frame)
-        setAccessibilityLabel(label)
-    }
-
-    override func accessibilityPerformPress() -> Bool {
-        onPress()
-        return true
-    }
-}
-
 extension DiffPaneView {
     /// Size the document view should have inside a clip view of the given width.
     func desiredSize(clipWidth: CGFloat, clipHeight: CGFloat) -> NSSize {
@@ -532,6 +528,7 @@ extension DiffPaneView {
     func setSyntax(styles: [[StyleRun]]?, outline: ScopeOutline?) {
         self.styles = styles
         self.outline = outline
+        scheduleHoverRefresh()
     }
 
     fileprivate func width(forDigits digits: Int) -> CGFloat {

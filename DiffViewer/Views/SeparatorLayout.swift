@@ -17,6 +17,14 @@ struct SeparatorLayout {
     /// The scope label starts at `labelX` and may take `labelWidth`; zero or less means no room.
     let labelX: CGFloat
     let labelWidth: CGFloat
+    /// The copy icon's square, the same size as a fold control.
+    let copyControlSide: CGFloat
+    /// Space between the drawn label and the copy icon.
+    let copySpacing: CGFloat
+    /// Label room minus the copy icon's, reserved even while the icon is hidden so hover never changes truncation.
+    let availableLabelTextWidth: CGFloat
+    /// Top of the control squares.
+    private let controlY: CGFloat
 
     /// `rowRect` spans the visible width, so the row stays put under horizontal scrolling.
     init(
@@ -24,6 +32,10 @@ struct SeparatorLayout {
         controls: [FoldControl]
     ) {
         let side = rowRect.height - 4
+        copyControlSide = side
+        copySpacing = charWidth
+        let controlY = rowRect.minY + 2
+        self.controlY = controlY
         let controlsWidth = CGFloat(controls.count) * (side + Self.controlSpacing) - Self.controlSpacing
         let controlsSpan = controls.isEmpty ? 0 : controlsWidth + Self.countSpacing
         labelX = rowRect.minX + gutterWidth + textInset
@@ -46,16 +58,18 @@ struct SeparatorLayout {
             self.countWidth = max(right - countX, 0)
             labelWidth = 0
         }
+        availableLabelTextWidth = labelWidth - (copySpacing + copyControlSide)
         self.controls = shown.map { control in
             defer { x += side + Self.controlSpacing }
-            return (control, NSRect(x: x, y: rowRect.minY + 2, width: side, height: side))
+            return (control, NSRect(x: x, y: controlY, width: side, height: side))
         }
     }
 
-    /// All the names, or only the innermost when `Parent › name` does not fit. `width`
-    /// measures the shaped label, because wide glyphs (CJK, emoji) overflow the monospaced cell.
-    static func labelNames(_ names: [String], availableWidth: CGFloat, width: ([String]) -> CGFloat) -> [String] {
-        guard let innermost = names.last else { return [] }
-        return width(names) <= availableWidth ? names : [innermost]
+    /// The copy icon right after a label drawn `drawnLabelWidth` wide. Nil when there is no
+    /// label room, or when the label overflows it, as a lone ellipsis can.
+    func copyRect(drawnLabelWidth: CGFloat) -> NSRect? {
+        guard availableLabelTextWidth > 0, drawnLabelWidth <= availableLabelTextWidth else { return nil }
+        return NSRect(
+            x: labelX + drawnLabelWidth + copySpacing, y: controlY, width: copyControlSide, height: copyControlSide)
     }
 }
