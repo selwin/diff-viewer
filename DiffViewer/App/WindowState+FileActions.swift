@@ -145,20 +145,24 @@ extension WindowState {
     /// What the refresh after writing `files` should select, or nil when none of them is
     /// selected. Read from the list on screen, before the write changes it.
     ///
-    /// Stage and unstage move on to the row that takes the topmost selected row's place in
-    /// the list it left, so repeated staging walks down Changes. Discard and Trash find
-    /// the rows again by path, falling back to the row that slid up.
+    /// Stage moves on to the unstaged row below the last staged one, so repeated staging
+    /// walks down Changes. Unstage clears the selection: the reader is backing out, not
+    /// working down the tray. Discard and Trash find the rows again by path, falling back
+    /// to the row that slid up.
     private func reselectionAfterWrite(_ action: FileAction, on files: [ChangedFile]) -> PendingReselection? {
         let selected = files.filter { selection.contains(.file($0.id)) }
         guard !selected.isEmpty else { return nil }
         let rows = sidebarRows
         switch action {
-        case .stage, .unstage:
-            let sourceArea: ChangedFile.Area = action == .stage ? .unstaged : .staged
-            let sourceRows = rows.filter { $0.area == sourceArea }
+        case .stage:
+            let unstagedRows = rows.filter { $0.area == .unstaged }
             let selectedIDs = Set(selected.map(\.id))
-            guard let sourceIndex = sourceRows.firstIndex(where: { selectedIDs.contains($0.id) }) else { return nil }
-            return .neighbour(sourceArea: sourceArea, sourceIndex: sourceIndex)
+            guard let lastIndex = unstagedRows.lastIndex(where: { selectedIDs.contains($0.id) }) else { return nil }
+            // Subtract the removed rows to find the next row's new index.
+            let targetIndex = lastIndex + 1 - unstagedRows.count(where: { selectedIDs.contains($0.id) })
+            return .neighbour(sourceArea: .unstaged, sourceIndex: targetIndex)
+        case .unstage:
+            return .clear
         case .discard, .trash:
             let rowIndex = Dictionary(rows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
             return .paths(selected.map { PendingSelection(path: $0.path, area: $0.area, row: rowIndex[$0.id]) })

@@ -134,18 +134,18 @@ The branch picker landed on 2026-09-18. Still open from the original request:
 ### B. Keyboard shortcuts for staging and committing (requested 2026-09-23)
 
 **Goal.** Stage the files just read and commit them without touching the mouse. The
-Changes menu (Stage S, Unstage U, Discard Changes…, Move to Trash…, active while the
-file list has focus), the selection popover, and moving the selection on to the next
-file after staging or unstaging have landed; what remains is below.
+Changes menu (Stage Selected ⌘S, Unstage Selected ⇧⌘S, Discard Changes…, Move to
+Trash…), the floating stage capsule that replaced the selection popover, and moving the
+selection on to the next file after staging have landed. What remains is below.
 
 **Design.**
 - Unstage All, ⌥⇧⌘S, in the Changes menu (Stage All ⌥⌘S has landed). Disabled when it
   doesn't apply and runs through `FileActionRunner`, like the other items.
-- With All changes selected, S stages the file whose section is at the top of the
+- With All changes selected, ⌘S stages the file whose section is at the top of the
   scroll.
-- The whole flow is then: read, S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
+- The whole flow is then: read, ⌘S (or ⌥⌘S), ⌘Return, ⌘G, ⌘Return.
 
-**Tests.** Which file S targets in All changes from a scroll position.
+**Tests.** Which file ⌘S targets in All changes from a scroll position.
 
 ---
 
@@ -307,8 +307,8 @@ screenshot.
 **Goal.** A conflicted file whose resolution equals HEAD shouldn't read as a
 contradiction. Found while merging `main` into `consolidate-quick-wins` (PR #41): the
 conflict was resolved by keeping the branch's side, and selecting the file showed
-"No differences / Both versions have identical content." next to a popover offering
-"Stage". Both are correct, but together they look like the app wants you to stage
+"No differences / Both versions have identical content." next to a stage control
+offering "Stage". Both are correct, but together they look like the app wants you to stage
 nothing.
 
 **Cause.**
@@ -317,8 +317,7 @@ nothing.
   file) and `DiffPaneView+Changeset` (All changes) show the generic "No differences".
 - Staging is how git marks a conflict resolved, and Commit Merge stays disabled until it
   is. The context menu says so ("Mark Resolved", `FileAction.title(for:)`), but the
-  selection popover uses `FileAction.compactTitle(for:)`, which says "Stage", and its
-  accessibility label says "Stage 1 file".
+  floating stage capsule says "Stage 1 File".
 
 **Reproduce.**
 ```bash
@@ -331,18 +330,18 @@ git merge other           # CONFLICT in f.txt
 git checkout --ours f.txt # resolve by keeping main's side, still unmerged
 ```
 Then `scripts/snapshot.sh /tmp/out.png /tmp/conflict-demo` (or `make run` and open the
-repo) and select `f.txt`: purple **U**, "No differences", popover "Stage", tray button
+repo) and select `f.txt`: purple **U**, "No differences", tray button
 "Commit Merge" disabled. Resolving with `git checkout --theirs f.txt` instead shows a
 real diff, so only the matches-HEAD case needs new wording.
 
 **Design.**
-- Popover: "Mark Resolved" when every selected file is unmerged ("Mark N Resolved" for a
-  batch, or whatever matches the popover's short style); accessibility label to match.
+- Stage capsule: "Mark Resolved" when every selected file is unmerged ("Mark N Resolved"
+  for a batch); accessibility label to match.
 - Empty diff for an unmerged file: say what it was compared with, e.g. "Resolution
   matches HEAD", in both the single-file view and the All changes section line.
 
-**Tests.** `compactTitle` for an unmerged file, a batch of unmerged files, and a mix
-with a modified file (falls back to "Stage N files"). The empty-state text is UI,
+**Tests.** The capsule's title for an unmerged file, a batch of unmerged files, and a mix
+with a modified file (falls back to "Stage N Files"). The empty-state text is UI,
 checked by screenshot with the repro above.
 
 ---

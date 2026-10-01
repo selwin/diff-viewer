@@ -55,7 +55,8 @@ final class WindowState {
         set {
             selectionRevision += 1
             pendingReselection = nil
-            let normalized = Self.withoutAllChangesBesideFiles(newValue)
+            let normalized = Self.withinOneList(
+                Self.withoutAllChangesBesideFiles(newValue), previous: storedSelection, rows: sidebarRows)
             if applySelection(normalized, from: detailIdentity) { reloadDiff() }
         }
     }
@@ -526,9 +527,10 @@ final class WindowState {
             let published = newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) }
             if published != files { files = published }
             let surviving = SidebarReselection.surviving(storedSelection, before: before, in: newFiles)
-            applySelection(
-                SidebarReselection.selection(for: pending, surviving: surviving, in: sidebarRows),
-                from: keyBefore)
+            // Restored rows can span both lists (a partly failed discard keeps one file's
+            // staged row and another's unstaged one), so the first in sidebar order picks.
+            let restored = SidebarReselection.selection(for: pending, surviving: surviving, in: sidebarRows)
+            applySelection(Self.withinOneList(restored, previous: [], rows: sidebarRows), from: keyBefore)
             // All changes is the default after a first list or an empty one. A selection a
             // refresh emptied because its files vanished from a list that still has rows stays
             // empty, which is what the restoration rule and the detail area both read.

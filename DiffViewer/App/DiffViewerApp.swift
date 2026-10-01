@@ -256,9 +256,10 @@ struct RepositoryCommands: Commands {
     }
 }
 
-/// The Changes menu: the sidebar's writes on the selected rows. Selected-file commands
-/// require list focus so S and U remain available for text entry. Stage All targets the
-/// focused window. The two that lose work have no shortcut.
+/// The Changes menu: the sidebar's writes on the selected rows. Stage Selected, Unstage
+/// Selected and Stage All act on the focused window, so they also work from the diff pane,
+/// and match the staging capsule. Discard and Move to Trash need list focus and have no
+/// shortcut, since they lose work.
 struct ChangesCommands: Commands {
     let services: AppServices
     @FocusedValue(\.fileListWindowState) private var windowState
@@ -267,17 +268,31 @@ struct ChangesCommands: Commands {
     var body: some Commands {
         // Built once per menu update rather than once per item: each build scans the selection.
         let groups = availableGroups
+        let capsule = selectedCapsule
         CommandMenu("Changes") {
-            button("Stage", for: .stage, in: groups)
-                .keyboardShortcut("s", modifiers: [])
-            button("Unstage", for: .unstage, in: groups)
-                .keyboardShortcut("u", modifiers: [])
+            Button("Stage Selected") { run(.stage) }
+                .keyboardShortcut("s")
+                .disabled(capsule?.action != .stage)
+            Button("Unstage Selected") { run(.unstage) }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(capsule?.action != .unstage)
             Button("Stage All") { stageAll() }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(!(sceneWindowState?.canStageAll ?? false))
             button("Discard Changes…", for: .discard, in: groups)
             button("Move to Trash…", for: .trash, in: groups)
         }
+    }
+
+    /// The focused window's capsule while a staging action can start, or nil.
+    private var selectedCapsule: StagingCapsule? {
+        guard let sceneWindowState, sceneWindowState.canStartStagingAction else { return nil }
+        return sceneWindowState.stagingCapsule
+    }
+
+    private func run(_ action: StagingCapsule.Action) {
+        guard let state = sceneWindowState else { return }
+        FileActionRunner.runStagingAction(action, in: state, services: services)
     }
 
     /// The guard repeats `.disabled`, which only reflects the state at the last render.

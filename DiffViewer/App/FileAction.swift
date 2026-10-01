@@ -131,21 +131,6 @@ enum FileAction: CaseIterable, Sendable {
         }
     }
 
-    /// The short label for the compact selection popover, which has no room for the
-    /// menu's per-file wording.
-    func compactTitle(for files: [ChangedFile]) -> String {
-        let count = files.count
-        switch self {
-        case .stage: return count == 1 ? "Stage" : "Stage \(count) files"
-        case .unstage: return count == 1 ? "Unstage" : "Unstage \(count) files"
-        case .discard:
-            guard files.allSatisfy({ $0.kind == .deleted }) else { return "Discard Changes…" }
-            return count == 1 ? "Restore" : "Restore \(count) files"
-        case .trash: return "Move to Trash…"
-        case .revealInFinder, .openInEditor, .copyPath: return title(for: files)
-        }
-    }
-
     /// Whether the action destroys work, which is what the confirmation sheet asks about.
     /// Restoring a deleted file is a discard that loses nothing, so it does not confirm.
     func isDestructive(for file: ChangedFile) -> Bool {

@@ -57,6 +57,9 @@ experience. We want this to be speedy when reviewing large diffs.
   restore a delete, or move an untracked file to the Trash, plus Reveal in Finder, Open in
   Default Editor, and Copy Path. A selection runs as one git command with one
   confirmation; destructive actions ask first.
+- **Keyboard staging**: ⌘S Stage Selected, ⇧⌘S Unstage Selected, ⌥⌘S Stage All. Staging
+  moves the selection on to the next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G,
+  ⌘Return.
 - **Commit picker** (⌘K): see what any commit on the branch changed against its first
   parent. A commit's diffs never change, so nothing reloads until HEAD moves.
 - **Branch picker** (⌘B) in the title bar: switch local branches. A row offers Push or
@@ -95,8 +98,7 @@ Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, Jux
 
 **Requested**
 - In-progress operation in the branch name (`main (rebasing)`).
-- Keyboard staging: Stage ⌘S, Unstage ⇧⌘S, Discard ⌘⌫, with the selection walking to the
-  next file, so the whole flow is read, ⌘S, ⌘Return, ⌘G, ⌘Return.
+- Discard from the keyboard (⌘⌫).
 - A Find button in the toolbar.
 
 **Next**

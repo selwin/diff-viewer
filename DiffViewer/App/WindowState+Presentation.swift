@@ -21,10 +21,11 @@ extension WindowState {
     enum PendingReselection: Equatable, Sendable {
         /// Find these rows again by path: a discard, a trash, or a branch switch.
         case paths([PendingSelection])
-        /// Select the row that took the place of the one at `sourceIndex` among `sourceArea`'s rows.
-        /// Stage and unstage move rows to the other list, and the reader works down the
-        /// list they left rather than following the rows.
+        /// Select the row now at `sourceIndex` among `sourceArea`'s rows. Stage moves rows
+        /// to the tray, and the reader works down Changes rather than following them.
         case neighbour(sourceArea: ChangedFile.Area, sourceIndex: Int)
+        /// Nothing: an unstage backs out of the tray rather than working down it.
+        case clear
     }
 
     static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
