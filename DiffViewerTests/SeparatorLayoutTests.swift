@@ -64,40 +64,73 @@ struct SeparatorLayoutTests {
         #expect(separator.labelWidth <= 0)
     }
 
-    /// Names measured at seven points a character, as a plain monospaced font would.
-    private func monospaced(_ names: [String]) -> CGFloat {
-        CGFloat(names.joined(separator: " › ").count) * 7
+    // MARK: - Copy icon
+
+    private let tolerance: CGFloat = 0.001
+
+    @Test func copyRectSitsOneSpacingAfterTheDrawnLabel() throws {
+        let separator = layout(controls: [.expandRun])
+        let rect = try #require(separator.copyRect(drawnLabelWidth: 50))
+        #expect(abs(rect.minX - (separator.labelX + 50 + separator.copySpacing)) < tolerance)
     }
 
-    @Test func labelShowsBothNamesWhenTheyFit() {
-        // "Cart › total" is 12 characters.
-        #expect(
-            SeparatorLayout.labelNames(["Cart", "total"], availableWidth: 84, width: monospaced) == ["Cart", "total"])
+    @Test func copyRectIsNilWhenTheLabelOverflowsItsRoom() {
+        let separator = layout(controls: [.expandRun])
+        #expect(separator.copyRect(drawnLabelWidth: separator.availableLabelTextWidth + 100) == nil)
     }
 
-    @Test func labelFallsBackToTheInnermostNameWhenBothDoNotFit() {
-        #expect(SeparatorLayout.labelNames(["Cart", "total"], availableWidth: 83, width: monospaced) == ["total"])
+    @Test func copyRectIsNilWithoutLabelRoom() {
+        let narrow = NSRect(x: 0, y: 0, width: 180, height: 20)
+        let separator = SeparatorLayout(
+            rowRect: narrow, gutterWidth: 40, textInset: 8, charWidth: 7, countWidth: 120,
+            controls: [.expandDown, .expandUp])
+        #expect(separator.copyRect(drawnLabelWidth: 0) == nil)
     }
 
-    @Test func labelKeepsTheInnermostNameEvenWhenItAloneDoesNotFit() {
-        // The caller truncates it at the tail.
-        #expect(SeparatorLayout.labelNames(["Cart", "total"], availableWidth: 10, width: monospaced) == ["total"])
+    @MainActor @Test func presentationIsNilWhenEvenTheEllipsisDoesNotFit() throws {
+        // Leaves 3 points of label text room, less than an ellipsis.
+        let separator = layout(countWidth: 404, controls: [])
+        try #require(separator.availableLabelTextWidth > 0)
+        let presentation = DiffPaneView.scopeLabelPresentation(
+            names: ["Job", "_handle_retry_result"], layout: separator, font: DiffTheme.font(size: 12))
+        #expect(presentation == nil)
     }
 
-    @Test func labelDecisionUsesTheShapedWidthOfWideGlyphs() {
+    /// UTF-16 length of the label shown for `names` with `textRoom` points of label text room.
+    @MainActor private func shownLength(_ names: [String], textRoom: CGFloat) throws -> Int {
+        let countWidth = layout(countWidth: 0, controls: []).availableLabelTextWidth - textRoom
+        let presentation = try #require(
+            DiffPaneView.scopeLabelPresentation(
+                names: names, layout: layout(countWidth: countWidth, controls: []), font: DiffTheme.font(size: 12)))
+        return CTLineGetStringRange(presentation.line).length
+    }
+
+    @MainActor @Test func presentationFallsBackToTheInnermostNameWhenTheChainDoesNotFit() throws {
+        let names = ["Job", "_handle_retry_result"]
+        #expect(try shownLength(names, textRoom: 280) == "Job › _handle_retry_result".utf16.count)
+        // The innermost name fits in 170 points; the chain does not.
+        #expect(try shownLength(names, textRoom: 170) == "_handle_retry_result".utf16.count)
+    }
+
+    @MainActor @Test func presentationMeasuresWideGlyphsShaped() throws {
         let font = DiffTheme.font(size: 12)
-        let charWidth = ("0" as NSString).size(withAttributes: [.font: font]).width
         let names = ["カート", "合計金額"]
-        func shaped(_ names: [String]) -> CGFloat {
-            let line = CTLineCreateWithAttributedString(
-                NSAttributedString(string: names.joined(separator: " › "), attributes: [.font: font]))
-            return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-        }
-        let counted = CGFloat(names.joined(separator: " › ").count) * charWidth
-        // Wide enough by character count, too narrow once shaped.
-        #expect(shaped(names) > counted)
-        let between = (counted + shaped(names)) / 2
-        #expect(SeparatorLayout.labelNames(names, availableWidth: between, width: shaped) == ["合計金額"])
-        #expect(SeparatorLayout.labelNames(names, availableWidth: shaped(names), width: shaped) == names)
+        let chain = names.joined(separator: " › ")
+        let shaped = CGFloat(
+            CTLineGetTypographicBounds(
+                CTLineCreateWithAttributedString(NSAttributedString(string: chain, attributes: [.font: font])), nil,
+                nil, nil))
+        let counted = CGFloat(chain.count) * ("0" as NSString).size(withAttributes: [.font: font]).width
+        // Room enough by character count, too little once shaped.
+        #expect(try shownLength(names, textRoom: (counted + shaped) / 2) == "合計金額".utf16.count)
+    }
+
+    @MainActor @Test func presentationPlacesTheIconWithinTheLabelRoom() throws {
+        let separator = layout(controls: [.expandRun])
+        let presentation = try #require(
+            DiffPaneView.scopeLabelPresentation(
+                names: ["Job", "_handle_retry_result"], layout: separator, font: DiffTheme.font(size: 12)))
+        #expect(presentation.innermostName == "_handle_retry_result")
+        #expect(presentation.copyRect.maxX <= separator.labelX + separator.labelWidth + tolerance)
     }
 }

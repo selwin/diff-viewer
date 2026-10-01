@@ -5,8 +5,8 @@ import CoreText
 /// hidden-line count on the right.
 extension DiffPaneView {
     /// The separator's layout and its shaped count, shared by drawing, clicks and
-    /// accessibility. A changeset's separators are inert: no controls, and a leading ellipsis
-    /// so the row still reads as a gap.
+    /// accessibility. Changeset separators omit fold controls and prefix the count with an
+    /// ellipsis.
     func separatorLayout(for hidden: Range<Int>, rowRect: NSRect) -> (layout: SeparatorLayout, count: CTLine) {
         let count = "\(hidden.count) unchanged line\(hidden.count == 1 ? "" : "s")"
         let controls =
@@ -22,7 +22,7 @@ extension DiffPaneView {
         return (layout, line)
     }
 
-    func drawSeparator(_ hidden: Range<Int>, in rowRect: NSRect, context: CGContext) {
+    func drawSeparator(_ hidden: Range<Int>, at index: Int, in rowRect: NSRect, context: CGContext) {
         DiffTheme.foldBackground.setFill()
         context.fill(fullWidthRect(rowRect))
         fillGutter(rowRect, color: nil, context: context)
@@ -39,18 +39,47 @@ extension DiffPaneView {
         {
             drawLine(fitted, at: CGPoint(x: layout.countX, y: baseline), context: context)
         }
-        drawScopeLabel(for: hidden, layout: layout, baseline: baseline, context: context)
+        guard let presentation = scopeLabelPresentation(for: hidden, layout: layout) else { return }
+        drawLine(presentation.line, at: CGPoint(x: layout.labelX, y: baseline), context: context)
+        if hoveredSeparatorRow == index {
+            drawScopeCopyIcon(in: presentation.copyRect, copied: copiedScopeRange == hidden)
+        }
+    }
+
+    // MARK: - Scope label
+
+    /// The scope label as drawn and where its copy icon goes. Drawing, clicks and
+    /// accessibility all lay it out through here, so the icon is hit where it is drawn.
+    struct ScopeLabelPresentation {
+        let line: CTLine
+        /// What the copy icon copies, even when the parent is shown too.
+        let innermostName: String
+        let copyRect: NSRect
+    }
+
+    private static let scopeCopyImage = scopeSymbol("doc.on.doc")
+    private static let scopeCopiedImage = scopeSymbol("checkmark")
+
+    private static func scopeSymbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(
+                NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+                    .applying(NSImage.SymbolConfiguration(paletteColors: [DiffTheme.foldText])))
+    }
+
+    func scopeLabelPresentation(for hidden: Range<Int>, layout: SeparatorLayout) -> ScopeLabelPresentation? {
+        guard let outline, let names = model?.scopeAnchor(after: hidden)?.names(in: outline) else { return nil }
+        return Self.scopeLabelPresentation(names: names, layout: layout, font: font)
     }
 
     /// `Parent › name` for the next change's scope. When it does not fit, only the innermost
-    /// name is shown, cut at the tail so its start stays readable; nothing if not even that fits.
-    private func drawScopeLabel(
-        for hidden: Range<Int>, layout: SeparatorLayout, baseline: CGFloat, context: CGContext
-    ) {
-        guard let outline, let allNames = model?.scopeAnchor(after: hidden)?.names(in: outline), !allNames.isEmpty
-        else { return }
+    /// name is shown, cut at the tail so its start stays readable. Nil, so neither label nor
+    /// icon is drawn, when the icon would not fit after it.
+    static func scopeLabelPresentation(
+        names: [String], layout: SeparatorLayout, font: NSFont
+    ) -> ScopeLabelPresentation? {
+        guard let innermostName = names.last, layout.availableLabelTextWidth > 0 else { return nil }
         let nameAttributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: DiffTheme.foldScope]
-        // The label as drawn, so the fit decision measures exactly what is shaped.
         func label(_ names: [String]) -> NSAttributedString {
             let text = NSMutableAttributedString()
             for (index, name) in names.enumerated() {
@@ -63,15 +92,47 @@ extension DiffPaneView {
             }
             return text
         }
-        let names = SeparatorLayout.labelNames(allNames, availableWidth: layout.labelWidth) {
-            CGFloat(CTLineGetTypographicBounds(CTLineCreateWithAttributedString(label($0)), nil, nil, nil))
-        }
+        func width(_ line: CTLine) -> CGFloat { CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) }
+        // Measure shaped text so wide glyphs fit correctly.
+        let chain = CTLineCreateWithAttributedString(label(names))
+        let shaped =
+            width(chain) <= layout.availableLabelTextWidth
+            ? chain : CTLineCreateWithAttributedString(label([innermostName]))
         guard
             let line = truncated(
-                CTLineCreateWithAttributedString(label(names)), truncation: .end, availableWidth: layout.labelWidth,
-                color: DiffTheme.foldScope)
+                shaped, truncation: .end, availableWidth: layout.availableLabelTextWidth,
+                color: DiffTheme.foldScope, font: font),
+            let copyRect = layout.copyRect(drawnLabelWidth: width(line))
+        else { return nil }
+        return ScopeLabelPresentation(line: line, innermostName: innermostName, copyRect: copyRect)
+    }
+
+    private func drawScopeCopyIcon(in rect: NSRect, copied: Bool) {
+        if isPointerOnScopeCopy {
+            DiffTheme.foldControl.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
+        }
+        guard let image = copied ? Self.scopeCopiedImage : Self.scopeCopyImage else { return }
+        let size = image.size
+        let imageRect = NSRect(
+            x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+        image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+
+    /// Copies the innermost scope name of the separator hiding `hidden`; the pointer and
+    /// VoiceOver both come here. A press from another document, or for a separator no
+    /// longer shown, copies nothing.
+    func copyScopeName(hidden: Range<Int>, generation: Int) {
+        guard generation == documentGeneration, displayRows.contains(.separator(hidden: hidden)), let outline,
+            let name = model?.scopeAnchor(after: hidden)?.names(in: outline).last
         else { return }
-        drawLine(line, at: CGPoint(x: layout.labelX, y: baseline), context: context)
+        PickerCopyButton.copyToPasteboard(name)
+        copyFeedbackTimer?.invalidate()
+        copiedScopeRange = hidden
+        let feedbackDuration: TimeInterval = 1.2
+        copyFeedbackTimer = Timer.scheduledTimer(withTimeInterval: feedbackDuration, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.copiedScopeRange = nil }
+        }
     }
 
     private func drawChevrons(for control: FoldControl, in rect: NSRect, context: CGContext) {

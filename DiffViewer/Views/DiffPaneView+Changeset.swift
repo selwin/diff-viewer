@@ -76,6 +76,13 @@ extension DiffPaneView {
     func truncated(
         _ line: CTLine, truncation: CTLineTruncationType, availableWidth: CGFloat, color: NSColor
     ) -> CTLine? {
+        Self.truncated(line, truncation: truncation, availableWidth: availableWidth, color: color, font: font)
+    }
+
+    /// `font` shapes the ellipsis; static so the separator label can be laid out without a view.
+    static func truncated(
+        _ line: CTLine, truncation: CTLineTruncationType, availableWidth: CGFloat, color: NSColor, font: NSFont
+    ) -> CTLine? {
         guard availableWidth > 0 else { return nil }
         guard CTLineGetTypographicBounds(line, nil, nil, nil) > Double(availableWidth) else { return line }
         // Without a token Core Text cuts the line off silently, and a clipped path or error
