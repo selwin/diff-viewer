@@ -401,7 +401,16 @@ final class WindowCoordinator {
     /// session is the truth until the batch settles) or after termination began.
     private func persist() {
         guard phase == .running, !isTerminating else { return }
-        writeSession(openOrder, active: lastActiveRepositoryRoot)
+        writeSession(rootsInSessionOrder(), active: lastActiveRepositoryRoot)
+    }
+
+    /// Roots in tab-strip order, so a dragged tab order survives a relaunch.
+    private func rootsInSessionOrder() -> [RepositoryRoot] {
+        let ids = openOrder.compactMap { rootIndex[$0] }
+        let tabOrderedRoots = hooks.windowIDsInTabOrder(ids).compactMap { windows[$0]?.repositoryRoot }
+        let placed = Set(tabOrderedRoots)
+        // Append roots absent from the tab snapshot in their existing order.
+        return tabOrderedRoots + openOrder.filter { !placed.contains($0) }
     }
 
     private func writeSession(_ roots: [RepositoryRoot], active: RepositoryRoot?) {
@@ -427,7 +436,7 @@ final class WindowCoordinator {
         isTerminating = true
         switch phase {
         case .running:
-            writeSession(openOrder, active: lastActiveRepositoryRoot)
+            writeSession(rootsInSessionOrder(), active: lastActiveRepositoryRoot)
         case .restoring:
             let kept = restoreList.filter { !restoreFailed.contains($0) && !restoreClosed.contains($0) }
             writeSession(paths: kept.map { savedPaths[$0] ?? $0.path }, activePath: savedActivePath)
@@ -574,6 +583,9 @@ extension WindowCoordinator {
         var createWindow: @MainActor (RepositoryRoot) -> Void
         var focusWindow: @MainActor (WindowID) -> Void
         var presentError: @MainActor (String) -> Void
+        /// Returns each supplied ID once, ordered within tab groups.
+        /// Retains ungrouped or unavailable IDs.
+        var windowIDsInTabOrder: @MainActor ([WindowID]) -> [WindowID] = { $0 }
     }
 
     /// Defaults keys for the persisted session.

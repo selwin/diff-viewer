@@ -64,6 +64,9 @@ final class PresentationLog {
     var created: [RepositoryRoot] = []
     var focused: [WindowID] = []
     var errors: [String] = []
+    /// The tab-strip order the app reports; nil leaves the supplied order.
+    var tabOrder: [WindowID]?
+    var tabOrderRequests = 0
 }
 
 @MainActor
@@ -116,7 +119,13 @@ final class CoordinatorHarness {
             hooks: WindowCoordinator.Hooks(
                 createWindow: { log.created.append($0) },
                 focusWindow: { log.focused.append($0) },
-                presentError: { log.errors.append($0) }
+                presentError: { log.errors.append($0) },
+                windowIDsInTabOrder: { ids in
+                    log.tabOrderRequests += 1
+                    guard let order = log.tabOrder else { return ids }
+                    let eligibleIDs = Set(ids)
+                    return order.filter { eligibleIDs.contains($0) }
+                }
             )
         )
         if launchFinished { coordinator.applicationDidFinishLaunching() }
@@ -1101,6 +1110,69 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.windows.isEmpty)
         #expect(h.savedRoots == [h.root(a), h.root(b)])
         #expect(h.savedActive == h.root(a))
+    }
+
+    @Test func quitWritesRootsInTabOrderWithoutChangingOpenOrder() async {
+        let h = CoordinatorHarness()
+        let (a, b, c) = (h.repo("A"), h.repo("B"), h.repo("C"))
+        let wa = h.makeWindow()
+        let wb = h.makeWindow()
+        let wc = h.makeWindow()
+        await h.openAndSettle(a, into: wa)
+        await h.openAndSettle(b, into: wb)
+        await h.openAndSettle(c, into: wc)
+        h.log.tabOrder = [wc.id, wa.id, wb.id]
+
+        h.coordinator.applicationWillTerminate()
+        #expect(h.savedRoots == [h.root(c), h.root(a), h.root(b)])
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)])
+    }
+
+    @Test func closingATabAfterReorderingKeepsTheTabOrder() async {
+        let h = CoordinatorHarness()
+        let (a, b, c) = (h.repo("A"), h.repo("B"), h.repo("C"))
+        let wa = h.makeWindow()
+        let wb = h.makeWindow()
+        let wc = h.makeWindow()
+        await h.openAndSettle(a, into: wa)
+        await h.openAndSettle(b, into: wb)
+        await h.openAndSettle(c, into: wc)
+        h.log.tabOrder = [wc.id, wa.id, wb.id]
+
+        h.coordinator.remove(wb.id)
+        #expect(h.savedRoots == [h.root(c), h.root(a)])
+    }
+
+    @Test func pendingRootIsAppendedAfterTabOrderedRoots() async {
+        let h = CoordinatorHarness()
+        let (a, b, c) = (h.repo("A"), h.repo("B"), h.repo("C"))
+        let wa = h.makeWindow()
+        let wb = h.makeWindow()
+        await h.openAndSettle(a, into: wa)
+        await h.openAndSettle(b, into: wb)
+        await h.open(c, from: wa)
+        #expect(h.coordinator.openOrder == [h.root(a), h.root(b), h.root(c)])
+        h.log.tabOrder = [wb.id, wa.id]
+
+        h.coordinator.applicationWillTerminate()
+        #expect(h.savedRoots == [h.root(b), h.root(a), h.root(c)])
+    }
+
+    @Test func terminatingWhileRestoringIgnoresTheTabOrder() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        await h.gate.hold(b)
+        let w1 = h.makeWindow()
+        #expect(await eventually { await w1.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.gate.waitingURLs == [b] })
+        let requests = h.log.tabOrderRequests
+
+        h.coordinator.applicationWillTerminate()
+        #expect(h.savedRoots == saved)
+        #expect(h.log.tabOrderRequests == requests)
+        await h.gate.release(b)
     }
 
     // MARK: Discovery against real repositories
