@@ -72,18 +72,28 @@ enum DiffAligner {
             guard !pendingDeletes.isEmpty || !pendingInserts.isEmpty else { return }
             let deleteSet = Set(pendingDeletes)
             let insertSet = Set(pendingInserts)
-            // Monotonic subset of difftastic pairs that fall inside this block.
-            var pairs: [(old: Int, new: Int)] = []
+            // Monotonic difftastic pairs inside this block, except those where both lines have
+            // every non-whitespace byte marked changed: multiline strings such as docstrings
+            // produce positional pairs without matched content.
+            var anchors: [(old: Int, new: Int)] = []
             var lastNew = -1
             for pair in hints.pairs where deleteSet.contains(pair.old) && insertSet.contains(pair.new) {
-                if pair.new > lastNew, pairs.last.map { pair.old > $0.old } ?? true {
-                    pairs.append(pair)
+                if pair.new > lastNew, anchors.last.map { pair.old > $0.old } ?? true {
+                    // A line with no change entry has nothing marked changed.
+                    let oldHasUnchangedContent = {
+                        hints.oldChanges[pair.old].map { hasUnchangedContent(oldLines[pair.old], changes: $0) } ?? true
+                    }
+                    let newHasUnchangedContent = {
+                        hints.newChanges[pair.new].map { hasUnchangedContent(newLines[pair.new], changes: $0) } ?? true
+                    }
+                    guard oldHasUnchangedContent() || newHasUnchangedContent() else { continue }
+                    anchors.append(pair)
                     lastNew = pair.new
                 }
             }
             var di = pendingDeletes.startIndex
             var ii = pendingInserts.startIndex
-            for pair in pairs {
+            for pair in anchors {
                 let dEnd = pendingDeletes.firstIndex(of: pair.old)!
                 let iEnd = pendingInserts.firstIndex(of: pair.new)!
                 zip(pendingDeletes[di..<dEnd], pendingInserts[ii..<iEnd])
@@ -108,6 +118,21 @@ enum DiffAligner {
         }
         flush()
         return rows
+    }
+
+    /// True when some non-whitespace byte of `line` lies outside `changes` (UTF-8 byte ranges):
+    /// difftastic matched something on the line, so its pairing has a basis.
+    static func hasUnchangedContent(_ line: String, changes: [Range<Int>]) -> Bool {
+        let bytes = Array(line.utf8)
+        var changed = [Bool](repeating: false, count: bytes.count)
+        for range in changes {
+            let lower = max(range.lowerBound, 0)
+            let upper = min(range.upperBound, bytes.count)
+            guard lower < upper else { continue }
+            for i in lower..<upper { changed[i] = true }
+        }
+        // Non-ASCII bytes map to non-ASCII scalars, which are never whitespace here.
+        return bytes.indices.contains { !changed[$0] && !asciiWhitespace.contains(Unicode.Scalar(bytes[$0])) }
     }
 
     /// ASCII whitespace, the only characters `git diff -w` ignores under LC_ALL=C:

@@ -116,13 +116,74 @@ struct DiffAlignerTests {
         // Old lines 0,1 removed; new lines 0,1,2 added; difft says old 1 pairs with new 2.
         var hints = DifftHints()
         hints.pairs = [(1, 2)]
-        hints.oldChanges = [1: [0..<1]]
-        hints.newChanges = [2: [0..<1]]
+        hints.oldChanges = [1: [8..<9]]
+        hints.newChanges = [2: [8..<9]]
         let rows = DiffAligner.align(
-            oldLines: ["p", "q"], newLines: ["r", "s", "t"], hideWhitespace: true, hints: hints)
+            oldLines: ["let p = 1", "let q = 2"], newLines: ["let r = 1", "let s = 2", "let q = 3"],
+            hideWhitespace: true, hints: hints)
         #expect(rows.map(\.kind) == [.modified, .added, .modified])
         #expect(rows[2].old?.lineNumber == 2 && rows[2].new?.lineNumber == 3)
-        #expect(rows[2].new?.highlights == [0..<1])
+        #expect(rows[2].new?.highlights == [8..<9])
+    }
+
+    @Test func positionalDifftPairIsNotAnAnchor() {
+        // difftastic pairs a docstring's lines by position (rq queue.py), marking every
+        // non-space byte changed; anchoring them left a filler mid-block.
+        let oldLines = [
+            "            pipeline (Optional[Pipeline]): If provided, the caller owns the pipeline: this",
+            "                method only appends its rate-limit ops and returns; the caller must execute",
+            "                the pipeline and then call",
+            "                RateLimitRegistry.acquire_and_enqueue(job.rate_limit_concurrency) itself.",
+            "                If None, this method executes and runs acquire_and_enqueue.",
+        ]
+        let newLines = [
+            "            pipeline (Optional[Pipeline]): If given, the job's writes and promotion are queued on it",
+            "                and run when it executes. Don't save the job on it afterwards; that would overwrite",
+            "                the promoted status.",
+        ]
+        var hints = DifftHints()
+        hints.pairs = [(1, 1), (3, 2)]
+        let allContent = { (line: String) in [line.prefix { $0 == " " }.utf8.count..<line.utf8.count] }
+        hints.oldChanges = [1: allContent(oldLines[1]), 3: allContent(oldLines[3])]
+        hints.newChanges = [1: allContent(newLines[1]), 2: allContent(newLines[2])]
+        let rows = DiffAligner.align(oldLines: oldLines, newLines: newLines, hideWhitespace: false, hints: hints)
+        #expect(rows.map(\.kind) == [.modified, .modified, .modified, .deleted, .deleted])
+        #expect(rows[2].old?.lineNumber == 3 && rows[2].new?.lineNumber == 3)
+    }
+
+    @Test func difftPairSharingASyntaxTokenStillAnchors() {
+        // The strings share nothing, but difftastic matched the old line's trailing comma.
+        let a = String(repeating: "a", count: 30)
+        let b = String(repeating: "b", count: 30)
+        let c = String(repeating: "c", count: 30)
+        var hints = DifftHints()
+        hints.pairs = [(0, 1)]
+        hints.oldChanges = [0: [4..<36]]
+        hints.newChanges = [0: [4..<37], 1: [4..<36]]
+        let rows = DiffAligner.align(
+            oldLines: ["    \"\(a)\","], newLines: ["    \"\(b)\",", "    \"\(c)\","],
+            hideWhitespace: false, hints: hints)
+        #expect(rows.map(\.kind) == [.added, .modified])
+        #expect(rows[1].old?.lineNumber == 1 && rows[1].new?.lineNumber == 2)
+    }
+
+    @Test func difftPairWithUnchangedContentOnOneSideAnchors() {
+        // Either line having unchanged content is enough; only the old line does here.
+        var hints = DifftHints()
+        hints.pairs = [(0, 1)]
+        hints.oldChanges = [0: [0..<5]]
+        hints.newChanges = [0: [0..<5], 1: [0..<5]]
+        let rows = DiffAligner.align(
+            oldLines: ["alpha, x"], newLines: ["gamma", "delta"], hideWhitespace: false, hints: hints)
+        #expect(rows.map(\.kind) == [.added, .modified])
+        #expect(rows[1].old?.lineNumber == 1 && rows[1].new?.lineNumber == 2)
+    }
+
+    @Test func unchangedContentIgnoresWhitespace() {
+        #expect(!DiffAligner.hasUnchangedContent("  ab  ", changes: [2..<4]))
+        #expect(DiffAligner.hasUnchangedContent("  ab,", changes: [2..<4]))
+        // Bytes of a non-ASCII character are content, not whitespace.
+        #expect(DiffAligner.hasUnchangedContent("ab é", changes: [0..<2]))
     }
 
     @Test func byteRangesBecomeUTF16Ranges() {
