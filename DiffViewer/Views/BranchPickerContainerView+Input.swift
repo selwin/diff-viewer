@@ -51,7 +51,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
             ?? PickerTableRowView(frame: .zero)
     }
 
-    /// An empty selection changes nothing: the highlight is always a row.
+    /// Accepts table selections; restores a highlighted branch after external deselection.
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
         if tableView.selectedRow >= 0 {

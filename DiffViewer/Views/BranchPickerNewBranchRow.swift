@@ -1,8 +1,8 @@
 import AppKit
 
 /// The branch picker's New Branch… row, under the list: a plus, the title, and ⌘N on the
-/// right as a menu shows a shortcut. Outside the table, so the list's highlight and arrow
-/// keys never reach it; the pointer gives it its own hover fill.
+/// right as a menu shows a shortcut. Outside the table, so the list's own selection never
+/// reaches it; it is styled from the picker's highlight state.
 final class BranchPickerNewBranchRow: NSView {
     static let height: CGFloat = 32
 
@@ -10,6 +10,17 @@ final class BranchPickerNewBranchRow: NSView {
     private static let iconGap: CGFloat = 9
 
     var onActivate: () -> Void = {}
+    /// The pointer entered, moved over, or pressed the row: it asks to take the highlight.
+    var onHighlightRequested: () -> Void = {}
+
+    /// Set by the container from the picker state; drawn as a highlighted branch row is.
+    var isHighlighted = false {
+        didSet {
+            guard isHighlighted != oldValue else { return }
+            applyColors()
+            needsDisplay = true
+        }
+    }
 
     /// Off while a switch runs: the branch would start from a HEAD about to move.
     var isEnabled = true {
@@ -24,12 +35,15 @@ final class BranchPickerNewBranchRow: NSView {
     private let title = PickerLabel.make(font: .systemFont(ofSize: 13), color: .labelColor)
     private let shortcut = PickerLabel.make(
         font: .systemFont(ofSize: 13), color: .tertiaryLabelColor, alignment: .right)
-    private var isHovered = false {
-        didSet { if isHovered != oldValue { needsDisplay = true } }
-    }
     private var isPressed = false {
-        didSet { if isPressed != oldValue { needsDisplay = true } }
+        didSet {
+            guard isPressed != oldValue else { return }
+            applyColors()
+            needsDisplay = true
+        }
     }
+    /// Accent fill with white content, as the highlighted branch row has.
+    private var isOnAccent: Bool { isEnabled && (isHighlighted || isPressed) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -43,7 +57,7 @@ final class BranchPickerNewBranchRow: NSView {
         // `.activeAlways`: a scripted launch never makes the popover key.
         addTrackingArea(
             NSTrackingArea(
-                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self,
+                rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self,
                 userInfo: nil))
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
@@ -65,11 +79,14 @@ final class BranchPickerNewBranchRow: NSView {
         bounds.contains(convert(point, from: superview)) ? self : nil
     }
 
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
+    override func mouseEntered(with event: NSEvent) { onHighlightRequested() }
+    /// A real pointer move takes the highlight back from the keyboard, as in the list.
+    override func mouseMoved(with event: NSEvent) { onHighlightRequested() }
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        // Before the press shows, so two rows are never on accent at once.
+        onHighlightRequested()
         isPressed = true
     }
 
@@ -95,14 +112,20 @@ final class BranchPickerNewBranchRow: NSView {
     override func isAccessibilityEnabled() -> Bool { isEnabled }
 
     private func applyColors() {
+        if isOnAccent {
+            icon.contentTintColor = .white
+            title.textColor = .white
+            shortcut.textColor = NSColor.white.withAlphaComponent(0.8)
+            return
+        }
         icon.contentTintColor = isEnabled ? .secondaryLabelColor : .tertiaryLabelColor
         title.textColor = isEnabled ? .labelColor : .tertiaryLabelColor
         shortcut.textColor = isEnabled ? .tertiaryLabelColor : .quaternaryLabelColor
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isEnabled, isHovered || isPressed else { return }
-        (isPressed ? NSColor.secondarySystemFill : NSColor.quaternarySystemFill).setFill()
+        guard isOnAccent else { return }
+        NSColor.controlAccentColor.setFill()
         let rect = bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0)
         NSBezierPath(
             roundedRect: rect, xRadius: PickerMetrics.cornerRadius, yRadius: PickerMetrics.cornerRadius

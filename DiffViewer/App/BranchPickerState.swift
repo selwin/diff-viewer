@@ -162,75 +162,6 @@ enum BranchPickerEmptyState: Equatable {
     case noMatches
 }
 
-/// The header's face: where HEAD is, how far it is from its upstream, and the current
-/// branch's Pull and Push.
-struct BranchPickerHeaderText: Equatable {
-    let title: String
-    /// What the detail line says about HEAD's upstream; the fetch news follows.
-    var detailParts: [String] = []
-    /// True while a fetch round runs, whether or not its remotes are known yet.
-    var showsSpinner = false
-    /// Fetch is offered unless a round is running or a pull or push is about to move the
-    /// same counts, which a round would not start beside.
-    var canFetch = true
-    /// HEAD's branch, which `buttons` act on; nil when HEAD is on no listed branch.
-    var branch: String?
-    var buttons = RowSyncButtons.hidden
-    /// What the title's copy button copies: HEAD's branch name, listed or not yet. Nil
-    /// when HEAD is detached or unread.
-    var copyableName: String?
-
-    /// A header button Tab can reach.
-    enum Control: Equatable {
-        case copy
-        case fetch
-        case pull
-        case push
-    }
-
-    /// The header buttons Tab visits after the search field, in order: only those shown
-    /// and enabled, so focus never lands on a button that can't act.
-    var focusOrder: [Control] {
-        var order: [Control] = copyableName == nil ? [] : [.copy]
-        if canFetch { order.append(.fetch) }
-        guard branch != nil else { return order }
-        if buttons.pull == .enabled { order.append(.pull) }
-        if buttons.push == .enabled { order.append(.push) }
-        return order
-    }
-
-    /// The detail line, with the fetch news last.
-    func detail(fetch: BranchPickerFetchText?) -> String {
-        (detailParts + [fetch?.text ?? ""]).filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    static func make(snapshot: BranchPickerSnapshot) -> BranchPickerHeaderText {
-        let spinner = snapshot.fetchStatus != .idle
-        let canFetch = !spinner && snapshot.activeSync == nil
-        guard let headState = snapshot.headState else {
-            let title = snapshot.readStatus == .failed ? "Couldn't read branches" : "Loading…"
-            return BranchPickerHeaderText(title: title, showsSpinner: spinner, canFetch: canFetch)
-        }
-        switch headState {
-        case .detached:
-            return BranchPickerHeaderText(title: headState.displayTitle, showsSpinner: spinner, canFetch: canFetch)
-        case let .named(name):
-            // A branch missing from the list says nothing: the counts are what the list holds.
-            guard let branch = snapshot.branches.first(where: { $0.name == name }) else {
-                return BranchPickerHeaderText(
-                    title: name, showsSpinner: spinner, canFetch: canFetch, copyableName: name)
-            }
-            // Worded as the row is, so a hidden upstream reads the same in both places.
-            let status = BranchRowStatus.local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
-            return BranchPickerHeaderText(
-                title: name, detailParts: [status == .none ? "up to date" : status.text], showsSpinner: spinner,
-                canFetch: canFetch, branch: name,
-                buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
-                copyableName: name)
-        }
-    }
-}
-
 /// What the branch table must do after a snapshot or a query.
 enum BranchTableChange: Equatable {
     case none
@@ -252,16 +183,17 @@ struct BranchPickerChange: Equatable {
     var buttonsChanged: Bool
 }
 
-/// The branch picker's model: the items, the highlight, and what the table must do after
-/// each snapshot. Picker behavior independent of AppKit.
+/// Branch picker items, highlight, navigation, and snapshot changes, independent of AppKit.
 ///
-/// Items are table rows: section headers and branches. Only branches can be highlighted
-/// or activated, so movement steps over headers.
+/// Items are table rows: section headers and branches. Movement steps over headers.
 struct BranchPickerState {
     private(set) var snapshot: BranchPickerSnapshot
     private(set) var items: [BranchPickerItem]
-    /// The row the keyboard or pointer is on, or nil when there are no rows.
+    /// The highlighted branch ID; nil when New Branch is highlighted or no branch is
+    /// highlighted.
     private(set) var highlightedRow: BranchRowID?
+    /// The New Branch… row below the list holds the highlight; never set with `highlightedRow`.
+    private(set) var isNewBranchHighlighted = false
     /// The search text, normalized, so a spaces-only field reads as no query at all.
     private(set) var query = ""
     private let grouping: CommitDayGrouping
@@ -512,6 +444,8 @@ struct BranchPickerState {
     /// Keeps the highlight by identity. When its row goes, a neighbour takes it, so the
     /// highlight stays where the reader was looking rather than jumping to the top.
     private mutating func keepHighlight(oldItems: [BranchPickerItem]) {
+        // A refresh (fetch, FSEvents) must not pull the highlight off New Branch….
+        guard !isNewBranchHighlighted else { return }
         let listed = Set(rows.map(\.id))
         if let highlightedRow, listed.contains(highlightedRow) { return }
         highlightedRow =
@@ -549,6 +483,7 @@ struct BranchPickerState {
         let normalized = FuzzyMatch.normalized(text)
         guard normalized != query else { return .none }
         query = normalized
+        isNewBranchHighlighted = false
         items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: query)
         highlightedRow = Self.initialHighlight(items: items, query: query)
         return .reloadAll
@@ -558,6 +493,13 @@ struct BranchPickerState {
 
     /// Moves `offset` branch rows from the highlight, clamped at both ends.
     private mutating func move(by offset: Int) {
+        // New Branch… is below the last branch: only up leaves it.
+        if isNewBranchHighlighted {
+            guard offset < 0, let last = rows.last else { return }
+            isNewBranchHighlighted = false
+            highlightedRow = last.id
+            return
+        }
         let positions = items.indices.filter { items[$0].row != nil }
         guard !positions.isEmpty else { return }
         let current = highlightedTableRow.flatMap { positions.firstIndex(of: $0) } ?? 0
@@ -574,17 +516,32 @@ struct BranchPickerState {
     }
 
     mutating func moveToFirst() {
-        highlightedRow = rows.first?.id
+        guard let first = rows.first else { return }
+        isNewBranchHighlighted = false
+        highlightedRow = first.id
     }
 
     mutating func moveToLast() {
-        highlightedRow = rows.last?.id
+        guard let last = rows.last else { return }
+        isNewBranchHighlighted = false
+        highlightedRow = last.id
+    }
+
+    /// Moves the highlight to New Branch… and takes it off the branches. Returns whether
+    /// it moved.
+    @discardableResult
+    mutating func highlightNewBranch() -> Bool {
+        guard !isNewBranchHighlighted else { return false }
+        isNewBranchHighlighted = true
+        highlightedRow = nil
+        return true
     }
 
     /// Headers and out-of-range rows are ignored. Returns whether the highlight moved.
     @discardableResult
     mutating func highlight(tableRow index: Int) -> Bool {
         guard let row = row(forTableRow: index), row.id != highlightedRow else { return false }
+        isNewBranchHighlighted = false
         highlightedRow = row.id
         return true
     }
