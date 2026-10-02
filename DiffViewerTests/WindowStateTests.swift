@@ -17,7 +17,7 @@ struct WindowStateTests {
         let repo = await h.adopt(state, "A", files: filesA)
         #expect(state.repositoryRoot == repo.root)
         #expect(!state.isEmpty)
-        #expect(state.files == filesA)
+        #expect(state.files == inPublishedFileOrder(filesA))
         #expect(h.watchers[repo.root] != nil)
         #expect(h.published.last?.cause == .initial)
         #expect(await eventually { await !state.isLoading })
@@ -30,7 +30,7 @@ struct WindowStateTests {
         let b = h.repo("B", files: filesB)
         #expect(!state.adopt(root: b.root, client: b.client))
         #expect(state.repositoryRoot == a.root)
-        #expect(state.files == filesA)
+        #expect(state.files == inPublishedFileOrder(filesA))
         #expect(h.watchers[b.root] == nil)
         #expect(await b.client.statusCalls == 0)
     }
@@ -68,7 +68,7 @@ struct WindowStateTests {
         await state.refresh()
         #expect(h.published.count == 2)
         #expect(h.published.last?.cause == .manual)
-        #expect(h.published.last?.files == filesA)
+        #expect(h.published.last?.files == inPublishedFileOrder(filesA))
 
         let updated = [changedFile("changed.swift")]
         await repo.client.set(files: updated)
@@ -85,7 +85,7 @@ struct WindowStateTests {
         await repo.client.fail(true)
         await state.refresh()
         #expect(state.errorMessage != nil)
-        #expect(state.files == filesA)
+        #expect(state.files == inPublishedFileOrder(filesA))
         #expect(h.published.count == 1)
     }
 
@@ -127,7 +127,7 @@ struct WindowStateTests {
         state.close()
         await client.releaseFirst(.status)
         await stale.value
-        #expect(state.files == filesA)
+        #expect(state.files == inPublishedFileOrder(filesA))
         #expect(h.published.count == 1, "a closed window must not publish")
         #expect(state.errorMessage == nil)
     }
@@ -339,7 +339,7 @@ struct WindowStateTests {
             await client.set(numstat: [counted("a1.swift", 12, 4)], area: .unstaged)
             await client.set(numstat: [NumstatEntry(path: "a2.swift", stats: .binary(nil))], area: .staged)
         }
-        #expect(h.published.last?.files.map(\.id) == filesA.map(\.id))
+        #expect(h.published.last?.files.map(\.id) == inPublishedFileOrder(filesA).map(\.id))
 
         // Stats follow the publish; the list itself does not change again.
         #expect(
@@ -347,7 +347,7 @@ struct WindowStateTests {
                 await state.files.first { $0.path == "a1.swift" }?.lineStats == .counted(added: 12, deleted: 4)
             })
         #expect(state.files.first { $0.path == "a2.swift" }?.lineStats == .binary(nil))
-        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(state.files.map(\.id) == inPublishedFileOrder(filesA).map(\.id))
         #expect(h.published.count == 1)
     }
 
@@ -365,7 +365,7 @@ struct WindowStateTests {
             await eventually { await repo.client.contentReads == reads + 2 },
             "the diff reloads without waiting for status")
         #expect(await eventually { await state.errorMessage != nil })
-        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(state.files.map(\.id) == inPublishedFileOrder(filesA).map(\.id))
     }
 
     @Test func closingDuringUntrackedReadsAttachesNothing() async {
@@ -558,7 +558,7 @@ struct WindowStateTests {
         let state = h.makeState()
         let repo = await h.adopt(state, "A", files: filesA) { await $0.fail(numstat: true) }
         await h.settleStats(state)
-        #expect(state.files.map(\.id) == filesA.map(\.id))
+        #expect(state.files.map(\.id) == inPublishedFileOrder(filesA).map(\.id))
         #expect(state.files.allSatisfy { $0.lineStats == nil })
         #expect(state.errorMessage == nil, "stats are decoration and must not fail the refresh")
         let numstats = await repo.client.numstatCalls
@@ -765,7 +765,7 @@ struct WindowStateTests {
         try? await Task.sleep(for: .milliseconds(50))
         #expect(h.published.count == before, "the outlived read publishes nothing")
         #expect(await repo.client.statusCalls == status + 1, "the queued follow-up is dropped")
-        #expect(state.files.first?.fingerprint == filesA[0].fingerprint)
+        #expect(state.files.first { $0.path == "a1.swift" }?.fingerprint == filesA[0].fingerprint)
         #expect(!state.diffStale, "nothing was published, so no reload is owed")
         #expect(await repo.client.contentReads == reads)
 
@@ -776,7 +776,10 @@ struct WindowStateTests {
 
         state.isVisible = true
         #expect(await eventually { await repo.client.statusCalls == status + 2 })
-        #expect(await eventually { await state.files.first?.fingerprint == self.filesA[0].edited().fingerprint })
+        #expect(
+            await eventually {
+                await state.files.first { $0.path == "a1.swift" }?.fingerprint == self.filesA[0].edited().fingerprint
+            })
         #expect(await eventually { await repo.client.contentReads == reads + 2 })
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         #expect(!state.diffStale)
@@ -852,7 +855,7 @@ struct WindowStateTests {
             })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await Reads(repo.client) == before.plus(Reads(status: 1, numstat: 2)))
-        #expect(state.files.map(\.id) == updated.map(\.id))
+        #expect(state.files.map(\.id) == inPublishedFileOrder(updated).map(\.id))
         #expect(h.published.count == published + 1)
         #expect(state.diffStale, "the new row's diff waits for the window to show")
     }
@@ -928,7 +931,7 @@ struct WindowStateTests {
         #expect(await eventually { await repo.client.statusCalls == status + 2 })
         #expect(await eventually { await h.published.count == before + 1 }, "the stale response published nothing")
         #expect(state.selection == [.file(filesA[0].id)], "the selection survives the file's brief absence")
-        #expect(state.files == filesA)
+        #expect(state.files == inPublishedFileOrder(filesA))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(h.published.count == before + 1)
         #expect(await repo.client.statusCalls == status + 2, "the rescan runs once, as the follow-up")
@@ -960,7 +963,7 @@ struct WindowStateTests {
         #expect(await eventually { await !state.diffLoader.hasActiveWork })
         #expect(!state.diffStale)
         #expect(hasContent(state, for: filesA[0]))
-        #expect(state.files == filesA, "the old list is retained")
+        #expect(state.files == inPublishedFileOrder(filesA), "the old list is retained")
     }
 
     /// Status cannot say what HEAD holds for a conflict, so the fingerprint is unknown and

@@ -43,6 +43,22 @@ struct WindowStateFileActionTests {
         #expect(state.errorMessage == nil)
     }
 
+    /// The next row is the next one the sidebar draws: a plain path sort would put
+    /// `a/b/c.swift` between `a/b.swift` and `a/z.swift`, but directory order keeps `a` together.
+    @Test func stagingSelectsTheNextRowInDirectoryOrder() async {
+        let h = Harness()
+        let state = h.makeState()
+        let rows = [changedFile("a/b.swift"), changedFile("a/b/c.swift"), changedFile("a/z.swift")]
+        let repo = await h.adopt(state, "A", files: rows)
+        await repo.client.set(filesAfterWrite: [changedFile("a/b.swift", area: .staged), rows[1], rows[2]])
+        #expect(state.sidebarRows.map(\.id) == ["unstaged:a/b.swift", "unstaged:a/z.swift", "unstaged:a/b/c.swift"])
+        state.selection = [.file(rows[0].id)]
+
+        await state.perform(.stage, on: [rows[0]])
+
+        #expect(await eventually { await state.selection == [.file("unstaged:a/z.swift")] })
+    }
+
     /// Unstaging backs out of the tray rather than working down it.
     @Test func unstagingTheSelectedFileClearsTheSelection() async {
         let h = Harness()
@@ -112,7 +128,7 @@ struct WindowStateFileActionTests {
 
         #expect(await repo.client.performed.isEmpty)
         #expect(state.errorMessage != nil)
-        #expect(state.files == files)
+        #expect(state.files == inPublishedFileOrder(files))
     }
 
     @Test func trashingAnUntrackedFileCallsTheClientAndRepublishes() async {

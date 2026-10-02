@@ -524,7 +524,9 @@ final class WindowState {
                 configurationRevision: session.configurationRevision,
                 inputs: newByID.mapValues { FileInputIdentity($0.fingerprint) })
             let lastOutcome = session.lineStats.lastOutcome
-            let published = newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) }
+            // Keep directory groups contiguous for display and reselection.
+            let published = DirectoryGrouping.sortedForDisplay(
+                newFiles.map { $0.with(lineStats: lastOutcome?.validStats(for: $0, in: desired)) })
             if published != files { files = published }
             let surviving = SidebarReselection.surviving(storedSelection, before: before, in: newFiles)
             // Restored rows can span both lists (a partly failed discard keeps one file's

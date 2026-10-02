@@ -130,9 +130,9 @@ extension WindowState {
     /// Whether Stage All can run: a staging action can start and Changes holds something to stage.
     var canStageAll: Bool { canStartStagingAction && !stageableUnstagedFiles.isEmpty }
 
-    /// The files in the order the sidebar draws them, which is not the order of `files`:
-    /// `GitClient.status()` sorts staged first, and the sidebar lists unstaged first.
-    /// Any rule that speaks of "the row above" or "the next row" means an index here.
+    /// Sidebar order: unstaged, staged, then commit files. `files` puts staged first;
+    /// directory order is kept within each area. Any rule that speaks of "the row above"
+    /// or "the next row" means an index here.
     var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
 
     /// The sidebar docks the staged files and the commit button below the other rows. A

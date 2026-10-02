@@ -213,7 +213,7 @@ final class CoordinatorHarness {
         await open(url, from: window)
         #expect(window.repositoryRoot == root(url))
         let expected = await client(url).currentFiles
-        #expect(await eventually { await window.files == expected })
+        #expect(await eventually { await window.files == inPublishedFileOrder(expected) })
         // The first list lands on All changes, which reads every file. Waiting for that
         // load keeps later read counts about what the test itself asked for, and clearing
         // the selection leaves a warm list to prefetch: All changes warms nothing, and
@@ -317,7 +317,7 @@ struct WindowCoordinatorTests {
             "registration order never reorders the session")
         #expect(h.coordinator.pendingCreates.isEmpty)
         #expect(h.sceneRoots[wa.id] == h.root(a))
-        #expect(await eventually { await wa.files == self.filesA })
+        #expect(await eventually { await wa.files == inPublishedFileOrder(self.filesA) })
     }
 
     @Test func appOriginWithNoWindowsCreates() async {

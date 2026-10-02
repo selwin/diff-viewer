@@ -38,7 +38,7 @@ struct WindowStateScopeTests {
         #expect(state.commitFiles.count == 1)
 
         state.selectWorkingTree()
-        #expect(await eventually { await state.files.map(\.path) == workingFiles.map(\.path) })
+        #expect(await eventually { await state.files.map(\.path) == inPublishedFileOrder(workingFiles).map(\.path) })
         #expect(state.selectedCommit == nil)
     }
 
@@ -147,7 +147,7 @@ struct WindowStateScopeTests {
 
         state.select(commit: commit)
         #expect(await eventually { await state.scope == .workingTree })
-        #expect(await eventually { await state.files.map(\.path) == workingFiles.map(\.path) })
+        #expect(await eventually { await state.files.map(\.path) == inPublishedFileOrder(workingFiles).map(\.path) })
         #expect(state.selectedCommit == nil)
         // The refresh that restored the working tree clears `errorMessage`; the
         // explanation has to outlive it.

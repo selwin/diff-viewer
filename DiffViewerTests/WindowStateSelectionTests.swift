@@ -125,7 +125,7 @@ struct WindowStateSelectionTests {
         await repo.client.set(files: remaining)
         h.watcherCallbacks[repo.root]?()
 
-        #expect(await eventually { await state.files.map(\.id) == remaining.map(\.id) })
+        #expect(await eventually { await state.files.map(\.id) == inPublishedFileOrder(remaining).map(\.id) })
         #expect(state.selection == [.allChanges])
         await awaitChangeset(remaining, in: state)
         #expect(await repo.client.contentReads > reads, "a shorter list is a different changeset")
