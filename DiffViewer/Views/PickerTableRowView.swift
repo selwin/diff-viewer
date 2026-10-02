@@ -1,8 +1,8 @@
 import AppKit
 
-/// A table row whose highlight is the accent fill, inset from the popover's sides with
-/// rounded corners, which the cell answers with white text. It never paints a background
-/// of its own, and has no hover fill: hover moves the highlight.
+/// A table row whose highlight is a neutral fill, inset from the popover's sides with
+/// rounded corners. It never paints a background of its own, and has no hover fill:
+/// hover moves the highlight.
 final class PickerTableRowView: NSTableRowView {
     static let identifier = NSUserInterfaceItemIdentifier("PickerTableRowView")
 
@@ -21,7 +21,7 @@ final class PickerTableRowView: NSTableRowView {
 
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
-        NSColor.controlAccentColor.setFill()
+        PickerMetrics.highlightColor.setFill()
         NSBezierPath(
             roundedRect: bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0), xRadius: PickerMetrics.cornerRadius,
             yRadius: PickerMetrics.cornerRadius

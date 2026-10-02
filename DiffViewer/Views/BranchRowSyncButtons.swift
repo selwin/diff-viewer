@@ -9,7 +9,7 @@ import AppKit
 /// on another row.
 final class BranchRowSyncButtons: NSView {
     enum Style {
-        /// Row pills: neutral, or translucent white on the highlighted row's accent fill.
+        /// Row pills: neutral.
         case rowPills
         /// The header's buttons: Push filled with the accent colour.
         case header
@@ -32,11 +32,6 @@ final class BranchRowSyncButtons: NSView {
     private(set) var shouldShow = false
     /// False while the pills fade out: they take no clicks, as if already hidden.
     var acceptsClicks = true
-
-    /// Row pills only: the row is highlighted, so the pills sit on the accent fill.
-    var isOnAccent = false {
-        didSet { if isOnAccent != oldValue { applyLooks() } }
-    }
 
     init(style: Style) {
         self.style = style
@@ -75,7 +70,7 @@ final class BranchRowSyncButtons: NSView {
     private func applyLooks() {
         switch style {
         case .rowPills:
-            for button in buttons { button.look = isOnAccent ? .onAccent : .plain }
+            for button in buttons { button.look = .plain }
         case .header:
             pullButton.look = .plain
             pushButton.look = .primary
@@ -201,13 +196,10 @@ final class BranchRowSyncButtons: NSView {
     }
 }
 
-/// A capsule button drawn by hand, so it reads on the accent fill of a highlighted row as
-/// well as on the popover's background.
+/// A capsule button drawn by hand, so its fill and text follow its look.
 final class SyncPillButton: NSButton {
     enum Look {
         case plain
-        /// Translucent white, for a highlighted row.
-        case onAccent
         /// Filled with the accent colour.
         case primary
     }
@@ -226,7 +218,7 @@ final class SyncPillButton: NSButton {
         didSet {
             guard look != oldValue else { return }
             // The spinner draws in its appearance's colours; a dark one is light enough for
-            // the accent fill.
+            // the primary look's accent fill.
             spinner.appearance = look == .plain ? nil : NSAppearance(named: .darkAqua)
             needsDisplay = true
         }
@@ -319,7 +311,7 @@ final class SyncPillButton: NSButton {
         string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
     }
 
-    /// A disabled button fades on every look, so it still reads as disabled on the accent.
+    /// A disabled button fades on every look, so it still reads as disabled.
     private var colors: (fill: NSColor, text: NSColor) {
         let pressed = isHighlighted
         switch look {
@@ -328,11 +320,6 @@ final class SyncPillButton: NSButton {
                 return (NSColor.labelColor.withAlphaComponent(0.05), .tertiaryLabelColor)
             }
             return (NSColor.labelColor.withAlphaComponent(pressed ? 0.16 : 0.09), .labelColor)
-        case .onAccent:
-            guard isEnabled || isRunning else {
-                return (NSColor.white.withAlphaComponent(0.1), NSColor.white.withAlphaComponent(0.45))
-            }
-            return (NSColor.white.withAlphaComponent(pressed ? 0.36 : 0.22), .white)
         case .primary:
             guard isEnabled || isRunning else {
                 return (NSColor.labelColor.withAlphaComponent(0.05), .tertiaryLabelColor)

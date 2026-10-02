@@ -23,7 +23,7 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch, NSWindow?) -> Void = { _, _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
-    /// The New Branch… row and ⌘N.
+    /// The New Branch… row, Return on it, and ⌘N.
     var onNewBranch: () -> Void = {}
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
@@ -62,6 +62,10 @@ final class BranchPickerContainerView: NSView {
         }
         configureHeader()
         newBranchRow.onActivate = { [weak self] in self?.onNewBranch() }
+        newBranchRow.onHighlightRequested = { [weak self] in
+            guard let self, newBranchRow.isEnabled else { return }
+            if self.state.highlightNewBranch() { syncSelection() }
+        }
         fetchTimeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderFetchTime() }
         }
@@ -216,6 +220,7 @@ final class BranchPickerContainerView: NSView {
         } else {
             tableView.deselectAll(nil)
         }
+        newBranchRow.isHighlighted = state.isNewBranchHighlighted
         updateRows([previous, state.highlightedTableRow].compactMap { $0 }, animated: true)
     }
 
@@ -293,7 +298,6 @@ final class BranchPickerContainerView: NSView {
             return
         }
         let view = cell.syncButtons ?? BranchRowSyncButtons(style: .rowPills)
-        view.isOnAccent = isHighlighted
         // The popover stays up during an operation, and the search field keeps the
         // keyboard: a click must not leave focus on a button that is about to disable.
         view.configure(
@@ -375,6 +379,8 @@ final class BranchPickerContainerView: NSView {
     /// Shows the highlighted row: once the rows and layout are first ready, then only
     /// after keyboard navigation.
     private func revealHighlight() {
+        // The list stays where it is: New Branch… sits below it.
+        guard !state.isNewBranchHighlighted else { return }
         if let row = state.highlightedTableRow {
             tableView.scrollRowToVisible(row)
         } else {
@@ -505,6 +511,11 @@ extension BranchPickerContainerView: PickerTableHandler {
     }
 
     func activate() {
+        if state.isNewBranchHighlighted {
+            // A disabled row does nothing, and never falls through to a branch.
+            if newBranchRow.isEnabled { onNewBranch() }
+            return
+        }
         guard let row = state.highlightedTableRow else { return }
         activate(tableRow: row)
     }

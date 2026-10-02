@@ -287,6 +287,101 @@ struct BranchPickerStateTests {
         #expect(picker.highlightedRow == .local(name: "old"), "rows arriving start on the current branch")
     }
 
+    // MARK: New Branch highlight
+
+    @Test func highlightingNewBranchTakesTheHighlightOffTheRows() {
+        var picker = state(snapshot(branches: [main, feature]))
+        let moved = picker.highlightNewBranch()
+        #expect(moved)
+        #expect(picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == nil)
+        #expect(picker.highlightedTableRow == nil)
+        let movedAgain = picker.highlightNewBranch()
+        #expect(!movedAgain, "already highlighted")
+    }
+
+    @Test func aBranchTakesTheHighlightBackFromNewBranch() {
+        var picker = state(snapshot(branches: [main, old]))
+        picker.highlightNewBranch()
+        let movedToHeader = picker.highlight(tableRow: 0)
+        let movedPastEnd = picker.highlight(tableRow: 9)
+        #expect(!movedToHeader && !movedPastEnd)
+        #expect(picker.isNewBranchHighlighted, "headers and bad indexes change nothing")
+
+        let movedToOld = picker.highlight(tableRow: 3)
+        #expect(movedToOld)
+        #expect(!picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == .local(name: "old"))
+    }
+
+    @Test func upLeavesNewBranchForTheLastBranchAndDownStays() {
+        var picker = state(snapshot(branches: [main, old]))
+        picker.highlightNewBranch()
+        picker.moveDown()
+        #expect(picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == nil)
+        picker.moveUp()
+        #expect(!picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == .local(name: "old"))
+
+        var empty = state(snapshot(branches: []))
+        empty.highlightNewBranch()
+        empty.moveUp()
+        #expect(empty.isNewBranchHighlighted)
+    }
+
+    @Test func jumpingToAnEndLeavesNewBranchOnlyWhenABranchTakesIt() {
+        let jumps: [(jump: (inout BranchPickerState) -> Void, lands: BranchRowID)] = [
+            ({ $0.moveToFirst() }, .local(name: "main")), ({ $0.moveToLast() }, .local(name: "old")),
+        ]
+        for (jump, lands) in jumps {
+            var picker = state(snapshot(branches: [main, old]))
+            picker.highlightNewBranch()
+            jump(&picker)
+            #expect(!picker.isNewBranchHighlighted)
+            #expect(picker.highlightedRow == lands)
+
+            var empty = state(snapshot(branches: []))
+            empty.highlightNewBranch()
+            jump(&empty)
+            #expect(empty.isNewBranchHighlighted)
+        }
+    }
+
+    /// A fetch or FSEvents refresh must not pull the highlight back onto the list.
+    @Test func snapshotsKeepTheNewBranchHighlight() {
+        var picker = state(snapshot(branches: [main, feature]))
+        picker.highlightNewBranch()
+        let newer = localBranch("newer", tipCommittedAt: Self.at(19, 14))
+        for branches in [[main, feature, newer], [main], [newer, feature, main]] {
+            _ = picker.apply(snapshot(branches: branches))
+            #expect(picker.isNewBranchHighlighted)
+            #expect(picker.highlightedRow == nil)
+        }
+    }
+
+    @Test func aChangedQueryTakesTheHighlightBackToTheBestMatch() {
+        var picker = state(snapshot(branches: [main, feature]))
+        picker.highlightNewBranch()
+        #expect(picker.setQuery("fe") == .reloadAll)
+        #expect(!picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == .local(name: "feature"))
+
+        var none = state(snapshot(branches: [main, feature]))
+        none.highlightNewBranch()
+        #expect(none.setQuery("zzz") == .reloadAll)
+        #expect(!none.isNewBranchHighlighted)
+        #expect(none.highlightedRow == nil)
+    }
+
+    @Test func anUnchangedQueryKeepsTheNewBranchHighlight() {
+        var picker = state(snapshot(branches: [main, feature]))
+        _ = picker.setQuery("fe")
+        picker.highlightNewBranch()
+        #expect(picker.setQuery(" fe ") == BranchTableChange.none)
+        #expect(picker.isNewBranchHighlighted)
+    }
+
     // MARK: Snapshots
 
     @Test func anUnchangedSnapshotChangesNothing() {
