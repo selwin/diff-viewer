@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(WindowState.self) private var windowState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sidebarRowSize) private var sidebarRowSize
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
@@ -13,11 +14,16 @@ struct SidebarView: View {
         let isTrayExpanded =
             windowState.repositoryRoot.map { windowState.preferences.isStagingTrayExpanded(for: $0) } ?? false
         let capsule = windowState.stagingCapsule
+        let stagedFiles = windowState.stagedFiles
+        let stagedGroups = DirectoryGrouping.groups(fromSortedFiles: stagedFiles)
+        let rowHeight = stagedRowHeight
+        let stagedContentHeight = StagingTrayLayout.contentHeight(
+            groupCount: stagedGroups.count, rowCount: stagedFiles.count, rowHeight: rowHeight)
         // A collapsed tray leaves its list out, which also moves focus off it below.
         let stagedListHeight =
             isTrayExpanded
             ? StagingTrayLayout.listHeight(
-                rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
+                contentHeight: stagedContentHeight, rowHeight: rowHeight, sidebarHeight: sidebarHeight,
                 holdsSelection: windowState.selectedFiles.contains { $0.area == .staged }, hasCapsule: capsule != nil)
             : 0
         let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
@@ -25,8 +31,10 @@ struct SidebarView: View {
             changesList
             if windowState.showsStagingTray {
                 StagingTrayView(
-                    listHeight: stagedListHeight, isExpanded: isTrayExpanded,
-                    hasCapsule: capsule != nil, focusedList: focusedList
+                    groups: stagedGroups, listHeight: stagedListHeight,
+                    overflows: StagingTrayLayout.overflows(
+                        contentHeight: stagedContentHeight, listHeight: stagedListHeight),
+                    isExpanded: isTrayExpanded, hasCapsule: capsule != nil, focusedList: focusedList
                 )
                 .alignmentGuide(.stagingCapsule) { $0[.top] }
                 // Under Reduce Motion nothing slides: the tray fades in place, with its own
@@ -55,6 +63,16 @@ struct SidebarView: View {
         // A focused list that goes away would leave the keyboard nowhere in the sidebar.
         .onChange(of: showsStagedList) { _, shows in
             if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
+        }
+    }
+
+    /// A staged row's height at the system's sidebar size, measured with the tray's insets.
+    private var stagedRowHeight: CGFloat {
+        switch sidebarRowSize {
+        case .small: 26
+        case .medium: 32
+        case .large: 40
+        @unknown default: 32
         }
     }
 
@@ -228,43 +246,58 @@ struct SidebarFileContextMenu: View {
 /// A directory caption and its file rows, as one list section.
 struct DirectoryFileSection: View {
     let group: DirectoryGroup
+    /// Nil keeps the list's own insets.
+    var rowInsets: EdgeInsets?
 
     var body: some View {
         Section {
-            ForEach(group.files) { SidebarFileRow(file: $0) }
+            ForEach(group.files) { SidebarFileRow(file: $0).listRowInsets(rowInsets) }
         } header: {
-            DirectoryCaption(group: group)
+            DirectoryCaption(group: group, rowTrailingInset: rowInsets?.trailing ?? 0)
         }
     }
 }
 
 /// A directory's path and file count, with the directory's own name emphasized.
 struct DirectoryCaption: View {
+    /// A sidebar header reaches 13pt closer to the list's trailing edge than a row's
+    /// content (macOS 26); padding by that lines the count up with the rows' churn.
+    private static let headerOverhang: CGFloat = 13
+
     let group: DirectoryGroup
+    /// The trailing inset the section's rows add, if any, so the count follows them in.
+    var rowTrailingInset: CGFloat = 0
 
     var body: some View {
         HStack(spacing: 0) {
-            // Truncates before the name. A sidebar header draws lighter than `.secondary`
-            // (macOS 26), so both tones are explicit to keep the prefix dimmer than the name.
-            if !group.parentPathPrefix.isEmpty {
-                Text(group.parentPathPrefix)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            // Drops the path a folder at a time before the name ever truncates. A sidebar
+            // header draws lighter than `.secondary` (macOS 26), so both tones are explicit
+            // to keep the prefix dimmer than the name.
+            ViewThatFits(in: .horizontal) {
+                ForEach(group.parentPathPrefixes, id: \.self) { prefix in
+                    HStack(spacing: 0) {
+                        if !prefix.isEmpty {
+                            Text(prefix)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        Text(group.directoryName)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
             }
-            Text(group.directoryName)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
             Spacer(minLength: 8)
             Text("\(group.files.count)")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .layoutPriority(2)
         }
+        .padding(.trailing, Self.headerOverhang + rowTrailingInset)
         .font(.system(size: 11))
+        // A shortened path can match another group's; hovering shows which is which.
+        .help(group.directoryPath)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             "\(group.directoryPath.isEmpty ? "Top level" : group.directoryPath), \(FileCountText.make(group.files.count))"

@@ -23,6 +23,18 @@ struct DirectoryGroupingTests {
         #expect(DirectoryGrouping.groups(fromSortedFiles: []).isEmpty)
     }
 
+    @Test("parent prefixes shorten a whole folder at a time, ending with none")
+    func parentPathPrefixes() {
+        let deep = DirectoryGroup(directoryPath: "a/b/c/name", files: [])
+        #expect(deep.parentPathPrefixes == ["a/b/c/", "…/b/c/", "…/c/", ""])
+        let shallow = DirectoryGroup(directoryPath: "a/name", files: [])
+        #expect(shallow.parentPathPrefixes == ["a/", ""])
+        let single = DirectoryGroup(directoryPath: "name", files: [])
+        #expect(single.parentPathPrefixes == [""])
+        let top = DirectoryGroup(directoryPath: "", files: [])
+        #expect(top.parentPathPrefixes == [""])
+    }
+
     @Test("parent prefix and name for nested, single-component and top-level directories")
     func names() {
         let nested = DirectoryGroup(directoryPath: "DiffViewer/Views", files: [])

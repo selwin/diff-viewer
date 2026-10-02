@@ -15,6 +15,20 @@ struct DirectoryGroup: Identifiable, Sendable {
         return String(directoryPath[...slash])
     }
 
+    /// `parentPathPrefix` and then shorter forms that drop leading components behind "…/",
+    /// ending with "", so a narrow caption shortens the path at a folder boundary rather
+    /// than mid-name.
+    var parentPathPrefixes: [String] {
+        let components = parentPathPrefix.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return [""] }
+        var forms = [parentPathPrefix]
+        for dropped in 1..<components.count {
+            forms.append("…/" + components[dropped...].joined(separator: "/") + "/")
+        }
+        forms.append("")
+        return forms
+    }
+
     var directoryName: String {
         directoryPath.isEmpty ? "Top level" : (directoryPath as NSString).lastPathComponent
     }
