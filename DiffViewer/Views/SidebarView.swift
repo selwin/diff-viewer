@@ -76,6 +76,10 @@ struct SidebarView: View {
 
     private var changesList: some View {
         @Bindable var windowState = windowState
+        let unstagedFiles = windowState.unstagedFiles
+        let commitFiles = windowState.commitFiles
+        let unstagedGroups = DirectoryGrouping.groups(fromSortedFiles: unstagedFiles)
+        let commitGroups = DirectoryGrouping.groups(fromSortedFiles: commitFiles)
         // Both lists bind the one selection, and the model's setter keeps it to one list:
         // a click, ⌘-click or ⇧-click in either clears the other's rows, so a selection
         // always has one staging action. The arrow keys stay within one list. The setter
@@ -115,27 +119,26 @@ struct SidebarView: View {
                 }
                 .tag(DiffSelection.allChanges)
             }
-            if !windowState.unstagedFiles.isEmpty {
+            // Header-only, so each directory below can be a section of its own.
+            if !unstagedGroups.isEmpty {
                 Section {
-                    ForEach(windowState.unstagedFiles) {
-                        SidebarFileRow(file: $0)
-                    }
                 } header: {
                     HStack(spacing: 4) {
                         Text("Changes")
-                        Text("\(windowState.unstagedFiles.count)")
+                        Text("\(unstagedFiles.count)")
                     }
                     .foregroundStyle(.secondary)
                     .font(.system(size: 11, weight: .semibold))
                 }
+                ForEach(unstagedGroups) { DirectoryFileSection(group: $0) }
             }
             // A commit has one list: its own staging is long settled.
-            if !windowState.commitFiles.isEmpty {
-                Section("Changed (\(windowState.commitFiles.count))") {
-                    ForEach(windowState.commitFiles) {
-                        SidebarFileRow(file: $0)
-                    }
+            if !commitGroups.isEmpty {
+                Section {
+                } header: {
+                    Text("Changed (\(commitFiles.count))")
                 }
+                ForEach(commitGroups) { DirectoryFileSection(group: $0) }
             }
         }
         .listStyle(.sidebar)
@@ -222,43 +225,69 @@ struct SidebarFileContextMenu: View {
     }
 }
 
+/// A directory caption and its file rows, as one list section.
+struct DirectoryFileSection: View {
+    let group: DirectoryGroup
+
+    var body: some View {
+        Section {
+            ForEach(group.files) { SidebarFileRow(file: $0) }
+        } header: {
+            DirectoryCaption(group: group)
+        }
+    }
+}
+
+/// A directory's path and file count, with the directory's own name emphasized.
+struct DirectoryCaption: View {
+    let group: DirectoryGroup
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Truncates before the name. A sidebar header draws lighter than `.secondary`
+            // (macOS 26), so both tones are explicit to keep the prefix dimmer than the name.
+            if !group.parentPathPrefix.isEmpty {
+                Text(group.parentPathPrefix)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Text(group.directoryName)
+                .fontWeight(.semibold)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+            Spacer(minLength: 8)
+            Text("\(group.files.count)")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .layoutPriority(2)
+        }
+        .font(.system(size: 11))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(group.directoryPath.isEmpty ? "Top level" : group.directoryPath), \(FileCountText.make(group.files.count))"
+        )
+        // Lets VoiceOver jump between directories by heading.
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 struct SidebarFileRow: View {
     let file: ChangedFile
-    var showsChurn = true
 
     var body: some View {
         HStack(spacing: 8) {
             KindBadge(kind: file.kind)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(file.fileName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let originalPath = file.originalPath {
-                    // The arrow sits outside the truncated text so a long old path keeps it.
-                    HStack(spacing: 3) {
-                        Text("←")
-                        caption(originalPath)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else if !file.directory.isEmpty {
-                    caption(file.directory)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(file.fileName)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 8)
-            if showsChurn {
-                ChurnLabel(stats: file.lineStats)
-            }
+            ChurnLabel(stats: file.lineStats)
         }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
-    }
-
-    /// Truncated at the head so the file name at the end stays visible.
-    private func caption(_ text: String) -> some View {
-        Text(text).lineLimit(1).truncationMode(.head)
     }
 }
 
