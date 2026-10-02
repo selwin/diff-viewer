@@ -48,7 +48,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// While set, `layout()` leaves the status and pills to the running animation.
     private var isAnimating = false
 
-    /// On the accent fill every part turns white.
+    /// Shows the copy button and the pills.
     var isHighlighted = false {
         didSet { if isHighlighted != oldValue { applyColors() } }
     }
@@ -103,26 +103,17 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// search's emphasis is drawn in the same colour as the rest of the name.
     private func applyColors() {
         guard let row else { return }
-        let primary: NSColor = isHighlighted ? .white : .labelColor
-        let secondary: NSColor = isHighlighted ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
-        name.attributedStringValue = Self.attributedName(row, color: primary)
-        subtitle.textColor = secondary
-        if row.status.isAccent {
-            status.textColor = isHighlighted ? .white : .controlAccentColor
-        } else {
-            status.textColor = secondary
-        }
+        name.attributedStringValue = Self.attributedName(row, color: .labelColor)
+        subtitle.textColor = .secondaryLabelColor
+        status.textColor = row.status.isAccent ? .controlAccentColor : .secondaryLabelColor
         status.font = row.status.isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
-        icon.contentTintColor =
-            isHighlighted ? .white : (row.kind == .current ? .controlAccentColor : .secondaryLabelColor)
-        syncButtons?.isOnAccent = isHighlighted
+        icon.contentTintColor = row.kind == .current ? .controlAccentColor : .secondaryLabelColor
         updateCopyButton()
     }
 
     /// The one place the copy button's visibility is set: on the highlighted row, when it
     /// fits. Called when either changes.
     private func updateCopyButton() {
-        copyButton.isOnAccent = isHighlighted
         copyButton.isHidden = !(isHighlighted && copyButtonFits)
     }
 

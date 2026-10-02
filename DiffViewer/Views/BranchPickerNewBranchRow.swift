@@ -42,8 +42,8 @@ final class BranchPickerNewBranchRow: NSView {
             needsDisplay = true
         }
     }
-    /// Accent fill with white content, as the highlighted branch row has.
-    private var isOnAccent: Bool { isEnabled && (isHighlighted || isPressed) }
+    /// Filled as a highlighted branch row is.
+    private var showsHighlight: Bool { isEnabled && (isHighlighted || isPressed) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -85,7 +85,7 @@ final class BranchPickerNewBranchRow: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
-        // Before the press shows, so two rows are never on accent at once.
+        // Before the press shows, so two rows are never highlighted at once.
         onHighlightRequested()
         isPressed = true
     }
@@ -112,20 +112,14 @@ final class BranchPickerNewBranchRow: NSView {
     override func isAccessibilityEnabled() -> Bool { isEnabled }
 
     private func applyColors() {
-        if isOnAccent {
-            icon.contentTintColor = .white
-            title.textColor = .white
-            shortcut.textColor = NSColor.white.withAlphaComponent(0.8)
-            return
-        }
         icon.contentTintColor = isEnabled ? .secondaryLabelColor : .tertiaryLabelColor
         title.textColor = isEnabled ? .labelColor : .tertiaryLabelColor
         shortcut.textColor = isEnabled ? .tertiaryLabelColor : .quaternaryLabelColor
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard isOnAccent else { return }
-        NSColor.controlAccentColor.setFill()
+        guard showsHighlight else { return }
+        (isPressed ? PickerMetrics.pressedHighlightColor : PickerMetrics.highlightColor).setFill()
         let rect = bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0)
         NSBezierPath(
             roundedRect: rect, xRadius: PickerMetrics.cornerRadius, yRadius: PickerMetrics.cornerRadius

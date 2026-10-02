@@ -298,7 +298,6 @@ final class BranchPickerContainerView: NSView {
             return
         }
         let view = cell.syncButtons ?? BranchRowSyncButtons(style: .rowPills)
-        view.isOnAccent = isHighlighted
         // The popover stays up during an operation, and the search field keeps the
         // keyboard: a click must not leave focus on a button that is about to disable.
         view.configure(

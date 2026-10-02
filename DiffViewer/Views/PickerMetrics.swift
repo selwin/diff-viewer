@@ -16,6 +16,11 @@ enum PickerMetrics {
 
     // MARK: Rows
 
+    /// The row highlight: the neutral fill macOS uses for hover, not the accent, which means selection.
+    static let highlightColor = NSColor.labelColor.withAlphaComponent(0.08)
+    /// The highlight while a row is pressed.
+    static let pressedHighlightColor = NSColor.labelColor.withAlphaComponent(0.14)
+
     static let nameFont = NSFont.systemFont(ofSize: 13)
     static let currentNameFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
     static let subtitleFont = NSFont.systemFont(ofSize: 11)

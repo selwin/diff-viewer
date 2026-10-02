@@ -14,10 +14,6 @@ final class CommitPickerMessageRowView: NSTableCellView {
     /// Set by the table's owner; nil for a message without an action.
     var onActivate: (() -> Void)?
 
-    var isHighlighted = false {
-        didSet { if isHighlighted != oldValue { applyColors() } }
-    }
-
     private let spinner = NSProgressIndicator()
     private let label = PickerLabel.make(font: font, color: .secondaryLabelColor)
     private let link = PickerLabel.make(font: font, color: .linkColor)
@@ -44,13 +40,7 @@ final class CommitPickerMessageRowView: NSTableCellView {
         if message.showsSpinner { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         spinner.isHidden = !message.showsSpinner
         setAccessibilityLabel([message.text, message.linkTitle].compactMap { $0 }.joined(separator: ", "))
-        applyColors()
         needsLayout = true
-    }
-
-    private func applyColors() {
-        label.textColor = isHighlighted ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
-        link.textColor = isHighlighted ? .white : .linkColor
     }
 
     override func accessibilityPerformPress() -> Bool {

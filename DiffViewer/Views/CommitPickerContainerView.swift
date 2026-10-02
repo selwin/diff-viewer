@@ -201,7 +201,6 @@ final class CommitPickerContainerView: NSView {
     func configureHighlight(of cell: NSView, row: Int) {
         let isHighlighted = row == state.highlightedItemIndex
         (cell as? CommitPickerRowView)?.isHighlighted = isHighlighted
-        (cell as? CommitPickerMessageRowView)?.isHighlighted = isHighlighted
     }
 
     private func renderChrome() {

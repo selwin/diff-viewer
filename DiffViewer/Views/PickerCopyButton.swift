@@ -15,15 +15,6 @@ final class PickerCopyButton: NSButton {
     /// After the copy; the picker returns focus to its search field.
     var onCopy: () -> Void = {}
 
-    /// White on the accent highlight, secondary elsewhere.
-    var isOnAccent = false {
-        didSet {
-            guard isOnAccent != oldValue else { return }
-            applyTint()
-            applyFill()
-        }
-    }
-
     /// What a click copies.
     private(set) var text = ""
     /// Room around the icon for a focus ring, which the button's own bounds would clip.
@@ -181,18 +172,14 @@ final class PickerCopyButton: NSButton {
         }
     }
 
-    /// On the accent the icon stays white and the fill alone shows the hover.
     private func applyTint() {
-        icon.contentTintColor = isOnAccent ? .white : (isHovered ? .labelColor : .secondaryLabelColor)
+        icon.contentTintColor = isHovered ? .labelColor : .secondaryLabelColor
     }
 
     /// The same tints as the rows' Pull and Push pills.
     private func applyFill() {
         let pressed = isHighlighted
-        fill.color =
-            isOnAccent
-            ? NSColor.white.withAlphaComponent(pressed ? 0.36 : 0.22)
-            : NSColor.labelColor.withAlphaComponent(pressed ? 0.16 : 0.09)
+        fill.color = NSColor.labelColor.withAlphaComponent(pressed ? 0.16 : 0.09)
     }
 }
 

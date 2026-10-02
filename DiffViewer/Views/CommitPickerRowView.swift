@@ -15,7 +15,7 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Set by the table's owner.
     var onActivate: (() -> Void)?
 
-    /// On the accent fill every part turns white, and the copy button shows.
+    /// Shows the copy button.
     var isHighlighted = false {
         didSet { if isHighlighted != oldValue { applyHighlight() } }
     }
@@ -87,12 +87,9 @@ final class CommitPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     }
 
     private func applyHighlight() {
-        let primary: NSColor = isHighlighted ? .white : .labelColor
-        let secondary: NSColor = isHighlighted ? NSColor.white.withAlphaComponent(0.8) : .secondaryLabelColor
-        name.textColor = primary
-        for label in [trailingLabel, subtitle, status] { label.textColor = secondary }
-        checkmark.contentTintColor = isHighlighted ? .white : .controlAccentColor
-        copyButton.isOnAccent = isHighlighted
+        name.textColor = .labelColor
+        for label in [trailingLabel, subtitle, status] { label.textColor = .secondaryLabelColor }
+        checkmark.contentTintColor = .controlAccentColor
         copyButton.isHidden = sha == nil || !isHighlighted
     }
 
