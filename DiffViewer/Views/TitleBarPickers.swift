@@ -5,6 +5,8 @@ import SwiftUI
 /// setting the same flag.
 struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
+    @State private var isBranchTinted = false
+    @State private var isLeadingSegmentTinted = false
 
     var body: some View {
         @Bindable var windowState = windowState
@@ -22,7 +24,7 @@ struct BranchPickerView: View {
                         .padding(.leading, 14)
                         .padding(.trailing, showsSegments ? 10 : 14)
                         .frame(height: 36)
-                        .modifier(PillPartHover())
+                        .modifier(PillPartHover { isBranchTinted = $0 })
                 }
                 .buttonStyle(.plain)
                 .disabled(!windowState.canOpenBranchPicker)
@@ -35,7 +37,10 @@ struct BranchPickerView: View {
                 Rectangle()
                     .fill(.separator)
                     .frame(width: 1, height: 18)
-                BranchSyncSegments(sync: sync)
+                    // Steps aside for a tinted neighbour, like a native segmented control's
+                    // separator. Opacity, not removal, so the pill's width doesn't change.
+                    .opacity(isBranchTinted || isLeadingSegmentTinted ? 0 : 1)
+                BranchSyncSegments(sync: sync, onLeadingTintChange: { isLeadingSegmentTinted = $0 })
                     .fixedSize()
                     // Disabled while another sheet or picker is up, like the branch button.
                     .disabled(!windowState.canOpenBranchPicker)
@@ -51,14 +56,17 @@ struct BranchPickerView: View {
 private struct BranchSyncSegments: View {
     @Environment(WindowState.self) private var windowState
     let sync: CurrentBranchSyncPresentation
+    let onLeadingTintChange: (Bool) -> Void
 
     var body: some View {
+        let showsPull = sync.buttons.pull != .hidden
         let showsPush = sync.buttons.push != .hidden
         HStack(spacing: 0) {
-            if sync.buttons.pull != .hidden {
+            if showsPull {
                 segment(
                     arrow: "arrow.down", count: sync.pullCount, title: "Pull", state: sync.buttons.pull,
-                    label: sync.pullAccessibilityLabel, isLast: !showsPush
+                    label: sync.pullAccessibilityLabel, isLast: !showsPush,
+                    onTintChange: onLeadingTintChange
                 ) {
                     let branch = sync.branch
                     Task { await windowState.pull(branch: branch) }
@@ -66,14 +74,14 @@ private struct BranchSyncSegments: View {
                 .id(SegmentID(branch: sync.branch, operation: .pull))
             }
             if showsPush {
-                pushSegment
+                pushSegment(onTintChange: showsPull ? nil : onLeadingTintChange)
                     .id(SegmentID(branch: sync.branch, operation: sync.buttons.pushOperation))
             }
         }
     }
 
     @ViewBuilder
-    private var pushSegment: some View {
+    private func pushSegment(onTintChange: ((Bool) -> Void)?) -> some View {
         let branch = sync.branch
         if case let .menu(items)? = sync.buttons.publish {
             Menu {
@@ -86,7 +94,7 @@ private struct BranchSyncSegments: View {
             } label: {
                 SyncSegmentLabel(
                     arrow: "arrow.up", count: nil, title: sync.buttons.pushTitle, state: sync.buttons.push,
-                    isLast: true)
+                    isLast: true, onTintChange: onTintChange)
             }
             // `.button` lets `.plain` strip the menu's own bezel, so it looks like the Push segment.
             .menuStyle(.button)
@@ -96,7 +104,8 @@ private struct BranchSyncSegments: View {
         } else {
             segment(
                 arrow: "arrow.up", count: sync.pushCount, title: sync.buttons.pushTitle, state: sync.buttons.push,
-                label: sync.pushAccessibilityLabel, isLast: true
+                label: sync.pushAccessibilityLabel, isLast: true,
+                onTintChange: onTintChange
             ) {
                 switch sync.buttons.publish {
                 case let .remote(remote)?: Task { await windowState.publish(branch: branch, to: remote) }
@@ -110,10 +119,12 @@ private struct BranchSyncSegments: View {
     // swiftlint:disable:next function_parameter_count
     private func segment(
         arrow: String, count: Int?, title: String, state: PickerButtonState, label: String, isLast: Bool,
-        action: @escaping () -> Void
+        onTintChange: ((Bool) -> Void)?, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            SyncSegmentLabel(arrow: arrow, count: count, title: title, state: state, isLast: isLast)
+            SyncSegmentLabel(
+                arrow: arrow, count: count, title: title, state: state, isLast: isLast,
+                onTintChange: onTintChange)
         }
         .buttonStyle(.plain)
         .modifier(SegmentAvailability(state: state, label: label))
@@ -137,6 +148,7 @@ private struct SyncSegmentLabel: View {
     let state: PickerButtonState
     /// The last segment pads its end so the title clears the capsule's round end.
     let isLast: Bool
+    var onTintChange: ((Bool) -> Void)?
 
     /// The count from before the click: the refresh behind the spinner may clear `count`.
     @State private var lastCount: Int?
@@ -174,7 +186,7 @@ private struct SyncSegmentLabel: View {
         .padding(.leading, 10)
         .padding(.trailing, isLast ? 14 : 10)
         .frame(height: 36)
-        .modifier(PillPartHover())
+        .modifier(PillPartHover(onTintChange: onTintChange))
     }
 }
 
@@ -198,12 +210,19 @@ private struct SegmentAvailability: ViewModifier {
 private struct PillPartHover: ViewModifier {
     @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
+    /// Reports whether the part is tinted, so the pill can hide the divider beside it.
+    var onTintChange: ((Bool) -> Void)?
 
     func body(content: Content) -> some View {
+        let isTinted = isHovering && isEnabled
         content
             .background {
-                if isHovering && isEnabled { Rectangle().fill(.quinary) }
+                if isTinted { Rectangle().fill(.quinary) }
             }
+            .onChange(of: isTinted) { _, new in onTintChange?(new) }
+            // A part can vanish under the pointer (its id changes, or the segments hide), which
+            // would leave the divider hidden.
+            .onDisappear { onTintChange?(false) }
             // The whole part takes the click, not only the text.
             .contentShape(Rectangle())
             // Not `onHover`: in a toolbar item that makes AppKit draw its own bezel at rest.
