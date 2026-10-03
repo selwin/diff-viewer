@@ -245,6 +245,7 @@ struct SidebarFileContextMenu: View {
 
 /// A directory caption and its file rows, as one list section.
 struct DirectoryFileSection: View {
+    @Environment(WindowState.self) private var windowState
     let group: DirectoryGroup
     /// Nil keeps the list's own insets.
     var rowInsets: EdgeInsets?
@@ -253,8 +254,18 @@ struct DirectoryFileSection: View {
         Section {
             ForEach(group.files) { SidebarFileRow(file: $0).listRowInsets(rowInsets) }
         } header: {
-            DirectoryCaption(group: group, rowTrailingInset: rowInsets?.trailing ?? 0)
+            Button(action: selectGroupFiles) {
+                DirectoryCaption(group: group, rowTrailingInset: rowInsets?.trailing ?? 0)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(.isHeader)
         }
+    }
+
+    // Select this group's files to read them as one changeset.
+    private func selectGroupFiles() {
+        windowState.selection = Set(group.files.map { .file($0.id) })
     }
 }
 
