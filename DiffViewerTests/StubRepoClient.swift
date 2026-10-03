@@ -24,6 +24,7 @@ enum StubCall {
     case fastForward
     case commitDefaults
     case stagedPatch
+    case mergePreview
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -118,6 +119,13 @@ actor StubRepoClient: RepoClient {
     /// Every fast-forward asked for, in order, whether or not it succeeded.
     private(set) var fastForwardCalls: [(branch: String, remote: String, remoteRef: String, localRef: String)] = []
     private var stubbedMergePreview: MergePreview = .alreadyMerged
+    /// Per-key answers on top of `stubbedMergePreview`.
+    private var mergePreviewsByKey: [MergePreviewKey: MergePreview] = [:]
+    private var failingMergePreviews: Set<MergePreviewKey> = []
+    /// Every `mergePreview` call, in order.
+    private(set) var mergePreviewCalls: [MergePreviewKey] = []
+    private(set) var runningMergePreviews = 0
+    private(set) var mostRunningMergePreviews = 0
     private var stubbedCommitsToMerge: [CommitSummary] = []
     /// Every merge asked for, in order, whether or not it succeeded.
     private(set) var mergeCalls: [String] = []
@@ -410,6 +418,11 @@ actor StubRepoClient: RepoClient {
     func fail(publish on: Bool) { failsPublish = on }
     func fail(fastForward on: Bool) { failsFastForward = on }
     func set(mergePreview preview: MergePreview) { stubbedMergePreview = preview }
+    func set(mergePreview preview: MergePreview, for key: MergePreviewKey) { mergePreviewsByKey[key] = preview }
+    /// Read once a held call is released, so a test can change it meanwhile.
+    func fail(mergePreview on: Bool, for key: MergePreviewKey) {
+        if on { failingMergePreviews.insert(key) } else { failingMergePreviews.remove(key) }
+    }
     func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
     func fail(merge on: Bool) { failsMerge = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
@@ -467,7 +480,16 @@ actor StubRepoClient: RepoClient {
     }
 
     func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview {
-        stubbedMergePreview
+        let key = MergePreviewKey(headSha: headSha, sourceTipSha: sourceTipSha)
+        mergePreviewCalls.append(key)
+        runningMergePreviews += 1
+        mostRunningMergePreviews = max(mostRunningMergePreviews, runningMergePreviews)
+        defer { runningMergePreviews -= 1 }
+        if isHeld(.mergePreview) { await park(.mergePreview) }
+        if failingMergePreviews.contains(key) {
+            throw ProcessError.failed(command: "git merge-tree", status: 128, stderr: "unrelated histories")
+        }
+        return mergePreviewsByKey[key] ?? stubbedMergePreview
     }
 
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {

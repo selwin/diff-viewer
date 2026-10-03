@@ -18,7 +18,7 @@ Full plan: design 16b, Switch and Merge only. Delete this file when all stages a
 **Goal**: Merge rows show `N commits` / `Already merged` / `Conflict in N files`, loaded lazily and cached.
 **Success Criteria**: Previews fade in for visible rows; at most 2 preview processes; stale results never shown.
 **Tests**: `MergePreviewLoaderTests`, `MergePreviewText`, state key lookups.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Merge sheet and merge
 **Goal**: Clicking a Merge row opens a confirmation sheet; Merge runs `git merge` and refreshes.

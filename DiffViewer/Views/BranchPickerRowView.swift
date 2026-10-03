@@ -1,7 +1,8 @@
 import AppKit
 
 /// A branch row: icon, name with a copy button after it, `author · time`, status text, and
-/// the Pull/Push pills. The copy button and pills show on the highlighted row; pills also
+/// the Pull/Push pills, or in Merge a chevron. The copy button, pills and chevron show on
+/// the highlighted row; pills also
 /// stay while their operation runs. The current branch's row is dimmed and never
 /// highlighted, so its copy button shows while the pointer is over it. As the highlight
 /// moves, the pills fade and the status slides to make room. As a table cell it stays an accessibility cell; a press, or the
@@ -17,6 +18,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Between the name and the copy button, whose hover fill already pads the icon.
     private static let copyGap: CGFloat = 0
     private static let animationDuration: TimeInterval = 0.18
+    /// A merge preview arriving fades in this quickly, so it reads as settling, not flashing.
+    private static let previewFadeDuration: TimeInterval = 0.12
 
     /// Set by the table's owner; nil on rows that cannot be activated.
     var onActivate: (() -> Void)?
@@ -59,8 +62,12 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private let subtitle = PickerLabel.make(font: PickerMetrics.subtitleFont, color: .secondaryLabelColor)
     private let status = PickerLabel.make(
         font: PickerMetrics.statusFont, color: .secondaryLabelColor, alignment: .right)
+    /// A highlighted Merge row's `›`: activating it leads on to the merge.
+    private let chevron = NSImageView()
     private var row: BranchPickerRow?
     private var trailing: BranchRowLabel?
+    /// Whether the row keeps room for the chevron, which shows only while highlighted.
+    private var hasChevron = false
     private var accessibilityActionName = "Switch to branch"
     /// Only the current row reads it, to show its copy button.
     private var isPointerInside = false
@@ -70,9 +77,14 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         clipsToBounds = true
         identifier = Self.identifier
         icon.imageScaling = .scaleProportionallyUpOrDown
+        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        chevron.contentTintColor = .secondaryLabelColor
+        chevron.isHidden = true
+        chevron.setAccessibilityElement(false)
         // Like the pills: the search field keeps the keyboard.
         copyButton.refusesFirstResponder = true
-        for view in [icon, name, copyButton, subtitle, status] { addSubview(view) }
+        for view in [icon, name, copyButton, subtitle, status, chevron] { addSubview(view) }
         // `.activeAlways`: a scripted launch never makes the popover key.
         addTrackingArea(
             NSTrackingArea(
@@ -87,10 +99,14 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     /// A reused cell starts from its final state: nothing animates across rows. The
     /// container passes what depends on the tab: the right-edge words, why the row is
-    /// blocked, and what its activation is called.
-    func configure(_ row: BranchPickerRow, trailing: BranchRowLabel?, blockedReason: String?, actionName: String) {
+    /// blocked, what its activation is called, and whether it has a chevron.
+    func configure(
+        _ row: BranchPickerRow, trailing: BranchRowLabel?, blockedReason: String?, actionName: String,
+        hasChevron: Bool
+    ) {
         self.row = row
         self.trailing = trailing
+        self.hasChevron = hasChevron
         stopAnimating()
         let symbol: NSImage? =
             switch row.kind {
@@ -121,11 +137,32 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         guard let row else { return }
         name.attributedStringValue = Self.attributedName(row, color: .labelColor)
         subtitle.textColor = .secondaryLabelColor
-        let isAccent = trailing?.isAccent ?? false
-        status.textColor = isAccent ? .controlAccentColor : .secondaryLabelColor
-        status.font = isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
+        switch trailing?.style ?? .secondary {
+        case .secondary:
+            status.textColor = .secondaryLabelColor
+            status.font = PickerMetrics.statusFont
+        case .accent:
+            status.textColor = .controlAccentColor
+            status.font = Self.accentStatusFont
+        case .warning:
+            status.textColor = .systemOrange
+            status.font = PickerMetrics.statusFont
+        }
         icon.contentTintColor = row.kind == .current ? .controlAccentColor : .secondaryLabelColor
+        chevron.isHidden = !(hasChevron && isHighlighted)
         updateCopyButton()
+    }
+
+    /// Fades in the right-edge words of a preview that just arrived. Reduce Motion shows
+    /// them at once.
+    func fadeInTrailing() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, let layer = status.layer else { return }
+        let animation = CABasicAnimation(keyPath: "opacity")
+        animation.fromValue = 0
+        animation.toValue = status.alphaValue
+        animation.duration = Self.previewFadeDuration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(animation, forKey: "previewFade")
     }
 
     /// The one place the copy button's visibility is set: on the highlighted row, or the
@@ -284,6 +321,11 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         showingSyncButtons: Bool
     ) -> (syncButtons: NSRect?, status: NSRect, textMaxX: CGFloat) {
         var rightEdge = bounds.width - PickerMetrics.rowInset - PickerMetrics.contentInset
+        // Room is kept while the chevron is hidden, so the preview doesn't shift as the
+        // highlight moves.
+        if hasChevron {
+            rightEdge = chevron.frame.minX - PickerMetrics.trailingGap
+        }
         var syncButtonsFrame: NSRect?
         if showingSyncButtons, let syncButtons {
             let size = syncButtons.intrinsicContentSize
@@ -319,6 +361,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         icon.frame = NSRect(
             x: leading, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
             height: Self.iconSize)
+        layoutChevron()
         let target = trailingFrames(showingSyncButtons: areSyncButtonsShown)
         // Pills fading out still take their room, so the name never runs under them.
         let textMaxX = isAnimating ? trailingFrames(showingSyncButtons: true).textMaxX : target.textMaxX
@@ -331,6 +374,16 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         guard !isAnimating else { return }
         if let frame = target.syncButtons { syncButtons?.frame = frame }
         status.frame = target.status
+    }
+
+    /// At the trailing edge, centred on the row. Laid out before the status, which sits left of it.
+    private func layoutChevron() {
+        let size = chevron.image?.size ?? .zero
+        chevron.frame = backingAlignedRect(
+            NSRect(
+                x: bounds.width - PickerMetrics.rowInset - PickerMetrics.contentInset - size.width,
+                y: (bounds.height - size.height) / 2, width: size.width, height: size.height),
+            options: PickerViewGeometry.pixelAlignment)
     }
 
     /// The name, truncating, then the copy button. The button's room is kept while it is

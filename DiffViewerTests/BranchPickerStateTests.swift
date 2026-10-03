@@ -625,11 +625,56 @@ struct BranchPickerStateTests {
         var picker = state(snapshot(branches: [main, feature]))
         let current = try index(.local(name: "main"), in: picker)
         let other = try index(.local(name: "feature"), in: picker)
-        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Current", isAccent: false))
+        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Current", style: .secondary))
         #expect(picker.trailingLabel(forTableRow: other)?.text == "Not published")
         picker.setTab(.merge)
-        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Merge target", isAccent: false))
+        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Merge target", style: .secondary))
         #expect(picker.trailingLabel(forTableRow: other) == nil)
+    }
+
+    @Test func aMergeRowShowsThePreviewItIsGiven() throws {
+        let picker = state(snapshot(branches: [main, feature]), tab: .merge)
+        let other = try index(.local(name: "feature"), in: picker)
+        #expect(
+            picker.trailingLabel(forTableRow: other, preview: .conflicts(commits: 1, paths: ["a"]))
+                == BranchRowLabel(text: "Conflict in 1 file", style: .warning))
+    }
+
+    // MARK: Merge preview keys
+
+    /// Two branches at one tip share a key, and a lookup finds both of their rows.
+    @Test func branchesAtTheSameTipShareAKey() throws {
+        let head = localBranch("main", tipSha: objectID("head"), tipCommittedAt: Self.at(19, 13))
+        let local = localBranch("feature", tipSha: objectID("tip"), tipCommittedAt: Self.at(19, 12))
+        let remote = remoteBranch("release", tipSha: objectID("tip"), tipCommittedAt: Self.at(19, 11))
+        let picker = state(
+            snapshot(branches: [head, local], remotes: ["origin"], remoteBranches: [remote]), tab: .merge)
+        let key = MergePreviewKey(headSha: objectID("head"), sourceTipSha: objectID("tip"))
+        let rows = try [index(.local(name: "feature"), in: picker), index(.remote(ref: remote.ref), in: picker)]
+        #expect(rows.map { picker.mergePreviewKey(forTableRow: $0) } == [key, key])
+        #expect(picker.tableRows(matching: key) == rows)
+        #expect(picker.requestedKeys(visibleRows: 0..<picker.items.count) == [key])
+    }
+
+    @Test func aNewHeadGivesTheRowsNewKeys() {
+        let feature = localBranch("feature", tipSha: objectID("tip"), tipCommittedAt: Self.at(19, 12))
+        let oldHead = localBranch("main", tipSha: objectID("old"), tipCommittedAt: Self.at(19, 13))
+        let newHead = localBranch("main", tipSha: objectID("new"), tipCommittedAt: Self.at(19, 13))
+        var picker = state(snapshot(branches: [oldHead, feature]), tab: .merge)
+        _ = picker.apply(snapshot(branches: [newHead, feature]))
+        #expect(
+            picker.requestedKeys(visibleRows: 0..<picker.items.count)
+                == [MergePreviewKey(headSha: objectID("new"), sourceTipSha: objectID("tip"))])
+    }
+
+    /// Past the end is clamped, and only Merge's non-current rows have keys.
+    @Test func theCurrentRowAndTheSwitchTabHaveNoKeys() throws {
+        var picker = state(snapshot(branches: [main, feature]), tab: .merge)
+        let current = try index(.local(name: "main"), in: picker)
+        #expect(picker.mergePreviewKey(forTableRow: current) == nil)
+        #expect(picker.requestedKeys(visibleRows: 0..<50).count == 1)
+        picker.setTab(.switchBranch)
+        #expect(picker.requestedKeys(visibleRows: 0..<picker.items.count).isEmpty)
     }
 
     /// Merging needs a checked-out branch: a detached or unborn HEAD, or a read that

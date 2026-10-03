@@ -63,10 +63,17 @@ struct BranchPickerInstruction: Equatable {
     let target: String?
 }
 
-/// What a row shows on its right edge in the current tab, and whether in the accent colour.
+/// What a row shows on its right edge in the current tab, and in which colour.
 struct BranchRowLabel: Equatable {
+    enum Style: Equatable {
+        case secondary
+        case accent
+        /// A predicted merge conflict.
+        case warning
+    }
+
     let text: String
-    let isAccent: Bool
+    let style: Style
 }
 
 /// What activating a row asks the window to do.

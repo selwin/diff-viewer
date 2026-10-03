@@ -18,11 +18,15 @@ struct BranchPickerState {
     /// The search text, normalized, so a spaces-only field reads as no query at all.
     private(set) var query = ""
     private let grouping: CommitDayGrouping
+    /// The current branch's tip, which merge previews are keyed by; nil while a merge is
+    /// unavailable. Stored so a row's key costs no scan of the branches.
+    private var mergeHeadSha: String?
 
     init(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, tab: BranchPickerTab = .switchBranch) {
         self.snapshot = snapshot
         self.grouping = grouping
         self.tab = tab
+        mergeHeadSha = Self.mergeHeadSha(in: snapshot)
         items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: "")
         leaveMergeIfUnavailable()
     }
@@ -235,14 +239,45 @@ struct BranchPickerState {
     }
 
     /// The row's right-edge words: the current branch's role in the tab, else its status
-    /// in Switch. Merge rows say nothing yet.
-    func trailingLabel(forTableRow index: Int) -> BranchRowLabel? {
+    /// in Switch, or in Merge the `preview` of its current key once one has arrived.
+    func trailingLabel(forTableRow index: Int, preview: MergePreview? = nil) -> BranchRowLabel? {
         guard let row = row(forTableRow: index) else { return nil }
         if row.kind == .current {
-            return BranchRowLabel(text: tab == .merge ? "Merge target" : "Current", isAccent: false)
+            return BranchRowLabel(text: tab == .merge ? "Merge target" : "Current", style: .secondary)
         }
-        guard tab == .switchBranch, !row.status.text.isEmpty else { return nil }
-        return BranchRowLabel(text: row.status.text, isAccent: row.status.isAccent)
+        switch tab {
+        case .merge:
+            return preview.map(MergePreviewText.label(for:))
+        case .switchBranch:
+            guard !row.status.text.isEmpty else { return nil }
+            return BranchRowLabel(text: row.status.text, style: row.status.isAccent ? .accent : .secondary)
+        }
+    }
+
+    // MARK: Merge previews
+
+    /// What merging the row into the current branch would be previewed by: in Merge only,
+    /// and never for the current branch itself. Keyed by tips, so a moved HEAD or branch
+    /// gives the row a new key.
+    func mergePreviewKey(forTableRow index: Int) -> MergePreviewKey? {
+        guard tab == .merge, let mergeHeadSha, let row = row(forTableRow: index), row.kind != .current
+        else { return nil }
+        let sourceTipSha =
+            switch row.source {
+            case let .local(branch): branch.tipSha
+            case let .remote(branch): branch.tipSha
+            }
+        return MergePreviewKey(headSha: mergeHeadSha, sourceTipSha: sourceTipSha)
+    }
+
+    /// Every row whose current key is `key`: branches at the same tip share one.
+    func tableRows(matching key: MergePreviewKey) -> [Int] {
+        items.indices.filter { mergePreviewKey(forTableRow: $0) == key }
+    }
+
+    /// The keys of the rows in `visibleRows` that have one.
+    func requestedKeys(visibleRows: Range<Int>) -> Set<MergePreviewKey> {
+        Set(visibleRows.clamped(to: items.indices).compactMap { mergePreviewKey(forTableRow: $0) })
     }
 
     // MARK: Tabs
@@ -250,8 +285,12 @@ struct BranchPickerState {
     /// A merge needs a checked-out branch to merge into: a loaded read with HEAD on a
     /// listed branch. Detached, unborn, unread and failed reads have none.
     var isMergeAvailable: Bool {
-        guard snapshot.readStatus == .loaded, let name = currentBranchName else { return false }
-        return snapshot.branches.contains { $0.name == name }
+        mergeHeadSha != nil
+    }
+
+    private static func mergeHeadSha(in snapshot: BranchPickerSnapshot) -> String? {
+        guard snapshot.readStatus == .loaded, case let .named(name)? = snapshot.headState else { return nil }
+        return snapshot.branches.first { $0.name == name }?.tipSha
     }
 
     private var currentBranchName: String? {
@@ -290,6 +329,7 @@ struct BranchPickerState {
         let oldButtons = Dictionary(
             rows.map { ($0.id, Self.syncButtons(for: $0, snapshot: old)) }, uniquingKeysWith: { first, _ in first })
         snapshot = new
+        mergeHeadSha = Self.mergeHeadSha(in: new)
         leaveMergeIfUnavailable()
         let rowChange = applyItems(new, old: old)
         let buttonsChanged = rows.contains { row in

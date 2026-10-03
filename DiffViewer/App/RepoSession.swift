@@ -12,6 +12,8 @@ struct WindowID: Hashable, Sendable {
 final class RepoSession {
     let root: RepositoryRoot
     let client: any RepoClient
+    /// Merge previews for the branch picker and the merge sheet, which share its cache.
+    let mergePreviews: MergePreviewLoader
     /// Nil while the window is hidden: a hidden window watches nothing.
     var watcher: (any RepoWatching)?
     /// Bumped on every watcher start and stop. A callback from a watcher whose
@@ -104,6 +106,7 @@ final class RepoSession {
     init(root: RepositoryRoot, client: any RepoClient) {
         self.root = root
         self.client = client
+        mergePreviews = MergePreviewLoader(client: client)
     }
 }
 

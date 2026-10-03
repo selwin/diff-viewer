@@ -324,6 +324,7 @@ final class WindowState {
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
+        session?.mergePreviews.invalidate()
         if let session {
             // No further read will publish, so anyone waiting for one is let go.
             resumeBranchReadWaiters(session: session)

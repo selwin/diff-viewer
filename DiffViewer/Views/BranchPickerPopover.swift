@@ -16,6 +16,7 @@ struct BranchPickerPopover: View {
             snapshot: windowState.branchPickerSnapshot,
             grouping: grouping,
             tab: windowState.branchPickerTab,
+            mergePreviews: windowState.session?.mergePreviews,
             onActivate: { activation in
                 switch activation {
                 case let .switchTo(name): Task { await windowState.switchBranch(to: name) }
@@ -52,6 +53,8 @@ struct BranchPickerListView: NSViewRepresentable {
     let grouping: CommitDayGrouping
     /// The tab the popover opens on; later changes are the container's.
     let tab: BranchPickerTab
+    /// Nil without a session: Merge rows then show no previews. Read once, like `tab`.
+    let mergePreviews: MergePreviewLoader?
     let onActivate: (BranchActivation) -> Void
     let onDismiss: () -> Void
     let onPull: (String) -> Void
@@ -65,7 +68,7 @@ struct BranchPickerListView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
         let view = BranchPickerContainerView(
-            state: BranchPickerState(snapshot: snapshot, grouping: grouping, tab: tab))
+            state: BranchPickerState(snapshot: snapshot, grouping: grouping, tab: tab), mergePreviews: mergePreviews)
         setCallbacks(on: view)
         return view
     }

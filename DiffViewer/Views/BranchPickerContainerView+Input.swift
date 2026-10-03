@@ -22,8 +22,11 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
                 as? BranchPickerRowView ?? BranchPickerRowView(frame: .zero)
             cell.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
             cell.configure(
-                entry, trailing: state.trailingLabel(forTableRow: row),
-                blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry))
+                entry, trailing: state.trailingLabel(forTableRow: row, preview: mergePreview(forTableRow: row)),
+                blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry),
+                // Every Merge row keeps the room, so the right edges line up; only the
+                // highlight shows it, and the current row never takes the highlight.
+                hasChevron: state.tab == .merge)
             configureHighlightAndButtons(of: cell, row: row, animated: false)
             // No callback on a row that cannot be activated: the action must not be offered.
             guard state.canActivate(tableRow: row) else {
@@ -143,5 +146,21 @@ private final class BranchNameCopy {
     init(name: String, rowID: BranchRowID) {
         self.name = name
         self.rowID = rowID
+    }
+}
+
+/// The search field holds the keyboard; the arrows, Return and Escape reach the list.
+extension BranchPickerContainerView: NSSearchFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)): moveUp()
+        case #selector(NSResponder.moveDown(_:)): moveDown()
+        case #selector(NSResponder.insertNewline(_:)): activate()
+        // Escape clears the query first, then dismisses.
+        case #selector(NSResponder.cancelOperation(_:)):
+            if searchField.stringValue.isEmpty { cancel() } else { clearQuery() }
+        default: return false
+        }
+        return true
     }
 }
