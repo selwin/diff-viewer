@@ -31,9 +31,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # swift-format ships inside the Swift toolchain, so the check runs in the official Swift
-    # image on a Linux runner. Xcode 26.6 bundles Swift 6.3; keep this tag on the same minor.
+    # image on a Linux runner. Xcode 27 bundles Swift 6.4; keep this tag on the same minor.
     container:
-      image: swift:6.3.3-noble@sha256:dd115b20969a2acf74c8dcf6da7c4aeda086053c27453dad59052a65bafc8d0c
+      image: swift:6.4.0-noble@sha256:31d14d727f4451f25e29bac9c42563a098c39ac66415e8bad970f48038e38aca
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

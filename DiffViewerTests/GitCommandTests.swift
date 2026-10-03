@@ -1186,6 +1186,103 @@ import Testing
         #expect(try await repo.client.headState() == .named("side"))
     }
 
+    // MARK: Merging
+
+    /// `main` and `side` each add a commit; `side` also edits `a.txt` when `conflicting`.
+    private func divergedRepo(conflicting: Bool) async throws -> (repo: Repo, main: String, side: String) {
+        let repo = try await committedRepo()
+        try await repo.git(["checkout", "-b", "side"])
+        try repo.write(conflicting ? "a.txt" : "side.txt", "side\n")
+        let side = try await repo.commit("Side commit")
+        try await repo.git(["checkout", "main"])
+        if conflicting { try repo.write("a.txt", "main\n") }
+        let main = try await repo.commit("Main commit")
+        return (repo, main, side)
+    }
+
+    @Test func mergePreviewClassifiesTheBranch() async throws {
+        let (clean, cleanMain, cleanSide) = try await divergedRepo(conflicting: false)
+        #expect(try await clean.client.mergePreview(headSha: cleanMain, sourceTipSha: cleanSide) == .clean(commits: 1))
+        #expect(try await clean.client.mergePreview(headSha: cleanSide, sourceTipSha: cleanMain) == .clean(commits: 1))
+        let ancestor = try await clean.git(["rev-parse", "main~1"])
+        #expect(try await clean.client.mergePreview(headSha: cleanMain, sourceTipSha: ancestor) == .alreadyMerged)
+
+        let (conflicting, main, side) = try await divergedRepo(conflicting: true)
+        #expect(
+            try await conflicting.client.mergePreview(headSha: main, sourceTipSha: side)
+                == .conflicts(commits: 1, paths: ["a.txt"]))
+        #expect(try await conflicting.git(["status", "--porcelain"]).isEmpty, "a preview leaves the tree alone")
+    }
+
+    @Test func mergePreviewOfUnrelatedHistoriesThrows() async throws {
+        let (repo, main, _) = try await divergedRepo(conflicting: false)
+        try await repo.git(["checkout", "--orphan", "unrelated"])
+        let unrelated = try await repo.commit("Unrelated root")
+        await #expect(throws: (any Error).self) {
+            try await repo.client.mergePreview(headSha: main, sourceTipSha: unrelated)
+        }
+    }
+
+    /// Commits reached only through a merge on the source branch count, as in the preview.
+    @Test func commitsToMergeFollowsEveryParentAndHonoursTheLimit() async throws {
+        let (repo, main, _) = try await divergedRepo(conflicting: false)
+        try await repo.git(["checkout", "-b", "feature", "main~1"])
+        try await repo.git(["checkout", "-b", "inner"])
+        try repo.write("inner.txt", "inner\n")
+        let inner = try await repo.commit("Inner commit")
+        try await repo.git(["checkout", "feature"])
+        try repo.write("feature.txt", "feature\n")
+        try await repo.commit("Feature commit")
+        try await repo.git(["merge", "--no-ff", "inner", "-m", "Merge inner"])
+        let tip = try await repo.git(["rev-parse", "HEAD"])
+
+        let all = try await repo.client.commitsToMerge(headSha: main, sourceTipSha: tip, limit: 10)
+        #expect(all.count == 3)
+        #expect(all.map(\.ref.sha).contains(inner))
+        #expect(try await repo.client.mergePreview(headSha: main, sourceTipSha: tip) == .clean(commits: 3))
+        #expect(try await repo.client.commitsToMerge(headSha: main, sourceTipSha: tip, limit: 2).count == 2)
+    }
+
+    /// A limit of zero or less returns nothing before git runs: the revisions don't exist.
+    @Test func commitsToMergeWithoutALimitIsEmpty() async throws {
+        let repo = try Repo()
+        for limit in [0, -1] {
+            let commits = try await repo.client.commitsToMerge(headSha: "none", sourceTipSha: "none", limit: limit)
+            #expect(commits.isEmpty)
+        }
+    }
+
+    @Test func mergeBringsInALocalOrRemoteTrackingRef() async throws {
+        let (repo, _, side) = try await divergedRepo(conflicting: false)
+        // A tag would win the short name `side`; the full ref still merges the branch.
+        try await repo.git(["tag", "side", "HEAD"])
+        try await repo.client.merge(sourceRef: "refs/heads/side")
+        #expect(try await repo.git(["merge-base", "--is-ancestor", side, "HEAD"]).isEmpty)
+
+        let (pushed, remote) = try await pushedRepo()
+        let other = try await clone(of: remote)
+        try await other.git(["checkout", "-b", "feature"])
+        try other.write("f.txt", "f\n")
+        let tip = try await other.commit("Feature commit")
+        try await other.git(["push", "origin", "feature"])
+        try await pushed.git(["fetch", "origin"])
+
+        try await pushed.client.merge(sourceRef: "refs/remotes/origin/feature")
+        #expect(try await pushed.git(["merge-base", "--is-ancestor", tip, "HEAD"]).isEmpty)
+    }
+
+    /// A conflicting merge throws git's report and leaves the merge in progress to resolve.
+    @Test func mergeStopsOnConflicts() async throws {
+        let (repo, _, side) = try await divergedRepo(conflicting: true)
+        await #expect {
+            try await repo.client.merge(sourceRef: "refs/heads/side")
+        } throws: { error in
+            error.localizedDescription.contains("CONFLICT")
+        }
+        #expect(try await repo.git(["diff", "--name-only", "--diff-filter=U"]) == "a.txt")
+        #expect(try await repo.git(["rev-parse", "MERGE_HEAD"]) == side)
+    }
+
     // MARK: Remote branches
 
     /// `origin/HEAD` is a symbolic ref to another branch, not a branch of its own.
@@ -1199,6 +1296,8 @@ import Testing
         #expect(branches.map(\.remote) == ["origin", "origin"])
         #expect(branches.map(\.ref) == ["refs/remotes/origin/feature/x", "refs/remotes/origin/main"])
         #expect(branches.first?.tipCommitAuthor == "Tester")
+        let head = try await repo.git(["rev-parse", "HEAD"])
+        #expect(branches.map(\.tipSha) == [head, head])
     }
 
     /// A remote name may contain a slash; its mapping, not the ref's path, splits it.

@@ -117,6 +117,11 @@ actor StubRepoClient: RepoClient {
     private(set) var publishCalls: [(branch: String, remote: String)] = []
     /// Every fast-forward asked for, in order, whether or not it succeeded.
     private(set) var fastForwardCalls: [(branch: String, remote: String, remoteRef: String, localRef: String)] = []
+    private var stubbedMergePreview: MergePreview = .alreadyMerged
+    private var stubbedCommitsToMerge: [CommitSummary] = []
+    /// Every merge asked for, in order, whether or not it succeeded.
+    private(set) var mergeCalls: [String] = []
+    private var failsMerge = false
     private var stubbedUpstreamRemotes: [String: String] = [:]
     private var failsConfiguredUpstreamRemotes = false
     private var failsFetch = false
@@ -404,6 +409,9 @@ actor StubRepoClient: RepoClient {
     func fail(push on: Bool) { failsPush = on }
     func fail(publish on: Bool) { failsPublish = on }
     func fail(fastForward on: Bool) { failsFastForward = on }
+    func set(mergePreview preview: MergePreview) { stubbedMergePreview = preview }
+    func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
+    func fail(merge on: Bool) { failsMerge = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -456,6 +464,19 @@ actor StubRepoClient: RepoClient {
         if failsFastForward {
             throw ProcessError.failed(command: "git fetch", status: 1, stderr: "fast-forward failed")
         }
+    }
+
+    func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview {
+        stubbedMergePreview
+    }
+
+    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {
+        limit > 0 ? Array(stubbedCommitsToMerge.prefix(limit)) : []
+    }
+
+    func merge(sourceRef: String) async throws {
+        mergeCalls.append(sourceRef)
+        if failsMerge { throw ProcessError.failed(command: "git merge", status: 1, stderr: "merge failed") }
     }
 
     func configuredUpstreamRemotes() async throws -> [String: String] {

@@ -52,9 +52,15 @@ format:
 format-check:
 	swift format lint --strict --parallel --recursive --configuration .swift-format $(SOURCES)
 
-# Git hooks running format and lint over the staged files: `brew install pre-commit`.
+# Git hooks: pre-commit formats and lints the staged files (`brew install pre-commit`);
+# a plain post-commit hook reports on the unstaged ones, which pre-commit stashes. An
+# existing post-commit hook of another tool is kept, never overwritten.
 hooks:
 	pre-commit install
+	@hook="$$(git rev-parse --git-path hooks)/post-commit"; target="$(CURDIR)/scripts/check-unstaged.sh"; \
+	if { [ -e "$$hook" ] || [ -L "$$hook" ]; } && [ "$$(readlink "$$hook")" != "$$target" ]; then \
+		echo "Kept the existing $$hook; link it to $$target by hand to use it." >&2; \
+	else ln -sf "$$target" "$$hook"; fi
 
 hooks-all:
 	pre-commit run --all-files
