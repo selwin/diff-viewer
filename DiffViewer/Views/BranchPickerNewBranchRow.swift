@@ -1,19 +1,24 @@
 import AppKit
 
-/// The branch picker's New Branch… row, under the list: a plus, the title, and ⌘N on the
-/// right as a menu shows a shortcut. Outside the table, so the list's own selection never
-/// reaches it; it is styled from the picker's highlight state.
+/// The branch picker's New Branch… footer, across the bottom under a hairline: a plus,
+/// the title, and ⌘N on the right as a menu shows a shortcut. Outside the table, so the
+/// list's own selection never reaches it; it is styled from the picker's highlight state.
 final class BranchPickerNewBranchRow: NSView {
-    static let height: CGFloat = 32
+    private static let topPadding: CGFloat = 9
+    private static let contentHeight: CGFloat = 16
+    private static let bottomPadding: CGFloat = 10
+    /// The hairline, then the padded content.
+    static let height = 1 + topPadding + contentHeight + bottomPadding
 
     private static let iconSize: CGFloat = 14
-    private static let iconGap: CGFloat = 9
+    private static let iconGap: CGFloat = 8
+    private static let sidePadding: CGFloat = 16
 
     var onActivate: () -> Void = {}
     /// The pointer entered, moved over, or pressed the row: it asks to take the highlight.
     var onHighlightRequested: () -> Void = {}
 
-    /// Set by the container from the picker state; drawn as a highlighted branch row is.
+    /// Set by the container from the picker state; drawn as a darker bar.
     var isHighlighted = false {
         didSet {
             guard isHighlighted != oldValue else { return }
@@ -34,7 +39,7 @@ final class BranchPickerNewBranchRow: NSView {
     private let icon = NSImageView()
     private let title = PickerLabel.make(font: .systemFont(ofSize: 13), color: .labelColor)
     private let shortcut = PickerLabel.make(
-        font: .systemFont(ofSize: 13), color: .tertiaryLabelColor, alignment: .right)
+        font: .systemFont(ofSize: 12), color: .tertiaryLabelColor, alignment: .right)
     private var isPressed = false {
         didSet {
             guard isPressed != oldValue else { return }
@@ -42,8 +47,6 @@ final class BranchPickerNewBranchRow: NSView {
             needsDisplay = true
         }
     }
-    /// Filled as a highlighted branch row is.
-    private var showsHighlight: Bool { isEnabled && (isHighlighted || isPressed) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -117,31 +120,31 @@ final class BranchPickerNewBranchRow: NSView {
         shortcut.textColor = isEnabled ? .tertiaryLabelColor : .quaternaryLabelColor
     }
 
+    /// A faint bar, darker under the highlight and darker still while pressed, with a
+    /// hairline across its top.
     override func draw(_ dirtyRect: NSRect) {
-        guard showsHighlight else { return }
-        (isPressed ? PickerMetrics.pressedHighlightColor : PickerMetrics.highlightColor).setFill()
-        let rect = bounds.insetBy(dx: PickerMetrics.rowInset, dy: 0)
-        NSBezierPath(
-            roundedRect: rect, xRadius: PickerMetrics.cornerRadius, yRadius: PickerMetrics.cornerRadius
-        ).fill()
+        let alpha: CGFloat = !isEnabled ? 0.035 : isPressed ? 0.11 : isHighlighted ? 0.07 : 0.035
+        NSColor.labelColor.withAlphaComponent(alpha).setFill()
+        bounds.fill()
+        NSColor.separatorColor.setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 
-    /// Lined up with the rows above: the icon over theirs, the text over their names.
+    /// The content is centred on the padded area under the hairline.
     override func layout() {
         super.layout()
-        let leading = PickerMetrics.rowInset + PickerMetrics.contentInset
-        let trailing = bounds.width - leading
+        let centerY = 1 + Self.topPadding + Self.contentHeight / 2
         icon.frame = NSRect(
-            x: leading, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
+            x: Self.sidePadding, y: (centerY - Self.iconSize / 2).rounded(), width: Self.iconSize,
             height: Self.iconSize)
         let shortcutSize = PickerViewGeometry.naturalSize(of: shortcut)
         shortcut.frame = NSRect(
-            x: trailing - shortcutSize.width, y: ((bounds.height - shortcutSize.height) / 2).rounded(),
+            x: bounds.width - Self.sidePadding - shortcutSize.width, y: (centerY - shortcutSize.height / 2).rounded(),
             width: shortcutSize.width, height: shortcutSize.height)
         let textX = icon.frame.maxX + Self.iconGap
         let titleHeight = PickerViewGeometry.naturalSize(of: title).height
         title.frame = NSRect(
-            x: textX, y: ((bounds.height - titleHeight) / 2).rounded(),
+            x: textX, y: (centerY - titleHeight / 2).rounded(),
             width: max(shortcut.frame.minX - 8 - textX, 0), height: titleHeight)
     }
 }

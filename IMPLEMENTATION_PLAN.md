@@ -12,7 +12,7 @@ Full plan: design 16b, Switch and Merge only. Delete this file when all stages a
 **Goal**: Switch / Merge… tabs, instruction sentence with token, idle highlight, dimmed current row, footer bar.
 **Success Criteria**: Switch behaves as before; Merge tab lists rows (not yet actionable); screenshots match the design.
 **Tests**: `BranchPickerStateTests` for idle highlight, navigation around the current row, per-tab activation and instruction.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Merge previews
 **Goal**: Merge rows show `N commits` / `Already merged` / `Conflict in N files`, loaded lazily and cached.

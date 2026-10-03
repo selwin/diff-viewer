@@ -210,6 +210,9 @@ final class WindowState {
             Task { @MainActor [weak self] in await self?.fetchForBranchPicker() }
         }
     }
+    /// The branch picker's last tab, so the popover reopens on it. Kept for the window's
+    /// life only.
+    var branchPickerTab: BranchPickerTab = .switchBranch
     /// Where the fetch round is: it drives the header's spinner and holds a pull while the
     /// remotes are listed.
     private(set) var fetchStatus: FetchStatus = .idle

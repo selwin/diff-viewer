@@ -15,6 +15,7 @@ struct BranchPickerPopover: View {
         BranchPickerListView(
             snapshot: windowState.branchPickerSnapshot,
             grouping: grouping,
+            tab: windowState.branchPickerTab,
             onActivate: { activation in
                 switch activation {
                 case let .switchTo(name): Task { await windowState.switchBranch(to: name) }
@@ -37,6 +38,7 @@ struct BranchPickerPopover: View {
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
             onNewBranch: { windowState.openNewBranchSheetFromPicker() },
+            onTabChange: { windowState.branchPickerTab = $0 },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
@@ -48,6 +50,8 @@ struct BranchPickerPopover: View {
 struct BranchPickerListView: NSViewRepresentable {
     let snapshot: BranchPickerSnapshot
     let grouping: CommitDayGrouping
+    /// The tab the popover opens on; later changes are the container's.
+    let tab: BranchPickerTab
     let onActivate: (BranchActivation) -> Void
     let onDismiss: () -> Void
     let onPull: (String) -> Void
@@ -56,10 +60,12 @@ struct BranchPickerListView: NSViewRepresentable {
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
     let onNewBranch: () -> Void
+    let onTabChange: (BranchPickerTab) -> Void
     let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
-        let view = BranchPickerContainerView(state: BranchPickerState(snapshot: snapshot, grouping: grouping))
+        let view = BranchPickerContainerView(
+            state: BranchPickerState(snapshot: snapshot, grouping: grouping, tab: tab))
         setCallbacks(on: view)
         return view
     }
@@ -86,6 +92,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onDelete = onDelete
         view.onFetch = onFetch
         view.onNewBranch = onNewBranch
+        view.onTabChange = onTabChange
         view.now = now
     }
 }

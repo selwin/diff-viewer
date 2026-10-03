@@ -2,8 +2,9 @@ import AppKit
 
 /// A branch row: icon, name with a copy button after it, `author · time`, status text, and
 /// the Pull/Push pills. The copy button and pills show on the highlighted row; pills also
-/// stay while their operation runs. As the highlight moves, the pills fade and the status
-/// slides to make room. As a table cell it stays an accessibility cell; a press, or the
+/// stay while their operation runs. The current branch's row is dimmed and never
+/// highlighted, so its copy button shows while the pointer is over it. As the highlight
+/// moves, the pills fade and the status slides to make room. As a table cell it stays an accessibility cell; a press, or the
 /// named accessibility action, activates the row, and the copy and the pills' actions are
 /// offered beside it.
 final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
@@ -59,7 +60,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private let status = PickerLabel.make(
         font: PickerMetrics.statusFont, color: .secondaryLabelColor, alignment: .right)
     private var row: BranchPickerRow?
+    private var trailing: BranchRowLabel?
     private var accessibilityActionName = "Switch to branch"
+    /// Only the current row reads it, to show its copy button.
+    private var isPointerInside = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -69,6 +73,11 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         // Like the pills: the search field keeps the keyboard.
         copyButton.refusesFirstResponder = true
         for view in [icon, name, copyButton, subtitle, status] { addSubview(view) }
+        // `.activeAlways`: a scripted launch never makes the popover key.
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self,
+                userInfo: nil))
     }
 
     @available(*, unavailable)
@@ -76,9 +85,12 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     override var isFlipped: Bool { true }
 
-    /// A reused cell starts from its final state: nothing animates across rows.
-    func configure(_ row: BranchPickerRow) {
+    /// A reused cell starts from its final state: nothing animates across rows. The
+    /// container passes what depends on the tab: the right-edge words, why the row is
+    /// blocked, and what its activation is called.
+    func configure(_ row: BranchPickerRow, trailing: BranchRowLabel?, blockedReason: String?, actionName: String) {
         self.row = row
+        self.trailing = trailing
         stopAnimating()
         let symbol: NSImage? =
             switch row.kind {
@@ -89,12 +101,16 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         icon.image = symbol?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
         subtitle.stringValue = row.subtitle
         copyButton.configure(text: row.name)
-        status.stringValue = row.status.text
-        toolTip = row.blockedReason
-        accessibilityActionName = row.kind == .remoteOnly ? "Check out branch" : "Switch to branch"
-        let described = [row.name, row.kind == .current ? "current" : "", row.subtitle, row.status.text]
+        status.stringValue = trailing?.text ?? ""
+        toolTip = blockedReason
+        accessibilityActionName = actionName
+        let described = [row.name, row.subtitle, trailing?.text ?? ""]
         setAccessibilityLabel(described.filter { !$0.isEmpty }.joined(separator: ", "))
-        setAccessibilityHelp(row.blockedReason)
+        setAccessibilityHelp(blockedReason)
+        // No tab acts on the current branch: its text recedes, but its copy button doesn't.
+        let alpha: CGFloat = row.kind == .current ? 0.42 : 1
+        for view in [icon, name, subtitle, status] { view.alphaValue = alpha }
+        refreshPointer()
         applyColors()
         needsLayout = true
     }
@@ -105,16 +121,36 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         guard let row else { return }
         name.attributedStringValue = Self.attributedName(row, color: .labelColor)
         subtitle.textColor = .secondaryLabelColor
-        status.textColor = row.status.isAccent ? .controlAccentColor : .secondaryLabelColor
-        status.font = row.status.isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
+        let isAccent = trailing?.isAccent ?? false
+        status.textColor = isAccent ? .controlAccentColor : .secondaryLabelColor
+        status.font = isAccent ? Self.accentStatusFont : PickerMetrics.statusFont
         icon.contentTintColor = row.kind == .current ? .controlAccentColor : .secondaryLabelColor
         updateCopyButton()
     }
 
-    /// The one place the copy button's visibility is set: on the highlighted row, when it
-    /// fits. Called when either changes.
+    /// The one place the copy button's visibility is set: on the highlighted row, or the
+    /// current row under the pointer since it takes no highlight, when it fits. Called
+    /// when any of those change.
     private func updateCopyButton() {
-        copyButton.isHidden = !(isHighlighted && copyButtonFits)
+        let isShown = isHighlighted || (row?.kind == .current && isPointerInside)
+        copyButton.isHidden = !(isShown && copyButtonFits)
+    }
+
+    // MARK: Pointer
+
+    override func mouseEntered(with event: NSEvent) { setPointerInside(true) }
+    override func mouseExited(with event: NSEvent) { setPointerInside(false) }
+
+    /// A reused or moved cell gets no exit event, so it reads the pointer again.
+    private func refreshPointer() {
+        guard let window else { return setPointerInside(false) }
+        setPointerInside(bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)))
+    }
+
+    private func setPointerInside(_ inside: Bool) {
+        guard inside != isPointerInside else { return }
+        isPointerInside = inside
+        updateCopyButton()
     }
 
     private static func attributedName(_ row: BranchPickerRow, color: NSColor) -> NSAttributedString {
