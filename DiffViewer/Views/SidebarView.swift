@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
     @Environment(WindowState.self) private var windowState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sidebarRowSize) private var sidebarRowSize
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
@@ -13,11 +14,16 @@ struct SidebarView: View {
         let isTrayExpanded =
             windowState.repositoryRoot.map { windowState.preferences.isStagingTrayExpanded(for: $0) } ?? false
         let capsule = windowState.stagingCapsule
+        let stagedFiles = windowState.stagedFiles
+        let stagedGroups = DirectoryGrouping.groups(fromSortedFiles: stagedFiles)
+        let rowHeight = stagedRowHeight
+        let stagedContentHeight = StagingTrayLayout.contentHeight(
+            groupCount: stagedGroups.count, rowCount: stagedFiles.count, rowHeight: rowHeight)
         // A collapsed tray leaves its list out, which also moves focus off it below.
         let stagedListHeight =
             isTrayExpanded
             ? StagingTrayLayout.listHeight(
-                rowCount: windowState.stagedFiles.count, sidebarHeight: sidebarHeight,
+                contentHeight: stagedContentHeight, rowHeight: rowHeight, sidebarHeight: sidebarHeight,
                 holdsSelection: windowState.selectedFiles.contains { $0.area == .staged }, hasCapsule: capsule != nil)
             : 0
         let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
@@ -25,8 +31,10 @@ struct SidebarView: View {
             changesList
             if windowState.showsStagingTray {
                 StagingTrayView(
-                    listHeight: stagedListHeight, isExpanded: isTrayExpanded,
-                    hasCapsule: capsule != nil, focusedList: focusedList
+                    groups: stagedGroups, listHeight: stagedListHeight,
+                    overflows: StagingTrayLayout.overflows(
+                        contentHeight: stagedContentHeight, listHeight: stagedListHeight),
+                    isExpanded: isTrayExpanded, hasCapsule: capsule != nil, focusedList: focusedList
                 )
                 .alignmentGuide(.stagingCapsule) { $0[.top] }
                 // Under Reduce Motion nothing slides: the tray fades in place, with its own
@@ -58,6 +66,16 @@ struct SidebarView: View {
         }
     }
 
+    /// A staged row's height at the system's sidebar size, measured with the tray's insets.
+    private var stagedRowHeight: CGFloat {
+        switch sidebarRowSize {
+        case .small: 26
+        case .medium: 32
+        case .large: 40
+        @unknown default: 32
+        }
+    }
+
     /// Centred on the tray's top edge, or floating 14pt above the sidebar's foot without one.
     /// One view whether it reads Stage or Unstage, so only coming and going run the entrance.
     private func stagingCapsule(_ capsule: StagingCapsule?) -> some View {
@@ -76,6 +94,10 @@ struct SidebarView: View {
 
     private var changesList: some View {
         @Bindable var windowState = windowState
+        let unstagedFiles = windowState.unstagedFiles
+        let commitFiles = windowState.commitFiles
+        let unstagedGroups = DirectoryGrouping.groups(fromSortedFiles: unstagedFiles)
+        let commitGroups = DirectoryGrouping.groups(fromSortedFiles: commitFiles)
         // Both lists bind the one selection, and the model's setter keeps it to one list:
         // a click, ⌘-click or ⇧-click in either clears the other's rows, so a selection
         // always has one staging action. The arrow keys stay within one list. The setter
@@ -115,27 +137,26 @@ struct SidebarView: View {
                 }
                 .tag(DiffSelection.allChanges)
             }
-            if !windowState.unstagedFiles.isEmpty {
+            // Header-only, so each directory below can be a section of its own.
+            if !unstagedGroups.isEmpty {
                 Section {
-                    ForEach(windowState.unstagedFiles) {
-                        SidebarFileRow(file: $0)
-                    }
                 } header: {
                     HStack(spacing: 4) {
                         Text("Changes")
-                        Text("\(windowState.unstagedFiles.count)")
+                        Text("\(unstagedFiles.count)")
                     }
                     .foregroundStyle(.secondary)
                     .font(.system(size: 11, weight: .semibold))
                 }
+                ForEach(unstagedGroups) { DirectoryFileSection(group: $0) }
             }
             // A commit has one list: its own staging is long settled.
-            if !windowState.commitFiles.isEmpty {
-                Section("Changed (\(windowState.commitFiles.count))") {
-                    ForEach(windowState.commitFiles) {
-                        SidebarFileRow(file: $0)
-                    }
+            if !commitGroups.isEmpty {
+                Section {
+                } header: {
+                    Text("Changed (\(commitFiles.count))")
                 }
+                ForEach(commitGroups) { DirectoryFileSection(group: $0) }
             }
         }
         .listStyle(.sidebar)
@@ -222,43 +243,84 @@ struct SidebarFileContextMenu: View {
     }
 }
 
+/// A directory caption and its file rows, as one list section.
+struct DirectoryFileSection: View {
+    let group: DirectoryGroup
+    /// Nil keeps the list's own insets.
+    var rowInsets: EdgeInsets?
+
+    var body: some View {
+        Section {
+            ForEach(group.files) { SidebarFileRow(file: $0).listRowInsets(rowInsets) }
+        } header: {
+            DirectoryCaption(group: group, rowTrailingInset: rowInsets?.trailing ?? 0)
+        }
+    }
+}
+
+/// A directory's path and file count, with the directory's own name emphasized.
+struct DirectoryCaption: View {
+    /// A sidebar header reaches 13pt closer to the list's trailing edge than a row's
+    /// content (macOS 26); padding by that lines the count up with the rows' churn.
+    private static let headerOverhang: CGFloat = 13
+
+    let group: DirectoryGroup
+    /// The trailing inset the section's rows add, if any, so the count follows them in.
+    var rowTrailingInset: CGFloat = 0
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Drops the path a folder at a time before the name ever truncates. A sidebar
+            // header draws lighter than `.secondary` (macOS 26), so both tones are explicit
+            // to keep the prefix dimmer than the name.
+            ViewThatFits(in: .horizontal) {
+                ForEach(group.parentPathPrefixes, id: \.self) { prefix in
+                    HStack(spacing: 0) {
+                        if !prefix.isEmpty {
+                            Text(prefix)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        Text(group.directoryName)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer(minLength: 8)
+            Text("\(group.files.count)")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .layoutPriority(2)
+        }
+        .padding(.trailing, Self.headerOverhang + rowTrailingInset)
+        .font(.system(size: 11))
+        // A shortened path can match another group's; hovering shows which is which.
+        .help(group.directoryPath)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            "\(group.directoryPath.isEmpty ? "Top level" : group.directoryPath), \(FileCountText.make(group.files.count))"
+        )
+        // Lets VoiceOver jump between directories by heading.
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
 struct SidebarFileRow: View {
     let file: ChangedFile
-    var showsChurn = true
 
     var body: some View {
         HStack(spacing: 8) {
             KindBadge(kind: file.kind)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(file.fileName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let originalPath = file.originalPath {
-                    // The arrow sits outside the truncated text so a long old path keeps it.
-                    HStack(spacing: 3) {
-                        Text("←")
-                        caption(originalPath)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else if !file.directory.isEmpty {
-                    caption(file.directory)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(file.fileName)
+                .lineLimit(1)
+                .truncationMode(.middle)
             Spacer(minLength: 8)
-            if showsChurn {
-                ChurnLabel(stats: file.lineStats)
-            }
+            ChurnLabel(stats: file.lineStats)
         }
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
-    }
-
-    /// Truncated at the head so the file name at the end stays visible.
-    private func caption(_ text: String) -> some View {
-        Text(text).lineLimit(1).truncationMode(.head)
     }
 }
 

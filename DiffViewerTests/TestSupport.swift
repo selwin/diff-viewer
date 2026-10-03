@@ -25,6 +25,11 @@ func changedFile(_ path: String, area: ChangedFile.Area = .unstaged, kind: Chang
     ChangedFile(path: path, originalPath: nil, kind: kind, area: area, fingerprint: fingerprint(path, area, kind))
 }
 
+/// What `WindowState.files` holds for a status list: staged first, directories contiguous.
+func inPublishedFileOrder(_ files: [ChangedFile]) -> [ChangedFile] {
+    DirectoryGrouping.sortedForDisplay(files)
+}
+
 private func fingerprint(_ path: String, _ area: ChangedFile.Area, _ kind: ChangedFile.Kind) -> DiffInputFingerprint? {
     let stat = DiffInputFingerprint.Worktree.file(mtimeNs: 1, ctimeNs: 1, size: 10, inode: 1)
     switch (area, kind) {

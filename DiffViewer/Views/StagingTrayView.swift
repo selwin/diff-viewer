@@ -3,9 +3,13 @@ import SwiftUI
 
 /// The staged files and the commit button, in a sheet docked below the Changes list.
 struct StagingTrayView: View {
+    /// The staged files by directory, in list order.
+    let groups: [DirectoryGroup]
     /// From `StagingTrayLayout`; at 0 the list is left out and only the header and the
     /// button show.
     let listHeight: CGFloat
+    /// Whether the list scrolls, which the fade at its foot says.
+    let overflows: Bool
     let isExpanded: Bool
     /// Whether the staging capsule sits on the tray's top edge, reaching 15pt into it.
     let hasCapsule: Bool
@@ -15,6 +19,7 @@ struct StagingTrayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let sheetFill = Color(nsColor: .controlBackgroundColor).opacity(0.85)
+    private static let rowInsets = EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
 
     var body: some View {
         let staged = windowState.stagedFiles
@@ -22,7 +27,7 @@ struct StagingTrayView: View {
         VStack(spacing: 0) {
             header(summary, stagedIDs: staged.map(\.id))
             if listHeight > 0 {
-                stagedList(staged)
+                stagedList
                     // Under Reduce Motion the toggle has no animation, so the list's own
                     // fade is what cross-fades it in place of the slide.
                     .transition(reduceMotion ? .opacity.animation(.easeInOut(duration: 0.2)) : .opacity)
@@ -79,24 +84,18 @@ struct StagingTrayView: View {
         .accessibilityLabel(summary.headerAccessibilityLabel + (isExpanded ? ", expanded" : ", collapsed"))
     }
 
-    private func stagedList(_ staged: [ChangedFile]) -> some View {
+    private var stagedList: some View {
         @Bindable var windowState = windowState
         // Bound to the same selection as Changes; `SidebarView` says how the two share it.
         return List(selection: $windowState.selection) {
-            ForEach(staged) { file in
-                // No per-file counts: the tray is narrow, and the header carries the total.
-                SidebarFileRow(file: file, showsChurn: false)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
-            }
+            ForEach(groups) { DirectoryFileSection(group: $0, rowInsets: Self.rowInsets) }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .environment(\.defaultMinListRowHeight, StagingTrayLayout.rowHeight)
         .modifier(SidebarListBehavior(list: .staged, focusedList: focusedList))
         .frame(height: listHeight)
-        // Past the cap, the fade says there is more to scroll to.
         .overlay(alignment: .bottom) {
-            if staged.count > StagingTrayLayout.maxVisibleRows {
+            if overflows {
                 LinearGradient(colors: [.clear, Self.sheetFill], startPoint: .top, endPoint: .bottom)
                     .frame(height: 28)
                     .allowsHitTesting(false)
