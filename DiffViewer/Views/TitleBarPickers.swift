@@ -138,8 +138,8 @@ private struct SegmentID: Hashable {
     let operation: SyncOperation
 }
 
-/// One segment's face: the arrow and action in the accent colour, then the count in
-/// secondary colour when there is one. A running segment covers the arrow and
+/// One segment's face: the arrow, action and count, when there is one, in the accent
+/// colour. A running segment covers the arrow and
 /// action with a spinner, as the picker's own buttons do, so the pill keeps its width.
 private struct SyncSegmentLabel: View {
     let arrow: String
@@ -163,7 +163,6 @@ private struct SyncSegmentLabel: View {
                 Text(title)
                     .fontWeight(.medium)
             }
-            .foregroundStyle(isEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             // Centred by its line box, the text reads low against the icons; lift it to the
             // eye, and the arrow with it so the two line up.
             .offset(y: -1)
@@ -174,11 +173,11 @@ private struct SyncSegmentLabel: View {
             if let shown = count ?? (isRunning ? lastCount : nil) {
                 Text("\(shown)")
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
                     // Lifted like the title, so the two share a baseline.
                     .offset(y: -1)
             }
         }
+        .foregroundStyle(isEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
         .onChange(of: count, initial: true) { _, new in
             if let new { lastCount = new }
         }
