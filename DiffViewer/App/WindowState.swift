@@ -1593,6 +1593,14 @@ extension WindowState {
         headChangeActivity = nil
     }
 
+    #if DEBUG
+        /// Shows `state` on the pill with no timer, so a snapshot can capture it.
+        func showHeadChangeActivityForSnapshot(_ state: HeadChangeActivity.State) {
+            clearHeadChangeActivity()
+            headChangeActivity = HeadChangeActivity(activityID: takeHeadChangeActivityID(), state: state)
+        }
+    #endif
+
     /// Creates `name` at HEAD and switches to it, on the same terms as `switchBranch(to:)`.
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {

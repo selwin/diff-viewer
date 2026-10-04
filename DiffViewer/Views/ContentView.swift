@@ -61,10 +61,7 @@ struct ContentView: View {
             // One item, so the two pickers stay side by side; the shared background is
             // hidden because each one draws its own capsule.
             ToolbarItem(placement: .navigation) {
-                HStack(spacing: 8) {
-                    BranchPickerView()
-                    ScopePickerView()
-                }
+                TitleBarPickers()
             }
             .sharedBackgroundVisibility(.hidden)
             // The toolbar's title carried the flexible space that kept the buttons on the

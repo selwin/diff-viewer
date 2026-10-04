@@ -1,16 +1,39 @@
 import SwiftUI
 
+/// The branch pill and the scope button, side by side in one toolbar item.
+struct TitleBarPickers: View {
+    @Environment(WindowState.self) private var windowState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The live pill's activity, copied in an animated transaction so the scope button
+    /// slides with the pill's edge. An implicit `.animation` here is ignored by the toolbar.
+    @State private var shownActivity: HeadChangeActivity?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            BranchPickerView(activity: shownActivity)
+            ScopePickerView()
+        }
+        .onChange(of: windowState.headChangeActivity, initial: true) { _, activity in
+            withAnimation(reduceMotion ? nil : .spring(duration: 0.4)) { shownActivity = activity }
+        }
+    }
+}
+
 /// The title bar's branch pill: the current branch, which opens the branch picker, then
 /// Pull and Push segments when there is something to sync. ⌘B opens the same popover by
-/// setting the same flag.
+/// setting the same flag. Right after a switch, create or merge it turns into a dark
+/// capsule that says what happened.
 struct BranchPickerView: View {
+    /// What the live pill shows, or nil for the normal pill.
+    let activity: HeadChangeActivity?
     @Environment(WindowState.self) private var windowState
     @State private var isBranchTinted = false
     @State private var isLeadingSegmentTinted = false
 
     var body: some View {
         @Bindable var windowState = windowState
-        let sync = windowState.currentBranchSync
+        // Read only for the normal pill: the live capsule hides the segments.
+        let sync = activity == nil ? windowState.currentBranchSync : nil
         let showsSegments = sync?.showsSegments ?? false
         HStack(spacing: 0) {
             // Capped like the scope picker, so a long branch name can't push the toolbar's
@@ -20,15 +43,21 @@ struct BranchPickerView: View {
                 Button {
                     windowState.isBranchPickerPresented = true
                 } label: {
-                    TitleBarPickerContent(icon: .gitBranch, title: windowState.branchDisplayTitle)
-                        .padding(.leading, 14)
-                        .padding(.trailing, showsSegments ? 10 : 14)
-                        .frame(height: 36)
-                        .modifier(PillPartHover { isBranchTinted = $0 })
+                    if let activity {
+                        HeadChangeCapsuleLabel(activity: activity)
+                            .padding(.horizontal, 12)
+                            .frame(height: 36)
+                    } else {
+                        TitleBarPickerContent(icon: .gitBranch, title: windowState.branchDisplayTitle)
+                            .padding(.leading, 14)
+                            .padding(.trailing, showsSegments ? 10 : 14)
+                            .frame(height: 36)
+                            .modifier(PillPartHover { isBranchTinted = $0 })
+                    }
                 }
                 .buttonStyle(.plain)
                 .disabled(!windowState.canOpenBranchPicker)
-                .help(windowState.branchSwitchHelp)
+                .help(activity?.accessibilityText ?? windowState.branchSwitchHelp)
                 .popover(isPresented: $windowState.isBranchPickerPresented, arrowEdge: .bottom) {
                     BranchPickerPopover()
                 }
@@ -46,9 +75,85 @@ struct BranchPickerView: View {
                     .disabled(!windowState.canOpenBranchPicker)
             }
         }
-        .background(TitleBarCapsule(isOpen: windowState.isBranchPickerPresented))
+        .background {
+            if activity != nil {
+                HeadChangeSurface().transition(.opacity)
+            } else {
+                TitleBarCapsule(isOpen: windowState.isBranchPickerPresented).transition(.opacity)
+            }
+        }
         // Clips each part's hover tint to the round ends.
         .clipShape(Capsule())
+        // Observed here, not in the label, which comes and goes with the activity.
+        .onChange(of: finishedActivityID) { _, id in
+            guard id != nil, let activity = windowState.headChangeActivity else { return }
+            AccessibilityNotification.Announcement(activity.accessibilityText).post()
+        }
+    }
+
+    /// The ID of the activity once it has finished; running states are not announced.
+    private var finishedActivityID: Int? {
+        guard let activity = windowState.headChangeActivity, case .finished = activity.state else { return nil }
+        return activity.activityID
+    }
+}
+
+/// The live pill's surface: the text colour inverted, so it reads dark in light mode and light
+/// in dark mode.
+private struct HeadChangeSurface: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        Capsule().fill(Color.primary.opacity(contrast == .increased ? 1 : 0.88))
+    }
+}
+
+/// What the live pill says: a spinner or a status dot, a semibold title, and the detail at
+/// reduced opacity, which is the only part that truncates.
+private struct HeadChangeCapsuleLabel: View {
+    let activity: HeadChangeActivity
+
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        let foreground = Color(nsColor: .windowBackgroundColor)
+        HStack(spacing: 6) {
+            indicator
+                .accessibilityHidden(true)
+            HStack(spacing: 4) {
+                Text(activity.title)
+                    .fontWeight(.semibold)
+                    .fixedSize()
+                    .layoutPriority(1)
+                Text(activity.detail)
+                    .fontWeight(.medium)
+                    .foregroundStyle(foreground.opacity(contrast == .increased ? 1 : 0.7))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            // Lifted like the normal pill's text, so the two sit at the same height.
+            .offset(y: -1)
+        }
+        .foregroundStyle(foreground)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(activity.accessibilityText)
+        .accessibilityHint("Open branch picker")
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        switch activity.tone {
+        case .progress:
+            // A symbol, not `ProgressView`: the AppKit spinner keeps the window's appearance,
+            // so it would vanish against the inverted surface. This one takes the text colour.
+            Image(systemName: "progress.indicator")
+                .font(.system(size: 12, weight: .semibold))
+                .symbolEffect(.variableColor.iterative, options: .repeat(.continuous))
+        case .success:
+            Circle().fill(Color.green).frame(width: 6, height: 6)
+        case .warning:
+            Circle().fill(Color(nsColor: .systemOrange)).frame(width: 6, height: 6)
+        }
     }
 }
 
