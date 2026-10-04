@@ -9,6 +9,8 @@ struct SidebarView: View {
     /// Owned by `ContentView`, which also needs to know when a list has focus.
     var focusedList: FocusState<SidebarList?>.Binding
     @State private var sidebarHeight: CGFloat = 0
+    /// Until measured, preserve the default staged-list cap.
+    @State private var changesContentHeight: CGFloat = .infinity
 
     var body: some View {
         let isTrayExpanded =
@@ -23,8 +25,9 @@ struct SidebarView: View {
         let stagedListHeight =
             isTrayExpanded
             ? StagingTrayLayout.listHeight(
-                contentHeight: stagedContentHeight, rowHeight: rowHeight, sidebarHeight: sidebarHeight,
-                holdsSelection: windowState.selectedFiles.contains { $0.area == .staged }, hasCapsule: capsule != nil)
+                contentHeight: stagedContentHeight, rowHeight: rowHeight, changesContentHeight: changesContentHeight,
+                sidebarHeight: sidebarHeight, holdsSelection: windowState.selectedFiles.contains { $0.area == .staged },
+                hasCapsule: capsule != nil)
             : 0
         let showsStagedList = windowState.showsStagingTray && stagedListHeight > 0
         VStack(spacing: 0) {
@@ -60,6 +63,9 @@ struct SidebarView: View {
         // A merge shows the tray with no staged ids changing.
         .animation(reduceMotion ? nil : .default, value: windowState.files.map(\.id))
         .animation(reduceMotion ? nil : .default, value: windowState.showsStagingTray)
+        // Changes is measured after its rows change, outside their animation, so the tray
+        // would jump to its new height without this. A window resize leaves it unchanged.
+        .animation(reduceMotion ? nil : .default, value: changesContentHeight)
         // A focused list that goes away would leave the keyboard nowhere in the sidebar.
         .onChange(of: showsStagedList) { _, shows in
             if !shows, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
@@ -161,7 +167,14 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         // Room for the last row to scroll clear of the staging capsule.
-        .safeAreaPadding(.bottom, 64)
+        .safeAreaPadding(.bottom, StagingTrayLayout.changesCapsulePadding)
+        // The reported bottom inset drops to 0 while the tray animates, so the capsule
+        // padding is added as a constant instead.
+        .onScrollGeometryChange(for: CGFloat.self) {
+            $0.contentSize.height + $0.contentInsets.top + StagingTrayLayout.changesCapsulePadding
+        } action: { _, height in
+            changesContentHeight = height
+        }
         .modifier(SidebarListBehavior(list: .changes, focusedList: focusedList))
     }
 }
