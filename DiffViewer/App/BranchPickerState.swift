@@ -208,20 +208,35 @@ struct BranchPickerState {
         return branch
     }
 
-    /// What activating the row does, or nil when it can't be activated. In Switch: the
-    /// current branch is already checked out, a switch in flight locks every row until it
-    /// settles, a branch being deleted can't be checked out, and a blocked row explains
-    /// why. Merge rows don't act yet.
+    /// What activating the row does, or nil when it can't be activated. A switch in flight
+    /// locks every row until it settles. In Switch: the current branch is already checked
+    /// out, a branch being deleted can't be checked out, and a blocked row explains why. In
+    /// Merge: any other branch opens the merge sheet, while a merge is available.
     func activation(forTableRow index: Int) -> BranchActivation? {
-        guard tab == .switchBranch, !snapshot.isSwitchingBranch, let row = row(forTableRow: index),
+        guard !snapshot.isSwitchingBranch, let row = row(forTableRow: index),
             blockedReason(forTableRow: index) == nil
         else { return nil }
+        switch tab {
+        case .switchBranch: return switchActivation(for: row)
+        case .merge: return mergeTarget(for: row).map(BranchActivation.merge)
+        }
+    }
+
+    private func switchActivation(for row: BranchPickerRow) -> BranchActivation? {
         switch row.source {
         case let .local(branch):
             guard row.kind != .current, branch.name != Self.deleting(snapshot) else { return nil }
             return .switchTo(name: branch.name)
         case let .remote(branch):
             return .checkoutTracking(branch)
+        }
+    }
+
+    private func mergeTarget(for row: BranchPickerRow) -> MergeTarget? {
+        guard row.kind != .current, let mergeHeadSha, let into = currentBranchName else { return nil }
+        switch row.source {
+        case let .local(branch): return .local(branch, destinationBranch: into, destinationTipSha: mergeHeadSha)
+        case let .remote(branch): return .remote(branch, destinationBranch: into, destinationTipSha: mergeHeadSha)
         }
     }
 
@@ -260,14 +275,8 @@ struct BranchPickerState {
     /// and never for the current branch itself. Keyed by tips, so a moved HEAD or branch
     /// gives the row a new key.
     func mergePreviewKey(forTableRow index: Int) -> MergePreviewKey? {
-        guard tab == .merge, let mergeHeadSha, let row = row(forTableRow: index), row.kind != .current
-        else { return nil }
-        let sourceTipSha =
-            switch row.source {
-            case let .local(branch): branch.tipSha
-            case let .remote(branch): branch.tipSha
-            }
-        return MergePreviewKey(headSha: mergeHeadSha, sourceTipSha: sourceTipSha)
+        guard tab == .merge, let row = row(forTableRow: index) else { return nil }
+        return mergeTarget(for: row)?.previewKey
     }
 
     /// Every row whose current key is `key`: branches at the same tip share one.

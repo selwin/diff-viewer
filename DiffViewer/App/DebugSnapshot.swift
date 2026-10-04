@@ -23,6 +23,9 @@ import Foundation
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
 /// - `DIFFVIEWER_NEW_BRANCH_SHEET=1` opens the New Branch sheet, rendered like the commit
 ///   sheet; `DIFFVIEWER_KEYS` types into its name field.
+/// - `DIFFVIEWER_MERGE_SHEET=<branch>` opens the Merge sheet for that local branch (or a
+///   remote one with that short name, like `origin/x`) into the current one, once the
+///   branches have loaded, rendered the same way.
 /// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (typed into the first
 ///   responder), `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
@@ -111,6 +114,7 @@ enum DebugLaunchOptions {
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || newBranchSheet
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
+                || env["DIFFVIEWER_MERGE_SHEET"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -159,9 +163,7 @@ enum DebugLaunchOptions {
                 else { return }
                 // The snapshot renders offscreen, so lift the visibility gate for this window.
                 windowState.isVisible = true
-                if !scopeSha.isEmpty {
-                    await selectScope(scopeSha, in: windowState)
-                }
+                if !scopeSha.isEmpty { await selectScope(scopeSha, in: windowState) }
                 if !selection.isEmpty {
                     windowState.selection =
                         selection == "all"
@@ -175,6 +177,7 @@ enum DebugLaunchOptions {
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
                 windowState.isNewBranchSheetPresented = newBranchSheet
+                await openMergeSheet(env: env, in: windowState)
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
                     try? await Task.sleep(for: .seconds(1))

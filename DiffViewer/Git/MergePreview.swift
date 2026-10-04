@@ -9,6 +9,17 @@ enum MergePreview: Sendable, Equatable {
     case conflicts(commits: Int, paths: [String])
 }
 
+extension MergePreview {
+    /// How many commits the merge brings in; zero when already merged.
+    var commitCount: Int {
+        switch self {
+        case .alreadyMerged: 0
+        case let .clean(commits): commits
+        case let .conflicts(commits, _): commits
+        }
+    }
+}
+
 /// Parses `git merge-tree --write-tree --name-only --no-messages -z`: the merged tree's
 /// object id, then each conflicted path, every one terminated by NUL.
 enum MergeTreeParser {

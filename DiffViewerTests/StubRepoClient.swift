@@ -127,8 +127,12 @@ actor StubRepoClient: RepoClient {
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     private var stubbedCommitsToMerge: [CommitSummary] = []
+    struct MergeCall: Equatable {
+        let sourceTipSha: String
+        let sourceRef: String
+    }
     /// Every merge asked for, in order, whether or not it succeeded.
-    private(set) var mergeCalls: [String] = []
+    private(set) var mergeCalls: [MergeCall] = []
     private var failsMerge = false
     private var stubbedUpstreamRemotes: [String: String] = [:]
     private var failsConfiguredUpstreamRemotes = false
@@ -156,7 +160,8 @@ actor StubRepoClient: RepoClient {
     private(set) var lastHistoryRevision: String?
     private(set) var lastHistoryLimit: Int?
     private(set) var lastHistorySkip: Int?
-    /// What `commitSha(of:)` answers per ref; an unlisted ref names no commit.
+    /// What `commitSha(of:)` answers per ref; an unlisted ref names no commit, except that
+    /// a `refs/heads/` ref falls back to that local branch's tip.
     private var stubbedCommitShas: [String: String] = [:]
     private var failsCommitSha = false
     /// Every ref `commitSha(of:)` was asked to resolve, in order.
@@ -496,8 +501,8 @@ actor StubRepoClient: RepoClient {
         limit > 0 ? Array(stubbedCommitsToMerge.prefix(limit)) : []
     }
 
-    func merge(sourceRef: String) async throws {
-        mergeCalls.append(sourceRef)
+    func merge(sourceTipSha: String, sourceRef: String) async throws {
+        mergeCalls.append(MergeCall(sourceTipSha: sourceTipSha, sourceRef: sourceRef))
         if failsMerge { throw ProcessError.failed(command: "git merge", status: 1, stderr: "merge failed") }
     }
 
@@ -529,7 +534,9 @@ actor StubRepoClient: RepoClient {
     func commitSha(of ref: String) async throws -> String? {
         commitShaCalls.append(ref)
         if failsCommitSha { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
-        return stubbedCommitShas[ref]
+        if let sha = stubbedCommitShas[ref] { return sha }
+        guard ref.hasPrefix("refs/heads/") else { return nil }
+        return stubbedLocalBranches.first { "refs/heads/\($0.name)" == ref }?.tipSha
     }
 
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {

@@ -58,14 +58,43 @@ extension GitClient {
         return try GitLogParser.parse(result.stdout)
     }
 
-    /// Merges `sourceRef`, a full ref such as `refs/heads/x` or `refs/remotes/origin/x`,
-    /// into the current branch. Kept full: a short name could resolve to a tag of the same
-    /// name. Runs hooks, so it takes the hook environment.
-    func merge(sourceRef: String) async throws {
+    /// Merges exactly `sourceTipSha`, the commit the reader confirmed, so a ref that a
+    /// fetch has moved since can't bring in commits the sheet never showed. `sourceRef`, a
+    /// full ref such as `refs/heads/x` or `refs/remotes/origin/x`, only names the branch
+    /// in the message. Runs hooks, so it takes the hook environment.
+    func merge(sourceTipSha: String, sourceRef: String) async throws {
+        try Self.rejectOption(sourceTipSha, kind: "object id", command: "git merge")
         try Self.rejectOption(sourceRef, kind: "branch", command: "git merge")
+        let message = try await mergeMessage(sourceTipSha: sourceTipSha, sourceRef: sourceRef)
         // Config decides fast-forward versus a merge commit, as in `pull()`; `--no-edit`
-        // keeps a merge commit from opening `$EDITOR`.
+        // keeps a merge commit from opening `$EDITOR`. `--no-log` because the message
+        // already has the shortlog `merge.log` asks for. Known cost: conflict markers are
+        // labelled with the sha, since git labels them with the argument it was given.
         try await runReportingDiagnostics(
-            ["merge", "--no-edit", sourceRef], command: "git merge", environment: await hookEnvironment())
+            ["merge", "--no-edit", "--no-log", "-m", message, sourceTipSha],
+            command: "git merge", environment: await hookEnvironment())
+    }
+
+    /// The message `git merge <branch>` would write, from the same `git fmt-merge-msg`
+    /// it uses, so branch naming, the "into <branch>" suffix and `merge.log` follow config.
+    private func mergeMessage(sourceTipSha: String, sourceRef: String) async throws -> String {
+        let description: String
+        if sourceRef.hasPrefix("refs/heads/") {
+            description = "branch '\(sourceRef.dropFirst("refs/heads/".count))'"
+        } else if sourceRef.hasPrefix("refs/remotes/") {
+            description = "remote-tracking branch '\(sourceRef.dropFirst("refs/remotes/".count))'"
+        } else {
+            description = "commit '\(sourceTipSha)'"
+        }
+        let input = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try "\(sourceTipSha)\t\t\(description) of .\n".write(to: input, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: input) }
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["fmt-merge-msg", "-F", input.path],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        return result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

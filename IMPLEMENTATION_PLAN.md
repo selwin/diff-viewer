@@ -4,7 +4,7 @@ Full plan: design 16b, Switch and Merge only. Delete this file when all stages a
 
 ## Stage 1: Merge git layer
 **Goal**: `GitClient` can preview, list and run a merge; remote branches carry their tip sha.
-**Success Criteria**: `mergePreview`, `commitsToMerge`, `merge(sourceRef:)` on `RepoClient`; tests pass.
+**Success Criteria**: `mergePreview`, `commitsToMerge`, `merge(sourceTipSha:sourceRef:)` on `RepoClient`; tests pass.
 **Tests**: `MergeTreeParserTests`, `RemoteBranchParserTests`, merge cases in a scratch-repo suite.
 **Status**: Complete
 
@@ -23,5 +23,5 @@ Full plan: design 16b, Switch and Merge only. Delete this file when all stages a
 ## Stage 4: Merge sheet and merge
 **Goal**: Clicking a Merge row opens a confirmation sheet; Merge runs `git merge` and refreshes.
 **Success Criteria**: Clean, already-merged and conflicting merges behave as planned; Cancel never merges.
-**Tests**: `WindowStateMergeTests`, `MergeSheetModelTests`.
-**Status**: Not Started
+**Tests**: `WindowStateMergeTests`, `MergeSheetModelTests`, Merge activation in `BranchPickerStateTests`, merge sheet overlay in `WindowStateBranchPickerTests`.
+**Status**: Complete

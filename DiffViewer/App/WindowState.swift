@@ -130,7 +130,7 @@ final class WindowState {
     /// The list's entry for the branch HEAD is on, or nil when HEAD is detached, unread, or
     /// the branch is missing from the list.
     var currentBranch: LocalBranch? { branches.first { $0.name == currentBranchName } }
-    /// True while a branch switch is queued, running, or refreshing repository state.
+    /// True while a checkout or merge is queued, running, or refreshing repository state.
     private(set) var isSwitchingBranch = false
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
@@ -202,6 +202,9 @@ final class WindowState {
     /// The New Branch sheet is up. Like the pickers and the commit sheet, it opens only
     /// while none of them is.
     var isNewBranchSheetPresented = false
+    /// The branch the Merge sheet is asking about, or nil while the sheet is down. Opens on
+    /// the same terms as the New Branch sheet.
+    var pendingMerge: MergeTarget?
     /// The branch picker popover is up, on the same terms as the commit picker's flag.
     /// Opening it starts the automatic fetch behind its counts.
     var isBranchPickerPresented = false {
@@ -321,6 +324,7 @@ final class WindowState {
         isCommitPickerPresented = false
         isBranchPickerPresented = false
         isNewBranchSheetPresented = false
+        pendingMerge = nil
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -1417,10 +1421,11 @@ extension WindowState {
     }
 }
 
-// MARK: - Switching branches
+// MARK: - HEAD changes
 
-/// Checking out another local branch, a remote one as a new tracking branch, or a new
-/// branch made at HEAD, from the title bar. Same file as the class so `isSwitchingBranch` stays `private(set)`.
+/// Moving HEAD or its branch from the title bar: checking out another local branch, a remote
+/// one as a new tracking branch, or a new branch made at HEAD, and merging a branch into the
+/// current one. Same file as the class so `isSwitchingBranch` stays `private(set)`.
 extension WindowState {
     /// Switches the working tree to `branch` on the write chain; a second call while one
     /// is queued or running does nothing, and so does choosing the branch already checked
@@ -1429,37 +1434,44 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
             activeSync != ActiveSync(branch: branch, operation: .delete)
         else { return }
-        await startBranchSwitch(session: session) { client in
+        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
             try await client.switchBranch(to: branch)
         }
     }
 
-    /// Runs `checkout` on the write chain, holding `isSwitchingBranch` until it and its
-    /// re-reads finish. The flag is set before the first suspension: callers guard on it.
-    private func startBranchSwitch(
-        session: RepoSession, checkout: @escaping (any RepoClient) async throws -> Void
+    /// Runs `operation` (a checkout or a merge) on the write chain, holding `isSwitchingBranch`
+    /// until it and its re-reads finish. The flag is set before the first suspension: callers
+    /// guard on it. Only a checkout leaves the remote branches' "new" badges behind;
+    /// `clearsNewRemoteBranches` says whether this one does.
+    private func startHeadChange(
+        session: RepoSession, clearsNewRemoteBranches: Bool,
+        operation: @escaping (any RepoClient) async throws -> Void
     ) async {
         isSwitchingBranch = true
         defer { isSwitchingBranch = false }
         // A run in flight would pair the old branch name with the new branch's patch.
         cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
-            await self?.runBranchSwitch(session: session, checkout: checkout)
+            await self?.runHeadChange(
+                session: session, clearsNewRemoteBranches: clearsNewRemoteBranches, operation: operation)
         }
     }
 
-    /// `checkout` is the git call that moves HEAD; everything after it is shared.
-    private func runBranchSwitch(session: RepoSession, checkout: (any RepoClient) async throws -> Void) async {
+    /// `operation` is the git call that moves HEAD or its branch; everything after it is shared.
+    private func runHeadChange(
+        session: RepoSession, clearsNewRemoteBranches: Bool,
+        operation: (any RepoClient) async throws -> Void
+    ) async {
         guard isLive(session) else { return }
         let headBefore = headState
         var failure: (any Error)?
-        do { try await checkout(session.client) } catch { failure = error }
+        do { try await operation(session.client) } catch { failure = error }
         guard isLive(session) else { return }
         // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
         // and the watcher ignores this process's own events. A commit's files and diff
         // cannot have changed, so commit scope skips the re-read.
         if scope == .workingTree {
-            // A switch replaces the working tree wholesale, so the old list must not
+            // A checkout or merge can change the working tree, so the old list must not
             // outlive it even when the re-read fails: cleared first, the way a scope
             // change is, and the defaults with it so a stale merge suggestion cannot
             // enable Commit. The refresh reloads both.
@@ -1488,7 +1500,9 @@ extension WindowState {
         // A failed post-checkout hook can still have moved HEAD, and a successful checkout
         // whose re-read failed still did. A failed checkout whose re-read also failed may
         // have moved HEAD unseen; dropping the flags beats leaving stale ones.
-        if failure == nil || headState != headBefore || branchReadStatus == .failed { newRemoteBranches = [] }
+        if clearsNewRemoteBranches, failure == nil || headState != headBefore || branchReadStatus == .failed {
+            newRemoteBranches = []
+        }
         guard let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
@@ -1498,7 +1512,7 @@ extension WindowState {
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {
         guard let session, !isClosed, !isSwitchingBranch else { return }
-        await startBranchSwitch(session: session) { client in
+        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
             try await client.createBranch(name)
         }
     }
@@ -1514,9 +1528,28 @@ extension WindowState {
             errorMessage = branch.localNameCollisionMessage
             return
         }
-        await startBranchSwitch(session: session) { client in
+        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
             try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
         }
+    }
+
+    /// Merges the confirmed source commit after validating the destination on the write
+    /// queue. Refreshes repository state before reporting validation or merge failures.
+    func merge(_ target: MergeTarget) async {
+        guard let session, !isClosed, !isSwitchingBranch, headState == .named(target.destinationBranch) else {
+            return
+        }
+        await startHeadChange(session: session, clearsNewRemoteBranches: false) { client in
+            try await target.validateDestination(in: client)
+            try await client.merge(sourceTipSha: target.sourceTipSha, sourceRef: target.sourceRef)
+        }
+    }
+
+    /// The commits `target` would bring in, newest first, or nil when git could not say.
+    func commitsToMerge(_ target: MergeTarget, limit: Int) async -> [CommitSummary]? {
+        guard let session, !isClosed else { return nil }
+        return try? await session.client.commitsToMerge(
+            headSha: target.destinationTipSha, sourceTipSha: target.sourceTipSha, limit: limit)
     }
 }
 

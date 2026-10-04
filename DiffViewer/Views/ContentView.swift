@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var commitDraftChanged = false
     /// The branch name the reader confirmed, held until the New Branch sheet is gone.
     @State private var pendingBranchName: String?
+    /// The merge the reader confirmed, held until the Merge sheet is gone.
+    @State private var confirmedMergeTarget: MergeTarget?
     /// An error alert is up; a new message waits for it to be dismissed rather than
     /// stacking another sheet on it.
     @State private var isPresentingError = false
@@ -129,6 +131,17 @@ struct ContentView: View {
                     windowState.isNewBranchSheetPresented = false
                 })
         }
+        .sheet(item: $windowState.pendingMerge, onDismiss: handleMergeSheetDismissal) { target in
+            MergeSheet(
+                model: MergeSheetModel(
+                    target: target, previews: windowState.session?.mergePreviews,
+                    loadCommits: { [windowState] in await windowState.commitsToMerge(target, limit: $0) }),
+                onMerge: { target in
+                    confirmedMergeTarget = target
+                    windowState.pendingMerge = nil
+                },
+                onCancel: { windowState.pendingMerge = nil })
+        }
     }
 
     /// Consumes the confirmed submission after the sheet is gone, so the commit's error
@@ -154,6 +167,13 @@ struct ContentView: View {
         guard let name = pendingBranchName else { return }
         pendingBranchName = nil
         Task { await windowState.createBranch(named: name) }
+    }
+
+    /// Merges once the sheet is gone, as for the New Branch sheet.
+    private func handleMergeSheetDismissal() {
+        guard let target = confirmedMergeTarget else { return }
+        confirmedMergeTarget = nil
+        Task { await windowState.merge(target) }
     }
 
     private func presentErrorIfNeeded() {

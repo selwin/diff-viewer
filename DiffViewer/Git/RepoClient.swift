@@ -119,9 +119,10 @@ protocol RepoClient: Sendable {
     /// Up to `limit` commits `sourceTipSha` brings in that `headSha` lacks, newest first,
     /// following every parent.
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary]
-    /// Merges the full ref `sourceRef` into the current branch. Throws git's and the hooks'
-    /// diagnostics when it refuses or stops on conflicts.
-    func merge(sourceRef: String) async throws
+    /// Merges the commit `sourceTipSha` into the current branch; the full ref `sourceRef`
+    /// only names the branch in the message. Throws git's and the hooks' diagnostics when
+    /// it refuses or stops on conflicts.
+    func merge(sourceTipSha: String, sourceRef: String) async throws
     /// The remote of each branch with both `branch.<name>.remote` and `.merge` set, keyed
     /// by branch name. Covers branches whose upstream the fetch mapping misses, which
     /// `localBranches` reports as having none.

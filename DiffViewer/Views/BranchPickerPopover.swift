@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
-/// popover; so does New Branch…, which opens its sheet. A click outside closes it too.
+/// popover; so does New Branch…, which opens its sheet, and a Merge row, which opens the
+/// Merge sheet. A click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
     /// For the window the delete confirmation hangs on.
@@ -21,6 +22,10 @@ struct BranchPickerPopover: View {
                 switch activation {
                 case let .switchTo(name): Task { await windowState.switchBranch(to: name) }
                 case let .checkoutTracking(branch): Task { await windowState.checkoutRemoteBranch(branch) }
+                // Opening the sheet closes the popover itself.
+                case let .merge(target):
+                    windowState.openMergeSheetFromPicker(target)
+                    return
                 }
                 windowState.isBranchPickerPresented = false
             },

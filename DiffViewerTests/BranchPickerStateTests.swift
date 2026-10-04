@@ -598,18 +598,47 @@ struct BranchPickerStateTests {
 
     // MARK: Tabs
 
-    /// A name collision only stops a checkout; Merge rows don't act at all yet.
-    @Test func blockedReasonsAndActivationFollowTheTab() throws {
+    /// A name collision only stops a checkout; a merge from the same remote branch is fine.
+    @Test func blockedReasonsFollowTheTab() throws {
         let colliding = remoteBranch("main", tipCommittedAt: Self.at(19, 12))
         let taken = snapshot(branches: [main, feature], remotes: ["origin"], remoteBranches: [colliding])
         let switching = state(taken)
         let remoteRow = try index(.remote(ref: colliding.ref), in: switching)
         #expect(switching.blockedReason(forTableRow: remoteRow) == "A local branch named main already exists")
         #expect(switching.activation(forTableRow: remoteRow) == nil)
+        #expect(state(taken, tab: .merge).blockedReason(forTableRow: remoteRow) == nil)
+    }
 
+    /// A Merge row carries everything the sheet needs, pinned to the tips as read.
+    @Test func mergeRowsActivateWithTheirTargets() throws {
+        let head = localBranch("main", tipSha: objectID("head"), tipCommittedAt: Self.at(19, 13))
+        let local = localBranch("feature", tipSha: objectID("tip"), tipCommittedAt: Self.at(19, 12))
+        let remote = remoteBranch("main", tipSha: objectID("remote"), tipCommittedAt: Self.at(19, 11))
+        let taken = snapshot(branches: [head, local], remotes: ["origin"], remoteBranches: [remote])
         let merging = state(taken, tab: .merge)
-        #expect(merging.blockedReason(forTableRow: remoteRow) == nil)
-        #expect(merging.items.indices.allSatisfy { merging.activation(forTableRow: $0) == nil })
+
+        let localRow = try index(.local(name: "feature"), in: merging)
+        #expect(
+            merging.activation(forTableRow: localRow)
+                == .merge(
+                    MergeTarget(
+                        sourceName: "feature", sourceRef: "refs/heads/feature", sourceTipSha: objectID("tip"),
+                        destinationBranch: "main", destinationTipSha: objectID("head"))))
+        let remoteRow = try index(.remote(ref: remote.ref), in: merging)
+        #expect(
+            merging.activation(forTableRow: remoteRow)
+                == .merge(
+                    MergeTarget(
+                        sourceName: "origin/main", sourceRef: remote.ref, sourceTipSha: objectID("remote"),
+                        destinationBranch: "main", destinationTipSha: objectID("head"))),
+            "a name taken locally doesn't block a merge")
+        #expect(try merging.activation(forTableRow: index(.local(name: "main"), in: merging)) == nil, "current")
+        #expect(merging.activation(forTableRow: 0) == nil, "a header")
+        #expect(merging.canActivate(tableRow: localRow))
+
+        let switching = state(
+            snapshot(branches: [head, local], isSwitchingBranch: true), tab: .merge)
+        #expect(switching.items.indices.allSatisfy { switching.activation(forTableRow: $0) == nil })
     }
 
     @Test func theInstructionNamesTheHighlightAndTheMergeTarget() {

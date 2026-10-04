@@ -89,7 +89,7 @@ struct TaggedClient: RepoClient {
     func configuredUpstreamRemotes() async throws -> [String: String] { [:] }
     func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview { .alreadyMerged }
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] { [] }
-    func merge(sourceRef: String) async throws {}
+    func merge(sourceTipSha: String, sourceRef: String) async throws {}
 }
 
 @MainActor

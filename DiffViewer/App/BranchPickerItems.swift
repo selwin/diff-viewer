@@ -76,11 +76,47 @@ struct BranchRowLabel: Equatable {
     let style: Style
 }
 
+/// A merge the reader is about to confirm. It captures the source tip, which the merge
+/// takes by sha, and the destination the sheet showed, which the merge refuses to run
+/// without (see `validateDestination`).
+struct MergeTarget: Equatable, Sendable, Identifiable {
+    /// What the sheet says: a local branch's name, or a remote one as `origin/x`.
+    let sourceName: String
+    /// The full ref the source tip was read from; it names the branch in the merge message.
+    let sourceRef: String
+    let sourceTipSha: String
+    /// The branch checked out when the row was activated, which the merge must still find
+    /// checked out.
+    let destinationBranch: String
+    /// The destination's tip, which merge previews are keyed by.
+    let destinationTipSha: String
+
+    var id: String { "\(sourceRef)@\(destinationTipSha)" }
+
+    static func local(_ branch: LocalBranch, destinationBranch: String, destinationTipSha: String) -> MergeTarget {
+        MergeTarget(
+            sourceName: branch.name, sourceRef: "refs/heads/\(branch.name)", sourceTipSha: branch.tipSha,
+            destinationBranch: destinationBranch, destinationTipSha: destinationTipSha)
+    }
+
+    static func remote(_ branch: RemoteBranch, destinationBranch: String, destinationTipSha: String) -> MergeTarget {
+        MergeTarget(
+            sourceName: "\(branch.remote)/\(branch.name)", sourceRef: branch.ref, sourceTipSha: branch.tipSha,
+            destinationBranch: destinationBranch, destinationTipSha: destinationTipSha)
+    }
+
+    var previewKey: MergePreviewKey {
+        MergePreviewKey(headSha: destinationTipSha, sourceTipSha: sourceTipSha)
+    }
+}
+
 /// What activating a row asks the window to do.
 enum BranchActivation: Equatable {
     case switchTo(name: String)
     /// Create a local branch tracking this remote one, then switch to it.
     case checkoutTracking(RemoteBranch)
+    /// Open the merge sheet for this branch.
+    case merge(MergeTarget)
 }
 
 /// The words on a row's right edge, and whether they are drawn in the accent colour.

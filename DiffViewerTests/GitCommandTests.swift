@@ -1252,12 +1252,19 @@ import Testing
         }
     }
 
-    @Test func mergeBringsInALocalOrRemoteTrackingRef() async throws {
+    /// Git's usual message names the branch by its short name, and the merge takes the
+    /// confirmed sha even when the branch has moved on since.
+    @Test func mergeBringsInTheConfirmedCommitUnderTheBranchName() async throws {
         let (repo, _, side) = try await divergedRepo(conflicting: false)
-        // A tag would win the short name `side`; the full ref still merges the branch.
-        try await repo.git(["tag", "side", "HEAD"])
-        try await repo.client.merge(sourceRef: "refs/heads/side")
-        #expect(try await repo.git(["merge-base", "--is-ancestor", side, "HEAD"]).isEmpty)
+        try await repo.git(["checkout", "side"])
+        try repo.write("later.txt", "later\n")
+        _ = try await repo.commit("Later side commit")
+        try await repo.git(["checkout", "main"])
+
+        try await repo.client.merge(sourceTipSha: side, sourceRef: "refs/heads/side")
+
+        #expect(try await repo.git(["rev-parse", "HEAD^2"]) == side)
+        #expect(try await repo.git(["log", "-1", "--format=%s"]) == "Merge branch 'side'")
 
         let (pushed, remote) = try await pushedRepo()
         let other = try await clone(of: remote)
@@ -1266,21 +1273,45 @@ import Testing
         let tip = try await other.commit("Feature commit")
         try await other.git(["push", "origin", "feature"])
         try await pushed.git(["fetch", "origin"])
+        // Diverged, so the merge makes a commit whose message can be read.
+        try pushed.write("m.txt", "m\n")
+        _ = try await pushed.commit("Main commit")
 
-        try await pushed.client.merge(sourceRef: "refs/remotes/origin/feature")
-        #expect(try await pushed.git(["merge-base", "--is-ancestor", tip, "HEAD"]).isEmpty)
+        try await pushed.client.merge(sourceTipSha: tip, sourceRef: "refs/remotes/origin/feature")
+        #expect(try await pushed.git(["rev-parse", "HEAD^2"]) == tip)
+        #expect(try await pushed.git(["log", "-1", "--format=%s"]) == "Merge remote-tracking branch 'origin/feature'")
+    }
+
+    /// `merge.log` puts the shortlog in the message once (the merge itself passes `--no-log`),
+    /// and a branch other than main is named as the destination.
+    @Test func mergeMessageFollowsConfigAndNamesANonDefaultDestination() async throws {
+        let (logged, _, side) = try await divergedRepo(conflicting: false)
+        try await logged.git(["config", "merge.log", "true"])
+        try await logged.client.merge(sourceTipSha: side, sourceRef: "refs/heads/side")
+        let message = try await logged.git(["log", "-1", "--format=%B"])
+        #expect(message.split(separator: "\n").first == "Merge branch 'side'")
+        #expect(message.components(separatedBy: "Side commit").count - 1 == 1)
+
+        let (topic, _, topicSide) = try await divergedRepo(conflicting: false)
+        try await topic.git(["checkout", "-b", "topic"])
+        try topic.write("topic.txt", "topic\n")
+        _ = try await topic.commit("Topic commit")
+        try await topic.client.merge(sourceTipSha: topicSide, sourceRef: "refs/heads/side")
+        #expect(try await topic.git(["log", "-1", "--format=%s"]) == "Merge branch 'side' into topic")
     }
 
     /// A conflicting merge throws git's report and leaves the merge in progress to resolve.
     @Test func mergeStopsOnConflicts() async throws {
         let (repo, _, side) = try await divergedRepo(conflicting: true)
         await #expect {
-            try await repo.client.merge(sourceRef: "refs/heads/side")
+            try await repo.client.merge(sourceTipSha: side, sourceRef: "refs/heads/side")
         } throws: { error in
             error.localizedDescription.contains("CONFLICT")
         }
         #expect(try await repo.git(["diff", "--name-only", "--diff-filter=U"]) == "a.txt")
         #expect(try await repo.git(["rev-parse", "MERGE_HEAD"]) == side)
+        let message = try String(contentsOf: repo.url.appendingPathComponent(".git/MERGE_MSG"), encoding: .utf8)
+        #expect(message.split(separator: "\n").first == "Merge branch 'side'")
     }
 
     // MARK: Remote branches
