@@ -1,0 +1,129 @@
+import AppKit
+
+/// The sentence over the branch picker's search field: "Switch to [branch]" or "Merge
+/// [branch] into current branch". The token names the highlighted branch, or stands empty,
+/// and truncates when the line runs short; the ending keeps its width.
+final class BranchPickerInstructionView: NSView {
+    static let height = BranchTokenView.height
+    private static let font = NSFont.systemFont(ofSize: 12.5)
+    private static let sideInset: CGFloat = 6
+    /// Either side of the token.
+    private static let tokenGap: CGFloat = 4
+
+    private let verb = PickerLabel.make(font: font, color: .labelColor)
+    private let token = BranchTokenView(frame: .zero)
+    /// "into current branch", one label.
+    private let ending = PickerLabel.make(font: font, color: .labelColor)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        ending.lineBreakMode = .byTruncatingTail
+        for view in [verb, token, ending] { addSubview(view) }
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    func configure(_ instruction: BranchPickerInstruction) {
+        verb.stringValue = instruction.verb
+        token.name = instruction.token
+        ending.isHidden = instruction.ending == nil
+        ending.stringValue = instruction.ending ?? ""
+        let parts = [instruction.verb, instruction.token ?? "a branch", ending.stringValue]
+        setAccessibilityValue(parts.filter { !$0.isEmpty }.joined(separator: " "))
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let maxX = bounds.width - Self.sideInset
+        var x = Self.sideInset
+        x = place(verb, at: x, width: PickerViewGeometry.naturalSize(of: verb).width) + Self.tokenGap
+        let endingReserve = ending.isHidden ? 0 : PickerViewGeometry.naturalSize(of: ending).width + Self.tokenGap
+        let tokenWidth = max(min(token.fittingWidth, maxX - x - endingReserve), 0)
+        token.frame = NSRect(
+            x: x, y: ((bounds.height - Self.height) / 2).rounded(), width: tokenWidth, height: Self.height)
+        guard !ending.isHidden else { return }
+        x = token.frame.maxX + Self.tokenGap
+        place(ending, at: x, width: min(PickerViewGeometry.naturalSize(of: ending).width, max(maxX - x, 0)))
+    }
+
+    /// Centres `label` on the line at `x`, and returns where it ends.
+    @discardableResult
+    private func place(_ label: NSTextField, at x: CGFloat, width: CGFloat) -> CGFloat {
+        let height = PickerViewGeometry.naturalSize(of: label).height
+        label.frame = NSRect(x: x, y: ((bounds.height - height) / 2).rounded(), width: width, height: height)
+        return label.frame.maxX
+    }
+}
+
+/// A branch name in a capsule. Empty, it is a dashed outline reading "a branch"; named, it
+/// is tinted with the accent. Changes show at once, without animation.
+final class BranchTokenView: NSView {
+    static let height: CGFloat = 20
+    private static let padding: CGFloat = 8
+    private static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+
+    var name: String? {
+        didSet {
+            guard name != oldValue else { return }
+            needsDisplay = true
+            superview?.needsLayout = true
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    /// The capsule's natural width; the sentence clamps it to the line.
+    var fittingWidth: CGFloat {
+        (Self.padding + text.size().width + Self.padding).rounded(.up)
+    }
+
+    private var color: NSColor { name == nil ? .tertiaryLabelColor : .controlAccentColor }
+
+    private var text: NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingMiddle
+        return NSAttributedString(
+            string: name ?? "a branch",
+            attributes: [.font: Self.font, .foregroundColor: color, .paragraphStyle: paragraph])
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let radius = rect.height / 2
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        path.lineWidth = 1
+        if name == nil {
+            path.setLineDash([3, 2], count: 2, phase: 0)
+            NSColor.labelColor.withAlphaComponent(0.25).setStroke()
+        } else {
+            NSColor.controlAccentColor.withAlphaComponent(0.1).setFill()
+            path.fill()
+            NSColor.controlAccentColor.withAlphaComponent(0.4).setStroke()
+        }
+        path.stroke()
+        // Centred on the cap height rather than the line box, whose descender and leading
+        // would sit the name low in so short a capsule. Mostly lowercase names still read
+        // low there, so the baseline rises 1pt more.
+        let font = Self.font
+        let baseline = (bounds.midY + font.capHeight / 2).rounded() - 1
+        let textRect = NSRect(
+            x: Self.padding, y: baseline - font.ascender, width: max(bounds.width - Self.padding * 2, 0),
+            height: font.ascender - font.descender)
+        text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+}

@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
-/// popover; so does New Branch…, which opens its sheet. A click outside closes it too.
+/// popover; so does New Branch…, which opens its sheet, and a Merge row, which opens the
+/// Merge sheet. A click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
     /// For the window the delete confirmation hangs on.
@@ -15,10 +16,16 @@ struct BranchPickerPopover: View {
         BranchPickerListView(
             snapshot: windowState.branchPickerSnapshot,
             grouping: grouping,
+            tab: windowState.branchPickerTab,
+            mergePreviews: windowState.session?.mergePreviews,
             onActivate: { activation in
                 switch activation {
                 case let .switchTo(name): Task { await windowState.switchBranch(to: name) }
                 case let .checkoutTracking(branch): Task { await windowState.checkoutRemoteBranch(branch) }
+                // Opening the sheet closes the popover itself.
+                case let .merge(target):
+                    windowState.openMergeSheetFromPicker(target)
+                    return
                 }
                 windowState.isBranchPickerPresented = false
             },
@@ -37,6 +44,7 @@ struct BranchPickerPopover: View {
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
             onNewBranch: { windowState.openNewBranchSheetFromPicker() },
+            onTabChange: { windowState.branchPickerTab = $0 },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
@@ -48,6 +56,10 @@ struct BranchPickerPopover: View {
 struct BranchPickerListView: NSViewRepresentable {
     let snapshot: BranchPickerSnapshot
     let grouping: CommitDayGrouping
+    /// The tab the popover opens on; later changes are the container's.
+    let tab: BranchPickerTab
+    /// Nil without a session: Merge rows then show no previews. Read once, like `tab`.
+    let mergePreviews: MergePreviewLoader?
     let onActivate: (BranchActivation) -> Void
     let onDismiss: () -> Void
     let onPull: (String) -> Void
@@ -56,10 +68,12 @@ struct BranchPickerListView: NSViewRepresentable {
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
     let onNewBranch: () -> Void
+    let onTabChange: (BranchPickerTab) -> Void
     let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
-        let view = BranchPickerContainerView(state: BranchPickerState(snapshot: snapshot, grouping: grouping))
+        let view = BranchPickerContainerView(
+            state: BranchPickerState(snapshot: snapshot, grouping: grouping, tab: tab), mergePreviews: mergePreviews)
         setCallbacks(on: view)
         return view
     }
@@ -86,6 +100,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onDelete = onDelete
         view.onFetch = onFetch
         view.onNewBranch = onNewBranch
+        view.onTabChange = onTabChange
         view.now = now
     }
 }

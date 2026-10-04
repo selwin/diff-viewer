@@ -45,11 +45,11 @@ enum PickerMetrics {
     /// The popover's header: a title over a detail line.
     @MainActor
     enum Header {
-        static let topPadding: CGFloat = 13
+        static let topPadding: CGFloat = 16
         static let sidePadding: CGFloat = 16
         static let bottomPadding: CGFloat = 4
         /// Between the title and the detail line.
-        static let lineGap: CGFloat = 2
+        static let lineGap: CGFloat = 5
         static let titleFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
         static let detailFont = NSFont.systemFont(ofSize: 12)
     }

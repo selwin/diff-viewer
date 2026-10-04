@@ -66,7 +66,7 @@ extension WindowState {
 
     /// The sheets and popovers that open one at a time.
     enum Overlay {
-        case commitSheet, commitPicker, branchPicker, newBranchSheet
+        case commitSheet, commitPicker, branchPicker, newBranchSheet, mergeSheet
     }
 
     /// Whether an overlay other than `overlay` is up. Only one opens at a time.
@@ -75,6 +75,7 @@ extension WindowState {
             || (overlay != .commitPicker && isCommitPickerPresented)
             || (overlay != .branchPicker && isBranchPickerPresented)
             || (overlay != .newBranchSheet && isNewBranchSheetPresented)
+            || (overlay != .mergeSheet && pendingMerge != nil)
     }
 }
 

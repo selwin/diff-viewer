@@ -11,6 +11,8 @@ final class BranchPickerHeaderView: NSView {
     private static let controlGap: CGFloat = 8
     /// Between the title and the copy button, whose hover fill already pads the icon.
     private static let copyGap: CGFloat = 2
+    /// Above the tab band's hairline; the commit picker's search field needs less.
+    private static let bottomPadding: CGFloat = 14
 
     private let title = PickerLabel.make(font: Metrics.titleFont, color: .labelColor)
     // Focusable like the header's other controls, so it carries room for its ring.
@@ -90,7 +92,7 @@ final class BranchPickerHeaderView: NSView {
     /// Two text lines and padding; constant so counts arriving later do not move the rows.
     var fittingHeight: CGFloat {
         Metrics.topPadding + PickerViewGeometry.naturalSize(of: title).height + Metrics.lineGap
-            + Self.detailHeight + Metrics.bottomPadding
+            + Self.detailHeight + Self.bottomPadding
     }
 
     /// The detail line's height for its font, measured once, so an empty line still

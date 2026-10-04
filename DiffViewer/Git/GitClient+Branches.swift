@@ -11,7 +11,7 @@ extension GitClient {
             Self.executable,
             arguments: [
                 "for-each-ref",
-                "--format=%(refname)%00%(symref)%00%(authorname)%00%(committerdate:iso-strict)",
+                "--format=%(refname)%00%(symref)%00%(objectname)%00%(authorname)%00%(committerdate:iso-strict)",
                 "refs/remotes/",
             ],
             currentDirectory: repoRoot,

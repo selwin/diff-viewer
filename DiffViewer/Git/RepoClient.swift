@@ -113,6 +113,16 @@ protocol RepoClient: Sendable {
     /// fast-forward only, through its upstream ref `localRef` (a non-symbolic ref under
     /// `refs/remotes/`). Git refuses a diverged branch or one checked out in any worktree.
     func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws
+    /// What merging `sourceTipSha` into `headSha` would do, without touching the working
+    /// tree. Both are object ids. Throws when git cannot tell, as for unrelated histories.
+    func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview
+    /// Up to `limit` commits `sourceTipSha` brings in that `headSha` lacks, newest first,
+    /// following every parent.
+    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary]
+    /// Merges the commit `sourceTipSha` into the current branch; the full ref `sourceRef`
+    /// only names the branch in the message. Throws git's and the hooks' diagnostics when
+    /// it refuses or stops on conflicts.
+    func merge(sourceTipSha: String, sourceRef: String) async throws
     /// The remote of each branch with both `branch.<name>.remote` and `.merge` set, keyed
     /// by branch name. Covers branches whose upstream the fetch mapping misses, which
     /// `localBranches` reports as having none.

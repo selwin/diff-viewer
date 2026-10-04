@@ -24,6 +24,7 @@ enum StubCall {
     case fastForward
     case commitDefaults
     case stagedPatch
+    case mergePreview
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -117,6 +118,22 @@ actor StubRepoClient: RepoClient {
     private(set) var publishCalls: [(branch: String, remote: String)] = []
     /// Every fast-forward asked for, in order, whether or not it succeeded.
     private(set) var fastForwardCalls: [(branch: String, remote: String, remoteRef: String, localRef: String)] = []
+    private var stubbedMergePreview: MergePreview = .alreadyMerged
+    /// Per-key answers on top of `stubbedMergePreview`.
+    private var mergePreviewsByKey: [MergePreviewKey: MergePreview] = [:]
+    private var failingMergePreviews: Set<MergePreviewKey> = []
+    /// Every `mergePreview` call, in order.
+    private(set) var mergePreviewCalls: [MergePreviewKey] = []
+    private(set) var runningMergePreviews = 0
+    private(set) var mostRunningMergePreviews = 0
+    private var stubbedCommitsToMerge: [CommitSummary] = []
+    struct MergeCall: Equatable {
+        let sourceTipSha: String
+        let sourceRef: String
+    }
+    /// Every merge asked for, in order, whether or not it succeeded.
+    private(set) var mergeCalls: [MergeCall] = []
+    private var failsMerge = false
     private var stubbedUpstreamRemotes: [String: String] = [:]
     private var failsConfiguredUpstreamRemotes = false
     private var failsFetch = false
@@ -143,7 +160,8 @@ actor StubRepoClient: RepoClient {
     private(set) var lastHistoryRevision: String?
     private(set) var lastHistoryLimit: Int?
     private(set) var lastHistorySkip: Int?
-    /// What `commitSha(of:)` answers per ref; an unlisted ref names no commit.
+    /// What `commitSha(of:)` answers per ref; an unlisted ref names no commit, except that
+    /// a `refs/heads/` ref falls back to that local branch's tip.
     private var stubbedCommitShas: [String: String] = [:]
     private var failsCommitSha = false
     /// Every ref `commitSha(of:)` was asked to resolve, in order.
@@ -404,6 +422,14 @@ actor StubRepoClient: RepoClient {
     func fail(push on: Bool) { failsPush = on }
     func fail(publish on: Bool) { failsPublish = on }
     func fail(fastForward on: Bool) { failsFastForward = on }
+    func set(mergePreview preview: MergePreview) { stubbedMergePreview = preview }
+    func set(mergePreview preview: MergePreview, for key: MergePreviewKey) { mergePreviewsByKey[key] = preview }
+    /// Read once a held call is released, so a test can change it meanwhile.
+    func fail(mergePreview on: Bool, for key: MergePreviewKey) {
+        if on { failingMergePreviews.insert(key) } else { failingMergePreviews.remove(key) }
+    }
+    func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
+    func fail(merge on: Bool) { failsMerge = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -458,6 +484,28 @@ actor StubRepoClient: RepoClient {
         }
     }
 
+    func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview {
+        let key = MergePreviewKey(headSha: headSha, sourceTipSha: sourceTipSha)
+        mergePreviewCalls.append(key)
+        runningMergePreviews += 1
+        mostRunningMergePreviews = max(mostRunningMergePreviews, runningMergePreviews)
+        defer { runningMergePreviews -= 1 }
+        if isHeld(.mergePreview) { await park(.mergePreview) }
+        if failingMergePreviews.contains(key) {
+            throw ProcessError.failed(command: "git merge-tree", status: 128, stderr: "unrelated histories")
+        }
+        return mergePreviewsByKey[key] ?? stubbedMergePreview
+    }
+
+    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {
+        limit > 0 ? Array(stubbedCommitsToMerge.prefix(limit)) : []
+    }
+
+    func merge(sourceTipSha: String, sourceRef: String) async throws {
+        mergeCalls.append(MergeCall(sourceTipSha: sourceTipSha, sourceRef: sourceRef))
+        if failsMerge { throw ProcessError.failed(command: "git merge", status: 1, stderr: "merge failed") }
+    }
+
     func configuredUpstreamRemotes() async throws -> [String: String] {
         if failsConfiguredUpstreamRemotes {
             throw ProcessError.failed(command: "git config", status: 2, stderr: "config failed")
@@ -486,7 +534,9 @@ actor StubRepoClient: RepoClient {
     func commitSha(of ref: String) async throws -> String? {
         commitShaCalls.append(ref)
         if failsCommitSha { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
-        return stubbedCommitShas[ref]
+        if let sha = stubbedCommitShas[ref] { return sha }
+        guard ref.hasPrefix("refs/heads/") else { return nil }
+        return stubbedLocalBranches.first { "refs/heads/\($0.name)" == ref }?.tipSha
     }
 
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {

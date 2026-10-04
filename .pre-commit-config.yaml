@@ -1,5 +1,7 @@
 # Runs the same formatter and linter as `make format` / `make lint` and the Format and
 # Lint workflows, but only over the files being committed. Install once with `make hooks`.
+# pre-commit stashes unstaged changes while it runs, so `make hooks` also installs a plain
+# post-commit hook (scripts/check-unstaged.sh) that reports on the unstaged Swift files.
 #
 # `unsupported_script` (spelled `script` before the rename) needs pre-commit 4.4.
 minimum_pre_commit_version: 4.4.0

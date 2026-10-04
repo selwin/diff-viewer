@@ -124,7 +124,7 @@ extension WindowState {
     var canStartStagingAction: Bool {
         session != nil && !isClosed && scope == .workingTree && !isSwitchingBranch && !isConfirmingFileAction
             && !isCommitting && !isCommitSheetPresented && !isCommitPickerPresented && !isBranchPickerPresented
-            && !isNewBranchSheetPresented
+            && !isNewBranchSheetPresented && pendingMerge == nil
     }
 
     /// Whether Stage All can run: a staging action can start and Changes holds something to stage.

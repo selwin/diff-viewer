@@ -271,12 +271,13 @@ func localBranch(
 func remoteBranch(
     _ name: String,
     remote: String = "origin",
+    tipSha: String? = nil,
     tipCommittedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
     tipCommitAuthor: String = "Tester"
 ) -> RemoteBranch {
     RemoteBranch(
-        remote: remote, name: name, ref: "refs/remotes/\(remote)/\(name)", tipCommitAuthor: tipCommitAuthor,
-        tipCommittedAt: tipCommittedAt)
+        remote: remote, name: name, ref: "refs/remotes/\(remote)/\(name)", tipSha: tipSha ?? "sha-\(remote)-\(name)",
+        tipCommitAuthor: tipCommitAuthor, tipCommittedAt: tipCommittedAt)
 }
 
 /// `remoteRef` defaults to the branch half of `shortName`: `origin/main` tracks

@@ -11,10 +11,11 @@ struct RemoteBranchParserTests {
     private func line(
         ref: String = "refs/remotes/origin/main",
         symref: String = "",
+        sha: String = "abc123",
         author: String = "Ada Lovelace",
         date: String = RemoteBranchParserTests.date
     ) -> String {
-        [ref, symref, author, date].joined(separator: "\0")
+        [ref, symref, sha, author, date].joined(separator: "\0")
     }
 
     private func parse(_ lines: [String], _ refspecs: [String: [String]] = origin) throws -> [RemoteBranch] {
@@ -25,7 +26,8 @@ struct RemoteBranchParserTests {
         #expect(
             try parse([line()]) == [
                 RemoteBranch(
-                    remote: "origin", name: "main", ref: "refs/remotes/origin/main", tipCommitAuthor: "Ada Lovelace",
+                    remote: "origin", name: "main", ref: "refs/remotes/origin/main", tipSha: "abc123",
+                    tipCommitAuthor: "Ada Lovelace",
                     tipCommittedAt: try #require(ISO8601DateFormatter().date(from: Self.date)))
             ])
     }

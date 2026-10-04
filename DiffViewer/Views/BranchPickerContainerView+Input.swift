@@ -21,7 +21,12 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
                 tableView.makeView(withIdentifier: BranchPickerRowView.identifier, owner: nil)
                 as? BranchPickerRowView ?? BranchPickerRowView(frame: .zero)
             cell.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
-            cell.configure(entry)
+            cell.configure(
+                entry, trailing: state.trailingLabel(forTableRow: row, preview: mergePreview(forTableRow: row)),
+                blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry),
+                // Every Merge row keeps the room, so the right edges line up; only the
+                // highlight shows it, and the current row never takes the highlight.
+                hasChevron: state.tab == .merge)
             configureHighlightAndButtons(of: cell, row: row, animated: false)
             // No callback on a row that cannot be activated: the action must not be offered.
             guard state.canActivate(tableRow: row) else {
@@ -38,8 +43,17 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         }
     }
 
+    /// By the item's kind: the current branch takes no highlight but is a full row.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        state.canHighlight(tableRow: row) ? PickerMetrics.rowHeight : PickerMetrics.headerRowHeight
+        state.row(forTableRow: row) != nil ? PickerMetrics.rowHeight : PickerMetrics.headerRowHeight
+    }
+
+    /// What VoiceOver calls a row's activation in the current tab.
+    private func activationName(for row: BranchPickerRow) -> String {
+        switch state.tab {
+        case .merge: "Merge branch"
+        case .switchBranch: row.kind == .remoteOnly ? "Check out branch" : "Switch to branch"
+        }
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
@@ -64,11 +78,9 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
 /// Key equivalents the popover answers before the main menu.
 extension BranchPickerContainerView {
-    /// ⌘R fetches, ⌘N opens the New Branch sheet and ⌘C copies the highlighted branch's
-    /// name while the popover is key. The key window's views see a key equivalent before
-    /// the main menu does, and this runs whichever view has focus, the search field's
-    /// editor included, so the menu never gets them. Once the popover closes this view is
-    /// out of the key window and ⌘R is Refresh again.
+    /// ⌘R fetches, ⌘N opens New Branch, ⌘1 and ⌘2 pick a tab, and ⌘C copies the
+    /// highlighted branch's name. They are taken whichever view has focus, so the main
+    /// menu only gets them once the popover closes.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
         guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
@@ -76,6 +88,8 @@ extension BranchPickerContainerView {
         case "r": onFetch()
         // Taken even while the row is off, so it never falls through to the menu.
         case "n": if newBranchRow.isEnabled { onNewBranch() }
+        case "1": selectTab(.switchBranch)
+        case "2": selectTab(.merge)
         case "c":
             // With text selected in the query, or no highlighted row, ⌘C is AppKit's.
             if let editor = searchField.currentEditor(), editor.selectedRange.length > 0 {
@@ -132,5 +146,21 @@ private final class BranchNameCopy {
     init(name: String, rowID: BranchRowID) {
         self.name = name
         self.rowID = rowID
+    }
+}
+
+/// The search field holds the keyboard; the arrows, Return and Escape reach the list.
+extension BranchPickerContainerView: NSSearchFieldDelegate {
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)): moveUp()
+        case #selector(NSResponder.moveDown(_:)): moveDown()
+        case #selector(NSResponder.insertNewline(_:)): activate()
+        // Escape clears the query first, then dismisses.
+        case #selector(NSResponder.cancelOperation(_:)):
+            if searchField.stringValue.isEmpty { cancel() } else { clearQuery() }
+        default: return false
+        }
+        return true
     }
 }

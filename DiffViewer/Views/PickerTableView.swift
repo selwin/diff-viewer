@@ -82,10 +82,11 @@ final class PickerTableView: NSTableView {
         handler?.activate(tableRow: pressedRow)
     }
 
-    /// The handler's menu for the row under the pointer; none below the rows or on a
-    /// section header.
+    /// The handler's menu for the row under the pointer, none below the rows. Any row is
+    /// offered, highlightable or not; the handler turns away the ones without a menu.
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let row = contentRow(at: convert(event.locationInWindow, from: nil)) else { return nil }
+        let row = row(at: convert(event.locationInWindow, from: nil))
+        guard row >= 0 else { return nil }
         return handler?.menu(forTableRow: row)
     }
 

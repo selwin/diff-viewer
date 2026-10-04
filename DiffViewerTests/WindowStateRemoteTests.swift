@@ -314,6 +314,23 @@ struct WindowStateRemoteTests {
         #expect(state.newRemoteBranches.isEmpty)
     }
 
+    /// Only a checkout moves the reader onto what the badges point at; a merge leaves them.
+    @Test func mergingKeepsTheNewFlags() async {
+        let h = Harness()
+        let state = h.makeState()
+        let main = localBranch("main", upstream: upstream("origin/main"), tipSha: objectID("main"))
+        let repo = await adoptWithNewFeature(h, state, branches: [main, localBranch("side", tipSha: objectID("side"))])
+
+        await state.merge(
+            MergeTarget(
+                sourceName: "side", sourceRef: "refs/heads/side", sourceTipSha: objectID("side"),
+                destinationBranch: "main", destinationTipSha: objectID("main")))
+
+        #expect(await repo.client.mergeCalls == [.init(sourceTipSha: objectID("side"), sourceRef: "refs/heads/side")])
+        #expect(state.errorMessage == nil)
+        #expect(state.newRemoteBranches == [remoteBranch("feature").ref])
+    }
+
     /// A new branch goes through the same switch path: HEAD and the list are re-read, and
     /// the flags go with the old branch.
     @Test func creatingABranchSwitchesRefreshesAndClearsTheNewFlags() async {
