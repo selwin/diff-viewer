@@ -1314,6 +1314,34 @@ import Testing
         #expect(message.split(separator: "\n").first == "Merge branch 'side'")
     }
 
+    /// A configured `--no-commit` or `--squash` would leave a pending index the reader never
+    /// confirmed, so the merge overrides both and records its commit.
+    @Test func mergeCommitsDespiteConfiguredNoCommitOrSquash() async throws {
+        for option in ["--no-commit", "--squash"] {
+            let (repo, _, side) = try await divergedRepo(conflicting: false)
+            try await repo.git(["config", "branch.main.mergeOptions", option])
+
+            try await repo.client.merge(sourceTipSha: side, sourceRef: "refs/heads/side")
+
+            #expect(try await repo.git(["rev-parse", "HEAD^2"]) == side, "\(option)")
+            #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent(".git/MERGE_HEAD").path))
+        }
+    }
+
+    /// Forcing the commit leaves fast-forwarding to config: a branch ahead of HEAD still moves HEAD to its tip.
+    @Test func mergeOfABranchAheadOfHeadStillFastForwards() async throws {
+        let repo = try await committedRepo()
+        try await repo.git(["checkout", "-b", "side"])
+        try repo.write("side.txt", "side\n")
+        let side = try await repo.commit("Side commit")
+        try await repo.git(["checkout", "main"])
+
+        try await repo.client.merge(sourceTipSha: side, sourceRef: "refs/heads/side")
+
+        #expect(try await repo.git(["rev-parse", "HEAD"]) == side)
+        #expect(try await repo.git(["rev-list", "--parents", "-n", "1", "HEAD"]).split(separator: " ").count == 2)
+    }
+
     // MARK: Remote branches
 
     /// `origin/HEAD` is a symbolic ref to another branch, not a branch of its own.

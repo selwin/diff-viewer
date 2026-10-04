@@ -34,11 +34,13 @@ final class Harness {
 
     /// What `WindowState` reads as the current time; tests move it to expire cooldowns.
     var clock = Date(timeIntervalSince1970: 1_789_300_000)
+    /// What `WindowState` sleeps on, so a test decides when timed feedback ends.
+    let sleepClock = ManualClock()
 
     func makeState(commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator()) -> WindowState {
         let state = WindowState(
             preferences: preferences, cache: probeCache(runner), commitMessageGenerator: commitMessageGenerator,
-            now: { [weak self] in self?.clock ?? Date() },
+            now: { [weak self] in self?.clock ?? Date() }, feedbackClock: sleepClock,
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher

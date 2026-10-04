@@ -46,6 +46,20 @@ struct CallGate {
     mutating func releaseLast() { if !waiters.isEmpty { waiters.removeLast().resume() } }
 }
 
+/// One scripted answer of `commitSha(of:)`; `.none` is a ref that names no commit, which
+/// differs from no script at all.
+enum CommitShaResponse {
+    case sha(String)
+    case none
+    case failure
+}
+
+/// One scripted answer of `status()`.
+enum StatusResponse {
+    case files([ChangedFile])
+    case failure
+}
+
 /// A repository whose calls can be held open and released.
 actor StubRepoClient: RepoClient {
     private var files: [ChangedFile]
@@ -134,6 +148,10 @@ actor StubRepoClient: RepoClient {
     /// Every merge asked for, in order, whether or not it succeeded.
     private(set) var mergeCalls: [MergeCall] = []
     private var failsMerge = false
+    /// What a failing merge leaves behind before it throws; nil leaves everything alone.
+    private var failedMergeLeftovers: (setsMergeHead: Bool, files: [ChangedFile]?)?
+    /// The tips successful merges give local branches, by branch name.
+    private var branchTipsAfterMerge: [String: String] = [:]
     private var stubbedUpstreamRemotes: [String: String] = [:]
     private var failsConfiguredUpstreamRemotes = false
     private var failsFetch = false
@@ -164,6 +182,8 @@ actor StubRepoClient: RepoClient {
     /// a `refs/heads/` ref falls back to that local branch's tip.
     private var stubbedCommitShas: [String: String] = [:]
     private var failsCommitSha = false
+    /// Scripted answers per ref, consumed one call at a time before the answers above.
+    private var queuedCommitShas: [String: [CommitShaResponse]] = [:]
     /// Every ref `commitSha(of:)` was asked to resolve, in order.
     private(set) var commitShaCalls: [String] = []
     private var stubbedUnpushed: Set<String> = []
@@ -178,6 +198,8 @@ actor StubRepoClient: RepoClient {
     /// Every trash call, in order: one entry per call, holding the whole batch.
     private(set) var trashed: [[String]] = []
     private var failsActions = false
+    /// Scripted answers of `status()`, consumed one call at a time before `files`.
+    private var queuedStatuses: [StatusResponse] = []
     /// What the repository becomes once a write succeeds, standing in for git's own
     /// effect on it. Nil leaves `files` alone.
     private var filesAfterWrite: [ChangedFile]?
@@ -201,6 +223,7 @@ actor StubRepoClient: RepoClient {
     func set(filesAfterWrite list: [ChangedFile]?) { filesAfterWrite = list }
     var currentFiles: [ChangedFile] { files }
     func fail(_ on: Bool) { fails = on }
+    func queue(statuses responses: [StatusResponse]) { queuedStatuses = responses }
 
     func set(numstat entries: [NumstatEntry], area: ChangedFile.Area) { numstatEntries[area] = entries }
     func fail(numstat on: Bool) { failsNumstat = on }
@@ -240,8 +263,14 @@ actor StubRepoClient: RepoClient {
 
     func status() async throws -> [ChangedFile] {
         statusCalls += 1
+        let scripted = queuedStatuses.isEmpty ? nil : queuedStatuses.removeFirst()
         let snapshot = files
         if isHeld(.status) { await park(.status) }
+        switch scripted {
+        case let .files(list)?: return list
+        case .failure?: throw ProcessError.failed(command: "git status", status: 128, stderr: "gone")
+        case nil: break
+        }
         if fails { throw ProcessError.failed(command: "git status", status: 128, stderr: "gone") }
         return snapshot
     }
@@ -430,6 +459,12 @@ actor StubRepoClient: RepoClient {
     }
     func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
     func fail(merge on: Bool) { failsMerge = on }
+    /// What a failing merge leaves behind before it throws, as git does when it stops on conflicts: `setsMergeHead` points `MERGE_HEAD` at the merged commit (false leaves the ref as it was), and `files` becomes the status list.
+    func set(failedMergeSetsMergeHead setsMergeHead: Bool, files: [ChangedFile]? = nil) {
+        failedMergeLeftovers = (setsMergeHead, files)
+    }
+    /// The tip `branch` has once a merge succeeds.
+    func set(branchTipAfterMerge sha: String, for branch: String) { branchTipsAfterMerge[branch] = sha }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -503,7 +538,19 @@ actor StubRepoClient: RepoClient {
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {
         mergeCalls.append(MergeCall(sourceTipSha: sourceTipSha, sourceRef: sourceRef))
-        if failsMerge { throw ProcessError.failed(command: "git merge", status: 1, stderr: "merge failed") }
+        if failsMerge {
+            if let failedMergeLeftovers {
+                if failedMergeLeftovers.setsMergeHead { stubbedCommitShas["MERGE_HEAD"] = sourceTipSha }
+                if let list = failedMergeLeftovers.files { files = list }
+            }
+            throw ProcessError.failed(command: "git merge", status: 1, stderr: "merge failed")
+        }
+        stubbedLocalBranches = stubbedLocalBranches.map { branch in
+            guard let tip = branchTipsAfterMerge[branch.name] else { return branch }
+            return LocalBranch(
+                name: branch.name, upstream: branch.upstream, tipSha: tip, tipCommittedAt: branch.tipCommittedAt,
+                tipCommitAuthor: branch.tipCommitAuthor)
+        }
     }
 
     func configuredUpstreamRemotes() async throws -> [String: String] {
@@ -528,11 +575,20 @@ actor StubRepoClient: RepoClient {
 
     func set(commitSha sha: String?, for ref: String) { stubbedCommitShas[ref] = sha }
     func fail(commitSha on: Bool) { failsCommitSha = on }
+    func queue(commitShas responses: [CommitShaResponse], for ref: String) { queuedCommitShas[ref] = responses }
     func set(unpushed shas: Set<String>) { stubbedUnpushed = shas }
     func fail(unpushed on: Bool) { failsUnpushed = on }
 
     func commitSha(of ref: String) async throws -> String? {
         commitShaCalls.append(ref)
+        if let response = queuedCommitShas[ref]?.first {
+            queuedCommitShas[ref]?.removeFirst()
+            switch response {
+            case let .sha(sha): return sha
+            case .none: return nil
+            case .failure: throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone")
+            }
+        }
         if failsCommitSha { throw ProcessError.failed(command: "git rev-parse", status: 128, stderr: "gone") }
         if let sha = stubbedCommitShas[ref] { return sha }
         guard ref.hasPrefix("refs/heads/") else { return nil }
