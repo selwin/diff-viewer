@@ -13,6 +13,7 @@ import SwiftUI
 /// (preferences, the caches, prefetching) are injected or driven from outside.
 @MainActor
 @Observable
+// swiftlint:disable:next type_body_length
 final class WindowState {
     typealias WatcherCallback = @MainActor (Set<RepoChange>) -> Void
     typealias WatcherFactory = @MainActor (RepositoryRoot, @escaping WatcherCallback) -> (any RepoWatching)?
@@ -130,8 +131,13 @@ final class WindowState {
     /// The list's entry for the branch HEAD is on, or nil when HEAD is detached, unread, or
     /// the branch is missing from the list.
     var currentBranch: LocalBranch? { branches.first { $0.name == currentBranchName } }
-    /// True while a checkout or merge is queued, running, or refreshing repository state.
+    /// A HEAD-changing operation is queued, running, or refreshing repository state.
     private(set) var isSwitchingBranch = false
+    /// Transient branch-pill feedback; does not control operation availability.
+    private(set) var headChangeActivity: HeadChangeActivity?
+    /// Clears finished feedback after the display duration unless cancelled.
+    @ObservationIgnored private var headChangeClearTask: Task<Void, Never>?
+    @ObservationIgnored private var nextHeadChangeActivityID = 0
     private(set) var isLoadingHistory = false
     private(set) var historyErrorMessage: String?
     /// The read a history load is serving, so an identical repeat can be skipped instead
@@ -210,6 +216,7 @@ final class WindowState {
     var isBranchPickerPresented = false {
         didSet {
             guard isBranchPickerPresented, !oldValue else { return }
+            dismissFinishedHeadChangeActivity()
             Task { @MainActor [weak self] in await self?.fetchForBranchPicker() }
         }
     }
@@ -261,16 +268,20 @@ final class WindowState {
     /// The clock the fetch cooldown and the picker's fetch times are measured against;
     /// injected so tests can move it.
     let now: @MainActor () -> Date
+    /// Times how long finished branch-pill feedback stays; injected so tests can move it.
+    private let feedbackClock: any Clock<Duration>
 
     init(
         preferences: Preferences, cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
         commitMessageGenerator: any CommitMessageGenerator = FoundationModelsCommitMessageGenerator(),
         now: @escaping @MainActor () -> Date = Date.init,
+        feedbackClock: any Clock<Duration> = ContinuousClock(),
         watchRepository: @escaping WatcherFactory
     ) {
         self.preferences = preferences
         self.commitMessageGenerator = commitMessageGenerator
         self.now = now
+        self.feedbackClock = feedbackClock
         self.watchRepository = watchRepository
         diffLoader = DiffLoader(cache: cache, resultCache: resultCache)
         diffLoader.onPresentationChange = { [weak self] in
@@ -325,6 +336,7 @@ final class WindowState {
         isBranchPickerPresented = false
         isNewBranchSheetPresented = false
         pendingMerge = nil
+        clearHeadChangeActivity()
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -1427,6 +1439,23 @@ extension WindowState {
 /// one as a new tracking branch, or a new branch made at HEAD, and merging a branch into the
 /// current one. Same file as the class so `isSwitchingBranch` stays `private(set)`.
 extension WindowState {
+    /// How long finished feedback stays on the pill.
+    static let headChangeFeedbackDuration: Duration = .seconds(4)
+
+    /// What the pill shows once an operation and its re-reads are done.
+    private enum HeadChangePresentation {
+        case show(HeadChangeOutcome)
+        /// A real failure: the alert, and no pill state.
+        case alert(any Error)
+    }
+
+    /// What a merge that git did not refuse left behind.
+    private enum MergeResult {
+        case succeeded(MergeKind)
+        /// Kept for the alert, in case the refreshed list shows no conflicts after all.
+        case stoppedOnConflicts(error: any Error)
+    }
+
     /// Switches the working tree to `branch` on the write chain; a second call while one
     /// is queued or running does nothing, and so does choosing the branch already checked
     /// out or the one being deleted. The scope is kept: a selected commit stays selected.
@@ -1434,38 +1463,44 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
             activeSync != ActiveSync(branch: branch, operation: .delete)
         else { return }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
-            try await client.switchBranch(to: branch)
-        }
+        await startHeadChange(
+            session: session, change: .switchTo(branch),
+            operation: { client in try await client.switchBranch(to: branch) },
+            makePresentation: { .show(.switched(to: branch)) })
     }
 
     /// Runs `operation` (a checkout or a merge) on the write chain, holding `isSwitchingBranch`
-    /// until it and its re-reads finish. The flag is set before the first suspension: callers
-    /// guard on it. Only a checkout leaves the remote branches' "new" badges behind;
-    /// `clearsNewRemoteBranches` says whether this one does.
-    private func startHeadChange(
-        session: RepoSession, clearsNewRemoteBranches: Bool,
-        operation: @escaping (any RepoClient) async throws -> Void
+    /// until it and its re-reads finish. The flag and the running state are set before the
+    /// first suspension: callers guard on the flag. `makePresentation` runs after the
+    /// refresh, so it reads the state the operation left.
+    private func startHeadChange<Value>(
+        session: RepoSession, change: HeadChange,
+        operation: @escaping (any RepoClient) async throws -> Value,
+        makePresentation: @escaping @MainActor (Value) -> HeadChangePresentation
     ) async {
         isSwitchingBranch = true
         defer { isSwitchingBranch = false }
+        headChangeClearTask?.cancel()
+        headChangeActivity = HeadChangeActivity(activityID: takeHeadChangeActivityID(), state: .running(change))
         // A run in flight would pair the old branch name with the new branch's patch.
         cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
             await self?.runHeadChange(
-                session: session, clearsNewRemoteBranches: clearsNewRemoteBranches, operation: operation)
+                session: session, change: change, operation: operation, makePresentation: makePresentation)
         }
     }
 
     /// `operation` is the git call that moves HEAD or its branch; everything after it is shared.
-    private func runHeadChange(
-        session: RepoSession, clearsNewRemoteBranches: Bool,
-        operation: (any RepoClient) async throws -> Void
+    private func runHeadChange<Value>(
+        session: RepoSession, change: HeadChange,
+        operation: (any RepoClient) async throws -> Value,
+        makePresentation: @MainActor (Value) -> HeadChangePresentation
     ) async {
+        // A closed window has already cleared its activity.
         guard isLive(session) else { return }
         let headBefore = headState
-        var failure: (any Error)?
-        do { try await operation(session.client) } catch { failure = error }
+        let result: Result<Value, any Error>
+        do { result = .success(try await operation(session.client)) } catch { result = .failure(error) }
         guard isLive(session) else { return }
         // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
         // and the watcher ignores this process's own events. A commit's files and diff
@@ -1497,24 +1532,83 @@ extension WindowState {
         await reloadHistoryIfHeadMoved(session: session)
         await refreshHeadState(session: session)
         guard isLive(session) else { return }
+        let operationFailed: Bool
+        if case .failure = result { operationFailed = true } else { operationFailed = false }
         // A failed post-checkout hook can still have moved HEAD, and a successful checkout
         // whose re-read failed still did. A failed checkout whose re-read also failed may
         // have moved HEAD unseen; dropping the flags beats leaving stale ones.
-        if clearsNewRemoteBranches, failure == nil || headState != headBefore || branchReadStatus == .failed {
+        if change.clearsNewRemoteBranches,
+            !operationFailed || headState != headBefore || branchReadStatus == .failed
+        {
             newRemoteBranches = []
         }
-        guard let failure else { return }
-        // After the refresh, so the news survives it.
-        errorMessage = failure.localizedDescription
+        let presentation: HeadChangePresentation
+        switch result {
+        case let .success(value): presentation = makePresentation(value)
+        case let .failure(error): presentation = .alert(error)
+        }
+        switch presentation {
+        case let .show(outcome):
+            showFinished(outcome)
+        case let .alert(error):
+            clearHeadChangeActivity()
+            // After the refresh, so the news survives it.
+            errorMessage = error.localizedDescription
+        }
     }
+
+    private func takeHeadChangeActivityID() -> Int {
+        nextHeadChangeActivityID += 1
+        return nextHeadChangeActivityID
+    }
+
+    /// The finished state replaces the running one for `headChangeFeedbackDuration`. With
+    /// the picker open the reader is already looking at the branch, so nothing is shown.
+    private func showFinished(_ outcome: HeadChangeOutcome) {
+        headChangeClearTask?.cancel()
+        guard !isBranchPickerPresented else {
+            clearHeadChangeActivity()
+            return
+        }
+        let activity = HeadChangeActivity(activityID: takeHeadChangeActivityID(), state: .finished(outcome))
+        headChangeActivity = activity
+        headChangeClearTask = Task { [weak self, feedbackClock] in
+            do { try await feedbackClock.sleep(for: Self.headChangeFeedbackDuration) } catch { return }
+            // The ID check keeps an old timer from clearing a newer activity.
+            guard let self, !Task.isCancelled, headChangeActivity?.activityID == activity.activityID else { return }
+            headChangeClearTask = nil
+            headChangeActivity = nil
+        }
+    }
+
+    /// Opening the picker ends finished feedback; a running state stays until its
+    /// operation ends.
+    private func dismissFinishedHeadChangeActivity() {
+        if case .finished? = headChangeActivity?.state { clearHeadChangeActivity() }
+    }
+
+    private func clearHeadChangeActivity() {
+        headChangeClearTask?.cancel()
+        headChangeClearTask = nil
+        headChangeActivity = nil
+    }
+
+    #if DEBUG
+        /// Shows `state` on the pill with no timer, so a snapshot can capture it.
+        func showHeadChangeActivityForSnapshot(_ state: HeadChangeActivity.State) {
+            clearHeadChangeActivity()
+            headChangeActivity = HeadChangeActivity(activityID: takeHeadChangeActivityID(), state: state)
+        }
+    #endif
 
     /// Creates `name` at HEAD and switches to it, on the same terms as `switchBranch(to:)`.
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {
         guard let session, !isClosed, !isSwitchingBranch else { return }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
-            try await client.createBranch(name)
-        }
+        await startHeadChange(
+            session: session, change: .create(name),
+            operation: { client in try await client.createBranch(name) },
+            makePresentation: { .show(.created(name)) })
     }
 
     /// Creates a local branch tracking `branch` and switches to it, on the same terms as
@@ -1528,9 +1622,10 @@ extension WindowState {
             errorMessage = branch.localNameCollisionMessage
             return
         }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
-            try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
-        }
+        await startHeadChange(
+            session: session, change: .checkoutTracking(branch),
+            operation: { client in try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref) },
+            makePresentation: { .show(.switched(to: branch.name)) })
     }
 
     /// Merges the confirmed source commit after validating the destination on the write
@@ -1539,9 +1634,52 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState == .named(target.destinationBranch) else {
             return
         }
-        await startHeadChange(session: session, clearsNewRemoteBranches: false) { client in
-            try await target.validateDestination(in: client)
+        await startHeadChange(
+            session: session, change: .merge(target),
+            operation: { client in try await Self.runMerge(target, in: client) },
+            makePresentation: { result in self.mergePresentation(result, target: target) })
+    }
+
+    /// Validates, merges, and reads what the merge left behind. The reads happen before the
+    /// next app write starts; external git commands can still interleave.
+    private static func runMerge(_ target: MergeTarget, in client: any RepoClient) async throws -> MergeResult {
+        try await target.validateDestination(in: client)
+        let wasMergeInProgress = try await client.commitSha(of: "MERGE_HEAD") != nil
+        do {
             try await client.merge(sourceTipSha: target.sourceTipSha, sourceRef: target.sourceRef)
+        } catch {
+            // Conflicts only when this merge made the stop: a hook failure after a clean merge
+            // or a merge already in progress leaves other evidence. Any unreadable evidence
+            // reports git's own error.
+            guard !wasMergeInProgress,
+                let mergeHead = try? await client.commitSha(of: "MERGE_HEAD"), mergeHead == target.sourceTipSha,
+                let status = try? await client.status(), status.contains(where: { $0.kind == .unmerged })
+            else { throw error }
+            return .stoppedOnConflicts(error: error)
+        }
+        let tip = try? await client.commitSha(of: "refs/heads/\(target.destinationBranch)")
+        guard let tip else { return .succeeded(.unknown) }
+        // Before the source check: the source tip may equal the destination tip.
+        if tip == target.destinationTipSha { return .succeeded(.alreadyUpToDate) }
+        return .succeeded(tip == target.sourceTipSha ? .fastForward : .mergeCommit)
+    }
+
+    /// Runs after the refresh. A conflict stop is shown only when the refreshed list can
+    /// list the conflicts; otherwise git's own error is the better account.
+    private func mergePresentation(_ result: MergeResult, target: MergeTarget) -> HeadChangePresentation {
+        switch result {
+        case let .succeeded(kind):
+            let commitCount: Int? =
+                switch session?.mergePreviews.cachedPreview(for: target.previewKey) {
+                case let .clean(commits)?, let .conflicts(commits, _)?: commits
+                case .alreadyMerged?, nil: nil
+                }
+            return .show(.merged(source: target.sourceName, kind: kind, commitCount: commitCount))
+        case let .stoppedOnConflicts(error):
+            guard scope == .workingTree else { return .alert(error) }
+            let conflicts = files.count { $0.kind == .unmerged }
+            guard conflicts > 0 else { return .alert(error) }
+            return .show(.mergeStopped(source: target.sourceName, conflictFileCount: conflicts))
         }
     }
 

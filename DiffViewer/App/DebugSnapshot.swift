@@ -27,6 +27,8 @@ import Foundation
 /// - `DIFFVIEWER_MERGE_SHEET=<branch>` opens the Merge sheet for that local branch (or a
 ///   remote one with that short name, like `origin/x`) into the current one, once the
 ///   branches have loaded, rendered the same way.
+/// - `DIFFVIEWER_HEAD_ACTIVITY=running|merged|fastForwarded|upToDate|created|switched|conflicts`
+///   leaves that branch pill live state showing; `DIFFVIEWER_HEAD_ACTIVITY_NAME=<name>` sets its branch.
 /// - `DIFFVIEWER_KEYS=<step>[,...]` drives the key window after the sheets open: a key
 ///   code (`126` is ↑, `36` Return, `53` Escape), a character (typed into the first
 ///   responder), `click:<x>x<y>` / `dblclick:<x>x<y>` in top-left content coordinates,
@@ -115,7 +117,7 @@ enum DebugLaunchOptions {
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || newBranchSheet
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
-                || env["DIFFVIEWER_MERGE_SHEET"] != nil
+                || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_HEAD_ACTIVITY"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the

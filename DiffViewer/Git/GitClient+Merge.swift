@@ -67,11 +67,13 @@ extension GitClient {
         try Self.rejectOption(sourceRef, kind: "branch", command: "git merge")
         let message = try await mergeMessage(sourceTipSha: sourceTipSha, sourceRef: sourceRef)
         // Config decides fast-forward versus a merge commit, as in `pull()`; `--no-edit`
-        // keeps a merge commit from opening `$EDITOR`. `--no-log` because the message
-        // already has the shortlog `merge.log` asks for. Known cost: conflict markers are
-        // labelled with the sha, since git labels them with the argument it was given.
+        // keeps a merge commit from opening `$EDITOR`. `--commit --no-squash` override a
+        // configured `--no-commit` or `--squash`, which would leave a pending index the
+        // reader never confirmed. `--no-log` because the message already has the shortlog
+        // `merge.log` asks for. Known cost: conflict markers are labelled with the sha,
+        // since git labels them with the argument it was given.
         try await runReportingDiagnostics(
-            ["merge", "--no-edit", "--no-log", "-m", message, sourceTipSha],
+            ["merge", "--no-edit", "--commit", "--no-squash", "--no-log", "-m", message, sourceTipSha],
             command: "git merge", environment: await hookEnvironment())
     }
 
