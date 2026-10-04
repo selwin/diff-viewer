@@ -56,11 +56,11 @@ enum BranchPickerTab: Sendable {
 }
 
 /// The sentence above the search field: the verb, the highlighted branch (nil when none
-/// is) and, for a merge, the branch it merges into.
+/// is) and, for a merge, what follows it. The header already names the current branch.
 struct BranchPickerInstruction: Equatable {
     let verb: String
     let token: String?
-    let target: String?
+    let ending: String?
 }
 
 /// What a row shows on its right edge in the current tab, and in which colour.

@@ -20,7 +20,8 @@ import Foundation
 ///   tray that way, alongside the commit sheet, and keeps it for later runs in the suite.
 /// - `DIFFVIEWER_COMMIT_PICKER=1` opens the commit picker popover the same way;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
-/// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way.
+/// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way;
+///   `DIFFVIEWER_BRANCH_PICKER_TAB=merge` opens it on the Merge… tab.
 /// - `DIFFVIEWER_NEW_BRANCH_SHEET=1` opens the New Branch sheet, rendered like the commit
 ///   sheet; `DIFFVIEWER_KEYS` types into its name field.
 /// - `DIFFVIEWER_MERGE_SHEET=<branch>` opens the Merge sheet for that local branch (or a
@@ -173,11 +174,11 @@ enum DebugLaunchOptions {
                 if let root = windowState.repositoryRoot, let trayExpansion {
                     windowState.preferences.setStagingTrayExpanded(trayExpansion, for: root)
                 }
+                await applyMergeOptions(env: env, in: windowState)
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
                 windowState.isNewBranchSheetPresented = newBranchSheet
-                await openMergeSheet(env: env, in: windowState)
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
                     try? await Task.sleep(for: .seconds(1))

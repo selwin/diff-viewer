@@ -309,8 +309,8 @@ struct BranchPickerState {
     var instruction: BranchPickerInstruction {
         let token = highlightedTableRow.flatMap { row(forTableRow: $0)?.name }
         switch tab {
-        case .switchBranch: return BranchPickerInstruction(verb: "Switch to", token: token, target: nil)
-        case .merge: return BranchPickerInstruction(verb: "Merge", token: token, target: currentBranchName)
+        case .switchBranch: return BranchPickerInstruction(verb: "Switch to", token: token, ending: nil)
+        case .merge: return BranchPickerInstruction(verb: "Merge", token: token, ending: "into current branch")
         }
     }
 

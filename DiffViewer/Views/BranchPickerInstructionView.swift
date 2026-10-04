@@ -1,8 +1,8 @@
 import AppKit
 
 /// The sentence over the branch picker's search field: "Switch to [branch]" or "Merge
-/// [branch] into main". The token names the highlighted branch, or stands empty. When the
-/// line runs short "into main" truncates first; the token keeps its width up to its cap.
+/// [branch] into current branch". The token names the highlighted branch, or stands empty,
+/// and truncates when the line runs short; the ending keeps its width.
 final class BranchPickerInstructionView: NSView {
     static let height = BranchTokenView.height
     private static let font = NSFont.systemFont(ofSize: 12.5)
@@ -12,7 +12,7 @@ final class BranchPickerInstructionView: NSView {
 
     private let verb = PickerLabel.make(font: font, color: .labelColor)
     private let token = BranchTokenView(frame: .zero)
-    /// "into <target>", one label so it truncates as one.
+    /// "into current branch", one label.
     private let ending = PickerLabel.make(font: font, color: .labelColor)
 
     override init(frame: NSRect) {
@@ -32,8 +32,8 @@ final class BranchPickerInstructionView: NSView {
     func configure(_ instruction: BranchPickerInstruction) {
         verb.stringValue = instruction.verb
         token.name = instruction.token
-        ending.isHidden = instruction.target == nil
-        ending.stringValue = instruction.target.map { "into \($0)" } ?? ""
+        ending.isHidden = instruction.ending == nil
+        ending.stringValue = instruction.ending ?? ""
         let parts = [instruction.verb, instruction.token ?? "a branch", ending.stringValue]
         setAccessibilityValue(parts.filter { !$0.isEmpty }.joined(separator: " "))
         needsLayout = true
@@ -44,11 +44,11 @@ final class BranchPickerInstructionView: NSView {
         let maxX = bounds.width - Self.sideInset
         var x = Self.sideInset
         x = place(verb, at: x, width: PickerViewGeometry.naturalSize(of: verb).width) + Self.tokenGap
-        let tokenWidth = max(min(token.fittingWidth, maxX - x), 0)
+        let endingReserve = ending.isHidden ? 0 : PickerViewGeometry.naturalSize(of: ending).width + Self.tokenGap
+        let tokenWidth = max(min(token.fittingWidth, maxX - x - endingReserve), 0)
         token.frame = NSRect(
             x: x, y: ((bounds.height - Self.height) / 2).rounded(), width: tokenWidth, height: Self.height)
         guard !ending.isHidden else { return }
-        // The ending gives way before the token does.
         x = token.frame.maxX + Self.tokenGap
         place(ending, at: x, width: min(PickerViewGeometry.naturalSize(of: ending).width, max(maxX - x, 0)))
     }
@@ -66,7 +66,6 @@ final class BranchPickerInstructionView: NSView {
 /// is tinted with the accent. Changes show at once, without animation.
 final class BranchTokenView: NSView {
     static let height: CGFloat = 20
-    private static let maximumWidth: CGFloat = 160
     private static let padding: CGFloat = 7
     private static let iconSize: CGFloat = 12
     private static let iconGap: CGFloat = 4
@@ -96,11 +95,11 @@ final class BranchTokenView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// The capsule's natural width, capped.
+    /// The capsule's natural width; the sentence clamps it to the line.
     var fittingWidth: CGFloat {
         let natural =
             Self.padding + Self.iconSize + Self.iconGap + PickerViewGeometry.naturalSize(of: label).width + Self.padding
-        return min(natural.rounded(.up), Self.maximumWidth)
+        return natural.rounded(.up)
     }
 
     private func applyState() {

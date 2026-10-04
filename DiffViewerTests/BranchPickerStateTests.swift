@@ -641,13 +641,14 @@ struct BranchPickerStateTests {
         #expect(switching.items.indices.allSatisfy { switching.activation(forTableRow: $0) == nil })
     }
 
-    @Test func theInstructionNamesTheHighlightAndTheMergeTarget() {
+    @Test func theInstructionNamesTheHighlight() {
         var picker = state(snapshot(branches: [main, feature]))
-        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: nil, target: nil))
+        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: nil, ending: nil))
         picker.moveDown()
-        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: "feature", target: nil))
+        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: "feature", ending: nil))
         picker.setTab(.merge)
-        #expect(picker.instruction == BranchPickerInstruction(verb: "Merge", token: "feature", target: "main"))
+        let merge = BranchPickerInstruction(verb: "Merge", token: "feature", ending: "into current branch")
+        #expect(picker.instruction == merge)
     }
 
     @Test func theCurrentRowsTrailingLabelFollowsTheTab() throws {
