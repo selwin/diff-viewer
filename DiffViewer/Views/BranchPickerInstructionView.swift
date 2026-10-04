@@ -66,28 +66,20 @@ final class BranchPickerInstructionView: NSView {
 /// is tinted with the accent. Changes show at once, without animation.
 final class BranchTokenView: NSView {
     static let height: CGFloat = 20
-    private static let padding: CGFloat = 7
-    private static let iconSize: CGFloat = 12
-    private static let iconGap: CGFloat = 4
+    private static let padding: CGFloat = 8
+    private static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
 
     var name: String? {
         didSet {
             guard name != oldValue else { return }
-            applyState()
+            needsDisplay = true
+            superview?.needsLayout = true
         }
     }
-
-    private let icon = NSImageView()
-    private let label = PickerLabel.make(font: .systemFont(ofSize: 12, weight: .medium), color: .tertiaryLabelColor)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        icon.image = NSImage(resource: .gitBranch).withSymbolConfiguration(.init(pointSize: 11, weight: .medium))
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        label.lineBreakMode = .byTruncatingMiddle
-        for view in [icon, label] { addSubview(view) }
-        applyState()
     }
 
     @available(*, unavailable)
@@ -97,19 +89,17 @@ final class BranchTokenView: NSView {
 
     /// The capsule's natural width; the sentence clamps it to the line.
     var fittingWidth: CGFloat {
-        let natural =
-            Self.padding + Self.iconSize + Self.iconGap + PickerViewGeometry.naturalSize(of: label).width + Self.padding
-        return natural.rounded(.up)
+        (Self.padding + text.size().width + Self.padding).rounded(.up)
     }
 
-    private func applyState() {
-        label.stringValue = name ?? "a branch"
-        let color: NSColor = name == nil ? .tertiaryLabelColor : .controlAccentColor
-        label.textColor = color
-        icon.contentTintColor = color
-        needsDisplay = true
-        needsLayout = true
-        superview?.needsLayout = true
+    private var color: NSColor { name == nil ? .tertiaryLabelColor : .controlAccentColor }
+
+    private var text: NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byTruncatingMiddle
+        return NSAttributedString(
+            string: name ?? "a branch",
+            attributes: [.font: Self.font, .foregroundColor: color, .paragraphStyle: paragraph])
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -126,17 +116,14 @@ final class BranchTokenView: NSView {
             NSColor.controlAccentColor.withAlphaComponent(0.4).setStroke()
         }
         path.stroke()
-    }
-
-    override func layout() {
-        super.layout()
-        icon.frame = NSRect(
-            x: Self.padding, y: ((bounds.height - Self.iconSize) / 2).rounded(), width: Self.iconSize,
-            height: Self.iconSize)
-        let labelX = icon.frame.maxX + Self.iconGap
-        let labelHeight = PickerViewGeometry.naturalSize(of: label).height
-        label.frame = NSRect(
-            x: labelX, y: ((bounds.height - labelHeight) / 2).rounded(),
-            width: max(bounds.width - Self.padding - labelX, 0), height: labelHeight)
+        // Centred on the cap height rather than the line box, whose descender and leading
+        // would sit the name low in so short a capsule. Mostly lowercase names still read
+        // low there, so the baseline rises 1pt more.
+        let font = Self.font
+        let baseline = (bounds.midY + font.capHeight / 2).rounded() - 1
+        let textRect = NSRect(
+            x: Self.padding, y: baseline - font.ascender, width: max(bounds.width - Self.padding * 2, 0),
+            height: font.ascender - font.descender)
+        text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }
