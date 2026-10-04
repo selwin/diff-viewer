@@ -5,13 +5,29 @@ import SwiftUI
 /// setting the same flag.
 struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isBranchTinted = false
     @State private var isLeadingSegmentTinted = false
+    /// Segments that just went hidden, still drawn while they collapse.
+    @State private var departure: SegmentDeparture?
+    /// How far the departing segments have collapsed, 0 to 1.
+    @State private var departureProgress = 0.0
+
+    /// How long a departing segment takes to collapse.
+    static let collapseDuration = Duration.milliseconds(250)
 
     var body: some View {
         @Bindable var windowState = windowState
-        let sync = windowState.currentBranchSync
+        let live = windowState.currentBranchSync
+        let sync = live.map { departure?.applied(to: $0) ?? $0 }
         let showsSegments = sync?.showsSegments ?? false
+        // Eased, so the collapse starts and ends gently.
+        let remaining = 1 - departureProgress * departureProgress * (3 - 2 * departureProgress)
+        // Every segment is leaving, so the divider goes with them.
+        let tailDeparts = departure != nil && !(live?.showsSegments ?? false)
+        // Otherwise one segment leaves on its own, and the other stays.
+        let departsPull = !tailDeparts && live.map { departure?.departsPull(in: $0) ?? false } ?? false
+        let departsPush = !tailDeparts && live.map { departure?.departsPush(in: $0) ?? false } ?? false
         HStack(spacing: 0) {
             // Capped like the scope picker, so a long branch name can't push the toolbar's
             // other items into overflow. Only the name part is capped: the name keeps the
@@ -22,7 +38,7 @@ struct BranchPickerView: View {
                 } label: {
                     TitleBarPickerContent(icon: .gitBranch, title: windowState.branchDisplayTitle)
                         .padding(.leading, 14)
-                        .padding(.trailing, showsSegments ? 10 : 14)
+                        .padding(.trailing, showsSegments ? 14 - 4 * (tailDeparts ? remaining : 1) : 14)
                         .frame(height: 36)
                         .modifier(PillPartHover { isBranchTinted = $0 })
                 }
@@ -34,21 +50,52 @@ struct BranchPickerView: View {
                 }
             }
             if let sync, showsSegments {
-                Rectangle()
-                    .fill(.separator)
-                    .frame(width: 1, height: 18)
-                    // Steps aside for a tinted neighbour, like a native segmented control's
-                    // separator. Opacity, not removal, so the pill's width doesn't change.
-                    .opacity(isBranchTinted || isLeadingSegmentTinted ? 0 : 1)
-                BranchSyncSegments(sync: sync, onLeadingTintChange: { isLeadingSegmentTinted = $0 })
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(.separator)
+                        .frame(width: 1, height: 18)
+                        // Steps aside for a tinted neighbour, like a native segmented control's
+                        // separator. Opacity, not removal, so the pill's width doesn't change.
+                        .opacity(isBranchTinted || isLeadingSegmentTinted ? 0 : 1)
+                    BranchSyncSegments(
+                        sync: sync,
+                        pullWidth: departsPull ? remaining : 1,
+                        pushWidth: departsPush ? remaining : 1,
+                        onLeadingTintChange: { isLeadingSegmentTinted = $0 }
+                    )
                     .fixedSize()
                     // Disabled while another sheet or picker is up, like the branch button.
                     .disabled(!windowState.canOpenBranchPicker)
+                }
+                .modifier(Collapsing(width: tailDeparts ? remaining : 1))
             }
         }
         .background(TitleBarCapsule(isOpen: windowState.isBranchPickerPresented))
         // Clips each part's hover tint to the round ends.
         .clipShape(Capsule())
+        .onChange(of: live) { old, new in
+            if !reduceMotion, let next = SegmentDeparture.between(old, new) {
+                departure = next
+                departureProgress = 0
+            } else if new?.branch != departure?.previous.branch {
+                departure = nil
+            }
+        }
+        .task(id: departure) {
+            guard departure != nil else { return }
+            // Stepped by hand rather than animated: the toolbar sizes its item from the
+            // pill's actual width, so only real width changes move the neighbours with it.
+            let start = ContinuousClock.now
+            while !Task.isCancelled {
+                let progress = (ContinuousClock.now - start) / Self.collapseDuration
+                if progress >= 1 { break }
+                departureProgress = progress
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+            guard !Task.isCancelled else { return }
+            departure = nil
+            departureProgress = 0
+        }
     }
 }
 
@@ -56,6 +103,9 @@ struct BranchPickerView: View {
 private struct BranchSyncSegments: View {
     @Environment(WindowState.self) private var windowState
     let sync: CurrentBranchSyncPresentation
+    /// The fraction of its width each segment takes: below 1 while it collapses.
+    let pullWidth: Double
+    let pushWidth: Double
     let onLeadingTintChange: (Bool) -> Void
 
     var body: some View {
@@ -71,10 +121,12 @@ private struct BranchSyncSegments: View {
                     let branch = sync.branch
                     Task { await windowState.pull(branch: branch) }
                 }
+                .modifier(Collapsing(width: pullWidth))
                 .id(SegmentID(branch: sync.branch, operation: .pull))
             }
             if showsPush {
                 pushSegment(onTintChange: showsPull ? nil : onLeadingTintChange)
+                    .modifier(Collapsing(width: pushWidth))
                     .id(SegmentID(branch: sync.branch, operation: sync.buttons.pushOperation))
             }
         }
@@ -139,8 +191,8 @@ private struct SegmentID: Hashable {
 }
 
 /// One segment's face: the arrow, action and count, when there is one, in the accent
-/// colour. A running segment covers the arrow and
-/// action with a spinner, as the picker's own buttons do, so the pill keeps its width.
+/// colour. A running segment hides all three under a centred spinner, as the picker's own
+/// buttons do; hidden, not removed, so the pill keeps its width.
 private struct SyncSegmentLabel: View {
     let arrow: String
     let count: Int?
@@ -150,32 +202,29 @@ private struct SyncSegmentLabel: View {
     let isLast: Bool
     var onTintChange: ((Bool) -> Void)?
 
-    /// The count from before the click: the refresh behind the spinner may clear `count`.
+    /// The count from before the click: the refresh behind the spinner may clear `count`,
+    /// and the hidden count still holds the segment's width.
     @State private var lastCount: Int?
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         let isRunning = state == .running
         HStack(spacing: 2) {
-            HStack(spacing: 2) {
-                Image(systemName: arrow)
-                    .font(.system(size: 10, weight: .bold))
-                Text(title)
-                    .fontWeight(.medium)
-            }
-            // Centred by its line box, the text reads low against the icons; lift it to the
-            // eye, and the arrow with it so the two line up.
-            .offset(y: -1)
-            .opacity(isRunning ? 0 : 1)
-            .overlay {
-                if isRunning { ProgressView().controlSize(.small) }
-            }
+            Image(systemName: arrow)
+                .font(.system(size: 10, weight: .bold))
+            Text(title)
+                .fontWeight(.medium)
             if let shown = count ?? (isRunning ? lastCount : nil) {
                 Text("\(shown)")
                     .monospacedDigit()
-                    // Lifted like the title, so the two share a baseline.
-                    .offset(y: -1)
             }
+        }
+        // Centred by its line box, the text reads low against the icons; lift it to the eye.
+        // The spinner below is centred on the unlifted frame.
+        .offset(y: -1)
+        .opacity(isRunning ? 0 : 1)
+        .overlay {
+            if isRunning { ProgressView().controlSize(.small) }
         }
         .foregroundStyle(isEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
         .onChange(of: count, initial: true) { _, new in
@@ -363,5 +412,41 @@ private struct CappedWidth: Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         assert(subviews.count == 1)
         subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// Draws a part of the pill at a fraction of its width, cut from the trailing edge, and
+/// takes no clicks while it collapses.
+private struct Collapsing: ViewModifier {
+    let width: Double
+
+    func body(content: Content) -> some View {
+        WidthFractionLayout(fraction: width) { content }
+            .clipped()
+            .opacity(width)
+            .allowsHitTesting(width == 1)
+    }
+}
+
+/// Reports a fraction of the child's ideal width without compressing its content, so the
+/// label keeps its shape as the part narrows. Lays out exactly one child.
+private struct WidthFractionLayout: Layout {
+    let fraction: Double
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        assert(subviews.count == 1)
+        let ideal = idealSize(of: subviews[0], height: proposal.height)
+        return CGSize(width: ideal.width * fraction, height: ideal.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        assert(subviews.count == 1)
+        let ideal = idealSize(of: subviews[0], height: proposal.height)
+        subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(ideal))
+    }
+
+    /// Measured at an unspecified width, never the narrowed one, so the label can't truncate.
+    private func idealSize(of subview: LayoutSubview, height: CGFloat?) -> CGSize {
+        subview.sizeThatFits(ProposedViewSize(width: nil, height: height))
     }
 }

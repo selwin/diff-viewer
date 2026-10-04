@@ -77,4 +77,25 @@ struct CurrentBranchSyncPresentationTests {
         #expect(sync.pullCount == pullCount)
         #expect(sync.pushCount == pushCount)
     }
+
+    @Test func departureKeepsDrawingASegmentThatWentHidden() {
+        let pulling = CurrentBranchSyncPresentation(
+            branch: "main", buttons: RowSyncButtons(pull: .running, push: .disabled(reason: "Pulling…")), target: nil)
+        let pulled = CurrentBranchSyncPresentation(
+            branch: "main", buttons: RowSyncButtons(pull: .hidden, push: .enabled), target: nil)
+        let departure = SegmentDeparture.between(pulling, pulled)
+        #expect(departure == SegmentDeparture(previous: pulling, pull: true, push: false))
+        // The departing Pull keeps its spinner; the Push that stayed shows its live state.
+        #expect(departure?.applied(to: pulled).buttons == RowSyncButtons(pull: .running, push: .enabled))
+
+        // Back in the live presentation, the segment is drawn live again.
+        let behindAgain = CurrentBranchSyncPresentation(
+            branch: "main", buttons: RowSyncButtons(pull: .enabled, push: .enabled), target: nil)
+        #expect(departure?.applied(to: behindAgain).buttons == behindAgain.buttons)
+
+        // Nothing went hidden, or the branch changed: nothing departs.
+        #expect(SegmentDeparture.between(pulled, pulled) == nil)
+        let other = CurrentBranchSyncPresentation(branch: "other", buttons: .hidden, target: nil)
+        #expect(SegmentDeparture.between(pulling, other) == nil)
+    }
 }

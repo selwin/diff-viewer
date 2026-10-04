@@ -31,6 +31,7 @@ enum BranchDeleteConfirmation {
         alert.informativeText =
             branch.upstream.map { "Its upstream \($0.shortName) is gone. \(consequence)" } ?? consequence
         alert.alertStyle = .warning
+
         alert.addButton(withTitle: "Delete")
         alert.buttons.first?.hasDestructiveAction = true
         alert.addButton(withTitle: "Cancel")
