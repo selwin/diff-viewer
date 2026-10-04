@@ -151,3 +151,45 @@ extension RemoteBranch {
         "A local branch named \(name) already exists"
     }
 }
+
+/// Segments the title bar pill keeps drawing while they collapse: hidden in the live
+/// presentation, drawn as they last were.
+struct SegmentDeparture: Equatable {
+    /// The presentation the departing segments last had.
+    let previous: CurrentBranchSyncPresentation
+    let pull: Bool
+    let push: Bool
+
+    /// The segments that went hidden between `old` and `new`. Nil when none did, or when
+    /// the branch changed: another branch's pill starts fresh.
+    static func between(
+        _ old: CurrentBranchSyncPresentation?, _ new: CurrentBranchSyncPresentation?
+    ) -> SegmentDeparture? {
+        guard let old, let new, old.branch == new.branch else { return nil }
+        let pull = old.buttons.pull != .hidden && new.buttons.pull == .hidden
+        let push = old.buttons.push != .hidden && new.buttons.push == .hidden
+        guard pull || push else { return nil }
+        return SegmentDeparture(previous: old, pull: pull, push: push)
+    }
+
+    /// Whether Pull is still departing: a segment back in `live` is drawn live again.
+    func departsPull(in live: CurrentBranchSyncPresentation) -> Bool {
+        pull && live.branch == previous.branch && live.buttons.pull == .hidden
+    }
+
+    func departsPush(in live: CurrentBranchSyncPresentation) -> Bool {
+        push && live.branch == previous.branch && live.buttons.push == .hidden
+    }
+
+    /// `live` with the departing segments put back as they last were.
+    func applied(to live: CurrentBranchSyncPresentation) -> CurrentBranchSyncPresentation {
+        var buttons = live.buttons
+        if departsPull(in: live) { buttons.pull = previous.buttons.pull }
+        if departsPush(in: live) {
+            buttons.push = previous.buttons.push
+            buttons.pushOperation = previous.buttons.pushOperation
+            buttons.publish = previous.buttons.publish
+        }
+        return CurrentBranchSyncPresentation(branch: live.branch, buttons: buttons, target: live.target)
+    }
+}
