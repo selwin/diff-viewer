@@ -76,7 +76,10 @@ struct StagingTrayView: View {
             .contentTransition(.numericText())
             .animation(.default, value: stagedIDs)
             .animation(.default, value: summary.churn)
-            .padding(.horizontal, 8)
+            .padding(.leading, 8)
+            // The list insets its rows 8pt more than this; matching it lines the total
+            // up with the rows' churn.
+            .padding(.trailing, 16)
             .frame(height: 24)
         }
         .buttonStyle(TrayHeaderButtonStyle())
