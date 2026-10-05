@@ -518,6 +518,38 @@ struct WindowStateCommitTests {
         #expect(state.commitMessage == mergeText)
     }
 
+    /// Matches generated text, including after restoration; differs after editing or clearing.
+    @Test func theDraftMatchesGeneratedTextOnlyWhileItIsTheModelsText() async throws {
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(texts: ["Add the picker"]))
+        await client.set(stagedPatch: stagedPatch)
+        #expect(!state.commitDraftMatchesGeneratedText)
+
+        state.generateCommitMessage()
+        #expect(await eventually { await !state.isGeneratingCommitMessage })
+        #expect(state.commitDraftMatchesGeneratedText)
+
+        state.commitMessage = "Add the picker, reworded"
+        #expect(!state.commitDraftMatchesGeneratedText)
+
+        state.commitMessage = "Add the picker"
+        #expect(state.commitDraftMatchesGeneratedText)
+
+        state.commitMessage = ""
+        #expect(!state.commitDraftMatchesGeneratedText)
+    }
+
+    /// Partial text left by a failed run is still the model's, so it counts as generated.
+    @Test func partialTextFromAFailedRunMatchesGeneratedText() async throws {
+        let generator = StubCommitMessageGenerator(texts: ["Add"], failure: StubGenerationError())
+        let (_, state, client, _) = try await settled(generator: generator)
+        await client.set(stagedPatch: stagedPatch)
+
+        state.generateCommitMessage()
+        let task = try #require(state.session?.commitGenerationTask)
+        await task.value
+        #expect(state.commitDraftMatchesGeneratedText)
+    }
+
     /// A model that gave up says so in the sheet, and what the reader had written stays.
     @Test func aFailedGenerationReportsAndKeepsTheDraft() async throws {
         let (_, state, client, _) = try await settled(
