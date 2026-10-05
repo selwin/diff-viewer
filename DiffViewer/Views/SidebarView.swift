@@ -282,7 +282,7 @@ struct DirectoryFileSection: View {
     }
 }
 
-/// A directory's path and file count, with the directory's own name emphasized.
+/// A directory's path and file count.
 struct DirectoryCaption: View {
     /// A sidebar header reaches 13pt closer to the list's trailing edge than a row's
     /// content (macOS 26); padding by that lines the count up with the rows' churn.
@@ -294,22 +294,12 @@ struct DirectoryCaption: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Drops the path a folder at a time before the name ever truncates. A sidebar
-            // header draws lighter than `.secondary` (macOS 26), so both tones are explicit
-            // to keep the prefix dimmer than the name.
+            // Drops the path a folder at a time before the name ever truncates.
             ViewThatFits(in: .horizontal) {
                 ForEach(group.parentPathPrefixes, id: \.self) { prefix in
-                    HStack(spacing: 0) {
-                        if !prefix.isEmpty {
-                            Text(prefix)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                        Text(group.directoryName)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    Text(prefix + group.directoryName)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 8)

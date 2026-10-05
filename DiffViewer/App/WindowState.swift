@@ -1353,6 +1353,11 @@ extension WindowState {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Whether the nonempty draft matches the latest generated text.
+    var commitDraftMatchesGeneratedText: Bool {
+        !storedCommitMessage.isEmpty && storedCommitMessage == lastGeneratedMessage
+    }
+
     /// Stops the generation in flight. Whatever it has written by then stays in the draft:
     /// it is text the reader has seen, and theirs to finish or clear.
     func cancelCommitMessageGeneration() {
