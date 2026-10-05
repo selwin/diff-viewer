@@ -52,9 +52,12 @@ struct ContentView: View {
             // panes compare.
             ToolbarItem(placement: .navigation) {
                 Text(windowState.title)
-                    .font(.headline)
+                    // Larger and heavier than the pickers' labels, so the name leads the row.
+                    .font(.system(size: 15, weight: .bold))
                     // The title the toolbar drew dimmed with the window; this one has to.
-                    .foregroundStyle(appearsActive ? .primary : .tertiary)
+                    .foregroundStyle(appearsActive ? .primary : .secondary)
+                    // Room on both sides so the name reads as a heading, not one more control.
+                    .padding(.horizontal, 10)
             }
             // A bare name, not a glass pill.
             .sharedBackgroundVisibility(.hidden)
