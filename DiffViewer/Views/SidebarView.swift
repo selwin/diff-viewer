@@ -333,6 +333,9 @@ struct SidebarFileRow: View {
             Spacer(minLength: 8)
             ChurnLabel(stats: file.lineStats)
         }
+        // Row content starts a point right of a section header; this lines the badge up
+        // with the directory caption above it.
+        .padding(.leading, -1)
         .tag(DiffSelection.file(file.id))
         .help(file.originalPath.map { "\(file.kind.label) from \($0)" } ?? file.kind.label)
     }
