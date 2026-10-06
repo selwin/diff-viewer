@@ -1,25 +1,15 @@
 import AppKit
 
 /// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
-/// detail line for how far that branch is from its upstream and how the fetch went, a
-/// round Fetch button that spins while a round runs, and the current branch's Pull and
-/// Push after it. It draws no background of its own, so the header and the list share the
-/// popover's one surface.
-final class BranchPickerHeaderView: NSView {
-    private typealias Metrics = PickerMetrics.Header
-
-    private static let controlGap: CGFloat = 8
-    /// Between the title and the copy button, whose hover fill already pads the icon.
-    private static let copyGap: CGFloat = 2
-    /// Above the tab band's hairline; the commit picker's search field needs less.
-    private static let bottomPadding: CGFloat = 14
-
-    private let title = PickerLabel.make(font: Metrics.titleFont, color: .labelColor)
+/// subtitle for how far that branch is from its upstream and how the fetch went, a round
+/// Fetch button that spins while a round runs, and the current branch's Pull and Push
+/// after it.
+final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
     private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: SyncPillButton.focusRingMargin)
-    private let detail = PickerLabel.make(font: Metrics.detailFont, color: .secondaryLabelColor)
-    private let syncButtons = BranchRowSyncButtons(style: .header)
-    private let fetchButton = FetchButton(frame: .zero)
+    private let controls = BranchHeaderControls()
+    private var syncButtons: BranchRowSyncButtons { controls.syncButtons }
+    private var fetchButton: FetchButton { controls.fetchButton }
 
     /// After a copy; the picker returns focus to its search field.
     var onCopy: () -> Void {
@@ -33,23 +23,22 @@ final class BranchPickerHeaderView: NSView {
     var onPublish: (String, String) -> Void = { _, _ in }
     private var text = BranchPickerHeaderText(title: "")
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        clipsToBounds = true
+    init() {
+        super.init(wrapsTitle: false)
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
-        for view in [title, copyButton, detail, syncButtons, fetchButton] { addSubview(view) }
+        titleAccessory = copyButton
+        trailingAccessory = controls
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override var isFlipped: Bool { true }
-
-    /// `fetch` follows the upstream on the detail line, and its tooltip covers the line.
+    /// `fetch` follows the upstream on the subtitle, and its tooltip covers the line.
     func configure(_ text: BranchPickerHeaderText, fetch: BranchPickerFetchText?) {
         self.text = text
-        title.stringValue = text.title
+        title = text.title
+        showsTitleAccessory = text.copyableName != nil
         if let name = text.copyableName { copyButton.configure(text: name) }
         configureFetch(fetch)
         fetchButton.isEnabled = text.canFetch
@@ -63,14 +52,14 @@ final class BranchPickerHeaderView: NSView {
         } else {
             syncButtons.isHidden = true
         }
+        controls.needsLayout = true
         needsLayout = true
     }
 
-    /// Redraws only the fetch text. The detail line's frame spans its space whatever it
-    /// says, so this needs no layout.
+    /// Redraws only the fetch text.
     func configureFetch(_ fetch: BranchPickerFetchText?) {
-        detail.stringValue = text.detail(fetch: fetch)
-        detail.toolTip = fetch?.tooltip
+        subtitle = text.detail(fetch: fetch)
+        subtitleToolTip = fetch?.tooltip
     }
 
     @objc private func fetchClicked() {
@@ -88,63 +77,48 @@ final class BranchPickerHeaderView: NSView {
             }
         }
     }
+}
 
-    /// Two text lines and padding; constant so counts arriving later do not move the rows.
-    var fittingHeight: CGFloat {
-        Metrics.topPadding + PickerViewGeometry.naturalSize(of: title).height + Metrics.lineGap
-            + Self.detailHeight + Self.bottomPadding
+/// The round Fetch button and, when the current branch has them, its Pull and Push, side by
+/// side as the header's one trailing accessory. Its frame carries the focus ring margin
+/// of the buttons at its ends.
+private final class BranchHeaderControls: NSView {
+    private static let controlGap: CGFloat = 8
+    private static let margin = SyncPillButton.focusRingMargin
+
+    let fetchButton = FetchButton(frame: .zero)
+    let syncButtons = BranchRowSyncButtons(style: .header)
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+        // Fetch comes first, left of Pull and Push, in the order Tab visits them.
+        addSubview(fetchButton)
+        addSubview(syncButtons)
     }
 
-    /// The detail line's height for its font, measured once, so an empty line still
-    /// reserves its space.
-    private static let detailHeight: CGFloat = PickerViewGeometry.naturalSize(
-        of: PickerLabel.make(font: Metrics.detailFont, color: .labelColor)
-    ).height
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: Self.margin, left: Self.margin, bottom: Self.margin, right: Self.margin)
+    }
+
+    override var intrinsicContentSize: NSSize {
+        var width = fetchButton.visibleSize.width
+        if !syncButtons.isHidden { width += Self.controlGap + syncButtons.visibleSize.width }
+        return NSSize(width: width + Self.margin * 2, height: fetchButton.intrinsicContentSize.height)
+    }
 
     override func layout() {
         super.layout()
-        let titleHeight = PickerViewGeometry.naturalSize(of: title).height
-        let centerY =
-            (Metrics.topPadding + titleHeight + Metrics.lineGap + Self.detailHeight + Metrics.topPadding) / 2
-        // The controls on the trailing edge are placed first; the text takes what is left.
-        var trailing = bounds.width - Metrics.sidePadding
-        // Both controls carry a margin for their focus rings; the gaps are between the shapes.
-        let margin = SyncPillButton.focusRingMargin
-        // Fetch comes first, left of Pull and Push, in the order Tab visits them.
+        let centerY = bounds.height / 2
+        let fetchMaxX = fetchButton.placeVisible(x: Self.margin, centerY: centerY)
         if !syncButtons.isHidden {
-            let size = syncButtons.intrinsicContentSize
-            syncButtons.frame = NSRect(
-                x: trailing - size.width + margin, y: (centerY - size.height / 2).rounded(), width: size.width,
-                height: size.height)
-            trailing = syncButtons.frame.minX + margin - Self.controlGap
+            syncButtons.placeVisible(x: fetchMaxX + Self.controlGap, centerY: centerY)
         }
-        let fetchSide = FetchButton.frameSide
-        fetchButton.frame = NSRect(
-            x: trailing - fetchSide + margin, y: (centerY - fetchSide / 2).rounded(), width: fetchSide,
-            height: fetchSide)
-        trailing = fetchButton.frame.minX + margin - Self.controlGap
-        let textWidth = max(trailing - Metrics.sidePadding, 0)
-        layoutTitle(width: textWidth, height: titleHeight)
-        detail.frame = NSRect(
-            x: Metrics.sidePadding, y: title.frame.maxY + Metrics.lineGap, width: textWidth,
-            height: Self.detailHeight)
-    }
-
-    /// The title, truncating, then the copy button, which is hidden when there's nothing to
-    /// copy or no room for it.
-    private func layoutTitle(width: CGFloat, height: CGFloat) {
-        let side = PickerCopyButton.side
-        let showsCopy = text.copyableName != nil && width >= Self.copyGap + side
-        let naturalWidth = PickerViewGeometry.naturalSize(of: title).width
-        let titleWidth = showsCopy ? max(min(naturalWidth, width - Self.copyGap - side), 0) : width
-        title.frame = NSRect(x: Metrics.sidePadding, y: Metrics.topPadding, width: titleWidth, height: height)
-        copyButton.isHidden = !showsCopy
-        let frameSide = copyButton.frameSide
-        copyButton.frame = backingAlignedRect(
-            NSRect(
-                x: title.frame.maxX + Self.copyGap - copyButton.focusMargin, y: title.frame.midY - frameSide / 2,
-                width: frameSide, height: frameSide),
-            options: PickerViewGeometry.pixelAlignment)
     }
 }
 
@@ -208,6 +182,12 @@ final class FetchButton: NSButton {
 
     private var circle: NSBezierPath {
         NSBezierPath(ovalIn: focusRingMaskBounds)
+    }
+
+    /// The visible circle, without the focus ring's margin.
+    override var alignmentRectInsets: NSEdgeInsets {
+        let margin = SyncPillButton.focusRingMargin
+        return NSEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
     }
 
     override var focusRingMaskBounds: NSRect {

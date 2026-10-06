@@ -49,8 +49,6 @@ final class BranchPickerTabBar: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.labelColor.withAlphaComponent(0.045).setFill()
         bounds.fill()
-        NSColor.separatorColor.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
     }
 
     override func layout() {

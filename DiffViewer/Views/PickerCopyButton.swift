@@ -68,6 +68,11 @@ final class PickerCopyButton: NSButton {
         NSSize(width: frameSide, height: frameSide)
     }
 
+    /// The visible circle, without the focus ring's margin.
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: focusMargin, left: focusMargin, bottom: focusMargin, right: focusMargin)
+    }
+
     override var focusRingMaskBounds: NSRect {
         guard focusMargin > 0 else { return super.focusRingMaskBounds }
         return bounds.insetBy(dx: focusMargin, dy: focusMargin)

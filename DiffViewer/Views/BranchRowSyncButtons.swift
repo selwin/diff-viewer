@@ -142,6 +142,12 @@ final class BranchRowSyncButtons: NSView {
         buttons.filter { !$0.isHidden }
     }
 
+    /// The header's buttons carry margins for their focus rings; the visible shapes exclude them.
+    override var alignmentRectInsets: NSEdgeInsets {
+        let margin = style == .header ? SyncPillButton.focusRingMargin : 0
+        return NSEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
+    }
+
     override var intrinsicContentSize: NSSize {
         let sizes = visibleButtons.map(\.intrinsicContentSize)
         let width = sizes.map(\.width).reduce(0, +) + gap * CGFloat(max(sizes.count - 1, 0))
