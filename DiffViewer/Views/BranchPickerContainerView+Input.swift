@@ -13,7 +13,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         case let .header(group):
             let cell =
                 tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
-                as? PickerGroupHeaderView ?? PickerGroupHeaderView(frame: .zero)
+                as? PickerGroupHeaderView ?? PickerGroupHeaderView(style: Self.groupHeaderStyle)
             cell.configure(title: group.title)
             return cell
         case let .branch(entry):
@@ -23,10 +23,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
             cell.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
             cell.configure(
                 entry, trailing: state.trailingLabel(forTableRow: row, preview: mergePreview(forTableRow: row)),
-                blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry),
-                // Every Merge row keeps the room, so the right edges line up; only the
-                // highlight shows it, and the current row never takes the highlight.
-                hasChevron: state.tab == .merge)
+                blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry))
             configureHighlightAndButtons(of: cell, row: row, animated: false, shortcuts: state.shortcutTargets)
             // No callback on a row that cannot be activated: the action must not be offered.
             guard state.canActivate(tableRow: row) else {
@@ -45,7 +42,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     /// By the item's kind: the current branch takes no highlight but is a full row.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        state.row(forTableRow: row) != nil ? PickerMetrics.rowHeight : PickerMetrics.headerRowHeight
+        state.row(forTableRow: row) != nil ? BranchPickerStyle.rowHeight : BranchPickerStyle.sectionHeaderHeight
     }
 
     /// What VoiceOver calls a row's activation in the current tab.
@@ -62,7 +59,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil) as? PickerTableRowView
-            ?? PickerTableRowView(frame: .zero)
+            ?? PickerTableRowView(style: Self.rowViewStyle)
     }
 
     /// Accepts table selections; restores a highlighted branch after external deselection.
@@ -78,6 +75,12 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
 /// Key equivalents the popover answers before the main menu.
 extension BranchPickerContainerView {
+    /// The footer, Return on it, and ⌘N, with the search's proposal; off while a switch runs.
+    func createBranch() {
+        guard newBranchRow.isEnabled else { return }
+        onNewBranch(newBranchProposal)
+    }
+
     /// ⌘R fetches, ⌘N opens New Branch, ⌘1 and ⌘2 pick a tab, ⌘C copies the highlighted
     /// branch's name, and ⌘P and ⇧⌘P push and pull. They are taken whichever view has
     /// focus, so the main menu only gets them once the popover closes.
@@ -93,17 +96,16 @@ extension BranchPickerContainerView {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "r": onFetch()
         // Taken even while the row is off, so it never falls through to the menu.
-        case "n": if newBranchRow.isEnabled { onNewBranch() }
+        case "n": createBranch()
         case "1": selectTab(.switchBranch)
         case "2": selectTab(.merge)
         case "c":
-            // With text selected in the query, or no highlighted row, ⌘C is AppKit's.
+            // With text selected in the query, or no row to copy (a resting selection
+            // included), ⌘C is AppKit's.
             if let editor = searchField.currentEditor(), editor.selectedRange.length > 0 {
                 return super.performKeyEquivalent(with: event)
             }
-            guard let row = state.highlightedTableRow, let branch = state.row(forTableRow: row) else {
-                return super.performKeyEquivalent(with: event)
-            }
+            guard let branch = state.copyableRow else { return super.performKeyEquivalent(with: event) }
             copyBranchName(branch.name, rowID: branch.id)
         default: return super.performKeyEquivalent(with: event)
         }
@@ -155,13 +157,17 @@ private final class BranchNameCopy {
     }
 }
 
-/// The search field holds the keyboard; the arrows, Return and Escape reach the list.
+/// The search field holds the keyboard; the arrows, Return and Escape reach the list, and
+/// ⇥ toggles Switch and Merge. ⇧⇥ is left to AppKit, which walks the key-view loop back
+/// through the header's buttons.
 extension BranchPickerContainerView: NSSearchFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.moveUp(_:)): moveUp()
         case #selector(NSResponder.moveDown(_:)): moveDown()
         case #selector(NSResponder.insertNewline(_:)): activate()
+        // Taken even while Merge is unavailable, so focus stays in the field.
+        case #selector(NSResponder.insertTab(_:)): selectTab(state.tab == .merge ? .switchBranch : .merge)
         // Escape clears the query first, then dismisses.
         case #selector(NSResponder.cancelOperation(_:)):
             if searchField.stringValue.isEmpty { cancel() } else { clearQuery() }

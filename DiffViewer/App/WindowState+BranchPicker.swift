@@ -17,11 +17,17 @@ extension WindowState {
     }
 
     /// The picker's New Branch… row and ⌘N: the popover closes first, since only one of
-    /// them is up at a time.
-    func openNewBranchSheetFromPicker() {
+    /// them is up at a time. The sheet opens with `initialName` filled in.
+    func openNewBranchSheet(initialName: String?) {
         isBranchPickerPresented = false
         guard canOpenNewBranchSheet else { return }
+        newBranchInitialName = initialName
         isNewBranchSheetPresented = true
+    }
+
+    /// The sheet is gone, by Create or Cancel: the next one opens with its own name.
+    func newBranchSheetDismissed() {
+        newBranchInitialName = nil
     }
 
     /// Like `canOpenNewBranchSheet`: a merge changes the branch HEAD is on, which a queued

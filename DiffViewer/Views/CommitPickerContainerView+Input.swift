@@ -14,7 +14,7 @@ extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         case let .header(section, _):
             let header =
                 tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
-                as? PickerGroupHeaderView ?? PickerGroupHeaderView(frame: .zero)
+                as? PickerGroupHeaderView ?? PickerGroupHeaderView()
             header.configure(title: section.title)
             return header
         case let .workingTree(entry):
@@ -65,7 +65,7 @@ extension CommitPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil) as? PickerTableRowView
-            ?? PickerTableRowView(frame: .zero)
+            ?? PickerTableRowView()
     }
 
     /// An empty selection changes nothing: only the pointer leaving clears the highlight.

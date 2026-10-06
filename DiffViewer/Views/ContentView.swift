@@ -126,6 +126,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $windowState.isNewBranchSheetPresented, onDismiss: handleNewBranchSheetDismissal) {
             NewBranchSheet(
+                initialName: windowState.newBranchInitialName,
                 validation: NewBranchNameValidation(
                     exists: { [windowState] in windowState.hasLocalBranch(named: $0) },
                     check: { [windowState] in await windowState.isValidBranchName($0) }),
@@ -167,6 +168,7 @@ struct ContentView: View {
     /// Creates the branch once the sheet is gone, so git's error alert never races the
     /// dismissal, as for the commit sheet.
     private func handleNewBranchSheetDismissal() {
+        windowState.newBranchSheetDismissed()
         guard let name = pendingBranchName else { return }
         pendingBranchName = nil
         Task { await windowState.createBranch(named: name) }

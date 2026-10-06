@@ -48,8 +48,6 @@ enum PickerMetrics {
     static let searchHeight: CGFloat = 28
     /// Tighter than `searchTopGap`, so the first group sits close under the search field.
     static let listTopGap: CGFloat = 5
-    /// What an empty list keeps room for: its message, or a spinner.
-    static let emptyListHeight: CGFloat = 120
 
     /// The popover's header: a title over a subtitle, with a hairline below.
     @MainActor

@@ -5,11 +5,13 @@ import SwiftUI
 struct NewBranchSheet: View {
     @Environment(WindowState.self) private var windowState
     @State private var validation: NewBranchNameValidation
-    @State private var text = ""
+    @State private var text: String
     @FocusState private var nameFocused: Bool
     let onCreate: (String) -> Void
 
-    init(validation: NewBranchNameValidation, onCreate: @escaping (String) -> Void) {
+    /// `initialName` fills the field, as the branch picker's search proposes it.
+    init(initialName: String?, validation: NewBranchNameValidation, onCreate: @escaping (String) -> Void) {
+        _text = State(initialValue: initialName ?? "")
         _validation = State(initialValue: validation)
         self.onCreate = onCreate
     }
@@ -49,7 +51,11 @@ struct NewBranchSheet: View {
         }
         .padding(16)
         .frame(width: 360)
-        .onAppear { nameFocused = true }
+        .onAppear {
+            nameFocused = true
+            // `.onChange` skips the initial value, so a prefilled name is checked here.
+            if !text.isEmpty { validation.update(text) }
+        }
         .onChange(of: windowState.branches) { validation.branchesChanged() }
         .onDisappear { validation.cancel() }
     }
