@@ -36,7 +36,7 @@ final class BranchPickerContainerView: NSView {
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
 
-    let header = BranchPickerHeaderView(frame: .zero)
+    let header = BranchPickerHeaderView()
     let tabBar = BranchPickerTabBar(frame: .zero)
     private let sheet = BranchPickerSheetView(frame: .zero)
     private let instruction = BranchPickerInstructionView(frame: .zero)
@@ -352,7 +352,7 @@ final class BranchPickerContainerView: NSView {
         super.layout()
         let width = bounds.width
         let height = bounds.height
-        let headerHeight = header.fittingHeight
+        let headerHeight = header.fittingHeight(width: width)
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         tabBar.frame = NSRect(x: 0, y: headerHeight, width: width, height: BranchPickerTabBar.height)
         let footerTop = height - BranchPickerNewBranchRow.height
@@ -399,7 +399,7 @@ final class BranchPickerContainerView: NSView {
             total + (item.row == nil ? PickerMetrics.headerRowHeight : PickerMetrics.rowHeight)
         }
         let chrome =
-            header.fittingHeight + BranchPickerTabBar.height + Self.sheetTopPadding
+            header.fittingHeight(width: PickerMetrics.width) + BranchPickerTabBar.height + Self.sheetTopPadding
             + BranchPickerInstructionView.height + Self.instructionGap + PickerMetrics.searchHeight + Self.listTopGap
             + Self.sheetBottomPadding + BranchPickerNewBranchRow.height
         let height = min(chrome + max(list, PickerMetrics.emptyListHeight), PickerMetrics.maximumHeight).rounded(.up)

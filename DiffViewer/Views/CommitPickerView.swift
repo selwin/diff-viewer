@@ -30,6 +30,7 @@ struct CommitPickerPopover: View {
         )
         // The height follows the list, through the representable's `sizeThatFits`.
         .frame(width: PickerMetrics.width)
+        .presentationBackground(Color(nsColor: PickerMetrics.popoverBackground))
     }
 }
 

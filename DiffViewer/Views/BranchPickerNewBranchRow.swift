@@ -120,10 +120,10 @@ final class BranchPickerNewBranchRow: NSView {
         shortcut.textColor = isEnabled ? .tertiaryLabelColor : .quaternaryLabelColor
     }
 
-    /// A faint bar, darker under the highlight and darker still while pressed, with a
-    /// hairline across its top.
+    /// Clear at rest, so it matches the header; darker when highlighted and darker still
+    /// when pressed. A hairline runs across its top.
     override func draw(_ dirtyRect: NSRect) {
-        let alpha: CGFloat = !isEnabled ? 0.035 : isPressed ? 0.11 : isHighlighted ? 0.07 : 0.035
+        let alpha: CGFloat = !isEnabled ? 0 : isPressed ? 0.11 : isHighlighted ? 0.07 : 0
         NSColor.labelColor.withAlphaComponent(alpha).setFill()
         bounds.fill()
         NSColor.separatorColor.setFill()

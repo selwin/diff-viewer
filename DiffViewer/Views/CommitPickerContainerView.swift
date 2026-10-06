@@ -17,7 +17,7 @@ final class CommitPickerContainerView: NSView {
     var onLoadMore: () -> Void = {}
     var onRetry: () -> Void = {}
 
-    let header = CommitPickerHeaderView(frame: .zero)
+    let header = CommitPickerHeaderView()
     let searchField = FilledSearchField()
     /// The search field's rounded fill; the field itself draws no bezel.
     private let searchBackground = RoundedFillView(frame: .zero)
@@ -115,6 +115,13 @@ final class CommitPickerContainerView: NSView {
     }
 
     override var isFlipped: Bool { true }
+
+    /// Fills below the header with the list's colour; the header shows the popover's own.
+    override func draw(_ dirtyRect: NSRect) {
+        PickerMetrics.listBackground.setFill()
+        NSRect(x: 0, y: header.frame.maxY, width: bounds.width, height: bounds.height - header.frame.maxY).fill()
+    }
+
     override var acceptsFirstResponder: Bool { false }
 
     // MARK: Snapshots

@@ -14,6 +14,15 @@ enum PickerMetrics {
     static let headerRowHeight: CGFloat = 26
     static let cornerRadius: CGFloat = 7
 
+    /// The popover's surface, opaque so the glass behind it doesn't grey the header.
+    static let popoverBackground = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.165, green: 0.165, blue: 0.173, alpha: 1)
+            : NSColor(srgbRed: 0.969, green: 0.969, blue: 0.976, alpha: 1)
+    }
+    /// Behind the list, so the header stands apart from it.
+    static let listBackground = NSColor.controlBackgroundColor
+
     // MARK: Rows
 
     /// The row highlight: the neutral fill macOS uses for hover, not the accent, which means selection.
@@ -34,23 +43,30 @@ enum PickerMetrics {
 
     /// How far the search field's background stays from the popover's sides.
     static let searchInset: CGFloat = 12
-    /// Between the header and the search field.
-    static let searchTopGap: CGFloat = 8
+    /// Between the header's hairline and the search field.
+    static let searchTopGap: CGFloat = searchInset
     static let searchHeight: CGFloat = 28
     /// Tighter than `searchTopGap`, so the first group sits close under the search field.
     static let listTopGap: CGFloat = 5
     /// What an empty list keeps room for: its message, or a spinner.
     static let emptyListHeight: CGFloat = 120
 
-    /// The popover's header: a title over a detail line.
+    /// The popover's header: a title over a subtitle, with a hairline below.
     @MainActor
     enum Header {
         static let topPadding: CGFloat = 16
-        static let sidePadding: CGFloat = 16
-        static let bottomPadding: CGFloat = 4
-        /// Between the title and the detail line.
-        static let lineGap: CGFloat = 5
-        static let titleFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        static let detailFont = NSFont.systemFont(ofSize: 12)
+        /// Above the hairline.
+        static let bottomPadding: CGFloat = 14
+        /// Lines the title up with the start of the rows' content.
+        static let sidePadding: CGFloat = rowInset + contentInset
+        static let dividerHeight: CGFloat = 1
+        /// Between the title and the subtitle.
+        static let titleSubtitleGap: CGFloat = 2
+        /// Between the text block and the trailing accessory.
+        static let trailingGap: CGFloat = 8
+        /// Between the title's text and its accessory, whose hover fill already pads the icon.
+        static let titleAccessoryGap: CGFloat = 2
+        static let titleFont = NSFont.systemFont(ofSize: 18, weight: .bold)
+        static let subtitleFont = NSFont.systemFont(ofSize: 12)
     }
 }

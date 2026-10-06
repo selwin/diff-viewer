@@ -3,15 +3,16 @@ import AppKit
 /// A branch's Pull and Push buttons, Pull on the left, where Publish takes Push's place on
 /// a branch that tracks nothing and Delete takes it on a branch whose upstream is gone.
 /// Rows show them as pills on the highlighted row; the header shows the current branch's
-/// as larger buttons with Push as the primary one. A running button keeps its place and
-/// its width: the spinner replaces the title rather than the button. The callbacks carry
+/// as larger buttons. Pull is the accent button when it shows, since a diverged branch must
+/// pull before it can push; otherwise Push is. A running button keeps its place and its
+/// width: the spinner replaces the title rather than the button. The callbacks carry
 /// the branch these were configured for, never a row index, so a recycled cell cannot act
 /// on another row.
 final class BranchRowSyncButtons: NSView {
     enum Style {
-        /// Row pills: neutral.
+        /// Pills on the highlighted row.
         case rowPills
-        /// The header's buttons: Push filled with the accent colour.
+        /// The header's buttons: taller, and focusable.
         case header
     }
 
@@ -59,7 +60,7 @@ final class BranchRowSyncButtons: NSView {
         pullButton.action = #selector(pullClicked)
         pushButton.action = #selector(pushClicked)
         deleteButton.action = #selector(deleteClicked)
-        applyLooks()
+        deleteButton.look = .destructive
     }
 
     @available(*, unavailable)
@@ -68,17 +69,6 @@ final class BranchRowSyncButtons: NSView {
     override var isFlipped: Bool { true }
 
     private var buttons: [SyncPillButton] { [pullButton, pushButton, deleteButton] }
-
-    private func applyLooks() {
-        switch style {
-        case .rowPills:
-            for button in buttons { button.look = .plain }
-        case .header:
-            pullButton.look = .plain
-            pushButton.look = .primary
-            deleteButton.look = .plain
-        }
-    }
 
     @objc private func pullClicked() { onPull() }
     @objc private func deleteClicked() { onDelete() }
@@ -156,6 +146,9 @@ final class BranchRowSyncButtons: NSView {
         pullButton.apply(buttons.pull, title: "Pull")
         pushButton.apply(buttons.push, title: buttons.pushTitle)
         deleteButton.apply(buttons.delete, title: "Delete…")
+        let pullShows = buttons.pull != .hidden
+        pullButton.look = pullShows ? .primary : .plain
+        pushButton.look = pullShows ? .plain : .primary
         let all = [buttons.pull, buttons.push, buttons.delete]
         shouldShow = (isRevealed || all.contains(.running)) && !all.allSatisfy { $0 == .hidden }
         invalidateIntrinsicContentSize()
@@ -169,6 +162,12 @@ final class BranchRowSyncButtons: NSView {
 
     private var visibleButtons: [SyncPillButton] {
         buttons.filter { !$0.isHidden }
+    }
+
+    /// The header's buttons carry margins for their focus rings; the visible shapes exclude them.
+    override var alignmentRectInsets: NSEdgeInsets {
+        let margin = style == .header ? SyncPillButton.focusRingMargin : 0
+        return NSEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
     }
 
     override var intrinsicContentSize: NSSize {
@@ -228,9 +227,12 @@ final class BranchRowSyncButtons: NSView {
 /// A capsule button drawn by hand, so its fill and text follow its look.
 final class SyncPillButton: NSButton {
     enum Look {
+        /// Outlined, on the list's colour.
         case plain
         /// Filled with the accent colour.
         case primary
+        /// Outlined, with red text.
+        case destructive
     }
 
     private static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
@@ -270,7 +272,7 @@ final class SyncPillButton: NSButton {
             guard look != oldValue else { return }
             // The spinner draws in its appearance's colours; a dark one is light enough for
             // the primary look's accent fill.
-            spinner.appearance = look == .plain ? nil : NSAppearance(named: .darkAqua)
+            spinner.appearance = look == .primary ? NSAppearance(named: .darkAqua) : nil
             needsDisplay = true
         }
     }
@@ -359,6 +361,13 @@ final class SyncPillButton: NSButton {
         let (fill, text) = colors
         fill.setFill()
         capsule.fill()
+        if look != .primary, isEnabled || isRunning {
+            if isHighlighted {
+                NSColor.labelColor.withAlphaComponent(0.08).setFill()
+                capsule.fill()
+            }
+            drawOutline()
+        }
         guard !isRunning else { return }
         let string = NSAttributedString(string: title, attributes: [.font: Self.font, .foregroundColor: text])
         let size = string.size()
@@ -378,21 +387,29 @@ final class SyncPillButton: NSButton {
         NSAttributedString(string: shortcut, attributes: [.font: shortcutFont, .foregroundColor: color])
     }
 
-    /// A disabled button fades on every look, so it still reads as disabled.
+    /// Inset half a point so the 1pt line lands on whole pixels.
+    private func drawOutline() {
+        let rect = bounds.insetBy(dx: focusMargin + 0.5, dy: focusMargin + 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
+        path.lineWidth = 1
+        NSColor.labelColor.withAlphaComponent(0.15).setStroke()
+        path.stroke()
+    }
+
+    /// Disabled is a faint grey capsule on every look. `draw` darkens a pressed outlined
+    /// button, since its fill stays the list's colour.
     private var colors: (fill: NSColor, text: NSColor) {
-        let pressed = isHighlighted
+        guard isEnabled || isRunning else {
+            return (NSColor.labelColor.withAlphaComponent(0.05), .tertiaryLabelColor)
+        }
         switch look {
         case .plain:
-            guard isEnabled || isRunning else {
-                return (NSColor.labelColor.withAlphaComponent(0.05), .tertiaryLabelColor)
-            }
-            return (NSColor.labelColor.withAlphaComponent(pressed ? 0.16 : 0.09), .labelColor)
+            return (.controlBackgroundColor, .labelColor)
         case .primary:
-            guard isEnabled || isRunning else {
-                return (NSColor.labelColor.withAlphaComponent(0.05), .tertiaryLabelColor)
-            }
             let accent = NSColor.controlAccentColor
-            return (pressed ? accent.withSystemEffect(.pressed) : accent, .white)
+            return (isHighlighted ? accent.withSystemEffect(.pressed) : accent, .white)
+        case .destructive:
+            return (.controlBackgroundColor, .systemRed)
         }
     }
 }
