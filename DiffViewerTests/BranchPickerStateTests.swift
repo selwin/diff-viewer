@@ -121,7 +121,7 @@ struct BranchPickerStateTests {
             ])
         #expect(
             statuses.map(\.text) == [
-                "Not published", "upstream not fetched", "upstream gone", "", "2 ahead · 3 behind", "New", "",
+                "Not published", "Upstream not fetched", "Upstream gone", "", "2 ahead · 3 behind", "New", "",
             ])
         #expect(statuses.map(\.isAccent) == [false, false, false, false, false, true, false])
     }
@@ -186,24 +186,37 @@ struct BranchPickerStateTests {
 
     // MARK: Highlight
 
-    @Test func nothingIsHighlightedOnOpenOrAfterARefresh() {
-        var picker = state(snapshot(branches: [main, feature]))
-        #expect(picker.highlightedRow == nil)
-        #expect(picker.highlightedTableRow == nil)
-        let newer = localBranch("newer", tipCommittedAt: Self.at(19, 14))
-        _ = picker.apply(snapshot(branches: [main, feature, newer]))
-        #expect(picker.highlightedRow == nil)
-        #expect(state(snapshot(headState: .detached(sha: objectID("x")), branches: [main])).highlightedRow == nil)
+    // MARK: Initial selection
+
+    /// The first branch that isn't current, past the current one and its header.
+    @Test func theFirstRowIsSelectedOnOpen() {
+        let picker = state(snapshot(branches: [main, feature]))
+        #expect(picker.highlightedRow == .local(name: "feature"))
+        let detached = state(snapshot(headState: .detached(sha: objectID("x")), branches: [main]))
+        #expect(detached.highlightedRow == .local(name: "main"))
     }
 
-    /// From idle, down starts at the top and up at the bottom; every move steps over
-    /// headers and the current branch.
+    /// A picker opened before the read lands selects the first row once it arrives, and a
+    /// later refresh keeps it.
+    @Test func theFirstRowIsSelectedWhenBranchesArriveAfterOpen() {
+        var picker = state(snapshot(headState: nil, branches: [], readStatus: .unread))
+        #expect(picker.highlightedRow == nil)
+        _ = picker.apply(snapshot(branches: [main, feature]))
+        #expect(picker.highlightedRow == .local(name: "feature"))
+        #expect(picker.isSelectionResting)
+        let newer = localBranch("newer", tipCommittedAt: Self.at(19, 14))
+        _ = picker.apply(snapshot(branches: [main, feature, newer]))
+        #expect(picker.highlightedRow == .local(name: "feature"))
+    }
+
+    // MARK: Highlight
+
+    /// Every move steps over headers and the current branch.
     @Test func movesSkipHeadersAndTheCurrentBranch() {
         let older = localBranch("older", tipCommittedAt: Self.at(12, 9))
         let branches = [main, feature, old, older]
         var picker = state(snapshot(headState: .named("feature"), branches: branches))
         #expect(layout(picker) == ["# Today", "main", "feature", "# Yesterday", "old", "# Older", "older"])
-        picker.moveDown()
         #expect(picker.highlightedRow == .local(name: "main"))
         picker.moveUp()
         #expect(picker.highlightedRow == .local(name: "main"), "nothing above the first row, and never the header")
@@ -215,10 +228,6 @@ struct BranchPickerStateTests {
         picker.moveDown()
         #expect(picker.highlightedTableRow == 6, "nothing below the last row")
 
-        var fromIdle = state(snapshot(headState: .named("feature"), branches: branches))
-        fromIdle.moveUp()
-        #expect(fromIdle.highlightedRow == .local(name: "older"))
-
         var onMain = state(snapshot(branches: branches))
         onMain.moveToFirst()
         #expect(onMain.highlightedRow == .local(name: "feature"))
@@ -227,28 +236,26 @@ struct BranchPickerStateTests {
         #expect(onMain.highlightedRow == .local(name: "feature"))
     }
 
-    /// Neither tab acts on the current branch, so it takes no highlight either.
+    /// Switch lists the current branch but doesn't act on it, so it takes no highlight.
     @Test func theCurrentRowIsNeverHighlightedOrActivated() throws {
-        for tab in [BranchPickerTab.switchBranch, .merge] {
-            var picker = state(snapshot(branches: [main, old]), tab: tab)
-            let current = try index(.local(name: "main"), in: picker)
-            #expect(!picker.canHighlight(tableRow: current))
-            #expect(!picker.canActivate(tableRow: current))
-            let moved = picker.highlight(tableRow: current)
-            #expect(!moved)
-            #expect(picker.highlightedRow == nil)
-        }
+        var picker = state(snapshot(branches: [main, old]))
+        let current = try index(.local(name: "main"), in: picker)
+        #expect(!picker.canHighlight(tableRow: current))
+        #expect(!picker.canActivate(tableRow: current))
+        let moved = picker.highlight(tableRow: current)
+        #expect(!moved)
+        #expect(picker.highlightedRow == .local(name: "old"))
     }
 
     @Test func headersTakeNoHighlight() {
-        var picker = state(snapshot(branches: [main, old]))
+        var picker = state(snapshot(branches: [main, feature, old]))
         #expect(!picker.canHighlight(tableRow: 0))
-        #expect(picker.canHighlight(tableRow: 3))
+        #expect(picker.canHighlight(tableRow: 4))
         #expect(!picker.canHighlight(tableRow: 9))
-        let movedToOld = picker.highlight(tableRow: 3)
+        let movedToOld = picker.highlight(tableRow: 4)
         #expect(movedToOld)
         #expect(picker.highlightedRow == .local(name: "old"))
-        let movedToHeader = picker.highlight(tableRow: 2)
+        let movedToHeader = picker.highlight(tableRow: 3)
         #expect(!movedToHeader)
         #expect(picker.highlightedRow == .local(name: "old"), "the Yesterday header is ignored")
     }
@@ -289,7 +296,6 @@ struct BranchPickerStateTests {
     @Test func aRemovedHighlightMovesToTheNextBranchElseThePrevious() {
         let older = localBranch("older", tipCommittedAt: Self.at(12, 9))
         var picker = state(snapshot(branches: [main, feature, old, older]))
-        picker.moveDown()
         #expect(picker.highlightedRow == .local(name: "feature"))
         _ = picker.apply(snapshot(branches: [main, old, older]))
         #expect(picker.highlightedRow == .local(name: "old"), "the next branch, across a header")
@@ -300,17 +306,16 @@ struct BranchPickerStateTests {
     }
 
     /// A highlighted branch that becomes current gives way to its neighbour; with none
-    /// left the list goes idle and stays so as rows return.
-    @Test func aHighlightWithNoNeighbourLeftGoesIdle() {
+    /// left nothing is highlighted until rows return, when the first one takes it.
+    @Test func aHighlightWithNoNeighbourLeftWaitsForTheFirstRow() {
         var picker = state(snapshot(branches: [main, feature, old]))
-        picker.moveDown()
         _ = picker.apply(snapshot(headState: .named("feature"), branches: [main, feature, old]))
         #expect(picker.highlightedRow == .local(name: "old"), "feature is current now")
 
         _ = picker.apply(snapshot(branches: [main]))
         #expect(picker.highlightedRow == nil, "only the current branch is left")
         _ = picker.apply(snapshot(branches: [main, feature, old]))
-        #expect(picker.highlightedRow == nil)
+        #expect(picker.highlightedRow == .local(name: "feature"))
     }
 
     // MARK: New Branch highlight
@@ -392,21 +397,62 @@ struct BranchPickerStateTests {
         #expect(picker.setQuery("fe") == .reloadAll)
         #expect(!picker.isNewBranchHighlighted)
         #expect(picker.highlightedRow == .local(name: "feature"))
-
-        var none = state(snapshot(branches: [main, feature]))
-        none.highlightNewBranch()
-        #expect(none.setQuery("zzz") == .reloadAll)
-        #expect(!none.isNewBranchHighlighted)
-        #expect(none.highlightedRow == nil)
     }
 
-    /// A search typed before its match exists highlights the match once a read brings it.
+    /// A search matching only the current branch selects nothing; a match arriving later
+    /// takes the highlight.
     @Test func aSearchHighlightsAMatchThatArrivesLater() {
+        let map = localBranch("map", tipCommittedAt: Self.at(19, 12))
         var picker = state(snapshot(branches: [main]))
-        _ = picker.setQuery("fe")
+        _ = picker.setQuery("ma")
         #expect(picker.highlightedRow == nil)
+        _ = picker.apply(snapshot(branches: [main, map]))
+        #expect(picker.highlightedRow == .local(name: "map"))
+    }
+
+    // MARK: Return with no matches
+
+    @Test func aQueryMatchingNoBranchSelectsNewBranch() {
+        var picker = state(snapshot(branches: [main, feature]))
+        #expect(picker.setQuery("zzz") == .reloadAll)
+        #expect(picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == nil)
+        #expect(picker.isNewBranchEnabled)
+    }
+
+    /// Return on New Branch… does nothing while a switch runs, though the search still
+    /// selects it.
+    @Test func newBranchIsOffWhileASwitchRuns() {
+        var picker = state(snapshot(branches: [main, feature], isSwitchingBranch: true))
+        _ = picker.setQuery("zzz")
+        #expect(picker.isNewBranchHighlighted)
+        #expect(!picker.isNewBranchEnabled)
+    }
+
+    /// New Branch… stays selected when the matches come back, as for any refresh.
+    @Test func aRefreshRemovingTheLastMatchSelectsNewBranch() {
+        var picker = state(snapshot(branches: [main, feature]))
+        _ = picker.setQuery("fe")
+        _ = picker.apply(snapshot(branches: [main]))
+        #expect(picker.isNewBranchHighlighted)
         _ = picker.apply(snapshot(branches: [main, feature]))
-        #expect(picker.highlightedRow == .local(name: "feature"))
+        #expect(picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == nil)
+    }
+
+    /// Switch lists the current branch, which can't be created again, so nothing is
+    /// selected; Merge leaves it out, so New Branch… is.
+    @Test func aSearchMatchingOnlyTheCurrentBranchSelectsCreateOnlyInMerge() {
+        var switching = state(snapshot(branches: [main, feature, old]))
+        _ = switching.setQuery("mai")
+        #expect(layout(switching) == ["main"])
+        #expect(switching.highlightedRow == nil)
+        #expect(!switching.isNewBranchHighlighted)
+
+        var merging = state(snapshot(branches: [main, feature, old]), tab: .merge)
+        _ = merging.setQuery("mai")
+        #expect(merging.items.isEmpty)
+        #expect(merging.isNewBranchHighlighted)
     }
 
     @Test func anUnchangedQueryKeepsTheNewBranchHighlight() {
@@ -491,7 +537,6 @@ struct BranchPickerStateTests {
     /// on the old rows to give the new ones.
     @Test func aMovedBranchIsARemovalAndAnInsertion() throws {
         var picker = state(snapshot(headState: .named("old"), branches: [main, feature, old]))
-        picker.moveDown()
         let before = layout(picker)
         let movedMain = localBranch("main", tipCommittedAt: Self.at(18, 10))
         let change = picker.apply(snapshot(headState: .named("old"), branches: [movedMain, feature, old])).rows
@@ -544,26 +589,19 @@ struct BranchPickerStateTests {
         #expect(picker.setQuery("") == .reloadAll)
         #expect(layout(picker) == sections)
         #expect(picker.rows.map(\.matchedRanges) == [[], [], []])
-        #expect(picker.highlightedRow == nil, "clearing the query goes back to idle")
+        #expect(picker.highlightedRow == .local(name: "ai-tools"), "clearing the query selects the first row")
     }
 
     @Test func theSameNormalizedQueryChangesNothing() {
         var picker = state(snapshot(branches: [main, feature, old]))
         #expect(picker.setQuery("   ") == BranchTableChange.none, "spaces alone are no query")
         #expect(layout(picker) == ["# Today", "main", "feature", "# Yesterday", "old"])
-        #expect(picker.highlightedRow == nil)
+        #expect(picker.highlightedRow == .local(name: "feature"))
         #expect(picker.emptyState == nil)
 
         #expect(picker.setQuery("fe") == .reloadAll)
         #expect(picker.setQuery(" fe ") == BranchTableChange.none)
         #expect(picker.query == "fe")
-    }
-
-    @Test func aSearchMatchingOnlyTheCurrentBranchHighlightsNothing() {
-        var picker = state(snapshot(branches: [main, feature, old]))
-        _ = picker.setQuery("mai")
-        #expect(layout(picker) == ["main"])
-        #expect(picker.highlightedRow == nil)
     }
 
     @Test func aSnapshotDuringASearchKeepsTheFilter() {
@@ -596,6 +634,19 @@ struct BranchPickerStateTests {
         #expect(failed.emptyState == .failed)
     }
 
+    /// Merge with only the current branch has nothing to offer, whatever the query; a
+    /// search for the current branch among others matches nothing.
+    @Test func mergeSaysWhenThereIsNothingToMerge() {
+        var alone = state(snapshot(branches: [main]), tab: .merge)
+        #expect(alone.emptyState == .noBranchesToMerge)
+        _ = alone.setQuery("zzz")
+        #expect(alone.emptyState == .noBranchesToMerge)
+
+        var others = state(snapshot(branches: [main, feature]), tab: .merge)
+        _ = others.setQuery("mai")
+        #expect(others.emptyState == .noMatches)
+    }
+
     // MARK: Tabs
 
     /// A name collision only stops a checkout; a merge from the same remote branch is fine.
@@ -606,7 +657,8 @@ struct BranchPickerStateTests {
         let remoteRow = try index(.remote(ref: colliding.ref), in: switching)
         #expect(switching.blockedReason(forTableRow: remoteRow) == "A local branch named main already exists")
         #expect(switching.activation(forTableRow: remoteRow) == nil)
-        #expect(state(taken, tab: .merge).blockedReason(forTableRow: remoteRow) == nil)
+        let merging = state(taken, tab: .merge)
+        #expect(try merging.blockedReason(forTableRow: index(.remote(ref: colliding.ref), in: merging)) == nil)
     }
 
     /// A Merge row carries everything the sheet needs, pinned to the tips as read.
@@ -632,7 +684,6 @@ struct BranchPickerStateTests {
                         sourceName: "origin/main", sourceRef: remote.ref, sourceTipSha: objectID("remote"),
                         destinationBranch: "main", destinationTipSha: objectID("head"))),
             "a name taken locally doesn't block a merge")
-        #expect(try merging.activation(forTableRow: index(.local(name: "main"), in: merging)) == nil, "current")
         #expect(merging.activation(forTableRow: 0) == nil, "a header")
         #expect(merging.canActivate(tableRow: localRow))
 
@@ -641,25 +692,63 @@ struct BranchPickerStateTests {
         #expect(switching.items.indices.allSatisfy { switching.activation(forTableRow: $0) == nil })
     }
 
-    @Test func theInstructionNamesTheHighlight() {
-        var picker = state(snapshot(branches: [main, feature]))
-        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: nil, ending: nil))
-        picker.moveDown()
-        #expect(picker.instruction == BranchPickerInstruction(verb: "Switch to", token: "feature", ending: nil))
+    /// The current row says its status like any other; its kind marks it as current.
+    @Test func trailingLabelsAreStatusesInSwitchAndPreviewsInMerge() throws {
+        let gone = localBranch("gone", upstream: upstream("origin/gone", tracking: .gone))
+        var picker = state(snapshot(branches: [main, feature, gone]))
+        let current = try index(.local(name: "main"), in: picker)
+        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Not published", style: .secondary))
+        #expect(
+            try picker.trailingLabel(forTableRow: index(.local(name: "gone"), in: picker))
+                == BranchRowLabel(text: "Upstream gone", style: .upstreamGone))
         picker.setTab(.merge)
-        let merge = BranchPickerInstruction(verb: "Merge", token: "feature", ending: "into current branch")
-        #expect(picker.instruction == merge)
+        #expect(try picker.trailingLabel(forTableRow: index(.local(name: "feature"), in: picker)) == nil)
     }
 
-    @Test func theCurrentRowsTrailingLabelFollowsTheTab() throws {
-        var picker = state(snapshot(branches: [main, feature]))
-        let current = try index(.local(name: "main"), in: picker)
-        let other = try index(.local(name: "feature"), in: picker)
-        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Current", style: .secondary))
-        #expect(picker.trailingLabel(forTableRow: other)?.text == "Not published")
+    // MARK: Tab filtering
+
+    /// Merge leaves out the current branch before grouping, so its section goes too.
+    @Test func mergeLeavesOutTheCurrentBranchAndItsEmptiedSection() {
+        let picker = state(snapshot(branches: [main, old]), tab: .merge)
+        #expect(layout(picker) == ["# Yesterday", "old"])
+        #expect(picker.highlightedRow == .local(name: "old"))
+    }
+
+    /// Every path that rebuilds the rows keeps Merge's filter, and Switch brings it back.
+    @Test func everyRebuildFollowsTheTab() {
+        var picker = state(snapshot(branches: [main, feature, old]))
         picker.setTab(.merge)
-        #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Merge target", style: .secondary))
-        #expect(picker.trailingLabel(forTableRow: other) == nil)
+        #expect(layout(picker) == ["# Today", "feature", "# Yesterday", "old"])
+        _ = picker.apply(snapshot(branches: [main, old]))
+        #expect(layout(picker) == ["# Yesterday", "old"])
+        _ = picker.setQuery("m")
+        #expect(picker.rows.isEmpty, "main matches but isn't listed")
+        _ = picker.setQuery("")
+        picker.setTab(.switchBranch)
+        #expect(layout(picker) == ["# Today", "main", "# Yesterday", "old"])
+    }
+
+    /// A tab change starts the selection over at the first row, as a fresh open would.
+    @Test func aTabChangeSelectsTheFirstRow() {
+        var picker = state(snapshot(branches: [main, feature, old]))
+        picker.moveToLast()
+        picker.highlightNewBranch()
+        picker.setTab(.merge)
+        #expect(!picker.isNewBranchHighlighted)
+        #expect(picker.highlightedRow == .local(name: "feature"))
+        #expect(picker.isSelectionResting)
+    }
+
+    /// Merge falling back to Switch reloads every row and selects the first.
+    @Test func losingMergeFallsBackToSwitchOnTheFirstRow() {
+        var picker = state(snapshot(branches: [main, feature, old]), tab: .merge)
+        picker.moveToLast()
+        let change = picker.apply(snapshot(headState: .detached(sha: objectID("x")), branches: [main, feature, old]))
+        #expect(change.rows == .reloadAll)
+        #expect(picker.tab == .switchBranch)
+        #expect(layout(picker) == ["# Today", "main", "feature", "# Yesterday", "old"])
+        #expect(picker.highlightedRow == .local(name: "main"))
+        #expect(picker.isSelectionResting)
     }
 
     @Test func aMergeRowShowsThePreviewItIsGiven() throws {
@@ -697,11 +786,9 @@ struct BranchPickerStateTests {
                 == [MergePreviewKey(headSha: objectID("new"), sourceTipSha: objectID("tip"))])
     }
 
-    /// Past the end is clamped, and only Merge's non-current rows have keys.
-    @Test func theCurrentRowAndTheSwitchTabHaveNoKeys() throws {
+    /// Past the end is clamped, and only Merge's rows have keys.
+    @Test func theSwitchTabHasNoKeys() throws {
         var picker = state(snapshot(branches: [main, feature]), tab: .merge)
-        let current = try index(.local(name: "main"), in: picker)
-        #expect(picker.mergePreviewKey(forTableRow: current) == nil)
         #expect(picker.requestedKeys(visibleRows: 0..<50).count == 1)
         picker.setTab(.switchBranch)
         #expect(picker.requestedKeys(visibleRows: 0..<picker.items.count).isEmpty)
@@ -756,13 +843,13 @@ struct BranchPickerStateTests {
                 BranchPickerSnapshot(
                     headState: .named("main"), branches: [localBranch("main")], readStatus: .loaded,
                     isSwitchingBranch: false, configuredUpstreamRemotes: ["main": "origin"]),
-                "main", ["upstream not fetched"]
+                "main", ["Upstream not fetched"]
             ),
             (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .gone))]), "main",
-                ["upstream gone"]
+                ["Upstream gone"]
             ),
-            (named([localBranch("main", upstream: upstream("origin/main"))]), "main", ["up to date"]),
+            (named([localBranch("main", upstream: upstream("origin/main"))]), "main", ["Up to date"]),
             (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2)))]),
                 "main", ["1 ahead · 2 behind"]
@@ -787,6 +874,9 @@ struct BranchPickerStateTests {
         let header = state(snapshot(branches: [ahead])).headerText
         #expect(header.detail(fetch: nil) == "2 ahead")
         #expect(header.detail(fetch: BranchPickerFetchText(text: "Fetched just now")) == "2 ahead · Fetched just now")
+        let synced = state(snapshot(branches: [localBranch("main", upstream: upstream("origin/main"))])).headerText
+        #expect(
+            synced.detail(fetch: BranchPickerFetchText(text: "Fetched just now")) == "Up to date · Fetched just now")
         let detached = state(snapshot(headState: .detached(sha: objectID("x")), branches: [])).headerText
         #expect(detached.detail(fetch: BranchPickerFetchText(text: "Fetching…")) == "Fetching…")
     }
@@ -979,7 +1069,7 @@ struct BranchPickerStateTests {
 
     static let shortcutCases: [ShortcutCase] = [
         ShortcutCase(
-            name: "nothing highlighted goes to the header", branches: [tracked("main", ahead: 0, behind: 1)],
+            name: "no other branch goes to the header", branches: [tracked("main", ahead: 0, behind: 1)],
             pull: .header, push: nil),
         ShortcutCase(
             name: "a highlighted row wins for its enabled action",
@@ -1058,5 +1148,95 @@ struct BranchPickerStateTests {
         #expect(state(snapshot(headState: nil, branches: [], readStatus: .unread)).emptyState == .loading)
         #expect(state(snapshot(headState: nil, branches: [], readStatus: .failed)).emptyState == .failed)
         #expect(state(snapshot(branches: [])).emptyState == .noBranches)
+    }
+}
+
+extension BranchPickerStateTests {
+    /// ⌘P presses Push. The current branch and the others are all ahead, so the header's
+    /// Push and any Switch row's can act. The list is feature, main (current), release.
+    @Suite("Resting selection")
+    struct RestingSelection {
+        private static let ahead = ["feature", "main", "release"].map { name in
+            localBranch(name, upstream: upstream("origin/\(name)", tracking: .counts(ahead: 1, behind: 0)))
+        }
+
+        private func makePicker(tab: BranchPickerTab = .switchBranch) -> BranchPickerState {
+            let grouping = CommitDayGrouping(
+                calendar: Calendar(identifier: .gregorian), locale: Locale(identifier: "en_US"),
+                timeZone: BranchPickerStateTests.timeZone, now: BranchPickerStateTests.now)
+            let snapshot = BranchPickerSnapshot(
+                headState: .named("main"), branches: Self.ahead, readStatus: .loaded, isSwitchingBranch: false)
+            return BranchPickerState(snapshot: snapshot, grouping: grouping, tab: tab)
+        }
+
+        private func featureRow(in picker: BranchPickerState) throws -> Int {
+            try #require(picker.items.firstIndex { $0.row?.id == .local(name: "feature") })
+        }
+
+        @Test func onOpenTheShortcutsGoToTheHeader() {
+            let picker = makePicker()
+            #expect(picker.highlightedRow == .local(name: "feature"))
+            #expect(picker.shortcutTarget(for: .push) == .header)
+            #expect(picker.copyableRow == nil)
+        }
+
+        @Test func hoveringTheSelectedRowMakesItTheTarget() throws {
+            var picker = makePicker()
+            let row = try featureRow(in: picker)
+            let changed = picker.highlight(tableRow: row)
+            #expect(changed, "the selection stopped resting, so the caller redraws")
+            #expect(picker.shortcutTarget(for: .push) == .row(tableRow: row))
+        }
+
+        @Test func aClampedMoveMakesTheRowTheTarget() throws {
+            var picker = makePicker()
+            picker.moveUp()
+            #expect(picker.shortcutTarget(for: .push) == .row(tableRow: try featureRow(in: picker)))
+        }
+
+        /// Row sync buttons belong to Switch, but ⌘C copies in either tab.
+        @Test func inMergeAnExplicitSelectionCopiesButSyncsTheHeader() throws {
+            var picker = makePicker(tab: .merge)
+            picker.highlight(tableRow: try featureRow(in: picker))
+            #expect(picker.shortcutTarget(for: .push) == .header)
+            #expect(picker.copyableRow?.name == "feature")
+        }
+
+        @Test func backInSwitchASearchSelectionIsTheTarget() throws {
+            var picker = makePicker(tab: .merge)
+            _ = picker.setQuery("fe")
+            picker.setTab(.switchBranch)
+            #expect(picker.shortcutTarget(for: .push) == .row(tableRow: try featureRow(in: picker)))
+        }
+
+        @Test func clearingTheQueryRestsTheSelectionAgain() throws {
+            var picker = makePicker()
+            _ = picker.setQuery("fe")
+            #expect(picker.shortcutTarget(for: .push) == .row(tableRow: try featureRow(in: picker)))
+            _ = picker.setQuery("")
+            #expect(picker.shortcutTarget(for: .push) == .header)
+            #expect(picker.copyableRow == nil)
+        }
+
+        /// A branch the reader never chose must not become the shortcuts' target.
+        @Test func replacingTheChosenBranchRestsTheSelection() throws {
+            let grouping = CommitDayGrouping(
+                calendar: Calendar(identifier: .gregorian), locale: Locale(identifier: "en_US"),
+                timeZone: BranchPickerStateTests.timeZone, now: BranchPickerStateTests.now)
+            func snapshot(_ names: [String]) -> BranchPickerSnapshot {
+                let branches = names.map { name in
+                    localBranch(name, upstream: upstream("origin/\(name)", tracking: .counts(ahead: 1, behind: 0)))
+                }
+                return BranchPickerSnapshot(
+                    headState: .named("main"), branches: branches, readStatus: .loaded, isSwitchingBranch: false)
+            }
+            var picker = BranchPickerState(snapshot: snapshot(["feature", "main"]), grouping: grouping)
+            picker.highlight(tableRow: try featureRow(in: picker))
+
+            _ = picker.apply(snapshot(["hotfix", "main"]))
+
+            #expect(picker.highlightedRow == .local(name: "hotfix"))
+            #expect(picker.shortcutTarget(for: .push) == .header)
+        }
     }
 }

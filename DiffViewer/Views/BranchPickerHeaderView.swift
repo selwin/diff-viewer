@@ -1,9 +1,9 @@
 import AppKit
 
 /// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
-/// subtitle for how far that branch is from its upstream and how the fetch went, a round
-/// Fetch button that spins while a round runs, and the current branch's Pull and Push
-/// after it.
+/// subtitle for how far that branch is from its upstream and how the fetch went, a raised
+/// round Fetch button that spins while a round runs, and the current branch's Pull and
+/// Push after it. No hairline: the panel's glass runs on under it.
 final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
     private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: SyncPillButton.focusRingMargin)
@@ -24,7 +24,13 @@ final class BranchPickerHeaderView: PickerHeaderView {
     private var text = BranchPickerHeaderText(title: "")
 
     init() {
-        super.init(wrapsTitle: false)
+        super.init(
+            wrapsTitle: false,
+            style: Style(
+                topPadding: 20, bottomPadding: 12, leadingPadding: BranchPickerStyle.edgeInset,
+                trailingPadding: BranchPickerStyle.edgeInset,
+                titleFont: BranchPickerStyle.titleFont, subtitleFont: BranchPickerStyle.headerStatusFont,
+                showsDivider: false))
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
         titleAccessory = copyButton
@@ -78,6 +84,12 @@ final class BranchPickerHeaderView: PickerHeaderView {
 
     func setShortcutGlyphs(pull: Bool, push: Bool) {
         syncButtons.setShortcutGlyphs(pull: pull, push: push)
+    }
+
+    /// Redraws the raised buttons with the current accessibility display options.
+    func refreshRendering() {
+        fetchButton.needsDisplay = true
+        syncButtons.refreshRendering()
     }
 
     /// The header's controls for `order`, which the container chains after the search field.
@@ -136,9 +148,9 @@ private final class BranchHeaderControls: NSView {
     }
 }
 
-/// A round button with a symbol that turns while a fetch runs.
+/// A raised round button with a symbol that turns while a fetch runs.
 final class FetchButton: NSButton {
-    private static let side: CGFloat = 28
+    private static let side: CGFloat = 34
     /// The circle plus room for its focus ring, which would otherwise be clipped.
     static let frameSide = side + SyncPillButton.focusRingMargin * 2
 
@@ -165,6 +177,10 @@ final class FetchButton: NSButton {
         didSet { needsDisplay = true }
     }
 
+    private var isHovered = false {
+        didSet { if isHovered != oldValue { needsDisplay = true } }
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
@@ -175,9 +191,14 @@ final class FetchButton: NSButton {
         toolTip = "Fetch (⌘R)"
         setAccessibilityLabel("Fetch")
         symbol.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
         symbol.imageScaling = .scaleNone
         addSubview(symbol)
+        // `.activeAlways`: a scripted launch never makes the popover key.
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self,
+                userInfo: nil))
         applyTint()
     }
 
@@ -213,6 +234,9 @@ final class FetchButton: NSButton {
         circle.fill()
     }
 
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
     private func applyTint() {
         symbol.contentTintColor = isEnabled || isSpinning ? .secondaryLabelColor : .tertiaryLabelColor
     }
@@ -223,7 +247,8 @@ final class FetchButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : 0.07).setFill()
-        circle.fill()
+        let state: BranchPickerStyle.Raised =
+            !isEnabled ? .rest : isHighlighted ? .pressed : isHovered ? .hover : .rest
+        BranchPickerStyle.drawRaised(circle, fill: BranchPickerStyle.raisedFill(state))
     }
 }

@@ -210,4 +210,23 @@ struct NewBranchNameValidationTests {
         #expect(held.asked.isEmpty)
         #expect(validation.pendingCheck == nil)
     }
+
+    /// A name handed over before any typing is checked like a typed one: Create stays
+    /// off until the check finishes.
+    @Test(arguments: [
+        (name: "feature-x", gitSays: true, status: NewBranchNameValidation.Status.valid),
+        (name: "a..b", gitSays: false, status: .invalid),
+        (name: "main", gitSays: true, status: .exists),
+    ])
+    func anInitialNameIsValidated(name: String, gitSays: Bool, status: NewBranchNameValidation.Status) async {
+        let held = HeldCheck()
+        let validation = model(held)
+        held.answer(name, valid: gitSays)
+
+        validation.update(name)
+        #expect(!validation.canCreate)
+        await validation.pendingCheck?.value
+
+        #expect(validation.status == status)
+    }
 }

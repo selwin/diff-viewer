@@ -6,9 +6,17 @@ struct BranchPickerFetchText: Equatable {
     var tooltip: String?
 
     /// The first that applies: a fetch running, a failed branch read, a failed remote,
-    /// then the fetch time. Nil when nothing has been fetched this session.
-    static func make(isFetching: Bool, readFailed: Bool, lastRound: FetchRound?, now: Date) -> BranchPickerFetchText? {
-        if isFetching { return BranchPickerFetchText(text: "Fetching…") }
+    /// then the fetch time. Nil when nothing has been fetched this session. A running
+    /// fetch names its remote when there is exactly one.
+    static func make(
+        isFetching: Bool, fetchingRemotes: Set<String>, readFailed: Bool, lastRound: FetchRound?, now: Date
+    ) -> BranchPickerFetchText? {
+        if isFetching {
+            guard fetchingRemotes.count == 1, let remote = fetchingRemotes.first else {
+                return BranchPickerFetchText(text: "Fetching…")
+            }
+            return BranchPickerFetchText(text: "Fetching from \(remote)…")
+        }
         if readFailed {
             return BranchPickerFetchText(text: "Couldn't refresh branches", tooltip: "Counts may be stale")
         }

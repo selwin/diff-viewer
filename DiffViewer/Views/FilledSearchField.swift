@@ -62,6 +62,11 @@ final class FilledSearchFieldCell: NSSearchFieldCell {
 
 /// A quiet capsule fill, behind a borderless control.
 final class RoundedFillView: NSView {
+    /// Nil for the commit picker's quiet fill.
+    var color: NSColor? {
+        didSet { needsDisplay = true }
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
@@ -72,7 +77,7 @@ final class RoundedFillView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         // Tuned to read as #F1F1F2 on the light popover; labelColor keeps dark mode in step.
-        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        (color ?? NSColor.labelColor.withAlphaComponent(0.05)).setFill()
         let radius = bounds.height / 2
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }

@@ -37,13 +37,47 @@ struct WindowStateBranchPickerTests {
         state.isBranchPickerPresented = true
         #expect(!state.canOpenNewBranchSheet)
 
-        state.openNewBranchSheetFromPicker()
+        state.openNewBranchSheet(initialName: nil)
 
         #expect(!state.isBranchPickerPresented)
         #expect(state.isNewBranchSheetPresented)
         #expect(!state.canOpenBranchPicker)
         #expect(!state.canOpenCommitPicker)
         #expect(!state.canOpenCommitSheet)
+    }
+
+    /// The picker's proposal reaches the sheet, and closing the sheet forgets it.
+    @Test func theSheetOpensWithTheProposedNameUntilItCloses() async {
+        let h = Harness()
+        let state = h.makeState()
+        _ = await adopt(h, state)
+        state.isBranchPickerPresented = true
+
+        state.openNewBranchSheet(initialName: "feature-x")
+        #expect(state.isNewBranchSheetPresented)
+        #expect(state.newBranchInitialName == "feature-x")
+
+        state.isNewBranchSheetPresented = false
+        state.newBranchSheetDismissed()
+        #expect(state.newBranchInitialName == nil)
+    }
+
+    /// A switch in flight keeps the sheet shut, and the name isn't kept for later.
+    @Test func aRefusedOpenStoresNoName() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await adopt(h, state, branches: [localBranch("main"), localBranch("feature")])
+        await repo.client.hold(.switchBranch)
+        Task { await state.switchBranch(to: "feature") }
+        #expect(await eventually { await repo.client.heldCount(.switchBranch) == 1 })
+
+        state.openNewBranchSheet(initialName: "feature-x")
+        #expect(!state.isNewBranchSheetPresented)
+        #expect(state.newBranchInitialName == nil)
+
+        await repo.client.hold(.switchBranch, false)
+        await repo.client.release(.switchBranch)
+        #expect(await eventually { await !state.isSwitchingBranch })
     }
 
     // MARK: Paired publish

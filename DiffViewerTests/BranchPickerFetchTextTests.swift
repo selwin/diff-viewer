@@ -7,9 +7,12 @@ struct BranchPickerFetchTextTests {
     private let now = Date(timeIntervalSince1970: 1_789_300_000)
 
     private func make(
-        isFetching: Bool = false, readFailed: Bool = false, lastRound: FetchRound?
+        isFetching: Bool = false, fetchingRemotes: Set<String> = [], readFailed: Bool = false,
+        lastRound: FetchRound?
     ) -> BranchPickerFetchText? {
-        BranchPickerFetchText.make(isFetching: isFetching, readFailed: readFailed, lastRound: lastRound, now: now)
+        BranchPickerFetchText.make(
+            isFetching: isFetching, fetchingRemotes: fetchingRemotes, readFailed: readFailed, lastRound: lastRound,
+            now: now)
     }
 
     private var failed: FetchRound {
@@ -18,6 +21,16 @@ struct BranchPickerFetchTextTests {
 
     @Test func aRunningFetchComesFirst() {
         #expect(make(isFetching: true, readFailed: true, lastRound: failed) == BranchPickerFetchText(text: "Fetching…"))
+    }
+
+    /// Only a single remote is named; none yet, or several, read as plain fetching.
+    @Test func aRunningFetchNamesItsOnlyRemote() {
+        #expect(
+            make(isFetching: true, fetchingRemotes: ["origin"], lastRound: nil)
+                == BranchPickerFetchText(text: "Fetching from origin…"))
+        #expect(
+            make(isFetching: true, fetchingRemotes: ["origin", "fork"], lastRound: nil)
+                == BranchPickerFetchText(text: "Fetching…"))
     }
 
     @Test func aFailedReadOutranksTheFetchOutcome() {

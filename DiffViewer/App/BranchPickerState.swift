@@ -3,8 +3,8 @@ import Foundation
 /// Branch picker items, highlight, navigation, and snapshot changes, independent of AppKit.
 ///
 /// Items are table rows: section headers and branches. Movement steps over headers and
-/// the current branch, which no tab acts on. With no query nothing is highlighted until
-/// the reader moves.
+/// the current branch, which no tab acts on and Merge leaves out. The first branch is
+/// selected on open, and again whenever the list is rebuilt for a query or tab.
 struct BranchPickerState {
     private(set) var snapshot: BranchPickerSnapshot
     private(set) var items: [BranchPickerItem]
@@ -17,6 +17,9 @@ struct BranchPickerState {
     private(set) var isNewBranchHighlighted = false
     /// The search text, normalized, so a spaces-only field reads as no query at all.
     private(set) var query = ""
+    /// Automatic selection keeps copy and sync shortcuts on their default targets until
+    /// explicit selection or a nonempty search.
+    private(set) var isSelectionResting = false
     private let grouping: CommitDayGrouping
     /// The current branch's tip, which merge previews are keyed by; nil while a merge is
     /// unavailable. Stored so a row's key costs no scan of the branches.
@@ -25,21 +28,32 @@ struct BranchPickerState {
     init(snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, tab: BranchPickerTab = .switchBranch) {
         self.snapshot = snapshot
         self.grouping = grouping
-        self.tab = tab
-        mergeHeadSha = Self.mergeHeadSha(in: snapshot)
-        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: "")
-        leaveMergeIfUnavailable()
+        let mergeHeadSha = Self.mergeHeadSha(in: snapshot)
+        self.mergeHeadSha = mergeHeadSha
+        // Merge is never opened while unavailable.
+        self.tab = tab == .merge && mergeHeadSha == nil ? .switchBranch : tab
+        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: "", tab: self.tab)
+        resetSelection()
     }
 
     // MARK: Items
 
     private static func makeItems(
-        snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, query: String
+        snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, query: String, tab: BranchPickerTab
     ) -> [BranchPickerItem] {
-        let rows =
-            localRows(snapshot: snapshot, grouping: grouping) + remoteRows(snapshot: snapshot, grouping: grouping)
+        let rows = tabRows(snapshot: snapshot, grouping: grouping, tab: tab)
         guard !query.isEmpty else { return groupedItems(rows, grouping: grouping) }
         return rankedRows(rows, query: query).map(BranchPickerItem.branch)
+    }
+
+    /// Every row the tab lists before any query. Merge drops the current branch here,
+    /// before grouping, so no section is left with only a header.
+    private static func tabRows(
+        snapshot: BranchPickerSnapshot, grouping: CommitDayGrouping, tab: BranchPickerTab
+    ) -> [BranchPickerRow] {
+        let rows =
+            localRows(snapshot: snapshot, grouping: grouping) + remoteRows(snapshot: snapshot, grouping: grouping)
+        return tab == .merge ? rows.filter { $0.kind != .current } : rows
     }
 
     /// Newest tip first within each section, so the branches in play come before the ones
@@ -120,11 +134,9 @@ struct BranchPickerState {
         "\(author) · \(grouping.branchTimeText(for: date))"
     }
 
-    /// A search starts on its best highlightable match; with no query nothing is
-    /// highlighted.
-    private static func initialHighlight(items: [BranchPickerItem], query: String) -> BranchRowID? {
-        guard !query.isEmpty else { return nil }
-        return items.first(where: isHighlightable)?.row?.id
+    /// The first highlightable row: the newest branch, or a search's best match.
+    private static func initialHighlight(items: [BranchPickerItem]) -> BranchRowID? {
+        items.first(where: isHighlightable)?.row?.id
     }
 
     /// The one rule for the highlight, hover and keyboard moves: a branch that is not
@@ -159,7 +171,10 @@ struct BranchPickerState {
     /// Nil when there are rows.
     var emptyState: BranchPickerEmptyState? {
         guard items.isEmpty else { return nil }
-        if !query.isEmpty, !snapshot.branches.isEmpty || !snapshot.remoteBranches.isEmpty { return .noMatches }
+        let hasRows = !Self.tabRows(snapshot: snapshot, grouping: grouping, tab: tab).isEmpty
+        if !query.isEmpty, hasRows { return .noMatches }
+        // Merge is only available on a loaded read with HEAD on a listed branch.
+        if tab == .merge { return .noBranchesToMerge }
         switch snapshot.readStatus {
         case .unread: return .loading
         case .failed: return .failed
@@ -170,8 +185,20 @@ struct BranchPickerState {
     /// The header's fetch news as of `now`; the caller re-asks as time passes.
     func fetchText(now: Date) -> BranchPickerFetchText? {
         BranchPickerFetchText.make(
-            isFetching: snapshot.fetchStatus != .idle, readFailed: snapshot.readStatus == .failed,
-            lastRound: snapshot.lastFetchRound, now: now)
+            isFetching: snapshot.fetchStatus != .idle, fetchingRemotes: snapshot.fetchingRemotes,
+            readFailed: snapshot.readStatus == .failed, lastRound: snapshot.lastFetchRound, now: now)
+    }
+
+    /// New Branch… is off while a switch runs: the branch would start from a HEAD about
+    /// to move.
+    var isNewBranchEnabled: Bool {
+        !snapshot.isSwitchingBranch
+    }
+
+    /// The branch ⌘C copies: the selected one, unless the selection is resting.
+    var copyableRow: BranchPickerRow? {
+        guard !isSelectionResting, let row = highlightedTableRow else { return nil }
+        return self.row(forTableRow: row)
     }
 
     var headerText: BranchPickerHeaderText {
@@ -203,8 +230,9 @@ struct BranchPickerState {
             configuredRemote: snapshot.configuredUpstreamRemotes[branch.name])
     }
 
-    /// The button ⌘P or ⇧⌘P presses: the highlighted row's when it can act, else the
-    /// header's, else none. Only the Switch tab shows row buttons.
+    /// The button ⌘P or ⇧⌘P presses: the highlighted row's when it can act and the
+    /// selection isn't resting, else the header's, else none. Only the Switch tab shows
+    /// row buttons.
     func shortcutTarget(for shortcut: SyncShortcut) -> SyncShortcutTarget? {
         let targets = shortcutTargets
         switch shortcut {
@@ -217,7 +245,9 @@ struct BranchPickerState {
     /// the header's buttons.
     var shortcutTargets: SyncShortcutTargets {
         var highlighted: (tableRow: Int, buttons: RowSyncButtons)?
-        if tab == .switchBranch, let row = highlightedTableRow, let buttons = syncButtons(forTableRow: row) {
+        if tab == .switchBranch, !isSelectionResting, let row = highlightedTableRow,
+            let buttons = syncButtons(forTableRow: row)
+        {
             highlighted = (row, buttons)
         }
         let header = headerText
@@ -293,40 +323,17 @@ struct BranchPickerState {
         return branch.localNameCollisionMessage
     }
 
-    /// The row's right-edge words: the current branch's role in the tab, else its status
-    /// in Switch, or in Merge the `preview` of its current key once one has arrived.
+    /// The row's right-edge words: its status in Switch, or in Merge the `preview` of its
+    /// current key once one has arrived.
     func trailingLabel(forTableRow index: Int, preview: MergePreview? = nil) -> BranchRowLabel? {
         guard let row = row(forTableRow: index) else { return nil }
-        if row.kind == .current {
-            return BranchRowLabel(text: tab == .merge ? "Merge target" : "Current", style: .secondary)
-        }
         switch tab {
         case .merge:
             return preview.map(MergePreviewText.label(for:))
         case .switchBranch:
             guard !row.status.text.isEmpty else { return nil }
-            return BranchRowLabel(text: row.status.text, style: row.status.isAccent ? .accent : .secondary)
+            return BranchRowLabel(text: row.status.text, style: row.status.labelStyle)
         }
-    }
-
-    // MARK: Merge previews
-
-    /// What merging the row into the current branch would be previewed by: in Merge only,
-    /// and never for the current branch itself. Keyed by tips, so a moved HEAD or branch
-    /// gives the row a new key.
-    func mergePreviewKey(forTableRow index: Int) -> MergePreviewKey? {
-        guard tab == .merge, let row = row(forTableRow: index) else { return nil }
-        return mergeTarget(for: row)?.previewKey
-    }
-
-    /// Every row whose current key is `key`: branches at the same tip share one.
-    func tableRows(matching key: MergePreviewKey) -> [Int] {
-        items.indices.filter { mergePreviewKey(forTableRow: $0) == key }
-    }
-
-    /// The keys of the rows in `visibleRows` that have one.
-    func requestedKeys(visibleRows: Range<Int>) -> Set<MergePreviewKey> {
-        Set(visibleRows.clamped(to: items.indices).compactMap { mergePreviewKey(forTableRow: $0) })
     }
 
     // MARK: Tabs
@@ -346,25 +353,40 @@ struct BranchPickerState {
         if case let .named(name)? = snapshot.headState { name } else { nil }
     }
 
-    var instruction: BranchPickerInstruction {
-        let token = highlightedTableRow.flatMap { row(forTableRow: $0)?.name }
-        switch tab {
-        case .switchBranch: return BranchPickerInstruction(verb: "Switch to", token: token, ending: nil)
-        case .merge: return BranchPickerInstruction(verb: "Merge", token: token, ending: "into current branch")
-        }
-    }
-
-    /// Returns whether the tab changed; Merge is refused while unavailable. The query and
-    /// highlight stay: neither depends on the tab.
+    /// Returns whether the tab changed; Merge is refused while unavailable. The query
+    /// stays; the rows are rebuilt for the tab and the selection starts over.
     @discardableResult
     mutating func setTab(_ new: BranchPickerTab) -> Bool {
         guard new != tab, new != .merge || isMergeAvailable else { return false }
         tab = new
+        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: query, tab: tab)
+        resetSelection()
         return true
     }
 
-    private mutating func leaveMergeIfUnavailable() {
-        if tab == .merge, !isMergeAvailable { tab = .switchBranch }
+    /// Falls back to Switch as `setTab` would. Returns whether it did.
+    private mutating func leaveMergeIfUnavailable() -> Bool {
+        guard tab == .merge, !isMergeAvailable else { return false }
+        return setTab(.switchBranch)
+    }
+
+    /// The selection after the list is rebuilt for a query or tab: New Branch… when a
+    /// search leaves no branch rows, else the first highlightable row, resting only
+    /// without a query. A search matching only the current branch selects nothing.
+    private mutating func resetSelection() {
+        isNewBranchHighlighted = false
+        if !query.isEmpty, rows.isEmpty {
+            selectNewBranch()
+        } else {
+            highlightedRow = Self.initialHighlight(items: items)
+            isSelectionResting = query.isEmpty
+        }
+    }
+
+    private mutating func selectNewBranch() {
+        isNewBranchHighlighted = true
+        highlightedRow = nil
+        isSelectionResting = false
     }
 
     // MARK: Snapshots
@@ -379,8 +401,8 @@ struct BranchPickerState {
             rows.map { ($0.id, Self.syncButtons(for: $0, snapshot: old)) }, uniquingKeysWith: { first, _ in first })
         snapshot = new
         mergeHeadSha = Self.mergeHeadSha(in: new)
-        leaveMergeIfUnavailable()
-        let rowChange = applyItems(new, old: old)
+        // Falling back to Switch rebuilds every row.
+        let rowChange = leaveMergeIfUnavailable() ? .reloadAll : applyItems(new, old: old)
         let buttonsChanged = rows.contains { row in
             oldButtons[row.id].map { $0 != Self.syncButtons(for: row, snapshot: new) } ?? false
         }
@@ -389,7 +411,7 @@ struct BranchPickerState {
 
     private mutating func applyItems(_ new: BranchPickerSnapshot, old: BranchPickerSnapshot) -> BranchTableChange {
         let oldItems = items
-        items = Self.makeItems(snapshot: new, grouping: grouping, query: query)
+        items = Self.makeItems(snapshot: new, grouping: grouping, query: query, tab: tab)
         keepHighlight(oldItems: oldItems)
         // A list appearing or emptying swaps with the empty state: there is nothing to slide.
         guard oldItems.isEmpty == items.isEmpty else { return .reloadAll }
@@ -418,18 +440,23 @@ struct BranchPickerState {
     /// a neighbour takes it, so the highlight stays where the reader was looking rather
     /// than jumping to the top.
     private mutating func keepHighlight(oldItems: [BranchPickerItem]) {
-        // A refresh (fetch, FSEvents) must not pull the highlight off New Branch… or wake
-        // an idle list. A search with nothing highlighted takes the first match that arrives.
+        // A refresh (fetch, FSEvents) must not pull the highlight off New Branch….
         guard !isNewBranchHighlighted else { return }
+        // A search the refresh leaves with no branch rows offers New Branch… instead.
+        if !query.isEmpty, rows.isEmpty { return selectNewBranch() }
+        // Nothing highlighted, as when the picker opened before the branches loaded: the
+        // first row that arrives takes it.
         guard let highlightedRow else {
-            if !query.isEmpty { highlightedRow = Self.initialHighlight(items: items, query: query) }
+            highlightedRow = Self.initialHighlight(items: items)
+            isSelectionResting = query.isEmpty
             return
         }
         let listed = Set(highlightableIDs)
         if listed.contains(highlightedRow) { return }
-        self.highlightedRow =
-            Self.neighbour(of: highlightedRow, in: oldItems, listed: listed)
-            ?? Self.initialHighlight(items: items, query: query)
+        let neighbour = Self.neighbour(of: highlightedRow, in: oldItems, listed: listed)
+        // Falling back to the first row is the picker's choice, not the reader's, so it rests.
+        if neighbour == nil { isSelectionResting = query.isEmpty }
+        self.highlightedRow = neighbour ?? Self.initialHighlight(items: items)
     }
 
     /// The branch after `id` in `oldItems` that is still listed, else the one before it.
@@ -462,9 +489,8 @@ struct BranchPickerState {
         let normalized = FuzzyMatch.normalized(text)
         guard normalized != query else { return .none }
         query = normalized
-        isNewBranchHighlighted = false
-        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: query)
-        highlightedRow = Self.initialHighlight(items: items, query: query)
+        items = Self.makeItems(snapshot: snapshot, grouping: grouping, query: query, tab: tab)
+        resetSelection()
         return .reloadAll
     }
 
@@ -476,8 +502,10 @@ struct BranchPickerState {
     }
 
     /// Moves `offset` highlightable rows from the highlight, clamped at both ends. From
-    /// idle, down starts at the first row and up at the last.
+    /// idle, down starts at the first row and up at the last. Any move, even a clamped
+    /// one, is the reader's choice, so the selection stops resting.
     private mutating func move(by offset: Int) {
+        isSelectionResting = false
         let ids = highlightableIDs
         // New Branch… is below the last branch: only up leaves it.
         if isNewBranchHighlighted {
@@ -503,12 +531,14 @@ struct BranchPickerState {
     }
 
     mutating func moveToFirst() {
+        isSelectionResting = false
         guard let first = highlightableIDs.first else { return }
         isNewBranchHighlighted = false
         highlightedRow = first
     }
 
     mutating func moveToLast() {
+        isSelectionResting = false
         guard let last = highlightableIDs.last else { return }
         isNewBranchHighlighted = false
         highlightedRow = last
@@ -519,39 +549,42 @@ struct BranchPickerState {
     @discardableResult
     mutating func highlightNewBranch() -> Bool {
         guard !isNewBranchHighlighted else { return false }
-        isNewBranchHighlighted = true
-        highlightedRow = nil
+        selectNewBranch()
         return true
     }
 
     /// Rows that take no highlight and out-of-range rows are ignored. Returns whether the
-    /// highlight moved.
+    /// highlight moved or stopped resting: hovering the resting row makes it the
+    /// shortcuts' target, which the caller must redraw.
     @discardableResult
     mutating func highlight(tableRow index: Int) -> Bool {
-        guard canHighlight(tableRow: index), let row = row(forTableRow: index), row.id != highlightedRow else {
-            return false
-        }
+        guard canHighlight(tableRow: index), let row = row(forTableRow: index) else { return false }
+        let wasResting = isSelectionResting
+        isSelectionResting = false
+        guard row.id != highlightedRow else { return wasResting }
         isNewBranchHighlighted = false
         highlightedRow = row.id
         return true
     }
 }
 
-/// The picker's sync shortcuts: ⇧⌘P pulls, ⌘P pushes. `.push` covers Publish: both live
-/// in the Push slot.
-enum SyncShortcut {
-    case pull
-    case push
-}
+/// Merge previews, outside the struct body to keep it under the length lint.
+extension BranchPickerState {
+    /// What merging the row into the current branch would be previewed by: in Merge only,
+    /// and never for the current branch itself. Keyed by tips, so a moved HEAD or branch
+    /// gives the row a new key.
+    func mergePreviewKey(forTableRow index: Int) -> MergePreviewKey? {
+        guard tab == .merge, let row = row(forTableRow: index) else { return nil }
+        return mergeTarget(for: row)?.previewKey
+    }
 
-/// Whose button a sync shortcut presses: a row's, by its index at the moment of the key
-/// press, or the header's.
-enum SyncShortcutTarget: Equatable {
-    case row(tableRow: Int)
-    case header
-}
+    /// Every row whose current key is `key`: branches at the same tip share one.
+    func tableRows(matching key: MergePreviewKey) -> [Int] {
+        items.indices.filter { mergePreviewKey(forTableRow: $0) == key }
+    }
 
-struct SyncShortcutTargets: Equatable {
-    let pull: SyncShortcutTarget?
-    let push: SyncShortcutTarget?
+    /// The keys of the rows in `visibleRows` that have one.
+    func requestedKeys(visibleRows: Range<Int>) -> Set<MergePreviewKey> {
+        Set(visibleRows.clamped(to: items.indices).compactMap { mergePreviewKey(forTableRow: $0) })
+    }
 }

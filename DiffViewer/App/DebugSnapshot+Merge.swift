@@ -1,7 +1,7 @@
 import Foundation
 
 extension DebugLaunchOptions {
-    /// Applies `DIFFVIEWER_BRANCH_PICKER_TAB=merge`, so the picker opens on the Merge… tab,
+    /// Applies `DIFFVIEWER_BRANCH_PICKER_TAB=merge`, so the picker opens on the Merge tab,
     /// and `DIFFVIEWER_MERGE_SHEET`. Runs before the other overlays are presented.
     @MainActor
     static func applyMergeOptions(env: [String: String], in windowState: WindowState) async {

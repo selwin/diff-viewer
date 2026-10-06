@@ -1,20 +1,29 @@
 import AppKit
 
-/// The branch picker's AppKit root, laid out top-down by hand: the header, the Switch and
-/// Merge… tabs, a sheet holding the instruction, search field and the branch table or its
+/// The branch picker's AppKit root, laid out top-down by hand on the popover's glass: the
+/// header, the Switch/Merge segmented control, the search field, the branch table or its
 /// empty state, and the New Branch… footer. Owns the `BranchPickerState` and applies each
 /// snapshot, query and tab to the table as the state directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
-    /// The sheet's padding: the instruction and search field sit inside its sides, and the
-    /// rows carry their own inset.
-    private static let sheetTopPadding: CGFloat = 11
-    private static let sheetSidePadding: CGFloat = 10
-    private static let sheetBottomPadding: CGFloat = 6
-    /// Between the instruction and the search field.
-    private static let instructionGap: CGFloat = 9
+    private static let tabControlWidth: CGFloat = 200
+    /// Between the segmented control and the search field.
+    private static let searchTopGap: CGFloat = 12
+    /// The capsule's round ends make its edge read as inset, so it reaches this far past
+    /// the shared edge to look aligned with it.
+    private static let searchOutset: CGFloat = 4
     /// Between the search field and the first row.
-    private static let listTopGap: CGFloat = 6
+    private static let listTopGap: CGFloat = 8
+    /// Above and below the footer's capsule.
+    private static let footerTopGap: CGFloat = 4
+    private static let footerBottomGap: CGFloat = 14
+
+    static let groupHeaderStyle = PickerGroupHeaderView.Style(
+        font: BranchPickerStyle.sectionFont, color: BranchPickerStyle.section, leading: BranchPickerStyle.edgeInset,
+        bottomPadding: 6)
+    static let rowViewStyle = PickerTableRowView.Style(
+        highlightColor: BranchPickerStyle.raisedFill(.highlight), inset: BranchPickerStyle.highlightInset,
+        radius: BranchPickerStyle.highlightRadius, drawsContrastBorder: true)
 
     private(set) var state: BranchPickerState
 
@@ -29,20 +38,19 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch, NSWindow?) -> Void = { _, _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
-    /// The New Branch… row, Return on it, and ⌘N.
-    var onNewBranch: () -> Void = {}
+    /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
+    var onNewBranch: (String?) -> Void = { _ in }
     /// The tab the reader chose, or the one Merge fell back to; the window remembers it.
     var onTabChange: (BranchPickerTab) -> Void = { _ in }
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
 
     let header = BranchPickerHeaderView()
-    let tabBar = BranchPickerTabBar(frame: .zero)
-    private let sheet = BranchPickerSheetView(frame: .zero)
-    private let instruction = BranchPickerInstructionView(frame: .zero)
+    /// Never takes focus: the search field keeps the keyboard, and ⇥ toggles it.
+    let tabControl = NSSegmentedControl()
     let searchField = FilledSearchField()
     /// The search field's rounded fill; the field itself draws no bezel.
-    private let searchBackground = RoundedFillView(frame: .zero)
+    let searchBackground = RoundedFillView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = PickerTableView()
     let emptyState = PickerEmptyStateView(frame: .zero)
@@ -51,9 +59,12 @@ final class BranchPickerContainerView: NSView {
     /// Set while the container itself moves the table's selection, which the delegate
     /// must not read back as the reader's choice.
     var isApplyingSelection = false
+    /// The branch name the search field's raw text proposes, which New Branch… opens with.
+    private(set) var newBranchProposal: String?
     private var hasFocusedSearchField = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
+    var displayOptionsObserver: (any NSObjectProtocol)?
     /// Nil without a session, when Merge rows show no previews.
     let mergePreviews: MergePreviewLoader?
     var mergePreviewToken: MergePreviewLoader.ConsumerToken?
@@ -69,17 +80,15 @@ final class BranchPickerContainerView: NSView {
         super.init(frame: .zero)
         clipsToBounds = true
         configureSearchField()
+        configureTabControl()
         configureTable()
-        for view in [header, tabBar, sheet, instruction, searchBackground, searchField, scrollView, emptyState] {
+        for view in [header, tabControl, searchBackground, searchField, scrollView, emptyState] {
             addSubview(view)
         }
         addSubview(newBranchRow)
         configureHeader()
-        tabBar.onSelect = { [weak self] tab in
-            self?.selectTab(tab)
-            self?.returnFocusToSearchField()
-        }
-        newBranchRow.onActivate = { [weak self] in self?.onNewBranch() }
+        observeDisplayOptions()
+        newBranchRow.onActivate = { [weak self] in self?.createBranch() }
         newBranchRow.onHighlightRequested = { [weak self] in
             guard let self, newBranchRow.isEnabled else { return }
             if self.state.highlightNewBranch() { syncSelection() }
@@ -89,7 +98,8 @@ final class BranchPickerContainerView: NSView {
         }
         registerForMergePreviews()
         renderChrome()
-        renderInstruction()
+        // The state opens with its first row selected.
+        syncSelection()
         updatePreferredHeight()
     }
 
@@ -118,7 +128,7 @@ final class BranchPickerContainerView: NSView {
     }
 
     private func configureSearchField() {
-        searchField.placeholderString = "Search branches"
+        searchBackground.color = BranchPickerStyle.controlFill
         searchField.setAccessibilityLabel("Search branches")
         searchField.controlSize = .large
         searchField.sendsSearchStringImmediately = true
@@ -133,7 +143,7 @@ final class BranchPickerContainerView: NSView {
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
-        tableView.rowHeight = PickerMetrics.rowHeight
+        tableView.rowHeight = BranchPickerStyle.rowHeight
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
@@ -201,6 +211,8 @@ final class BranchPickerContainerView: NSView {
         isApplyingSelection = false
         // Before the restyle below, so a highlight that moved eases its pills in.
         syncSelection()
+        // Falling back to Switch selects the first row, which is at the top.
+        if tabChanged { tableView.scroll(.zero) }
         // Reloaded cells configured their buttons already; the others are restyled here.
         if change.buttonsChanged {
             let visible = tableView.rows(in: tableView.visibleRect)
@@ -252,17 +264,12 @@ final class BranchPickerContainerView: NSView {
         let shortcuts = state.shortcutTargets
         updateRows([previous, state.highlightedTableRow].compactMap { $0 }, animated: true, shortcuts: shortcuts)
         header.setShortcutGlyphs(pull: shortcuts.pull == .header, push: shortcuts.push == .header)
-        renderInstruction()
-    }
-
-    private func renderInstruction() {
-        instruction.configure(state.instruction)
     }
 
     // MARK: Tabs
 
-    /// The query and highlight stay; every cell is reloaded, since what a row says and
-    /// offers depends on the tab.
+    /// The query stays; every cell is reloaded, since which rows show and what they say
+    /// and offer depend on the tab. The selection starts over at the top.
     func selectTab(_ tab: BranchPickerTab) {
         guard state.setTab(tab) else { return }
         isApplyingSelection = true
@@ -270,6 +277,7 @@ final class BranchPickerContainerView: NSView {
         tableView.reloadData()
         isApplyingSelection = false
         syncSelection()
+        tableView.scroll(.zero)
         renderChrome()
         tableView.refreshHover()
         requestVisibleMergePreviews()
@@ -289,25 +297,29 @@ final class BranchPickerContainerView: NSView {
         applyQuery()
     }
 
-    /// The one path from the field's text to the table. An unchanged query (a typed
-    /// space) keeps the scroll and highlight.
+    /// The one path from the field's text to the table. The proposal follows every edit;
+    /// an unchanged query (a typed space) keeps the scroll and highlight.
     private func applyQuery() {
+        updateNewBranchProposal()
         guard state.setQuery(searchField.stringValue) != .none else { return }
         isApplyingSelection = true
         tableView.cancelPress()
         tableView.reloadData()
         isApplyingSelection = false
         syncSelection()
-        // The best match is shown at the top; with no query, the list is back at the top.
-        if state.query.isEmpty {
-            revealHighlight()
-        } else {
-            tableView.scroll(.zero)
-        }
+        // The selection is the first row, or New Branch… below an empty list.
+        tableView.scroll(.zero)
         renderChrome()
         updatePreferredHeight()
         tableView.refreshHover()
         requestVisibleMergePreviews()
+    }
+
+    /// From the raw text, not the normalized query: whitespace that search ignores still
+    /// shapes the name.
+    private func updateNewBranchProposal() {
+        newBranchProposal = BranchNameProposal.make(from: searchField.stringValue)
+        newBranchRow.proposal = newBranchProposal
     }
 
     /// The timer's tick: only the fetch text ages, so nothing else is redrawn or laid out.
@@ -319,8 +331,11 @@ final class BranchPickerContainerView: NSView {
         header.configure(state.headerText, fetch: state.fetchText(now: now()))
         let shortcuts = state.shortcutTargets
         header.setShortcutGlyphs(pull: shortcuts.pull == .header, push: shortcuts.push == .header)
-        tabBar.configure(selected: state.tab, isMergeAvailable: state.isMergeAvailable)
-        newBranchRow.isEnabled = !state.snapshot.isSwitchingBranch
+        tabControl.selectedSegment = state.tab == .merge ? 1 : 0
+        tabControl.setEnabled(state.isMergeAvailable, forSegment: 1)
+        tabControl.setToolTip(state.isMergeAvailable ? nil : "Check out a branch to merge into it", forSegment: 1)
+        renderPlaceholder()
+        newBranchRow.isEnabled = state.isNewBranchEnabled
         wireKeyViewLoop()
         switch state.emptyState {
         case nil: emptyState.configure(text: nil, isLoading: false)
@@ -328,6 +343,7 @@ final class BranchPickerContainerView: NSView {
         case .noBranches: emptyState.configure(text: "No branches", isLoading: false)
         case .failed: emptyState.configure(text: "Couldn't read branches", isLoading: false)
         case .noMatches: emptyState.configure(text: "No matching branches", isLoading: false)
+        case .noBranchesToMerge: emptyState.configure(text: "No branches to merge", isLoading: false)
         }
         needsLayout = true
     }
@@ -354,32 +370,35 @@ final class BranchPickerContainerView: NSView {
         let height = bounds.height
         let headerHeight = header.fittingHeight(width: width)
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
-        tabBar.frame = NSRect(x: 0, y: headerHeight, width: width, height: BranchPickerTabBar.height)
-        let footerTop = height - BranchPickerNewBranchRow.height
-        sheet.frame = NSRect(x: 0, y: tabBar.frame.maxY, width: width, height: max(footerTop - tabBar.frame.maxY, 0))
-        let contentWidth = width - Self.sheetSidePadding * 2
-        instruction.frame = NSRect(
-            x: Self.sheetSidePadding, y: sheet.frame.minY + Self.sheetTopPadding, width: contentWidth,
-            height: BranchPickerInstructionView.height)
+        tabControl.frame = NSRect(
+            x: BranchPickerStyle.edgeInset, y: headerHeight, width: Self.tabControlWidth,
+            height: tabControl.intrinsicContentSize.height)
+        let inset = BranchPickerStyle.edgeInset
+        let searchInset = inset - Self.searchOutset
         searchBackground.frame = NSRect(
-            x: Self.sheetSidePadding, y: instruction.frame.maxY + Self.instructionGap, width: contentWidth,
-            height: PickerMetrics.searchHeight)
+            x: searchInset, y: tabControl.frame.maxY + Self.searchTopGap, width: width - searchInset * 2,
+            height: BranchPickerStyle.searchHeight)
         let fieldHeight = searchField.intrinsicContentSize.height
         searchField.frame = NSRect(
-            x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
-            width: searchBackground.frame.width - 8, height: fieldHeight)
+            x: searchBackground.frame.minX + 6, y: searchBackground.frame.midY - fieldHeight / 2,
+            width: searchBackground.frame.width - 12, height: fieldHeight)
+        let footerTop = height - Self.footerBottomGap - BranchPickerStyle.footerHeight
         let tableTop = searchBackground.frame.maxY + Self.listTopGap
-        let tableBottom = footerTop - Self.sheetBottomPadding
+        let tableBottom = footerTop - Self.footerTopGap
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(tableBottom - tableTop, 0))
         emptyState.frame = scrollView.frame
-        newBranchRow.frame = NSRect(x: 0, y: footerTop, width: width, height: BranchPickerNewBranchRow.height)
+        // The footer's frame carries room for its capsule's shadow.
+        let margin = BranchPickerStyle.shadowMargin
+        newBranchRow.frame = NSRect(
+            x: inset - margin, y: footerTop - margin, width: width - (inset - margin) * 2,
+            height: BranchPickerStyle.footerHeight + margin * 2)
         tableView.sizeLastColumnToFit()
         // The first layout is when the visible rows are first known.
         requestVisibleMergePreviews()
     }
 
-    /// Shows the highlighted row after keyboard navigation. The list opens at the top with
-    /// nothing highlighted, so there is no initial reveal.
+    /// Shows the highlighted row after keyboard navigation. The list opens at the top on
+    /// its first row, so there is no initial reveal.
     private func revealHighlight() {
         // The list stays where it is: New Branch… sits below it.
         guard !state.isNewBranchHighlighted else { return }
@@ -396,20 +415,21 @@ final class BranchPickerContainerView: NSView {
     private func updatePreferredHeight() {
         guard state.query.isEmpty else { return }
         let list = state.items.reduce(CGFloat(0)) { total, item in
-            total + (item.row == nil ? PickerMetrics.headerRowHeight : PickerMetrics.rowHeight)
+            total + (item.row == nil ? BranchPickerStyle.sectionHeaderHeight : BranchPickerStyle.rowHeight)
         }
         let chrome =
-            header.fittingHeight(width: PickerMetrics.width) + BranchPickerTabBar.height + Self.sheetTopPadding
-            + BranchPickerInstructionView.height + Self.instructionGap + PickerMetrics.searchHeight + Self.listTopGap
-            + Self.sheetBottomPadding + BranchPickerNewBranchRow.height
-        let height = min(chrome + max(list, PickerMetrics.emptyListHeight), PickerMetrics.maximumHeight).rounded(.up)
+            header.fittingHeight(width: BranchPickerStyle.width) + tabControl.intrinsicContentSize.height
+            + Self.searchTopGap + BranchPickerStyle.searchHeight + Self.listTopGap + Self.footerTopGap
+            + BranchPickerStyle.footerHeight + Self.footerBottomGap
+        let listHeight = max(min(list, BranchPickerStyle.maximumListHeight), BranchPickerStyle.minimumListHeight)
+        let height = (chrome + listHeight).rounded(.up)
         guard height > preferredHeight else { return }
         preferredHeight = height
         invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: PickerMetrics.width, height: preferredHeight)
+        NSSize(width: BranchPickerStyle.width, height: preferredHeight)
     }
 
     // MARK: Window
@@ -485,6 +505,8 @@ final class BranchPickerContainerView: NSView {
         removeKeyObserver()
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
+        if let displayOptionsObserver { NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver) }
+        displayOptionsObserver = nil
         if let mergePreviewToken { mergePreviews?.unregisterConsumer(mergePreviewToken) }
         mergePreviewToken = nil
     }
@@ -520,7 +542,7 @@ extension BranchPickerContainerView: PickerTableHandler {
     func activate() {
         if state.isNewBranchHighlighted {
             // A disabled row does nothing, and never falls through to a branch.
-            if newBranchRow.isEnabled { onNewBranch() }
+            createBranch()
             return
         }
         guard let row = state.highlightedTableRow else { return }
@@ -538,59 +560,5 @@ extension BranchPickerContainerView: PickerTableHandler {
 
     func canHighlight(tableRow row: Int) -> Bool {
         state.canHighlight(tableRow: row)
-    }
-}
-
-/// Row highlight and buttons, outside the class body to keep it under the length lint.
-extension BranchPickerContainerView {
-    /// Sets `cell`'s highlight and its Pull and Push, Publish, or Delete from the current
-    /// snapshot. The buttons show on the highlighted row, and wherever one runs, in the
-    /// Switch tab only. `animated` lets an on-screen cell ease its pills in or out as the
-    /// highlight moves. `shortcuts` decides which pills show their key.
-    func configureHighlightAndButtons(
-        of cell: BranchPickerRowView, row: Int, animated: Bool, shortcuts: SyncShortcutTargets
-    ) {
-        let isHighlighted = row == state.highlightedTableRow
-        cell.isHighlighted = isHighlighted
-        guard state.tab == .switchBranch, let buttons = state.syncButtons(forTableRow: row),
-            let branch = state.branch(forTableRow: row)
-        else {
-            cell.syncButtons = nil
-            cell.showSyncButtons(false, animated: false)
-            return
-        }
-        let view = cell.syncButtons ?? BranchRowSyncButtons(style: .rowPills)
-        // The popover stays up during an operation, and the search field keeps the
-        // keyboard: a click must not leave focus on a button that is about to disable.
-        view.configure(
-            buttons, isRevealed: isHighlighted, branch: branch.name,
-            onPull: { [weak self] name in
-                self?.onPull(name)
-                self?.returnFocusToSearchField()
-            },
-            onPush: { [weak self] name in
-                self?.onPush(name)
-                self?.returnFocusToSearchField()
-            },
-            onPublish: { [weak self] name, remote in
-                self?.onPublish(name, remote)
-                self?.returnFocusToSearchField()
-            },
-            onDelete: { [weak self] in
-                self?.onDelete(branch, self?.window)
-                self?.returnFocusToSearchField()
-            })
-        view.setShortcutGlyphs(pull: shortcuts.pull == .row(tableRow: row), push: shortcuts.push == .row(tableRow: row))
-        cell.syncButtons = view
-        cell.showSyncButtons(view.shouldShow, animated: animated)
-    }
-
-    /// Re-configures whichever of `rows` have a cell on screen.
-    private func updateRows(_ rows: some Sequence<Int>, animated: Bool, shortcuts: SyncShortcutTargets) {
-        for row in rows where row >= 0 && row < tableView.numberOfRows {
-            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? BranchPickerRowView
-            else { continue }
-            configureHighlightAndButtons(of: cell, row: row, animated: animated, shortcuts: shortcuts)
-        }
     }
 }

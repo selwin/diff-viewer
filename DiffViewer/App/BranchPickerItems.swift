@@ -50,19 +50,11 @@ enum BranchRowID: Hashable, Sendable {
     case remote(ref: String)
 }
 
-/// The popover's two modes. Rows, highlight and query are shared; what a row offers
-/// and says differs.
+/// The popover's two modes. The query is shared; Merge leaves out the current branch,
+/// and what a row offers and says differs.
 enum BranchPickerTab: Sendable {
     case switchBranch
     case merge
-}
-
-/// The sentence above the search field: the verb, the highlighted branch (nil when none
-/// is) and, for a merge, what follows it. The header already names the current branch.
-struct BranchPickerInstruction: Equatable {
-    let verb: String
-    let token: String?
-    let ending: String?
 }
 
 /// What a row shows on its right edge in the current tab, and in which colour.
@@ -72,6 +64,8 @@ struct BranchRowLabel: Equatable {
         case accent
         /// A predicted merge conflict.
         case warning
+        /// An upstream that was deleted: a status indicator with a slashed link.
+        case upstreamGone
     }
 
     let text: String
@@ -121,7 +115,7 @@ enum BranchActivation: Equatable {
     case merge(MergeTarget)
 }
 
-/// The words on a row's right edge, and whether they are drawn in the accent colour.
+/// The words on a row's right edge, and the style they are drawn in.
 enum BranchRowStatus: Equatable {
     /// In sync, or a remote-only branch that isn't new.
     case none
@@ -138,13 +132,17 @@ enum BranchRowStatus: Equatable {
         case .none: ""
         case let .counts(ahead, behind): UpstreamTracking.counts(ahead: ahead, behind: behind).summary ?? ""
         case .notPublished: "Not published"
-        case .upstreamNotFetched: "upstream not fetched"
-        case .upstreamGone: UpstreamTracking.gone.summary ?? ""
+        case .upstreamNotFetched: "Upstream not fetched"
+        case .upstreamGone: "Upstream gone"
         case .new: "New"
         }
     }
 
     var isAccent: Bool { self == .new }
+
+    var labelStyle: BranchRowLabel.Style {
+        self == .upstreamGone ? .upstreamGone : isAccent ? .accent : .secondary
+    }
 
     /// `configuredRemote` tells a branch that tracks nothing from one whose upstream the
     /// fetch settings hide.
@@ -227,6 +225,8 @@ enum BranchPickerEmptyState: Equatable {
     case failed
     /// Branches exist, but the query matches none of them.
     case noMatches
+    /// Merge has no branch besides the current one, whatever the query.
+    case noBranchesToMerge
 }
 
 /// What the branch table must do after a snapshot or a query.
@@ -248,4 +248,23 @@ enum BranchTableChange: Equatable {
 struct BranchPickerChange: Equatable {
     var rows: BranchTableChange
     var buttonsChanged: Bool
+}
+
+/// The picker's sync shortcuts: ⇧⌘P pulls, ⌘P pushes. `.push` covers Publish: both live
+/// in the Push slot.
+enum SyncShortcut {
+    case pull
+    case push
+}
+
+/// Whose button a sync shortcut presses: a row's, by its index at the moment of the key
+/// press, or the header's.
+enum SyncShortcutTarget: Equatable {
+    case row(tableRow: Int)
+    case header
+}
+
+struct SyncShortcutTargets: Equatable {
+    let pull: SyncShortcutTarget?
+    let push: SyncShortcutTarget?
 }

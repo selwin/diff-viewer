@@ -43,13 +43,12 @@ struct BranchPickerPopover: View {
                 }
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
-            onNewBranch: { windowState.openNewBranchSheetFromPicker() },
+            onNewBranch: { windowState.openNewBranchSheet(initialName: $0) },
             onTabChange: { windowState.branchPickerTab = $0 },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
-        .frame(width: PickerMetrics.width)
-        .presentationBackground(Color(nsColor: PickerMetrics.popoverBackground))
+        .frame(width: BranchPickerStyle.width)
     }
 }
 
@@ -68,7 +67,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPublish: (String, String) -> Void
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
-    let onNewBranch: () -> Void
+    let onNewBranch: (String?) -> Void
     let onTabChange: (BranchPickerTab) -> Void
     let now: @MainActor () -> Date
 
@@ -85,7 +84,7 @@ struct BranchPickerListView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: BranchPickerContainerView, context: Context) -> CGSize? {
-        CGSize(width: PickerMetrics.width, height: nsView.preferredHeight)
+        CGSize(width: BranchPickerStyle.width, height: nsView.preferredHeight)
     }
 
     static func dismantleNSView(_ view: BranchPickerContainerView, coordinator: ()) {

@@ -202,6 +202,9 @@ final class WindowState {
     /// The New Branch sheet is up. Like the pickers and the commit sheet, it opens only
     /// while none of them is.
     var isNewBranchSheetPresented = false
+    /// The name the New Branch sheet opens with: the picker's search, if any. Cleared when
+    /// the sheet closes.
+    var newBranchInitialName: String?
     /// The branch the Merge sheet is asking about, or nil while the sheet is down. Opens on
     /// the same terms as the New Branch sheet.
     var pendingMerge: MergeTarget?

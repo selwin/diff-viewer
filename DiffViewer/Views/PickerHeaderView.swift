@@ -1,22 +1,34 @@
 import AppKit
 
 /// The header both pickers share: a title over a subtitle, up to three accessory views,
-/// and a hairline along the bottom. It draws no background, so the popover's shows.
+/// and optionally a hairline along the bottom. It draws no background, so the popover's
+/// shows.
 ///
 /// Accessories report their size through `intrinsicContentSize` and are placed by their
 /// alignment rect, so a focus ring margin set in `alignmentRectInsets` doesn't count toward
 /// spacing. Owners hide an accessory with `isHidden`.
 class PickerHeaderView: NSView {
+    /// Paddings, fonts and the hairline. The defaults are the commit picker's.
+    @MainActor
+    struct Style {
+        var topPadding = PickerMetrics.Header.topPadding
+        /// Below the subtitle; above the hairline, when there is one.
+        var bottomPadding = PickerMetrics.Header.bottomPadding
+        var leadingPadding = PickerMetrics.Header.sidePadding
+        var trailingPadding = PickerMetrics.Header.sidePadding
+        var titleFont = PickerMetrics.Header.titleFont
+        var subtitleFont = PickerMetrics.Header.subtitleFont
+        var showsDivider = true
+    }
+
     private typealias Metrics = PickerMetrics.Header
 
+    private let style: Style
     /// The subtitle line's height for its font, measured once, so an empty subtitle still
     /// reserves its space and counts arriving later do not move the rows.
-    private static let subtitleHeight: CGFloat = PickerViewGeometry.naturalSize(
-        of: PickerLabel.make(font: Metrics.subtitleFont, color: .labelColor)
-    ).height
-
+    private let subtitleHeight: CGFloat
     private let titleField: NSTextField
-    private let subtitleField = PickerLabel.make(font: Metrics.subtitleFont, color: .secondaryLabelColor)
+    private let subtitleField: NSTextField
     private let wrapsTitle: Bool
 
     var title: String {
@@ -65,18 +77,21 @@ class PickerHeaderView: NSView {
 
     /// A commit's subject can run long, so `wrapsTitle` lets it wrap in full; otherwise the
     /// title truncates on one line.
-    init(wrapsTitle: Bool) {
+    init(wrapsTitle: Bool, style: Style = Style()) {
         self.wrapsTitle = wrapsTitle
+        self.style = style
+        subtitleField = PickerLabel.make(font: style.subtitleFont, color: .secondaryLabelColor)
+        subtitleHeight = PickerViewGeometry.naturalSize(of: subtitleField).height
         if wrapsTitle {
             let field = NSTextField(wrappingLabelWithString: "")
-            field.font = Metrics.titleFont
+            field.font = style.titleFont
             field.textColor = .labelColor
             field.maximumNumberOfLines = 0
             field.lineBreakMode = .byWordWrapping
             field.isSelectable = false
             titleField = field
         } else {
-            titleField = PickerLabel.make(font: Metrics.titleFont, color: .labelColor)
+            titleField = PickerLabel.make(font: style.titleFont, color: .labelColor)
         }
         super.init(frame: .zero)
         clipsToBounds = true
@@ -97,11 +112,13 @@ class PickerHeaderView: NSView {
 
     // MARK: Layout
 
-    /// The title at `width`, the subtitle line, padding and the hairline.
+    /// The title at `width`, the subtitle line, padding and any hairline.
     func fittingHeight(width: CGFloat) -> CGFloat {
-        Metrics.topPadding + titleHeight(width: textWidth(forWidth: width)) + Metrics.titleSubtitleGap
-            + Self.subtitleHeight + Metrics.bottomPadding + Metrics.dividerHeight
+        style.topPadding + titleHeight(width: textWidth(forWidth: width)) + Metrics.titleSubtitleGap
+            + subtitleHeight + style.bottomPadding + dividerHeight
     }
+
+    private var dividerHeight: CGFloat { style.showsDivider ? Metrics.dividerHeight : 0 }
 
     private var shownTrailing: NSView? {
         trailingAccessory.flatMap { $0.isHidden ? nil : $0 }
@@ -109,7 +126,7 @@ class PickerHeaderView: NSView {
 
     /// What the text block gets once the side padding and the trailing accessory are taken.
     private func textWidth(forWidth width: CGFloat) -> CGFloat {
-        var available = width - Metrics.sidePadding * 2
+        var available = width - style.leadingPadding - style.trailingPadding
         if let trailing = shownTrailing { available -= trailing.visibleSize.width + Metrics.trailingGap }
         return max(available, 0)
     }
@@ -125,11 +142,12 @@ class PickerHeaderView: NSView {
         let width = textWidth(forWidth: bounds.width)
         let titleHeight = titleHeight(width: width)
         layoutTitle(width: width, height: titleHeight)
-        let subtitleY = Metrics.topPadding + titleHeight + Metrics.titleSubtitleGap
+        let subtitleY = style.topPadding + titleHeight + Metrics.titleSubtitleGap
         layoutSubtitle(y: subtitleY, width: width)
         if let trailing = shownTrailing {
-            let centerY = Metrics.topPadding + (titleHeight + Metrics.titleSubtitleGap + Self.subtitleHeight) / 2
-            trailing.placeVisible(x: bounds.width - Metrics.sidePadding - trailing.visibleSize.width, centerY: centerY)
+            let centerY = style.topPadding + (titleHeight + Metrics.titleSubtitleGap + subtitleHeight) / 2
+            trailing.placeVisible(
+                x: bounds.width - style.trailingPadding - trailing.visibleSize.width, centerY: centerY)
         }
     }
 
@@ -145,10 +163,14 @@ class PickerHeaderView: NSView {
             }
             accessory.isHidden = !showsAccessory
         }
-        titleField.frame = NSRect(x: Metrics.sidePadding, y: Metrics.topPadding, width: titleWidth, height: height)
+        titleField.frame = NSRect(x: style.leadingPadding, y: style.topPadding, width: titleWidth, height: height)
         if showsAccessory {
+            // Centred on the lowercase letters branch names are mostly made of; the line
+            // box's middle sits at cap height, which reads high beside them.
+            let font = titleField.font ?? style.titleFont
+            let baseline = titleField.frame.minY + titleField.firstBaselineOffsetFromTop
             titleAccessory?.placeVisible(
-                x: titleField.frame.maxX + Metrics.titleAccessoryGap, centerY: titleField.frame.midY)
+                x: titleField.frame.maxX + Metrics.titleAccessoryGap, centerY: baseline - font.xHeight / 2)
         }
     }
 
@@ -159,11 +181,12 @@ class PickerHeaderView: NSView {
             let natural = PickerViewGeometry.naturalSize(of: subtitleField).width
             subtitleWidth = min(natural, max(width - accessory.visibleSize.width, 0))
         }
-        subtitleField.frame = NSRect(x: Metrics.sidePadding, y: y, width: subtitleWidth, height: Self.subtitleHeight)
+        subtitleField.frame = NSRect(x: style.leadingPadding, y: y, width: subtitleWidth, height: subtitleHeight)
         accessory?.placeVisible(x: subtitleField.frame.maxX, centerY: subtitleField.frame.midY)
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        guard style.showsDivider else { return }
         NSColor.separatorColor.setFill()
         NSRect(x: 0, y: bounds.height - Metrics.dividerHeight, width: bounds.width, height: Metrics.dividerHeight)
             .fill()

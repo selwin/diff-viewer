@@ -58,10 +58,12 @@ struct BranchPickerHeaderText: Equatable {
                 return BranchPickerHeaderText(
                     title: name, showsSpinner: spinner, canFetch: canFetch, copyableName: name)
             }
-            // Worded as the row is, so a hidden upstream reads the same in both places.
+            // Worded as the row is, so a hidden upstream reads the same in both places, but
+            // capitalised: it starts the detail line.
             let status = BranchRowStatus.local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[name])
+            let words = status == .none ? "up to date" : status.text
             return BranchPickerHeaderText(
-                title: name, detailParts: [status == .none ? "up to date" : status.text], showsSpinner: spinner,
+                title: name, detailParts: [words.prefix(1).uppercased() + words.dropFirst()], showsSpinner: spinner,
                 canFetch: canFetch, branch: name,
                 buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
                 copyableName: name)
