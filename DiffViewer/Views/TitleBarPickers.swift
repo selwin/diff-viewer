@@ -114,8 +114,8 @@ private struct BranchSyncSegments: View {
         HStack(spacing: 0) {
             if showsPull {
                 segment(
-                    arrow: "arrow.down", count: sync.pullCount, title: "Pull", state: sync.buttons.pull,
-                    label: sync.pullAccessibilityLabel, isLast: !showsPush,
+                    arrow: "arrow.down", count: sync.pullCount, title: "Pull", shortcut: "⇧⌘P",
+                    state: sync.buttons.pull, label: sync.pullAccessibilityLabel, isLast: !showsPush,
                     onTintChange: onLeadingTintChange
                 ) {
                     let branch = sync.branch
@@ -144,9 +144,10 @@ private struct BranchSyncSegments: View {
                     .disabled(!item.isEnabled)
                 }
             } label: {
+                // No glyph: ⌘P has no one remote to publish to, so the menu has no shortcut.
                 SyncSegmentLabel(
-                    arrow: "arrow.up", count: nil, title: sync.buttons.pushTitle, state: sync.buttons.push,
-                    isLast: true, onTintChange: onTintChange)
+                    arrow: "arrow.up", count: nil, title: sync.buttons.pushTitle, shortcut: nil,
+                    state: sync.buttons.push, isLast: true, onTintChange: onTintChange)
             }
             // `.button` lets `.plain` strip the menu's own bezel, so it looks like the Push segment.
             .menuStyle(.button)
@@ -155,8 +156,8 @@ private struct BranchSyncSegments: View {
             .modifier(SegmentAvailability(state: sync.buttons.push, label: sync.pushAccessibilityLabel))
         } else {
             segment(
-                arrow: "arrow.up", count: sync.pushCount, title: sync.buttons.pushTitle, state: sync.buttons.push,
-                label: sync.pushAccessibilityLabel, isLast: true,
+                arrow: "arrow.up", count: sync.pushCount, title: sync.buttons.pushTitle, shortcut: "⌘P",
+                state: sync.buttons.push, label: sync.pushAccessibilityLabel, isLast: true,
                 onTintChange: onTintChange
             ) {
                 switch sync.buttons.publish {
@@ -170,12 +171,12 @@ private struct BranchSyncSegments: View {
 
     // swiftlint:disable:next function_parameter_count
     private func segment(
-        arrow: String, count: Int?, title: String, state: PickerButtonState, label: String, isLast: Bool,
-        onTintChange: ((Bool) -> Void)?, action: @escaping () -> Void
+        arrow: String, count: Int?, title: String, shortcut: String, state: PickerButtonState, label: String,
+        isLast: Bool, onTintChange: ((Bool) -> Void)?, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             SyncSegmentLabel(
-                arrow: arrow, count: count, title: title, state: state, isLast: isLast,
+                arrow: arrow, count: count, title: title, shortcut: shortcut, state: state, isLast: isLast,
                 onTintChange: onTintChange)
         }
         .buttonStyle(.plain)
@@ -191,12 +192,13 @@ private struct SegmentID: Hashable {
 }
 
 /// One segment's face: the arrow, action and count, when there is one, in the accent
-/// colour. A running segment hides all three under a centred spinner, as the picker's own
-/// buttons do; hidden, not removed, so the pill keeps its width.
+/// colour, then the menu shortcut. A running segment hides them under a centred spinner,
+/// as the picker's own buttons do; hidden, not removed, so the pill keeps its width.
 private struct SyncSegmentLabel: View {
     let arrow: String
     let count: Int?
     let title: String
+    let shortcut: String?
     let state: PickerButtonState
     /// The last segment pads its end so the title clears the capsule's round end.
     let isLast: Bool
@@ -217,6 +219,14 @@ private struct SyncSegmentLabel: View {
             if let shown = count ?? (isRunning ? lastCount : nil) {
                 Text("\(shown)")
                     .monospacedDigit()
+            }
+            // Styled as on the commit sheet's Commit button.
+            if let shortcut {
+                Text(shortcut)
+                    .font(.system(size: 11, weight: .medium))
+                    .opacity(0.6)
+                    .padding(.leading, 3)
+                    .accessibilityHidden(true)
             }
         }
         // Centred by its line box, the text reads low against the icons; lift it to the eye.

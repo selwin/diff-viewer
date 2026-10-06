@@ -1777,7 +1777,8 @@ extension WindowState {
     /// Pushes `branch`, which tracks nothing, to the same name on `remote` and makes that
     /// its upstream. Admitted on the same terms as a pull or push, and on the same chain.
     func publish(branch: String, to remote: String) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting,
+            branchReadStatus == .loaded,
             !SyncPolicy.isFetching(remote: remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
         let request = PublishRequest(branch: branch, remote: remote)
@@ -1800,7 +1801,7 @@ extension WindowState {
     /// push away, so a push waits for the round fetching its remote instead and `runSync`
     /// re-checks.
     private func sync(_ operation: SyncOperation, branch: String) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch else { return }
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting else { return }
         var isCurrent = headState == .named(branch)
         guard
             let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
@@ -2007,7 +2008,8 @@ extension WindowState {
     /// Delete, on the write chain, and one operation at a time with pull and push. A fetch
     /// of its remote may bring the remote branch back, so the delete waits it out.
     func deleteBranch(_ branch: LocalBranch) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, branchReadStatus == .loaded,
+        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting,
+            branchReadStatus == .loaded,
             Self.isDeletable(branch, in: branches, headState: headState), let upstream = branch.upstream,
             !SyncPolicy.isFetching(remote: upstream.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }

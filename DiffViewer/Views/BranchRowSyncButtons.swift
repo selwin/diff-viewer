@@ -43,12 +43,14 @@ final class BranchRowSyncButtons: NSView {
         pushButton = SyncPillButton(title: "Push", height: height, focusMargin: margin)
         deleteButton = SyncPillButton(title: "Delete…", height: height, focusMargin: margin)
         super.init(frame: .zero)
+        pullButton.shortcut = "⇧⌘P"
+        pushButton.shortcut = "⌘P"
         clipsToBounds = true
         for button in buttons {
             // Row pills show only on the highlighted row: the search field keeps the
             // keyboard, and VoiceOver uses the row's custom actions. Header buttons take
             // focus for keyboard users. Neither has a key equivalent: Return belongs to
-            // the highlighted row.
+            // the highlighted row, and the picker routes ⌘P and ⇧⌘P itself.
             button.refusesFirstResponder = !isHeader
             button.focusRingType = isHeader ? .default : .none
             button.target = self
@@ -108,6 +110,33 @@ final class BranchRowSyncButtons: NSView {
 
     @objc private func publishRemoteChosen(_ sender: NSMenuItem) {
         (sender.representedObject as? PublishChoice)?.run()
+    }
+
+    // MARK: Shortcuts
+
+    /// ⇧⌘P's click. Returns whether it ran: only an enabled button the reader could click
+    /// takes it.
+    func pressPull() -> Bool {
+        guard canPress(pullButton, state: states.pull) else { return false }
+        pullClicked()
+        return true
+    }
+
+    /// ⌘P's click, as for `pressPull`. A Publish with several remotes opens its menu.
+    func pressPush() -> Bool {
+        guard canPress(pushButton, state: states.push) else { return false }
+        pushClicked()
+        return true
+    }
+
+    private func canPress(_ button: SyncPillButton, state: PickerButtonState) -> Bool {
+        state == .enabled && acceptsClicks && !button.isHiddenOrHasHiddenAncestor
+    }
+
+    /// Shows the shortcut glyph on the buttons the keys would press now.
+    func setShortcutGlyphs(pull: Bool, push: Bool) {
+        pullButton.showsKeyboardShortcut = pull
+        pushButton.showsKeyboardShortcut = push
     }
 
     // swiftlint:disable function_parameter_count
@@ -205,6 +234,10 @@ final class SyncPillButton: NSButton {
     }
 
     private static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    /// The shortcut glyph after the title: a size smaller and faded, as on the commit sheet.
+    private static let shortcutFont = NSFont.systemFont(ofSize: 11, weight: .medium)
+    private static let shortcutGap: CGFloat = 5
+    private static let shortcutOpacity: CGFloat = 0.6
     private static let horizontalPadding: CGFloat = 10
     /// Room around a focusable button's capsule, so its focus ring isn't clipped.
     static let focusRingMargin: CGFloat = 4
@@ -213,6 +246,24 @@ final class SyncPillButton: NSButton {
     private let focusMargin: CGFloat
     private let spinner = NSProgressIndicator(frame: .zero)
     private var isRunning = false
+
+    /// The key this button's action answers to. Its width is always reserved, so the button
+    /// keeps its size as the glyph comes and goes.
+    var shortcut: String? {
+        didSet {
+            guard shortcut != oldValue else { return }
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+            needsDisplay = true
+        }
+    }
+
+    /// Whether the glyph is drawn: only on the button the key would press now.
+    var showsKeyboardShortcut = false {
+        didSet {
+            if showsKeyboardShortcut != oldValue { needsDisplay = true }
+        }
+    }
 
     var look = Look.plain {
         didSet {
@@ -241,9 +292,12 @@ final class SyncPillButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Sized with the title in place, so a running button keeps its width.
+    /// Sized with the title and any shortcut in place, so a running button keeps its width.
     override var intrinsicContentSize: NSSize {
-        let width = ceil(NSAttributedString(string: title, attributes: [.font: Self.font]).size().width)
+        var width = ceil(NSAttributedString(string: title, attributes: [.font: Self.font]).size().width)
+        if let shortcut {
+            width += Self.shortcutGap + ceil(Self.shortcutString(shortcut, color: .labelColor).size().width)
+        }
         return NSSize(
             width: width + Self.horizontalPadding * 2 + focusMargin * 2, height: height + focusMargin * 2)
     }
@@ -308,7 +362,20 @@ final class SyncPillButton: NSButton {
         guard !isRunning else { return }
         let string = NSAttributedString(string: title, attributes: [.font: Self.font, .foregroundColor: text])
         let size = string.size()
-        string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+        // Without the glyph, the title centres alone in the reserved width.
+        guard showsKeyboardShortcut, let shortcut else {
+            string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
+            return
+        }
+        let glyph = Self.shortcutString(shortcut, color: text.withAlphaComponent(Self.shortcutOpacity))
+        let glyphSize = glyph.size()
+        let x = (bounds.width - size.width - Self.shortcutGap - glyphSize.width) / 2
+        string.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))
+        glyph.draw(at: NSPoint(x: x + size.width + Self.shortcutGap, y: (bounds.height - glyphSize.height) / 2))
+    }
+
+    private static func shortcutString(_ shortcut: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: shortcut, attributes: [.font: shortcutFont, .foregroundColor: color])
     }
 
     /// A disabled button fades on every look, so it still reads as disabled.

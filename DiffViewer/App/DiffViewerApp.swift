@@ -187,6 +187,7 @@ struct RepositoryCommands: Commands {
             Button("Choose Branch…") { windowState?.isBranchPickerPresented = true }
                 .keyboardShortcut("b")
                 .disabled(!(windowState?.canOpenBranchPicker ?? false))
+            syncItems
         }
         // Replaced rather than extended: this group holds the default Find submenu, which
         // would otherwise claim ⌘F a second time.
@@ -252,6 +253,59 @@ struct RepositoryCommands: Commands {
                 .keyboardShortcut("-", modifiers: .command)
             Button("Reset Font Size") { preferences.resetFontSize() }
                 .keyboardShortcut("0", modifiers: .command)
+        }
+    }
+
+    /// The title bar pill's Pull and Push for the current branch, available whenever its
+    /// segments are. Each action keeps the window and branch it was built with.
+    @ViewBuilder private var syncItems: some View {
+        let state = windowState
+        let sync = state?.canOpenBranchPicker == true ? state?.currentBranchSync : nil
+        Button("Pull") {
+            guard let sync else { return }
+            Self.startSync(in: state) { await $0.pull(branch: sync.branch) }
+        }
+        .keyboardShortcut("p", modifiers: [.command, .shift])
+        .disabled(sync?.buttons.pull != .enabled)
+        if let sync, let action = sync.pushAction {
+            let branch = sync.branch
+            switch action {
+            case .push:
+                Button(sync.buttons.pushTitle) { Self.startSync(in: state) { await $0.push(branch: branch) } }
+                    .keyboardShortcut("p")
+            case let .publish(remote):
+                Button(sync.buttons.pushTitle) {
+                    Self.startSync(in: state) { await $0.publish(branch: branch, to: remote) }
+                }
+                .keyboardShortcut("p")
+            case let .chooseRemote(remotes):
+                // No shortcut: there is no one remote for ⌘P to publish to.
+                Menu("Publish") {
+                    ForEach(remotes, id: \.remote) { item in
+                        Button(item.remote) {
+                            Self.startSync(in: state) { await $0.publish(branch: branch, to: item.remote) }
+                        }
+                        .disabled(!item.isEnabled)
+                    }
+                }
+            }
+        } else {
+            Button(sync?.buttons.pushTitle ?? "Push") {}
+                .keyboardShortcut("p")
+                .disabled(true)
+        }
+    }
+
+    /// The guard repeats `.disabled`, which only reflects the state at the last render: a
+    /// pull, push or publish doesn't itself check for a sheet or picker in the way. It is
+    /// checked again inside the Task, since a sheet may open before the Task runs.
+    private static func startSync(
+        in state: WindowState?, _ operation: @escaping @MainActor (WindowState) async -> Void
+    ) {
+        guard let state, state.canOpenBranchPicker else { return }
+        Task {
+            guard state.canOpenBranchPicker else { return }
+            await operation(state)
         }
     }
 }

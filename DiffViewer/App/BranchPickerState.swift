@@ -197,9 +197,49 @@ struct BranchPickerState {
     {
         SyncPolicy.rowButtons(
             branch: branch, isCurrent: isCurrent, readStatus: snapshot.readStatus, active: snapshot.activeSync,
-            isSwitching: snapshot.isSwitchingBranch, fetchStatus: snapshot.fetchStatus,
+            isSwitching: snapshot.isSwitchingBranch, isCommitting: snapshot.isCommitting,
+            fetchStatus: snapshot.fetchStatus,
             fetchingRemotes: snapshot.fetchingRemotes, remotes: snapshot.remotes,
             configuredRemote: snapshot.configuredUpstreamRemotes[branch.name])
+    }
+
+    /// The button ⌘P or ⇧⌘P presses: the highlighted row's when it can act, else the
+    /// header's, else none. Only the Switch tab shows row buttons.
+    func shortcutTarget(for shortcut: SyncShortcut) -> SyncShortcutTarget? {
+        let targets = shortcutTargets
+        switch shortcut {
+        case .pull: return targets.pull
+        case .push: return targets.push
+        }
+    }
+
+    /// Both shortcuts' current targets, found from one read of the highlighted row's and
+    /// the header's buttons.
+    var shortcutTargets: SyncShortcutTargets {
+        var highlighted: (tableRow: Int, buttons: RowSyncButtons)?
+        if tab == .switchBranch, let row = highlightedTableRow, let buttons = syncButtons(forTableRow: row) {
+            highlighted = (row, buttons)
+        }
+        let header = headerText
+        let headerButtons = header.branch != nil ? header.buttons : nil
+        return SyncShortcutTargets(
+            pull: Self.resolve(.pull, row: highlighted, header: headerButtons),
+            push: Self.resolve(.push, row: highlighted, header: headerButtons))
+    }
+
+    private static func resolve(
+        _ shortcut: SyncShortcut, row: (tableRow: Int, buttons: RowSyncButtons)?, header: RowSyncButtons?
+    ) -> SyncShortcutTarget? {
+        if let row, slot(shortcut, of: row.buttons) == .enabled { return .row(tableRow: row.tableRow) }
+        if let header, slot(shortcut, of: header) == .enabled { return .header }
+        return nil
+    }
+
+    private static func slot(_ shortcut: SyncShortcut, of buttons: RowSyncButtons) -> PickerButtonState {
+        switch shortcut {
+        case .pull: buttons.pull
+        case .push: buttons.push
+        }
     }
 
     /// The local branch as the row shows it, which a delete checks against before it runs.
@@ -495,4 +535,23 @@ struct BranchPickerState {
         highlightedRow = row.id
         return true
     }
+}
+
+/// The picker's sync shortcuts: ⇧⌘P pulls, ⌘P pushes. `.push` covers Publish: both live
+/// in the Push slot.
+enum SyncShortcut {
+    case pull
+    case push
+}
+
+/// Whose button a sync shortcut presses: a row's, by its index at the moment of the key
+/// press, or the header's.
+enum SyncShortcutTarget: Equatable {
+    case row(tableRow: Int)
+    case header
+}
+
+struct SyncShortcutTargets: Equatable {
+    let pull: SyncShortcutTarget?
+    let push: SyncShortcutTarget?
 }

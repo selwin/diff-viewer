@@ -185,8 +185,8 @@ enum SyncPolicy {
     /// waits for the fetch after the click and re-checks before it runs.
     static func rowButtons(
         branch: LocalBranch, isCurrent: Bool, readStatus: BranchReadStatus, active: ActiveSync?,
-        isSwitching: Bool, fetchStatus: FetchStatus, fetchingRemotes: Set<String>, remotes: [String],
-        configuredRemote: String?
+        isSwitching: Bool, isCommitting: Bool, fetchStatus: FetchStatus, fetchingRemotes: Set<String>,
+        remotes: [String], configuredRemote: String?
     ) -> RowSyncButtons {
         let target = target(for: branch, readStatus: readStatus)
         let showsPull = (target?.behind ?? 0) > 0
@@ -211,6 +211,8 @@ enum SyncPolicy {
                 }
             } else if isSwitching {
                 "Switching branch…"
+            } else if isCommitting {
+                "Committing…"
             } else {
                 nil
             }

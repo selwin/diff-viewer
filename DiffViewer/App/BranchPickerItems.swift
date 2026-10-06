@@ -23,6 +23,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var branches: [LocalBranch]
     var readStatus: BranchReadStatus
     var isSwitchingBranch: Bool
+    /// A commit is queued or running: it holds the repository like a switch does.
+    var isCommitting: Bool = false
     var fetchStatus: FetchStatus = .idle
     /// The pull, push, publish or delete in flight and its branch, or nil when none is running.
     var activeSync: ActiveSync?

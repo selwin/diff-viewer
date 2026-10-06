@@ -6,11 +6,13 @@ import Testing
 struct CurrentBranchSyncPresentationTests {
     private static func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
-        activeSync: ActiveSync? = nil, remotes: [String] = ["origin"], configuredUpstreamRemotes: [String: String] = [:]
+        activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = ["origin"],
+        configuredUpstreamRemotes: [String: String] = [:]
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: false,
-            activeSync: activeSync, remotes: remotes, configuredUpstreamRemotes: configuredUpstreamRemotes)
+            activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
+            configuredUpstreamRemotes: configuredUpstreamRemotes)
     }
 
     private static func tracking(ahead: Int, behind: Int) -> LocalBranch {
@@ -76,6 +78,45 @@ struct CurrentBranchSyncPresentationTests {
         #expect(sync.buttons == buttons)
         #expect(sync.pullCount == pullCount)
         #expect(sync.pushCount == pushCount)
+    }
+
+    struct PushActionCase: CustomTestStringConvertible {
+        let name: String
+        let snapshot: BranchPickerSnapshot
+        let expectedAction: CurrentBranchSyncPresentation.PushAction?
+
+        var testDescription: String { name }
+    }
+
+    static let pushActionCases: [PushActionCase] = [
+        PushActionCase(
+            name: "hidden", snapshot: snapshot(branches: [tracking(ahead: 0, behind: 0)]), expectedAction: nil),
+        PushActionCase(
+            name: "disabled", snapshot: snapshot(branches: [tracking(ahead: 2, behind: 1)]), expectedAction: nil),
+        PushActionCase(
+            name: "running",
+            snapshot: snapshot(
+                branches: [tracking(ahead: 1, behind: 0)], activeSync: ActiveSync(branch: "main", operation: .push)),
+            expectedAction: nil),
+        PushActionCase(
+            name: "push", snapshot: snapshot(branches: [tracking(ahead: 1, behind: 0)]), expectedAction: .push),
+        PushActionCase(
+            name: "publish to the only remote", snapshot: snapshot(branches: [localBranch("main")], remotes: ["fork"]),
+            expectedAction: .publish(remote: "fork")),
+        // Without origin there is no remote to pick automatically.
+        PushActionCase(
+            name: "choose among remotes without origin",
+            snapshot: snapshot(
+                branches: [localBranch("main")], fetchingRemotes: ["upstream"], remotes: ["fork", "upstream"]),
+            expectedAction: .chooseRemote(remotes: [
+                PublishMenuItem(remote: "fork", isEnabled: true), PublishMenuItem(remote: "upstream", isEnabled: false),
+            ])),
+    ]
+
+    @Test(arguments: pushActionCases)
+    func pushActionIsWhatAnEnabledPushSlotDoes(_ testCase: PushActionCase) throws {
+        let sync = try #require(CurrentBranchSyncPresentation.make(snapshot: testCase.snapshot))
+        #expect(sync.pushAction == testCase.expectedAction)
     }
 
     @Test func departureKeepsDrawingASegmentThatWentHidden() {

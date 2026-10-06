@@ -943,6 +943,116 @@ struct BranchPickerStateTests {
                     pushOperation: .publish))
     }
 
+    // MARK: Sync shortcuts
+
+    private static func tracked(_ name: String, ahead: Int, behind: Int) -> LocalBranch {
+        localBranch(name, upstream: upstream("origin/\(name)", tracking: .counts(ahead: ahead, behind: behind)))
+    }
+
+    /// Where a case's highlight sits.
+    enum ShortcutHighlight {
+        case none
+        case branch(BranchRowID)
+        case newBranch
+    }
+
+    /// A row by identity, since its table index depends on the layout.
+    enum ExpectedShortcutTarget {
+        case row(BranchRowID)
+        case header
+    }
+
+    struct ShortcutCase: CustomTestStringConvertible {
+        let name: String
+        var headState: HeadState? = .named("main")
+        let branches: [LocalBranch]
+        var activeSync: ActiveSync?
+        var remoteBranches: [RemoteBranch] = []
+        var remotes: [String] = []
+        var tab = BranchPickerTab.switchBranch
+        var highlight = ShortcutHighlight.none
+        let pull: ExpectedShortcutTarget?
+        let push: ExpectedShortcutTarget?
+
+        var testDescription: String { name }
+    }
+
+    static let shortcutCases: [ShortcutCase] = [
+        ShortcutCase(
+            name: "nothing highlighted goes to the header", branches: [tracked("main", ahead: 0, behind: 1)],
+            pull: .header, push: nil),
+        ShortcutCase(
+            name: "a highlighted row wins for its enabled action",
+            branches: [tracked("main", ahead: 0, behind: 1), tracked("feature", ahead: 0, behind: 1)],
+            highlight: .branch(.local(name: "feature")), pull: .row(.local(name: "feature")), push: nil),
+        ShortcutCase(
+            name: "a disabled row slot falls to the header",
+            branches: [tracked("main", ahead: 0, behind: 1), tracked("feature", ahead: 1, behind: 1)],
+            highlight: .branch(.local(name: "feature")), pull: .header, push: nil),
+        ShortcutCase(
+            name: "a hidden row slot falls to the header, so Pull and Push part ways",
+            branches: [tracked("main", ahead: 0, behind: 1), tracked("feature", ahead: 1, behind: 0)],
+            highlight: .branch(.local(name: "feature")), pull: .header, push: .row(.local(name: "feature"))),
+        ShortcutCase(
+            name: "the Merge tab goes to the header",
+            branches: [tracked("main", ahead: 1, behind: 0), tracked("feature", ahead: 1, behind: 0)], tab: .merge,
+            highlight: .branch(.local(name: "feature")), pull: nil, push: .header),
+        ShortcutCase(
+            name: "a remote-only row goes to the header", branches: [tracked("main", ahead: 1, behind: 0)],
+            remoteBranches: [remoteBranch("release")], highlight: .branch(.remote(ref: "refs/remotes/origin/release")),
+            pull: nil, push: .header),
+        ShortcutCase(
+            name: "New Branch… goes to the header", branches: [tracked("main", ahead: 1, behind: 0)],
+            highlight: .newBranch, pull: nil, push: .header),
+        ShortcutCase(
+            name: "a detached HEAD with no row target has none", headState: .detached(sha: objectID("x")),
+            branches: [tracked("main", ahead: 1, behind: 1)], pull: nil, push: nil),
+        ShortcutCase(
+            name: "an unlisted current branch with no row target has none",
+            branches: [tracked("feature", ahead: 1, behind: 1)], pull: nil, push: nil),
+        ShortcutCase(
+            name: "neither the current nor the highlighted branch can act",
+            branches: [tracked("main", ahead: 0, behind: 0), tracked("feature", ahead: 1, behind: 1)],
+            highlight: .branch(.local(name: "feature")), pull: nil, push: nil),
+        ShortcutCase(
+            name: "a running row slot with no header fallback has none",
+            branches: [tracked("main", ahead: 0, behind: 0), tracked("feature", ahead: 0, behind: 1)],
+            activeSync: ActiveSync(branch: "feature", operation: .pull), highlight: .branch(.local(name: "feature")),
+            pull: nil, push: nil),
+        ShortcutCase(
+            name: "a highlighted untracked row publishes",
+            branches: [tracked("main", ahead: 0, behind: 0), localBranch("feature")], remotes: ["origin"],
+            highlight: .branch(.local(name: "feature")), pull: nil, push: .row(.local(name: "feature"))),
+        ShortcutCase(
+            name: "an untracked current branch publishes from the header", branches: [localBranch("main")],
+            remotes: ["origin"], pull: nil, push: .header),
+    ]
+
+    @Test(arguments: shortcutCases)
+    func syncShortcutsPressTheHighlightedRowElseTheHeader(_ testCase: ShortcutCase) throws {
+        var picker = state(
+            snapshot(
+                headState: testCase.headState, branches: testCase.branches, activeSync: testCase.activeSync,
+                remotes: testCase.remotes, remoteBranches: testCase.remoteBranches),
+            tab: testCase.tab)
+        switch testCase.highlight {
+        case .none: break
+        case let .branch(id): try picker.highlight(tableRow: index(id, in: picker))
+        case .newBranch: picker.highlightNewBranch()
+        }
+        func resolved(_ expected: ExpectedShortcutTarget?) throws -> SyncShortcutTarget? {
+            switch expected {
+            case nil: nil
+            case .header?: .header
+            case let .row(id)?: try .row(tableRow: index(id, in: picker))
+            }
+        }
+        let pull = try resolved(testCase.pull)
+        let push = try resolved(testCase.push)
+        #expect(picker.shortcutTarget(for: .pull) == pull)
+        #expect(picker.shortcutTarget(for: .push) == push)
+    }
+
     @Test func theEmptyStateFollowsTheReadStatus() {
         #expect(state(snapshot(branches: [main])).emptyState == nil)
         #expect(state(snapshot(headState: nil, branches: [], readStatus: .unread)).emptyState == .loading)

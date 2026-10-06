@@ -95,13 +95,13 @@ struct SyncPolicyTests {
 
     private func buttons(
         _ branch: LocalBranch, isCurrent: Bool = true, readStatus: BranchReadStatus = .loaded,
-        active: ActiveSync? = nil, isSwitching: Bool = false, isDiscovering: Bool = false,
+        active: ActiveSync? = nil, isSwitching: Bool = false, isCommitting: Bool = false, isDiscovering: Bool = false,
         fetchingRemotes: Set<String> = [], remotes: [String] = [], configuredRemote: String? = nil
     ) -> RowSyncButtons {
         SyncPolicy.rowButtons(
             branch: branch, isCurrent: isCurrent, readStatus: readStatus, active: active, isSwitching: isSwitching,
-            fetchStatus: isDiscovering ? .discovering : .idle, fetchingRemotes: fetchingRemotes, remotes: remotes,
-            configuredRemote: configuredRemote)
+            isCommitting: isCommitting, fetchStatus: isDiscovering ? .discovering : .idle,
+            fetchingRemotes: fetchingRemotes, remotes: remotes, configuredRemote: configuredRemote)
     }
 
     private func buttons(ahead: Int, behind: Int, isCurrent: Bool = true) -> RowSyncButtons {
@@ -128,6 +128,22 @@ struct SyncPolicyTests {
         let diverged = tracked(ahead: 1, behind: 2)
         let switching = PickerButtonState.disabled(reason: "Switching branch…")
         #expect(buttons(diverged, isSwitching: true) == RowSyncButtons(pull: switching, push: switching))
+    }
+
+    @Test func aCommitDisablesWhateverWouldShow() {
+        let committing = PickerButtonState.disabled(reason: "Committing…")
+        #expect(
+            buttons(tracked(ahead: 1, behind: 2), isCommitting: true)
+                == RowSyncButtons(pull: committing, push: committing))
+        #expect(buttons(tracked(ahead: 0, behind: 0), isCommitting: true) == .hidden, "nothing to disable")
+        #expect(buttons(gone, isCurrent: false, isCommitting: true) == delete(committing))
+        #expect(
+            buttons(untracked, isCommitting: true, remotes: ["origin"]) == publish(committing),
+            "publish")
+        let switching = PickerButtonState.disabled(reason: "Switching branch…")
+        #expect(
+            buttons(tracked(ahead: 1, behind: 0), isSwitching: true, isCommitting: true)
+                == RowSyncButtons(pull: .hidden, push: switching), "the switch is named first")
     }
 
     /// A fetch may still move a pull's counts; it can only take a push away, and the push
