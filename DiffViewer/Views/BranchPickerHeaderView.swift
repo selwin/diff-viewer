@@ -77,6 +77,20 @@ final class BranchPickerHeaderView: NSView {
         onFetch()
     }
 
+    /// ⇧⌘P on the current branch's Pull, through its click. Returns whether it ran.
+    func pressPull() -> Bool {
+        syncButtons.pressPull()
+    }
+
+    /// ⌘P on the current branch's Push or Publish, as for `pressPull`.
+    func pressPush() -> Bool {
+        syncButtons.pressPush()
+    }
+
+    func setShortcutGlyphs(pull: Bool, push: Bool) {
+        syncButtons.setShortcutGlyphs(pull: pull, push: push)
+    }
+
     /// The header's controls for `order`, which the container chains after the search field.
     func keyViews(for order: [BranchPickerHeaderText.Control]) -> [NSView] {
         order.map { control in

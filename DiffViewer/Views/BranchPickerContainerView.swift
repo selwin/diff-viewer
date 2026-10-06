@@ -204,7 +204,7 @@ final class BranchPickerContainerView: NSView {
         // Reloaded cells configured their buttons already; the others are restyled here.
         if change.buttonsChanged {
             let visible = tableView.rows(in: tableView.visibleRect)
-            updateRows(visible.lowerBound..<visible.upperBound, animated: false)
+            updateRows(visible.lowerBound..<visible.upperBound, animated: false, shortcuts: state.shortcutTargets)
         }
         renderChrome()
         updatePreferredHeight()
@@ -236,7 +236,8 @@ final class BranchPickerContainerView: NSView {
     }
 
     /// Moves the table's selection to the highlight without scrolling. The rows' colours
-    /// and pills follow the highlight.
+    /// and pills follow the highlight, and the shortcut glyphs follow the buttons the keys
+    /// now press.
     func syncSelection() {
         let wasApplying = isApplyingSelection
         isApplyingSelection = true
@@ -248,7 +249,9 @@ final class BranchPickerContainerView: NSView {
             tableView.deselectAll(nil)
         }
         newBranchRow.isHighlighted = state.isNewBranchHighlighted
-        updateRows([previous, state.highlightedTableRow].compactMap { $0 }, animated: true)
+        let shortcuts = state.shortcutTargets
+        updateRows([previous, state.highlightedTableRow].compactMap { $0 }, animated: true, shortcuts: shortcuts)
+        header.setShortcutGlyphs(pull: shortcuts.pull == .header, push: shortcuts.push == .header)
         renderInstruction()
     }
 
@@ -314,6 +317,8 @@ final class BranchPickerContainerView: NSView {
 
     private func renderChrome() {
         header.configure(state.headerText, fetch: state.fetchText(now: now()))
+        let shortcuts = state.shortcutTargets
+        header.setShortcutGlyphs(pull: shortcuts.pull == .header, push: shortcuts.push == .header)
         tabBar.configure(selected: state.tab, isMergeAvailable: state.isMergeAvailable)
         newBranchRow.isEnabled = !state.snapshot.isSwitchingBranch
         wireKeyViewLoop()
@@ -541,8 +546,10 @@ extension BranchPickerContainerView {
     /// Sets `cell`'s highlight and its Pull and Push, Publish, or Delete from the current
     /// snapshot. The buttons show on the highlighted row, and wherever one runs, in the
     /// Switch tab only. `animated` lets an on-screen cell ease its pills in or out as the
-    /// highlight moves.
-    func configureHighlightAndButtons(of cell: BranchPickerRowView, row: Int, animated: Bool) {
+    /// highlight moves. `shortcuts` decides which pills show their key.
+    func configureHighlightAndButtons(
+        of cell: BranchPickerRowView, row: Int, animated: Bool, shortcuts: SyncShortcutTargets
+    ) {
         let isHighlighted = row == state.highlightedTableRow
         cell.isHighlighted = isHighlighted
         guard state.tab == .switchBranch, let buttons = state.syncButtons(forTableRow: row),
@@ -573,16 +580,17 @@ extension BranchPickerContainerView {
                 self?.onDelete(branch, self?.window)
                 self?.returnFocusToSearchField()
             })
+        view.setShortcutGlyphs(pull: shortcuts.pull == .row(tableRow: row), push: shortcuts.push == .row(tableRow: row))
         cell.syncButtons = view
         cell.showSyncButtons(view.shouldShow, animated: animated)
     }
 
     /// Re-configures whichever of `rows` have a cell on screen.
-    private func updateRows(_ rows: some Sequence<Int>, animated: Bool) {
+    private func updateRows(_ rows: some Sequence<Int>, animated: Bool, shortcuts: SyncShortcutTargets) {
         for row in rows where row >= 0 && row < tableView.numberOfRows {
             guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? BranchPickerRowView
             else { continue }
-            configureHighlightAndButtons(of: cell, row: row, animated: animated)
+            configureHighlightAndButtons(of: cell, row: row, animated: animated, shortcuts: shortcuts)
         }
     }
 }

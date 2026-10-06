@@ -588,6 +588,10 @@ private func mainTracking(ahead: Int = 0, behind: Int = 2, remote: String = "ori
 private let featureBehind = localBranch(
     "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 0, behind: 2)))
 
+/// Ahead of its upstream and not checked out, so a push on it is allowed.
+private let featureAhead = localBranch(
+    "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 2, behind: 0)))
+
 /// Pulling and pushing branches from the branch picker's rows.
 @MainActor
 struct WindowStateSyncTests {
@@ -715,6 +719,34 @@ struct WindowStateSyncTests {
         await repo.client.hold(.switchBranch, false)
         await repo.client.release(.switchBranch)
         await switching.value
+    }
+
+    @Test func syncIsRefusedWhileACommitRuns() async {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: [changedFile("a.swift", area: .staged)]) { client in
+            await client.set(localBranches: mainTracking(ahead: 0, behind: 2) + [featureAhead])
+            await client.set(remoteNames: ["origin"])
+        }
+        #expect(await eventually { await state.branchReadStatus == .loaded })
+        state.commitMessage = "Add the picker"
+        await repo.client.hold(.actions)
+        let committing = Task { await state.commit() }
+        #expect(await eventually { await repo.client.heldCount(.actions) == 1 })
+        #expect(state.branchPickerSnapshot.isCommitting)
+
+        await state.pull(branch: "main")
+        await state.push(branch: "feature")
+        #expect(await repo.client.pullCalls == 0)
+        #expect(await repo.client.pushCalls.isEmpty)
+        #expect(state.activeSync == nil)
+
+        await repo.client.hold(.actions, false)
+        await repo.client.release(.actions)
+        await committing.value
+        #expect(!state.branchPickerSnapshot.isCommitting)
+        await state.pull(branch: "main")
+        #expect(await repo.client.pullCalls == 1)
     }
 
     /// The pull is a repository write like any other: it waits its turn behind one that

@@ -27,7 +27,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
                 // Every Merge row keeps the room, so the right edges line up; only the
                 // highlight shows it, and the current row never takes the highlight.
                 hasChevron: state.tab == .merge)
-            configureHighlightAndButtons(of: cell, row: row, animated: false)
+            configureHighlightAndButtons(of: cell, row: row, animated: false, shortcuts: state.shortcutTargets)
             // No callback on a row that cannot be activated: the action must not be offered.
             guard state.canActivate(tableRow: row) else {
                 cell.onActivate = nil
@@ -78,11 +78,17 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
 /// Key equivalents the popover answers before the main menu.
 extension BranchPickerContainerView {
-    /// ⌘R fetches, ⌘N opens New Branch, ⌘1 and ⌘2 pick a tab, and ⌘C copies the
-    /// highlighted branch's name. They are taken whichever view has focus, so the main
-    /// menu only gets them once the popover closes.
+    /// ⌘R fetches, ⌘N opens New Branch, ⌘1 and ⌘2 pick a tab, ⌘C copies the highlighted
+    /// branch's name, and ⌘P and ⇧⌘P push and pull. They are taken whichever view has
+    /// focus, so the main menu only gets them once the popover closes.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        let hasSyncShortcutModifiers = modifiers == .command || modifiers == [.command, .shift]
+        if hasSyncShortcutModifiers, event.charactersIgnoringModifiers?.lowercased() == "p" {
+            pressSyncShortcut(modifiers.contains(.shift) ? .pull : .push)
+            // Consume unavailable shortcuts too, so the main menu cannot act on another branch.
+            return true
+        }
         guard modifiers == .command else { return super.performKeyEquivalent(with: event) }
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "r": onFetch()

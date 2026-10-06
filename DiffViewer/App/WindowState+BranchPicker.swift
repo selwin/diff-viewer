@@ -53,7 +53,7 @@ extension WindowState {
     var branchPickerSnapshot: BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: branchReadStatus,
-            isSwitchingBranch: isSwitchingBranch, fetchStatus: fetchStatus,
+            isSwitchingBranch: isSwitchingBranch, isCommitting: isCommitting, fetchStatus: fetchStatus,
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
             remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches)

@@ -101,6 +101,24 @@ struct CurrentBranchSyncPresentation: Equatable {
 
     var isPublish: Bool { buttons.pushOperation == .publish }
 
+    /// What the Push slot does when pressed. A publish with several remotes has no one
+    /// action, so the reader picks the remote.
+    enum PushAction: Equatable {
+        case push
+        case publish(remote: String)
+        case chooseRemote(remotes: [PublishMenuItem])
+    }
+
+    /// Nil unless Push is enabled.
+    var pushAction: PushAction? {
+        guard buttons.push == .enabled else { return nil }
+        switch buttons.publish {
+        case nil: return isPublish ? nil : .push
+        case let .remote(remote): return .publish(remote: remote)
+        case let .menu(items): return .chooseRemote(remotes: items)
+        }
+    }
+
     var showsSegments: Bool { buttons.pull != .hidden || buttons.push != .hidden }
 
     /// Commits a pull would take, or nil when there are none to show. Nil while running
