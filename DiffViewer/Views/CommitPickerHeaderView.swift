@@ -27,8 +27,8 @@ final class CommitPickerHeaderView: PickerHeaderView {
     }
 }
 
-/// The dot, the short hash and the copy button after the subtitle's text, which never
-/// truncate.
+/// The dot, short hash and copy button after the subtitle. The subtitle truncates; these
+/// never do.
 private final class CommitHashAccessoryView: NSView {
     private static let hashFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 

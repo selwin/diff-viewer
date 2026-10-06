@@ -20,7 +20,7 @@ enum PickerMetrics {
             ? NSColor(srgbRed: 0.165, green: 0.165, blue: 0.173, alpha: 1)
             : NSColor(srgbRed: 0.969, green: 0.969, blue: 0.976, alpha: 1)
     }
-    /// Below the header, a shade lighter than `popoverBackground`.
+    /// Behind the list, so the header stands apart from it.
     static let listBackground = NSColor.controlBackgroundColor
 
     // MARK: Rows
@@ -57,7 +57,7 @@ enum PickerMetrics {
         static let topPadding: CGFloat = 16
         /// Above the hairline.
         static let bottomPadding: CGFloat = 14
-        /// Lines the title up with the rows' icons and text below.
+        /// Lines the title up with the start of the rows' content.
         static let sidePadding: CGFloat = rowInset + contentInset
         static let dividerHeight: CGFloat = 1
         /// Between the title and the subtitle.

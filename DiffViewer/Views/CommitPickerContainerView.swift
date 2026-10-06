@@ -116,11 +116,12 @@ final class CommitPickerContainerView: NSView {
 
     override var isFlipped: Bool { true }
 
-    /// The list's lighter fill below the header, which sits on the popover's own surface.
+    /// Fills below the header with the list's colour; the header shows the popover's own.
     override func draw(_ dirtyRect: NSRect) {
         PickerMetrics.listBackground.setFill()
         NSRect(x: 0, y: header.frame.maxY, width: bounds.width, height: bounds.height - header.frame.maxY).fill()
     }
+
     override var acceptsFirstResponder: Bool { false }
 
     // MARK: Snapshots

@@ -1,13 +1,11 @@
 import AppKit
 
-/// The header both pickers share: a big title over a quiet subtitle, up to three accessory
-/// views, and a hairline along the bottom. It draws no background, so the header and the
-/// list share the popover's one surface.
+/// The header both pickers share: a title over a subtitle, up to three accessory views,
+/// and a hairline along the bottom. It draws no background, so the popover's shows.
 ///
-/// Accessories are laid out by their visible shape (`alignmentRect`), so a view that
-/// carries an invisible margin for its focus ring overrides `alignmentRectInsets` and
-/// needs no allowance here. Each must report its size through `intrinsicContentSize`.
-/// Owners hide an accessory with `isHidden`.
+/// Accessories report their size through `intrinsicContentSize` and are placed by their
+/// alignment rect, so a focus ring margin set in `alignmentRectInsets` doesn't count toward
+/// spacing. Owners hide an accessory with `isHidden`.
 class PickerHeaderView: NSView {
     private typealias Metrics = PickerMetrics.Header
 
@@ -154,7 +152,6 @@ class PickerHeaderView: NSView {
         }
     }
 
-    /// With no subtitle accessory the subtitle spans its space whatever it says.
     private func layoutSubtitle(y: CGFloat, width: CGFloat) {
         var subtitleWidth = width
         let accessory = subtitleAccessory.flatMap { $0.isHidden ? nil : $0 }

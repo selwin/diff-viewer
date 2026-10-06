@@ -56,7 +56,7 @@ final class BranchPickerHeaderView: PickerHeaderView {
         needsLayout = true
     }
 
-    /// Redraws only the fetch text.
+    /// Updates only the subtitle, as the fetch time ages.
     func configureFetch(_ fetch: BranchPickerFetchText?) {
         subtitle = text.detail(fetch: fetch)
         subtitleToolTip = fetch?.tooltip
