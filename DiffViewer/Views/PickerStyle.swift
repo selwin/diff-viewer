@@ -28,8 +28,6 @@ enum PickerStyle {
     static let footerHeight: CGFloat = 38
     /// Between a row's name, its status and its pills.
     static let trailingGap: CGFloat = 8
-    /// Room around a raised control's shape for its shadow.
-    static let shadowMargin: CGFloat = 3
 
     // MARK: Fonts
 
@@ -92,7 +90,7 @@ enum PickerStyle {
     // MARK: Drawing
 
     /// Fills `path` as a raised control: a soft shadow under it, a lit top edge and a rim.
-    /// The view needs `shadowMargin` of room around the path for the shadow.
+    /// The view needs a few points of room around the path for the shadow.
     static func drawRaised(_ path: NSBezierPath, fill: NSColor) {
         NSGraphicsContext.saveGraphicsState()
         let shadow = NSShadow()

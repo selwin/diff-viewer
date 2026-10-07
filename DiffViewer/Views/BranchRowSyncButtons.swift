@@ -3,8 +3,8 @@ import AppKit
 /// A branch's Pull and Push buttons, Pull on the left, where Publish takes Push's place on
 /// a branch that tracks nothing and Delete takes it on a branch whose upstream is gone.
 /// Rows show them as neutral pills on the highlighted row; the header shows the current
-/// branch's as raised capsules. In the header, Pull takes the accent text when it shows,
-/// since a diverged branch must pull before it can push; otherwise Push does. A running
+/// branch's as raised capsules. Pull takes the accent text when it shows, since a
+/// diverged branch must pull before it can push; otherwise Push does. A running
 /// button keeps its place and its width: the spinner replaces the title rather than the
 /// button. The callbacks carry
 /// the branch these were configured for, never a row index, so a recycled cell cannot act
@@ -168,8 +168,8 @@ final class BranchRowSyncButtons: NSView {
         deleteButton.apply(buttons.delete, title: "Delete…")
         // Rows keep their pills neutral; only the header's primary button is blue.
         let pullShows = buttons.pull != .hidden
-        pullButton.look = style == .header && pullShows ? .primary : .plain
-        pushButton.look = style == .header && !pullShows ? .primary : .plain
+        pullButton.look = pullShows ? .primary : .plain
+        pushButton.look = pullShows ? .plain : .primary
         let all = [buttons.pull, buttons.push, buttons.delete]
         shouldShow = (isRevealed || all.contains(.running)) && !all.allSatisfy { $0 == .hidden }
         invalidateIntrinsicContentSize()

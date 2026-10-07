@@ -2,8 +2,9 @@ import AppKit
 
 /// The branch picker's AppKit root, laid out top-down by hand on the popover's glass: the
 /// header, the Switch/Merge segmented control, the search field, the branch table or its
-/// empty state, and the New Branch… footer. Owns the `BranchPickerState` and applies each
-/// snapshot, query and tab to the table as the state directs.
+/// empty state, and the New Branch… button floating over the list's foot. Owns the
+/// `BranchPickerState` and applies each snapshot, query and tab to the table as the state
+/// directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
     private static let tabControlWidth: CGFloat = 200
@@ -14,6 +15,8 @@ final class BranchPickerContainerView: NSView {
     /// Above and below the footer's capsule.
     private static let footerTopGap: CGFloat = 4
     private static let footerBottomGap: CGFloat = 14
+    /// The list runs under the footer; this much of its foot is covered.
+    private static let footerInset = footerTopGap + PickerStyle.footerHeight + footerBottomGap
 
     private(set) var state: BranchPickerState
 
@@ -79,6 +82,7 @@ final class BranchPickerContainerView: NSView {
         configureHeader()
         observeDisplayOptions()
         newBranchRow.onActivate = { [weak self] in self?.createBranch() }
+        newBranchRow.onScroll = { [weak self] event in self?.scrollView.scrollWheel(with: event) }
         newBranchRow.onHighlightRequested = { [weak self] in
             guard let self, newBranchRow.isEnabled else { return }
             if self.state.highlightNewBranch() { syncSelection() }
@@ -147,7 +151,8 @@ final class BranchPickerContainerView: NSView {
         // Hover is the highlight, as in a menu. Rows moving under a still pointer (a
         // keyboard move that scrolled) must not take it back from the keyboard.
         tableView.onHoverChange = { [weak self] _, current, pointerMoved in
-            guard let self, pointerMoved, let current else { return }
+            // The rows under the New Branch… capsule are hidden; it takes the hover there.
+            guard let self, pointerMoved, let current, !newBranchRow.isUnderPointer else { return }
             // Also sent for a move within the hovered row; only an actual change redraws.
             if state.highlight(tableRow: current) { syncSelection() }
         }
@@ -155,6 +160,9 @@ final class BranchPickerContainerView: NSView {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.automaticallyAdjustsContentInsets = false
+        // Lets the last row scroll clear of the footer, and keeps `scrollRowToVisible` above
+        // it. The scroller follows content insets, so it stops above the footer too.
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: Self.footerInset, right: 0)
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
@@ -373,11 +381,12 @@ final class BranchPickerContainerView: NSView {
             width: searchBackground.frame.width - 12, height: fieldHeight)
         let footerTop = height - Self.footerBottomGap - PickerStyle.footerHeight
         let tableTop = searchBackground.frame.maxY + Self.listTopGap
-        let tableBottom = footerTop - Self.footerTopGap
-        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(tableBottom - tableTop, 0))
-        emptyState.frame = scrollView.frame
-        // The footer's frame carries room for its capsule's shadow.
-        let margin = PickerStyle.shadowMargin
+        scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop, 0))
+        // Centred on what the footer leaves visible.
+        emptyState.frame = NSRect(
+            x: 0, y: tableTop, width: width, height: max(footerTop - Self.footerTopGap - tableTop, 0))
+        // The footer's frame carries room for its glass's shadow.
+        let margin = BranchPickerNewBranchRow.glassMargin
         newBranchRow.frame = NSRect(
             x: inset - margin, y: footerTop - margin, width: width - (inset - margin) * 2,
             height: PickerStyle.footerHeight + margin * 2)
@@ -389,7 +398,7 @@ final class BranchPickerContainerView: NSView {
     /// Shows the highlighted row after keyboard navigation. The list opens at the top on
     /// its first row, so there is no initial reveal.
     private func revealHighlight() {
-        // The list stays where it is: New Branch… sits below it.
+        // The list stays where it is: New Branch… floats over its foot.
         guard !state.isNewBranchHighlighted else { return }
         if let row = state.highlightedTableRow {
             tableView.scrollRowToVisible(row)
@@ -408,8 +417,7 @@ final class BranchPickerContainerView: NSView {
         }
         let chrome =
             header.fittingHeight(width: PickerStyle.width) + tabControl.intrinsicContentSize.height
-            + Self.searchTopGap + PickerStyle.searchHeight + Self.listTopGap + Self.footerTopGap
-            + PickerStyle.footerHeight + Self.footerBottomGap
+            + Self.searchTopGap + PickerStyle.searchHeight + Self.listTopGap + Self.footerInset
         let listHeight = max(min(list, PickerStyle.maximumListHeight), PickerStyle.minimumListHeight)
         let height = (chrome + listHeight).rounded(.up)
         guard height > preferredHeight else { return }
