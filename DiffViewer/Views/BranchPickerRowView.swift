@@ -371,13 +371,15 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         let final = trailingLayout(for: shown)
         // Pills fading out keep the width they had.
         if shown.syncButtons { syncButtons?.reservesShortcutWidth = final.reservesShortcutWidth }
-        // While a fade runs, the name takes the narrower of its two layouts, so it never
-        // runs under what is still on screen.
-        var nameLayout = final
-        if let fadingFrom {
-            let start = trailingLayout(for: fadingFrom)
-            if start.nameWidth < final.nameWidth { nameLayout = start }
+        // The name takes the narrowest room of every state the line can show, so it never
+        // runs under a fade and never re-truncates as the highlight swaps status for pills.
+        var states = [shown] + [fadingFrom].compactMap { $0 }
+        if syncButtons != nil {
+            // At rest, and highlighted.
+            states.append(TrailingState(syncButtons: false, status: true))
+            states.append(TrailingState(syncButtons: true, status: false))
         }
+        let nameLayout = states.map(trailingLayout(for:)).min { $0.nameWidth < $1.nameWidth } ?? final
         layoutText(nameLayout)
         let frames = trailingFrames(for: shown, layout: final)
         // A running fade already ends on these frames; setting them here would snap it.

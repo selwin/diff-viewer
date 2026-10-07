@@ -121,7 +121,7 @@ struct BranchPickerStateTests {
             ])
         #expect(
             statuses.map(\.text) == [
-                "Not published", "Upstream not fetched", "Upstream gone", "", "2 ahead · 3 behind", "New", "",
+                "Not published", "Upstream not fetched", "Remote gone", "", "2 ahead · 3 behind", "New", "",
             ])
         #expect(statuses.map(\.isAccent) == [false, false, false, false, false, true, false])
     }
@@ -700,7 +700,7 @@ struct BranchPickerStateTests {
         #expect(picker.trailingLabel(forTableRow: current) == BranchRowLabel(text: "Not published", style: .secondary))
         #expect(
             try picker.trailingLabel(forTableRow: index(.local(name: "gone"), in: picker))
-                == BranchRowLabel(text: "Upstream gone", style: .upstreamGone))
+                == BranchRowLabel(text: "Remote gone", style: .upstreamGone))
         picker.setTab(.merge)
         #expect(try picker.trailingLabel(forTableRow: index(.local(name: "feature"), in: picker)) == nil)
     }
@@ -847,7 +847,7 @@ struct BranchPickerStateTests {
             ),
             (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .gone))]), "main",
-                ["Upstream gone"]
+                ["Remote gone"]
             ),
             (named([localBranch("main", upstream: upstream("origin/main"))]), "main", ["Up to date"]),
             (

@@ -37,7 +37,7 @@ final class BranchRowStatusView: NSView {
             }
         label.font = style == .upstreamGone ? Self.upstreamGoneFont : PickerStyle.rowStatusFont
         icon.isHidden = style != .upstreamGone
-        toolTip = style == .upstreamGone ? "Upstream branch was deleted" : nil
+        toolTip = style == .upstreamGone ? "Remote branch was deleted" : nil
         needsLayout = true
     }
 

@@ -133,7 +133,7 @@ enum BranchRowStatus: Equatable {
         case let .counts(ahead, behind): UpstreamTracking.counts(ahead: ahead, behind: behind).summary ?? ""
         case .notPublished: "Not published"
         case .upstreamNotFetched: "Upstream not fetched"
-        case .upstreamGone: "Upstream gone"
+        case .upstreamGone: "Remote gone"
         case .new: "New"
         }
     }
