@@ -34,6 +34,14 @@ final class AppServices {
                 createWindow: { root in opener.action?(value: root) },
                 focusWindow: { id in windows[id]?.makeKeyAndOrderFront(nil) },
                 presentError: WindowCoordinator.presentError,
+                holdWindow: { windows.hold($0) },
+                revealWindows: { windows.reveal(ordered: $0, selected: $1) },
+                isWindowVisible: { windows[$0].map { $0.occlusionState.contains(.visible) } },
+                schedule: { delay, action in
+                    let (seconds, attoseconds) = delay.components
+                    let interval = Double(seconds) + Double(attoseconds) * 1e-18
+                    DispatchQueue.main.asyncAfter(deadline: .now() + interval) { action() }
+                },
                 windowIDsInTabOrder: { windows.windowIDsInTabOrder($0) }
             )
         )
@@ -89,6 +97,36 @@ final class NativeWindowRegistry {
 
     func id(of window: NSWindow) -> WindowID? {
         windows.first { $0.value === window }?.key
+    }
+
+    /// Keeps a restoration window invisible, unclickable, and out of tab groups until
+    /// `reveal`.
+    func hold(_ id: WindowID) {
+        guard let window = windows[id] else { return }
+        window.alphaValue = 0
+        window.tabbingMode = .disallowed
+        window.ignoresMouseEvents = true
+    }
+
+    /// Groups the transparent windows, selects the active tab, then reveals them.
+    /// Returns the selected window's id.
+    func reveal(ordered ids: [WindowID], selected: WindowID?) -> WindowID? {
+        let live = ids.compactMap { id in windows[id].map { (id: id, window: $0) } }
+        guard let first = live.first else { return nil }
+        let (selectedID, selectedWindow) = live.first { $0.id == selected } ?? first
+        let group = live.map(\.window)
+        // Enable tabbing before explicitly assembling the group.
+        for window in group { window.tabbingMode = .preferred }
+        for (previous, next) in zip(group, group.dropFirst()) {
+            previous.addTabbedWindow(next, ordered: .above)
+        }
+        selectedWindow.tabGroup?.selectedWindow = selectedWindow
+        for window in group {
+            window.ignoresMouseEvents = false
+            window.alphaValue = 1
+        }
+        selectedWindow.makeKeyAndOrderFront(nil)
+        return selectedID
     }
 
     /// The supplied IDs with each tab group's windows in tab-strip order.

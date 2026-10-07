@@ -48,7 +48,6 @@ enum PickerStyle {
     /// the same whites composited over #F7F7F9 (light) or #2A2A2C (dark).
     enum Raised {
         case rest
-        case highlight
         case hover
         case pressed
     }
@@ -56,15 +55,12 @@ enum PickerStyle {
     static func raisedFill(_ state: Raised) -> NSColor {
         switch state {
         case .rest: raisedRest
-        case .highlight: raisedHighlight
         case .hover: raisedHover
         case .pressed: raisedPressed
         }
     }
 
     private static let raisedRest = raised(light: 0.70, dark: 0.10, opaqueLight: 0xFDFDFD, opaqueDark: 0x3F3F41)
-    private static let raisedHighlight = raised(
-        light: 0.85, dark: 0.16, opaqueLight: 0xFEFEFE, opaqueDark: 0x4C4C4E)
     private static let raisedHover = raised(light: 1, dark: 0.20, opaqueLight: 0xFFFFFF, opaqueDark: 0x555556)
     /// Lighter than rest in light mode, so a press reads greyer on the light panel.
     private static let raisedPressed = raised(light: 0.55, dark: 0.26, opaqueLight: 0xFBFBFC, opaqueDark: 0x616163)
@@ -79,6 +75,9 @@ enum PickerStyle {
     static let raisedShadow = dynamic(light: NSColor(white: 0, alpha: 0.10), dark: NSColor(white: 0, alpha: 0.30))
 
     static let controlFill = dynamic(light: rgb(118, 118, 128, 0.12), dark: rgb(118, 118, 128, 0.24))
+    /// A list row's highlight: grey in light mode, since a white fill vanishes on the light
+    /// glass; a white lift in dark mode, where it shows.
+    static let rowHighlight = dynamic(light: rgb(118, 118, 128, 0.14), dark: NSColor(white: 1, alpha: 0.16))
     static let tileFill = controlFill
     static let accent = dynamic(light: rgb(10, 122, 255), dark: rgb(10, 132, 255))
     static let accentTint = dynamic(light: rgb(10, 122, 255, 0.14), dark: rgb(10, 132, 255, 0.24))

@@ -51,9 +51,11 @@ final class RecordingPrefetcher: Prefetching {
     }
 
     private(set) var events: [Event] = []
+    private(set) var prefetchedRepositories: [RepositoryRoot] = []
 
     func prefetch(files: [ChangedFile], repository: RepositoryRoot, client: any RepoClient) {
         events.append(.prefetch(files.map(\.id)))
+        prefetchedRepositories.append(repository)
     }
     func cancel() { events.append(.cancel) }
 }
@@ -61,9 +63,20 @@ final class RecordingPrefetcher: Prefetching {
 /// What the coordinator asked the app to present.
 @MainActor
 final class PresentationLog {
+    struct Reveal: Equatable {
+        let ordered: [WindowID]
+        let selected: WindowID?
+    }
+
     var created: [RepositoryRoot] = []
     var focused: [WindowID] = []
     var errors: [String] = []
+    var held: [WindowID] = []
+    var reveals: [Reveal] = []
+    /// What `isWindowVisible` reports per window; a missing entry models a gone window.
+    var windowVisible: [WindowID: Bool] = [:]
+    /// Scheduled callbacks not yet fired.
+    var scheduled: [(delay: Duration, action: @MainActor () -> Void)] = []
     /// The tab-strip order the app reports; nil leaves the supplied order.
     var tabOrder: [WindowID]?
     var tabOrderRequests = 0
@@ -120,6 +133,13 @@ final class CoordinatorHarness {
                 createWindow: { log.created.append($0) },
                 focusWindow: { log.focused.append($0) },
                 presentError: { log.errors.append($0) },
+                holdWindow: { log.held.append($0) },
+                revealWindows: { ordered, selected in
+                    log.reveals.append(PresentationLog.Reveal(ordered: ordered, selected: selected))
+                    return selected ?? ordered.first
+                },
+                isWindowVisible: { log.windowVisible[$0] },
+                schedule: { log.scheduled.append((delay: $0, action: $1)) },
                 windowIDsInTabOrder: { ids in
                     log.tabOrderRequests += 1
                     guard let order = log.tabOrder else { return ids }
@@ -159,6 +179,17 @@ final class CoordinatorHarness {
         registry.entries[entry.0.url] = entry
         return url
     }
+
+    /// Fires the callbacks scheduled with `delay`, as the main queue would.
+    func fireScheduled(after delay: Duration) {
+        let due = log.scheduled.filter { $0.delay == delay }
+        log.scheduled.removeAll { $0.delay == delay }
+        for entry in due { entry.action() }
+    }
+
+    /// The reveal a settled restoration schedules.
+    func fireReveal() { fireScheduled(after: .zero) }
+    func fireRevealTimeout() { fireScheduled(after: WindowCoordinator.restorationRevealTimeout) }
 
     func running() async -> Bool {
         await eventually { await self.coordinator.phase == .running }
@@ -872,7 +903,7 @@ struct WindowCoordinatorTests {
         #expect(h.recent.isEmpty)
     }
 
-    @Test func activeRootIsFocusedAfterSettle() async {
+    @Test func activeRootIsSelectedAfterReveal() async {
         let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
         let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
         let a = h.repo("A", files: filesA)
@@ -882,9 +913,183 @@ struct WindowCoordinatorTests {
         #expect(await eventually { await h.log.created == [h.root(b)] })
         let wb = h.registerCreated(h.root(b))
         #expect(h.coordinator.phase == .running)
-        #expect(h.log.focused.last == wb.id)
+        h.fireReveal()
+        #expect(h.log.reveals.last?.selected == wb.id)
         #expect(h.coordinator.lastActiveRepositoryRoot == h.root(b))
         #expect(h.savedActive == h.root(b))
+    }
+
+    // MARK: Held restoration
+
+    /// Restores saved A, B, and `extra`, with `active` as the saved active root, until
+    /// the batch settles and before its reveal fires.
+    private func settledHeldRestore(
+        active: RepositoryRoot? = CoordinatorHarness.savedRoot("B"), extra: [RepositoryRoot] = []
+    ) async -> (h: CoordinatorHarness, wa: WindowState, wb: WindowState) {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")] + extra
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: active)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let wa = h.makeWindow()
+        #expect(await eventually { await wa.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        let wb = h.registerCreated(h.root(b))
+        #expect(await h.running())
+        return (h, wa, wb)
+    }
+
+    @Test func heldWindowsAreRevealedOnceInSavedOrderWithTheActiveTabSelected() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let wa = h.makeWindow()
+        h.coordinator.windowDidBecomeKey(wa.id)
+        #expect(await eventually { await wa.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        let wb = h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .running)
+        #expect(h.log.held == [wa.id, wb.id])
+        #expect(!wa.isVisible && !wb.isVisible)
+        #expect(h.log.reveals.isEmpty, "the reveal waits for the registration to return")
+        #expect(h.prefetcher.prefetchedRepositories.isEmpty, "the key window is held")
+
+        h.fireReveal()
+        #expect(h.log.reveals == [PresentationLog.Reveal(ordered: [wa.id, wb.id], selected: wb.id)])
+        h.fireRevealTimeout()
+        #expect(h.log.reveals.count == 1, "the timeout after a reveal does nothing")
+        h.coordinator.windowDidBecomeKey(wb.id)
+        #expect(h.prefetcher.prefetchedRepositories.first == h.root(b))
+        #expect(h.savedRoots == [h.root(a), h.root(b)])
+        #expect(h.savedActive == h.root(b))
+    }
+
+    @Test func timedOutRevealIncludesAWindowThatHasNotRegistered() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let wa = h.makeWindow()
+        #expect(await eventually { await wa.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        let late = h.makeState()
+        h.coordinator.windowDidAttach(late.id, sceneRoot: h.root(b))
+        h.coordinator.windowOcclusionChanged(late.id, visible: false)
+
+        h.fireRevealTimeout()
+        #expect(h.log.reveals.map(\.ordered) == [[wa.id, late.id]])
+        h.coordinator.windowOcclusionChanged(late.id, visible: true)
+        h.coordinator.register(late, sceneRoot: h.root(b))
+        #expect(late.isVisible)
+
+        let after = h.makeState()
+        h.coordinator.windowDidAttach(after.id, sceneRoot: nil)
+        #expect(!h.log.held.contains(after.id), "windows attached after the reveal are not held")
+    }
+
+    @Test func timedOutRevealSelectsTheSavedActiveWindow() async {
+        let saved = ["A", "B", "C"].map(CoordinatorHarness.savedRoot)
+        let h = CoordinatorHarness(savedRoots: saved, savedActive: saved[1])
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let c = h.repo("C")
+        await h.gate.hold(c)
+        let wa = h.makeWindow()
+        #expect(await eventually { await wa.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b)] })
+        #expect(await eventually { await h.gate.waitingURLs == [c] })
+        let wb = h.registerCreated(h.root(b))
+        #expect(h.coordinator.phase == .restoring, "C is still discovering")
+
+        h.fireRevealTimeout()
+        #expect(h.log.reveals == [PresentationLog.Reveal(ordered: [wa.id, wb.id], selected: wb.id)])
+
+        // Let the pending restoration finish.
+        await h.gate.release(c)
+        #expect(await eventually { await h.log.created == [h.root(b), h.root(c)] })
+        _ = h.registerCreated(h.root(c))
+    }
+
+    @Test func timedOutRevealKeepsSavedOrderAfterOutOfOrderRegistration() async {
+        let saved = ["A", "B", "C"].map(CoordinatorHarness.savedRoot)
+        let h = CoordinatorHarness(savedRoots: saved)
+        let a = h.repo("A", files: filesA)
+        let b = h.repo("B", files: filesB)
+        let c = h.repo("C")
+        let wa = h.makeWindow()
+        #expect(await eventually { await wa.repositoryRoot == h.root(a) })
+        #expect(await eventually { await h.log.created == [h.root(b), h.root(c)] })
+        let pendingB = h.makeState()
+        h.coordinator.windowDidAttach(pendingB.id, sceneRoot: h.root(b))
+        let wc = h.registerCreated(h.root(c))
+
+        h.fireRevealTimeout()
+        #expect(h.log.reveals.map(\.ordered) == [[wa.id, pendingB.id, wc.id]])
+    }
+
+    @Test func revealReconcilesVisibilityWithWhatTheAppReports() async {
+        let (h, wa, wb) = await settledHeldRestore()
+        let windowWithoutVisibilityReport = h.makeWindow()
+        h.coordinator.windowOcclusionChanged(windowWithoutVisibilityReport.id, visible: true)
+        h.log.windowVisible = [wb.id: true, wa.id: false]
+
+        h.fireReveal()
+        #expect(wb.isVisible)
+        #expect(!wa.isVisible)
+        #expect(windowWithoutVisibilityReport.isVisible, "no report leaves the recorded value")
+    }
+
+    @Test func revealPrefetchesASelectedWindowThatIsAlreadyKey() async {
+        let (h, _, wb) = await settledHeldRestore()
+        h.coordinator.windowDidBecomeKey(wb.id)
+        #expect(h.prefetcher.prefetchedRepositories.isEmpty)
+
+        h.fireReveal()
+        #expect(h.coordinator.lastActiveRepositoryRoot == wb.repositoryRoot)
+        #expect(h.prefetcher.prefetchedRepositories.first == wb.repositoryRoot)
+    }
+
+    @Test func missingSavedActiveRootFallsBackToTheFirstRestoredRoot() async {
+        let (h, wa, _) = await settledHeldRestore(
+            active: CoordinatorHarness.savedRoot("gone"), extra: [CoordinatorHarness.savedRoot("gone")])
+        #expect(h.savedActive == wa.repositoryRoot)
+        h.fireReveal()
+        #expect(h.log.reveals.map(\.selected) == [wa.id])
+    }
+
+    @Test func activeWindowClosedBeforeTheRevealSelectsTheFirst() async {
+        let (h, wa, wb) = await settledHeldRestore()
+        h.coordinator.windowWillClose(wb.id, sceneRoot: wb.repositoryRoot)
+
+        h.fireReveal()
+        #expect(h.log.reveals == [PresentationLog.Reveal(ordered: [wa.id], selected: wa.id)])
+        #expect(h.coordinator.lastActiveRepositoryRoot == wa.repositoryRoot)
+        #expect(h.savedActive == wa.repositoryRoot)
+    }
+
+    @Test func launchWithFinderURLsRevealsAtOnce() async {
+        let saved = [CoordinatorHarness.savedRoot("A"), CoordinatorHarness.savedRoot("B")]
+        let h = CoordinatorHarness(savedRoots: saved, launchFinished: false)
+        let c = h.repo("C")
+        let w1 = h.makeWindow()
+        h.coordinator.openFromApp(c)
+        h.coordinator.applicationDidFinishLaunching()
+        #expect(h.log.held == [w1.id])
+        #expect(h.log.reveals == [PresentationLog.Reveal(ordered: [w1.id], selected: w1.id)])
+        #expect(w1.isVisible)
+    }
+
+    @Test func fewerThanTwoSavedRepositoriesHoldNothing() async {
+        let a = CoordinatorHarness.savedRoot("A")
+        for saved in [[], [a], [a, a]] {
+            let h = CoordinatorHarness(savedRoots: saved)
+            _ = h.repo("A", files: filesA)
+            let w1 = h.makeWindow()
+            #expect(await h.running())
+            #expect(h.log.held.isEmpty)
+            #expect(h.log.scheduled.isEmpty)
+            #expect(w1.isVisible)
+        }
     }
 
     @Test func duplicateRequestForAPendingRestoredRootKeepsRestorationActive() async {
