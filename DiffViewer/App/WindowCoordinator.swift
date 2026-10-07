@@ -1,3 +1,6 @@
+// swiftlint:disable file_length
+// The restoration extension stays in this file so the session state it drives can
+// remain private; the length is the cost of that.
 import AppKit
 import Foundation
 
@@ -75,6 +78,13 @@ final class WindowCoordinator {
     /// Saved roots whose window the user closed during startup.
     private var restoreClosed: Set<RepositoryRoot> = []
     private var restoreStarted = false
+    /// Restoring several repositories keeps their windows transparent until the tab
+    /// group is assembled, so it appears once instead of growing a tab at a time.
+    private var isHoldingRestorationWindows = false
+    /// Held windows in attach order, registered or not.
+    private var heldWindowIDs: [WindowID] = []
+    /// A restoration that stalls must not leave its windows invisible.
+    static let restorationRevealTimeout: Duration = .seconds(2)
 
     init(
         preferences: Preferences,
@@ -93,6 +103,7 @@ final class WindowCoordinator {
             restoreList.append(root)
             if savedPaths[root] == nil { savedPaths[root] = path }
         }
+        isHoldingRestorationWindows = Set(restoreList).count > 1
         savedActivePath = defaults.string(forKey: SessionKeys.lastActive)
         restoreActive = savedActivePath.map { RepositoryRoot(path: $0) }
         preferences.onDiffSettingsChange = { [weak self] in
@@ -245,12 +256,14 @@ final class WindowCoordinator {
         rootIndex[root] = id
         sceneRootSetters[id]?(root)
         if purpose == .user { preferences.noteOpened(root) }
+        updateTitles()
+        // Defer active-window bookkeeping while this window is held.
+        guard !isHeld(id) else { return }
         // No key event will come for a window that is already key.
         if keyWindowID == id {
             lastActiveRepositoryRoot = root
             prefetch(for: id)
         }
-        updateTitles()
         persist()
     }
 
@@ -269,6 +282,13 @@ final class WindowCoordinator {
         if let sceneRoot, pendingCreates[sceneRoot] != nil {
             pendingCreates[sceneRoot]?.windowID = id
         }
+        if isHoldingRestorationWindows, !isHeld(id) {
+            heldWindowIDs.append(id)
+            hooks.holdWindow(id)
+            if heldWindowIDs.count == 1 {
+                hooks.schedule(Self.restorationRevealTimeout) { [weak self] in self?.revealHeldWindows() }
+            }
+        }
     }
 
     /// Registers a window's state. Idempotent by id; refused for a window that
@@ -284,8 +304,8 @@ final class WindowCoordinator {
         state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
             self?.refreshPublished(state, cause: cause, inputsChanged: inputsChanged)
         }
-        // Reconcile with notifications that arrived before registration.
-        if let visible = visibility[state.id] { state.isVisible = visible }
+        // Reconcile with notifications that arrived before registration, and with a hold.
+        state.isVisible = effectiveVisibility(state.id)
         state.isKey = keyWindowID == state.id
 
         if let sceneRoot, let pending = pendingCreates.removeValue(forKey: sceneRoot) {
@@ -321,6 +341,7 @@ final class WindowCoordinator {
         }
         if keyWindowID == id { windowDidResignKey(id) }
         visibility[id] = nil
+        heldWindowIDs.removeAll { $0 == id }
         closedBeforeRegistration.insert(id)
         let match = pendingCreates.first { $0.key == sceneRoot || $0.value.windowID == id }
         guard let (root, pending) = match else { return }
@@ -346,6 +367,7 @@ final class WindowCoordinator {
         }
         sceneRootSetters[id] = nil
         visibility[id] = nil
+        heldWindowIDs.removeAll { $0 == id }
         updateTitles()
         persist()
     }
@@ -358,11 +380,11 @@ final class WindowCoordinator {
         keyWindowID = id
         guard let window = windows[id] else { return }
         window.isKey = true
-        if let root = window.repositoryRoot {
-            lastActiveRepositoryRoot = root
-            prefetch(for: id)
-            persist()
-        }
+        // Defer active-window bookkeeping while this window is held.
+        guard !isHeld(id), let root = window.repositoryRoot else { return }
+        lastActiveRepositoryRoot = root
+        prefetch(for: id)
+        persist()
     }
 
     func windowDidResignKey(_ id: WindowID) {
@@ -373,7 +395,16 @@ final class WindowCoordinator {
 
     func windowOcclusionChanged(_ id: WindowID, visible: Bool) {
         visibility[id] = visible
-        windows[id]?.isVisible = visible
+        windows[id]?.isVisible = effectiveVisibility(id)
+    }
+
+    /// A held window counts as hidden whatever AppKit reports, so it starts no diff work.
+    private func effectiveVisibility(_ id: WindowID) -> Bool {
+        !isHeld(id) && (visibility[id] ?? true)
+    }
+
+    private func isHeld(_ id: WindowID) -> Bool {
+        heldWindowIDs.contains(id)
     }
 
     /// Cancels the queued prefetch, which only ever belongs to the key window.
@@ -383,9 +414,9 @@ final class WindowCoordinator {
     }
 
     private func prefetch(for id: WindowID) {
-        guard let window = windows[id], let client = window.session?.client, let root = window.repositoryRoot else {
-            return
-        }
+        guard !isHeld(id), let window = windows[id], let client = window.session?.client,
+            let root = window.repositoryRoot
+        else { return }
         prefetcher.prefetch(files: window.filesToWarm, repository: root, client: client)
     }
 
@@ -443,8 +474,20 @@ final class WindowCoordinator {
         }
     }
 
-    // MARK: - Restoration
+    // MARK: - Presentation defaults
 
+    static func presentError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Could not open repository"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+}
+
+// MARK: - Restoration
+
+extension WindowCoordinator {
     /// Runs once, as soon as a window has registered and launch has finished. The
     /// empty window that exists then (the launch window) is the adoption target for
     /// the first saved repository whether or not it is key yet. URLs the app was
@@ -460,6 +503,7 @@ final class WindowCoordinator {
             restoreList = []
             restoreActive = nil
             phase = .running
+            revealHeldWindows()
             for url in queued {
                 Task { await open(OpenRequest(url: url, origin: .window(id))) }
             }
@@ -474,8 +518,9 @@ final class WindowCoordinator {
             finishRestorationIfSettled()
             return
         }
-        // One at a time, in saved order: windows are presented in the order their
-        // opens complete, and the tab strip shows that order.
+        // One at a time, in saved order. Held windows are tabbed in that order when
+        // revealed; a held window starts no diff or highlight work, though adoption
+        // still refreshes its repository.
         let requests = restoreList.enumerated().map { index, root in
             OpenRequest(
                 url: URL(fileURLWithPath: savedPaths[root] ?? root.path, isDirectory: true),
@@ -517,6 +562,10 @@ final class WindowCoordinator {
     /// running, write the session once, and open the Finder URLs queued meanwhile.
     private func finishRestorationIfSettled() {
         guard phase == .restoring, restoreStarted, restoreOutstanding.isEmpty else { return }
+        if isHoldingRestorationWindows {
+            finishHeldRestoration()
+            return
+        }
         if let active = restoreActive, let id = rootIndex[active] {
             lastActiveRepositoryRoot = active
             hooks.focusWindow(id)
@@ -530,6 +579,27 @@ final class WindowCoordinator {
         }
         phase = .running
         persist()
+        openQueuedAppURLs()
+    }
+
+    /// Finishes a held restoration. The active root is chosen and written before the
+    /// reveal, so a quit in between keeps it.
+    private func finishHeldRestoration() {
+        let restored = openOrder.filter { rootIndex[$0] != nil }
+        if let active = restored.first(where: { $0 == restoreActive }) ?? restored.first {
+            lastActiveRepositoryRoot = active
+        }
+        phase = .running
+        persist()
+        // The batch settles inside the last restored window's registration; reveal
+        // once that has returned.
+        hooks.schedule(.zero) { [weak self] in
+            self?.revealHeldWindows()
+            self?.openQueuedAppURLs()
+        }
+    }
+
+    private func openQueuedAppURLs() {
         let queued = queuedAppURLs
         queuedAppURLs = []
         for url in queued {
@@ -537,14 +607,33 @@ final class WindowCoordinator {
         }
     }
 
-    // MARK: - Presentation defaults
-
-    static func presentError(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Could not open repository"
-        alert.informativeText = message
-        alert.alertStyle = .warning
-        alert.runModal()
+    /// Groups held repository windows in session order, followed by windows without a known
+    /// repository in attach order, with the active one selected, then shows them.
+    private func revealHeldWindows() {
+        guard isHoldingRestorationWindows else { return }
+        isHoldingRestorationWindows = false
+        let heldIDs = heldWindowIDs
+        // `openOrder` holds pending roots in their saved position too.
+        func heldID(_ root: RepositoryRoot) -> WindowID? {
+            (rootIndex[root] ?? pendingCreates[root]?.windowID).flatMap { heldIDs.contains($0) ? $0 : nil }
+        }
+        let repositoryWindowIDs = openOrder.compactMap(heldID)
+        let ordered = repositoryWindowIDs + heldIDs.filter { !repositoryWindowIDs.contains($0) }
+        let activeRoot = phase == .restoring ? restoreActive : lastActiveRepositoryRoot
+        let selected = activeRoot.flatMap(heldID) ?? ordered.first
+        // Still held, so occlusion changes the reveal causes are recorded but start no work.
+        let selectedWindowID = hooks.revealWindows(ordered, selected)
+        heldWindowIDs = []
+        // An unregistered window reconciles when it registers.
+        for id in heldIDs where windows[id] != nil {
+            if let visible = hooks.isWindowVisible(id) { visibility[id] = visible }
+            windows[id]?.isVisible = effectiveVisibility(id)
+        }
+        guard let selectedWindowID, let window = windows[selectedWindowID] else { return }
+        if let root = window.repositoryRoot { lastActiveRepositoryRoot = root }
+        // `windowDidBecomeKey` ignores a window that was already key while held.
+        if keyWindowID == selectedWindowID { prefetch(for: selectedWindowID) }
+        persist()
     }
 }
 
@@ -583,6 +672,15 @@ extension WindowCoordinator {
         var createWindow: @MainActor (RepositoryRoot) -> Void
         var focusWindow: @MainActor (WindowID) -> Void
         var presentError: @MainActor (String) -> Void
+        /// Keeps a restoration window invisible and out of tab groups until revealed.
+        var holdWindow: @MainActor (WindowID) -> Void
+        /// Tabs the held windows together in the given order, selects the given one (or
+        /// the first that still exists), and shows them. Returns the selected window.
+        var revealWindows: @MainActor ([WindowID], WindowID?) -> WindowID?
+        /// Whether the window is on screen, per AppKit; nil once it is gone.
+        var isWindowVisible: @MainActor (WindowID) -> Bool?
+        /// Runs the action on the main actor after the delay. Not cancellable.
+        var schedule: @MainActor (Duration, @escaping @MainActor () -> Void) -> Void
         /// Returns each supplied ID once, ordered within tab groups.
         /// Retains ungrouped or unavailable IDs.
         var windowIDsInTabOrder: @MainActor ([WindowID]) -> [WindowID] = { $0 }
