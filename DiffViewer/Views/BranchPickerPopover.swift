@@ -48,7 +48,7 @@ struct BranchPickerPopover: View {
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
-        .frame(width: BranchPickerStyle.width)
+        .frame(width: PickerStyle.width)
     }
 }
 
@@ -84,7 +84,7 @@ struct BranchPickerListView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: BranchPickerContainerView, context: Context) -> CGSize? {
-        CGSize(width: BranchPickerStyle.width, height: nsView.preferredHeight)
+        CGSize(width: PickerStyle.width, height: nsView.preferredHeight)
     }
 
     static func dismantleNSView(_ view: BranchPickerContainerView, coordinator: ()) {

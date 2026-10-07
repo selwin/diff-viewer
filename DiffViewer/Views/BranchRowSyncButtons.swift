@@ -270,7 +270,7 @@ final class SyncPillButton: NSButton {
         case destructive
     }
 
-    private static let font = BranchPickerStyle.pillFont
+    private static let font = PickerStyle.pillFont
     /// The shortcut glyph after the title: a size smaller and faded, as on the commit sheet.
     private static let shortcutFont = NSFont.systemFont(ofSize: 11, weight: .medium)
     private static let shortcutGap: CGFloat = 5
@@ -426,11 +426,11 @@ final class SyncPillButton: NSButton {
         let isActive = isEnabled || isRunning
         switch surface {
         case .raised:
-            let state: BranchPickerStyle.Raised =
+            let state: PickerStyle.Raised =
                 !isActive ? .rest : isHighlighted ? .pressed : isHovered ? .hover : .rest
-            BranchPickerStyle.drawRaised(capsule, fill: BranchPickerStyle.raisedFill(state))
+            PickerStyle.drawRaised(capsule, fill: PickerStyle.raisedFill(state))
         case .neutral:
-            (isActive ? BranchPickerStyle.controlFill : NSColor.labelColor.withAlphaComponent(0.05)).setFill()
+            (isActive ? PickerStyle.controlFill : NSColor.labelColor.withAlphaComponent(0.05)).setFill()
             capsule.fill()
             if isActive, isHighlighted {
                 NSColor.labelColor.withAlphaComponent(0.08).setFill()
@@ -461,7 +461,7 @@ final class SyncPillButton: NSButton {
         guard isEnabled || isRunning else { return .tertiaryLabelColor }
         switch look {
         case .plain: return .labelColor
-        case .primary: return BranchPickerStyle.accent
+        case .primary: return PickerStyle.accent
         case .destructive: return .systemRed
         }
     }

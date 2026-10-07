@@ -62,9 +62,9 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Set before `showSyncButtons`, which shows or fades the status to match.
     private var hidesStatus = false
 
-    private let tile = BranchRowIconTile(frame: .zero)
-    private let name = PickerLabel.make(font: BranchPickerStyle.nameFont, color: .labelColor)
-    private let subtitle = PickerLabel.make(font: BranchPickerStyle.metaFont, color: BranchPickerStyle.meta)
+    private let tile = PickerRowIconTile(frame: .zero)
+    private let name = PickerLabel.make(font: PickerStyle.nameFont, color: .labelColor)
+    private let subtitle = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
     private let status = BranchRowStatusView(frame: .zero)
     private var row: BranchPickerRow?
     private var accessibilityActionName = "Switch to branch"
@@ -98,7 +98,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     ) {
         self.row = row
         stopAnimating()
-        tile.configure(kind: row.kind)
+        tile.configure(Self.tileGlyph(for: row.kind))
         name.attributedStringValue = Self.attributedName(row)
         subtitle.stringValue = row.subtitle
         copyButton.configure(text: row.name)
@@ -169,16 +169,28 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         updateCopyButton()
     }
 
+    /// The branch glyph, a cloud for a remote-only branch, or the checkmark for the current one.
+    private static func tileGlyph(for kind: BranchPickerRow.Kind) -> PickerRowIconTile.Glyph {
+        switch kind {
+        case .current: .current
+        case .remoteOnly:
+            .init(
+                image: .symbol("cloud", pointSize: 14, weight: .medium), tint: .secondaryLabelColor,
+                fill: PickerStyle.tileFill)
+        case .local: .init(image: .asset(.gitBranch, side: 14), tint: .secondaryLabelColor, fill: PickerStyle.tileFill)
+        }
+    }
+
     private static func attributedName(_ row: BranchPickerRow) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byTruncatingTail
         let string = NSMutableAttributedString(
             string: row.name,
             attributes: [
-                .font: BranchPickerStyle.nameFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
+                .font: PickerStyle.nameFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph,
             ])
         for range in row.matchedRanges {
-            string.addAttribute(.font, value: BranchPickerStyle.matchFont, range: NSRange(range, in: row.name))
+            string.addAttribute(.font, value: PickerStyle.matchFont, range: NSRange(range, in: row.name))
         }
         return string
     }
@@ -299,12 +311,12 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     /// Where the name starts.
     private static let textX =
-        BranchPickerStyle.highlightInset + BranchPickerStyle.contentInset + BranchPickerStyle.iconTileSize + tileGap
+        PickerStyle.highlightInset + PickerStyle.contentInset + PickerStyle.iconTileSize + tileGap
 
     /// The text line's width in a row `rowWidth` wide: from the name's start to the content's
     /// trailing edge.
     static func lineWidth(rowWidth: CGFloat) -> CGFloat {
-        rowWidth - BranchPickerStyle.highlightInset - BranchPickerStyle.contentInset - textX
+        rowWidth - PickerStyle.highlightInset - PickerStyle.contentInset - textX
     }
 
     private var textX: CGFloat { Self.textX }
@@ -318,7 +330,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             status: state.status ? status.naturalSize.width : 0,
             syncPills: pills?.width(reservingShortcuts: true) ?? 0,
             compactSyncPills: pills?.width(reservingShortcuts: false) ?? 0,
-            copyButton: Self.copyGap + PickerCopyButton.side, gap: BranchPickerStyle.trailingGap)
+            copyButton: Self.copyGap + PickerCopyButton.side, gap: PickerStyle.trailingGap)
         return .make(available: Self.lineWidth(rowWidth: bounds.width), nameMinimum: Self.nameMinimum, widths: widths)
     }
 
@@ -332,7 +344,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             let frame = backingAlignedRect(
                 NSRect(x: right - width, y: (bounds.height - height) / 2, width: width, height: height),
                 options: PickerViewGeometry.pixelAlignment)
-            right = frame.minX - BranchPickerStyle.trailingGap
+            right = frame.minX - PickerStyle.trailingGap
             return frame
         }
         var pillsFrame: NSRect?
@@ -352,9 +364,9 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     // row, measured first so the name takes what is left.
     override func layout() {
         super.layout()
-        let side = BranchPickerStyle.iconTileSize
+        let side = PickerStyle.iconTileSize
         tile.frame = NSRect(
-            x: BranchPickerStyle.highlightInset + BranchPickerStyle.contentInset,
+            x: PickerStyle.highlightInset + PickerStyle.contentInset,
             y: ((bounds.height - side) / 2).rounded(), width: side, height: side)
         let final = trailingLayout(for: shown)
         // Pills fading out keep the width they had.

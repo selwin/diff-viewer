@@ -9,21 +9,11 @@ final class BranchPickerContainerView: NSView {
     private static let tabControlWidth: CGFloat = 200
     /// Between the segmented control and the search field.
     private static let searchTopGap: CGFloat = 12
-    /// The capsule's round ends make its edge read as inset, so it reaches this far past
-    /// the shared edge to look aligned with it.
-    private static let searchOutset: CGFloat = 4
     /// Between the search field and the first row.
     private static let listTopGap: CGFloat = 8
     /// Above and below the footer's capsule.
     private static let footerTopGap: CGFloat = 4
     private static let footerBottomGap: CGFloat = 14
-
-    static let groupHeaderStyle = PickerGroupHeaderView.Style(
-        font: BranchPickerStyle.sectionFont, color: BranchPickerStyle.section, leading: BranchPickerStyle.edgeInset,
-        bottomPadding: 6)
-    static let rowViewStyle = PickerTableRowView.Style(
-        highlightColor: BranchPickerStyle.raisedFill(.highlight), inset: BranchPickerStyle.highlightInset,
-        radius: BranchPickerStyle.highlightRadius, drawsContrastBorder: true)
 
     private(set) var state: BranchPickerState
 
@@ -128,7 +118,6 @@ final class BranchPickerContainerView: NSView {
     }
 
     private func configureSearchField() {
-        searchBackground.color = BranchPickerStyle.controlFill
         searchField.setAccessibilityLabel("Search branches")
         searchField.controlSize = .large
         searchField.sendsSearchStringImmediately = true
@@ -143,7 +132,7 @@ final class BranchPickerContainerView: NSView {
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
-        tableView.rowHeight = BranchPickerStyle.rowHeight
+        tableView.rowHeight = PickerStyle.rowHeight
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
@@ -371,27 +360,27 @@ final class BranchPickerContainerView: NSView {
         let headerHeight = header.fittingHeight(width: width)
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         tabControl.frame = NSRect(
-            x: BranchPickerStyle.edgeInset, y: headerHeight, width: Self.tabControlWidth,
+            x: PickerStyle.edgeInset, y: headerHeight, width: Self.tabControlWidth,
             height: tabControl.intrinsicContentSize.height)
-        let inset = BranchPickerStyle.edgeInset
-        let searchInset = inset - Self.searchOutset
+        let inset = PickerStyle.edgeInset
+        let searchInset = inset - PickerStyle.searchOutset
         searchBackground.frame = NSRect(
             x: searchInset, y: tabControl.frame.maxY + Self.searchTopGap, width: width - searchInset * 2,
-            height: BranchPickerStyle.searchHeight)
+            height: PickerStyle.searchHeight)
         let fieldHeight = searchField.intrinsicContentSize.height
         searchField.frame = NSRect(
             x: searchBackground.frame.minX + 6, y: searchBackground.frame.midY - fieldHeight / 2,
             width: searchBackground.frame.width - 12, height: fieldHeight)
-        let footerTop = height - Self.footerBottomGap - BranchPickerStyle.footerHeight
+        let footerTop = height - Self.footerBottomGap - PickerStyle.footerHeight
         let tableTop = searchBackground.frame.maxY + Self.listTopGap
         let tableBottom = footerTop - Self.footerTopGap
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(tableBottom - tableTop, 0))
         emptyState.frame = scrollView.frame
         // The footer's frame carries room for its capsule's shadow.
-        let margin = BranchPickerStyle.shadowMargin
+        let margin = PickerStyle.shadowMargin
         newBranchRow.frame = NSRect(
             x: inset - margin, y: footerTop - margin, width: width - (inset - margin) * 2,
-            height: BranchPickerStyle.footerHeight + margin * 2)
+            height: PickerStyle.footerHeight + margin * 2)
         tableView.sizeLastColumnToFit()
         // The first layout is when the visible rows are first known.
         requestVisibleMergePreviews()
@@ -415,13 +404,13 @@ final class BranchPickerContainerView: NSView {
     private func updatePreferredHeight() {
         guard state.query.isEmpty else { return }
         let list = state.items.reduce(CGFloat(0)) { total, item in
-            total + (item.row == nil ? BranchPickerStyle.sectionHeaderHeight : BranchPickerStyle.rowHeight)
+            total + (item.row == nil ? PickerStyle.sectionHeaderHeight : PickerStyle.rowHeight)
         }
         let chrome =
-            header.fittingHeight(width: BranchPickerStyle.width) + tabControl.intrinsicContentSize.height
-            + Self.searchTopGap + BranchPickerStyle.searchHeight + Self.listTopGap + Self.footerTopGap
-            + BranchPickerStyle.footerHeight + Self.footerBottomGap
-        let listHeight = max(min(list, BranchPickerStyle.maximumListHeight), BranchPickerStyle.minimumListHeight)
+            header.fittingHeight(width: PickerStyle.width) + tabControl.intrinsicContentSize.height
+            + Self.searchTopGap + PickerStyle.searchHeight + Self.listTopGap + Self.footerTopGap
+            + PickerStyle.footerHeight + Self.footerBottomGap
+        let listHeight = max(min(list, PickerStyle.maximumListHeight), PickerStyle.minimumListHeight)
         let height = (chrome + listHeight).rounded(.up)
         guard height > preferredHeight else { return }
         preferredHeight = height
@@ -429,7 +418,7 @@ final class BranchPickerContainerView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: BranchPickerStyle.width, height: preferredHeight)
+        NSSize(width: PickerStyle.width, height: preferredHeight)
     }
 
     // MARK: Window

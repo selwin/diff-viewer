@@ -131,7 +131,7 @@ struct BranchPickerState {
     }
 
     private static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
-        "\(author) · \(grouping.branchTimeText(for: date))"
+        "\(author) · \(grouping.rowTimeText(for: date))"
     }
 
     /// The first highlightable row: the newest branch, or a search's best match.

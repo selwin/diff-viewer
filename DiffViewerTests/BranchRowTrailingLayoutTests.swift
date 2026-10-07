@@ -8,13 +8,13 @@ import Testing
 /// of the stages, not states the picker produces.
 @MainActor
 struct BranchRowTrailingLayoutTests {
-    private let available = BranchPickerRowView.lineWidth(rowWidth: BranchPickerStyle.width)
+    private let available = BranchPickerRowView.lineWidth(rowWidth: PickerStyle.width)
 
     private func widths(
         pills buttons: RowSyncButtons? = nil, status: BranchRowLabel? = nil
     ) -> BranchRowTrailingLayout.Widths {
         var widths = BranchRowTrailingLayout.Widths(
-            copyButton: PickerCopyButton.side, gap: BranchPickerStyle.trailingGap)
+            copyButton: PickerCopyButton.side, gap: PickerStyle.trailingGap)
         if let buttons {
             let pills = BranchRowSyncButtons(style: .rowPills)
             pills.configure(

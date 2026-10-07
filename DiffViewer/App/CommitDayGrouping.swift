@@ -69,7 +69,7 @@ struct CommitDayGrouping {
     }
 
     /// Short enough for a row's subtitle; the section header says which day.
-    func branchTimeText(for date: Date) -> String {
+    func rowTimeText(for date: Date) -> String {
         switch recencyGroup(for: date) {
         case .today, .yesterday: return time.string(from: date)
         case .thisWeek: return shortWeekday.string(from: date)
@@ -77,8 +77,9 @@ struct CommitDayGrouping {
         }
     }
 
-    /// A commit row's date: the day and time for today and yesterday, the weekday and date
-    /// for two to six days ago, the date after that. The year only outside this one.
+    /// A commit's date where no section header names the day, as in the picker's header:
+    /// the day and time for today and yesterday, the weekday and date for two to six days
+    /// ago, the date after that. The year only outside this one.
     func commitDateText(for date: Date) -> String {
         let sameYear = isInCurrentYear(date)
         switch recencyGroup(for: date) {

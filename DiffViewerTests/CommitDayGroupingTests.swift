@@ -62,11 +62,11 @@ struct CommitDayGroupingTests {
         #expect(grouping.recencyGroup(for: date(2026, 9, 12, 23, 59)) == .older)
     }
 
-    @Test func branchTimeTextForms() {
-        #expect(grouping.branchTimeText(for: date(2026, 9, 19, 9, 5)) == "09:05")
-        #expect(grouping.branchTimeText(for: date(2026, 9, 18, 21, 40)) == "21:40")
-        #expect(grouping.branchTimeText(for: date(2026, 9, 15, 9, 0)) == "Tue")
-        #expect(grouping.branchTimeText(for: date(2026, 9, 12, 9, 0)) == "12 Sep")
-        #expect(grouping.branchTimeText(for: date(2025, 12, 30, 9, 0)) == "30 Dec 2025")
+    @Test func rowTimeTextForms() {
+        #expect(grouping.rowTimeText(for: date(2026, 9, 19, 9, 5)) == "09:05")
+        #expect(grouping.rowTimeText(for: date(2026, 9, 18, 21, 40)) == "21:40")
+        #expect(grouping.rowTimeText(for: date(2026, 9, 15, 9, 0)) == "Tue")
+        #expect(grouping.rowTimeText(for: date(2026, 9, 12, 9, 0)) == "12 Sep")
+        #expect(grouping.rowTimeText(for: date(2025, 12, 30, 9, 0)) == "30 Dec 2025")
     }
 }

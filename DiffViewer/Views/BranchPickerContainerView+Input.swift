@@ -13,7 +13,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
         case let .header(group):
             let cell =
                 tableView.makeView(withIdentifier: PickerGroupHeaderView.identifier, owner: nil)
-                as? PickerGroupHeaderView ?? PickerGroupHeaderView(style: Self.groupHeaderStyle)
+                as? PickerGroupHeaderView ?? PickerGroupHeaderView()
             cell.configure(title: group.title)
             return cell
         case let .branch(entry):
@@ -42,7 +42,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     /// By the item's kind: the current branch takes no highlight but is a full row.
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        state.row(forTableRow: row) != nil ? BranchPickerStyle.rowHeight : BranchPickerStyle.sectionHeaderHeight
+        state.row(forTableRow: row) != nil ? PickerStyle.rowHeight : PickerStyle.sectionHeaderHeight
     }
 
     /// What VoiceOver calls a row's activation in the current tab.
@@ -59,7 +59,7 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         tableView.makeView(withIdentifier: PickerTableRowView.identifier, owner: nil) as? PickerTableRowView
-            ?? PickerTableRowView(style: Self.rowViewStyle)
+            ?? PickerTableRowView()
     }
 
     /// Accepts table selections; restores a highlighted branch after external deselection.

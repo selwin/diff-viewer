@@ -1,7 +1,7 @@
 import AppKit
 
 /// The branch picker's New Branch… footer: a raised capsule with a plus and the title
-/// centred in the accent colour. Its frame keeps `BranchPickerStyle.shadowMargin` around
+/// centred in the accent colour. Its frame keeps `PickerStyle.shadowMargin` around
 /// the capsule for the shadow, and only the capsule takes the pointer. Outside the table,
 /// so the list's own selection never reaches it; it is styled from the picker's highlight
 /// state.
@@ -36,7 +36,7 @@ final class BranchPickerNewBranchRow: NSView {
     }
 
     private let icon = NSImageView()
-    private let title = PickerLabel.make(font: BranchPickerStyle.footerFont, color: BranchPickerStyle.accent)
+    private let title = PickerLabel.make(font: PickerStyle.footerFont, color: PickerStyle.accent)
     private var isPressed = false {
         didSet { if isPressed != oldValue { needsDisplay = true } }
     }
@@ -67,7 +67,7 @@ final class BranchPickerNewBranchRow: NSView {
     override var isFlipped: Bool { true }
 
     private var capsuleRect: NSRect {
-        bounds.insetBy(dx: BranchPickerStyle.shadowMargin, dy: BranchPickerStyle.shadowMargin)
+        bounds.insetBy(dx: PickerStyle.shadowMargin, dy: PickerStyle.shadowMargin)
     }
 
     /// The first click in an inactive popover acts, as a row's does.
@@ -124,7 +124,7 @@ final class BranchPickerNewBranchRow: NSView {
     }
 
     private func applyColors() {
-        let color = isEnabled ? BranchPickerStyle.accent : .tertiaryLabelColor
+        let color = isEnabled ? PickerStyle.accent : .tertiaryLabelColor
         icon.contentTintColor = color
         title.textColor = color
     }
@@ -136,11 +136,11 @@ final class BranchPickerNewBranchRow: NSView {
 
     /// Raised at rest, lifted when highlighted, greyer while pressed.
     override func draw(_ dirtyRect: NSRect) {
-        let state: BranchPickerStyle.Raised =
+        let state: PickerStyle.Raised =
             !isEnabled ? .rest : isPressed ? .pressed : isHighlighted ? .hover : .rest
         let rect = capsuleRect
         let path = NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
-        BranchPickerStyle.drawRaised(path, fill: BranchPickerStyle.raisedFill(state))
+        PickerStyle.drawRaised(path, fill: PickerStyle.raisedFill(state))
     }
 
     /// The plus and the title, centred together on the capsule; a long proposal truncates.

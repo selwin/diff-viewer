@@ -7,7 +7,7 @@ final class CommitPickerMessageRowView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("CommitPickerMessageRowView")
     static let height: CGFloat = 36
 
-    private static let font = NSFont.systemFont(ofSize: 12)
+    private static let linkFont = NSFont.systemFont(ofSize: PickerStyle.metaFont.pointSize, weight: .semibold)
     private static let spinnerSize: CGFloat = 16
     private static let gap: CGFloat = 6
 
@@ -15,8 +15,8 @@ final class CommitPickerMessageRowView: NSTableCellView {
     var onActivate: (() -> Void)?
 
     private let spinner = NSProgressIndicator()
-    private let label = PickerLabel.make(font: font, color: .secondaryLabelColor)
-    private let link = PickerLabel.make(font: font, color: .linkColor)
+    private let label = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
+    private let link = PickerLabel.make(font: linkFont, color: PickerStyle.accent)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -49,11 +49,11 @@ final class CommitPickerMessageRowView: NSTableCellView {
         return true
     }
 
-    /// Spinner, message and link on one line from the rows' text inset; the message
-    /// truncates before the link does.
+    /// Spinner, message and link on one line from the shared edge; the message truncates
+    /// before the link does.
     override func layout() {
         super.layout()
-        var x = PickerMetrics.rowInset + PickerMetrics.contentInset
+        var x = PickerStyle.edgeInset
         let maxX = bounds.width - x
         if !spinner.isHidden {
             let side = Self.spinnerSize

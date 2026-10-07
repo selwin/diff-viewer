@@ -1,10 +1,10 @@
 import AppKit
 
-/// The branch picker's metrics, fonts and colours: a glass panel with raised white controls.
-/// Colours are dynamic, so they follow the appearance and the accessibility display options
-/// each time a view draws.
+/// The title bar pickers' metrics, fonts and colours, shared by the branch and commit
+/// pickers: a glass panel with raised white controls. Colours are dynamic, so they follow
+/// the appearance and the accessibility display options each time a view draws.
 @MainActor
-enum BranchPickerStyle {
+enum PickerStyle {
     static let width: CGFloat = 368
     /// The list grows with its rows up to this height, then scrolls.
     static let maximumListHeight: CGFloat = 320
@@ -22,6 +22,9 @@ enum BranchPickerStyle {
     static let iconTileSize: CGFloat = 32
     static let highlightRadius: CGFloat = 20
     static let searchHeight: CGFloat = 34
+    /// The search capsule's round ends make its edge read as inset, so it reaches this far
+    /// past `edgeInset` to look aligned with it.
+    static let searchOutset: CGFloat = 4
     static let footerHeight: CGFloat = 38
     /// Between a row's name, its status and its pills.
     static let trailingGap: CGFloat = 8
@@ -30,12 +33,12 @@ enum BranchPickerStyle {
 
     // MARK: Fonts
 
-    static let titleFont = NSFont.systemFont(ofSize: 22, weight: .bold)
-    static let headerStatusFont = NSFont.systemFont(ofSize: 12.5)
+    static let titleFont = NSFont.systemFont(ofSize: 18, weight: .bold)
+    static let headerStatusFont = NSFont.systemFont(ofSize: 12)
     static let nameFont = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
     /// A search's matched characters, a step heavier than the name.
     static let matchFont = NSFont.systemFont(ofSize: 13.5, weight: .heavy)
-    static let metaFont = NSFont.systemFont(ofSize: 12)
+    static let metaFont = NSFont.systemFont(ofSize: 11.5)
     static let sectionFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let pillFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let rowStatusFont = NSFont.systemFont(ofSize: 11.5, weight: .medium)

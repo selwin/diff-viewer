@@ -1,8 +1,8 @@
 import AppKit
 
-/// The commit picker's header: the displayed scope's title, wrapped in full, over a
-/// subtitle. For a commit that is its author and date, then its hash and a copy button; for
-/// Working Tree, its change count.
+/// The commit picker's header: the displayed scope's title, wrapped to two lines with the
+/// full subject in its tooltip, over a subtitle. For a commit that is its author and date,
+/// then its hash and a copy button; for Working Tree, its change count.
 final class CommitPickerHeaderView: PickerHeaderView {
     private let hashAccessory = CommitHashAccessoryView()
 
@@ -13,7 +13,7 @@ final class CommitPickerHeaderView: PickerHeaderView {
     }
 
     init() {
-        super.init(wrapsTitle: true)
+        super.init(wrapsTitle: true, maximumTitleLines: 2)
         subtitleAccessory = hashAccessory
     }
 
@@ -22,6 +22,8 @@ final class CommitPickerHeaderView: PickerHeaderView {
 
     func configure(_ text: CommitPickerHeaderText) {
         title = text.title
+        // A commit's subject may be cut short at two lines.
+        titleToolTip = text.sha == nil ? nil : text.title
         subtitle = text.detailParts.joined(separator: " · ")
         hashAccessory.configure(text)
     }
@@ -30,12 +32,13 @@ final class CommitPickerHeaderView: PickerHeaderView {
 /// The dot, short hash and copy button after the subtitle. The subtitle truncates; these
 /// never do.
 private final class CommitHashAccessoryView: NSView {
-    private static let hashFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let hashFont = NSFont.monospacedSystemFont(
+        ofSize: PickerStyle.headerStatusFont.pointSize, weight: .regular)
 
     let copyButton = PickerCopyButton(label: "Copy SHA")
     /// The labels' own padding spaces the dot.
-    private let dot = PickerLabel.make(font: PickerMetrics.Header.subtitleFont, color: .secondaryLabelColor)
-    private let shaLabel = PickerLabel.make(font: hashFont, color: .secondaryLabelColor)
+    private let dot = PickerLabel.make(font: PickerStyle.headerStatusFont, color: PickerStyle.meta)
+    private let shaLabel = PickerLabel.make(font: hashFont, color: PickerStyle.meta)
 
     override init(frame: NSRect) {
         super.init(frame: frame)

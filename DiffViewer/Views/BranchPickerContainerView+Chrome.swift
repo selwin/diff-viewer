@@ -57,7 +57,7 @@ extension BranchPickerContainerView {
             string: text,
             attributes: [
                 .font: searchField.font ?? .systemFont(ofSize: NSFont.systemFontSize),
-                .foregroundColor: BranchPickerStyle.placeholder,
+                .foregroundColor: PickerStyle.placeholder,
             ])
     }
 }

@@ -1,14 +1,17 @@
 import AppKit
 
 /// The commit picker's AppKit root: header, search field and the list, laid out top-down
-/// by hand. Owns the `CommitPickerState`, applies each snapshot and query to the table as
-/// the state directs, and asks for older pages when the state wants them.
+/// by hand on the popover's glass. Owns the `CommitPickerState`, applies each snapshot and
+/// query to the table as the state directs, and asks for older pages when the state wants
+/// them.
 @MainActor
 final class CommitPickerContainerView: NSView {
     /// How long typing must pause before a query reads older pages.
     private static let queryLoadDelay: TimeInterval = 0.3
+    /// Between the search field and the first row.
+    private static let listTopGap: CGFloat = 8
     /// Below the list, so the last row's highlight clears the popover's edge.
-    private static let bottomGap: CGFloat = 6
+    private static let bottomGap: CGFloat = 8
 
     private(set) var state: CommitPickerState
 
@@ -20,7 +23,7 @@ final class CommitPickerContainerView: NSView {
     let header = CommitPickerHeaderView()
     let searchField = FilledSearchField()
     /// The search field's rounded fill; the field itself draws no bezel.
-    private let searchBackground = RoundedFillView(frame: .zero)
+    let searchBackground = RoundedFillView(frame: .zero)
     let scrollView = NSScrollView()
     let tableView = PickerTableView()
 
@@ -31,6 +34,7 @@ final class CommitPickerContainerView: NSView {
     private var hasFocusedSearchField = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
+    var displayOptionsObserver: (any NSObjectProtocol)?
     /// The generation of a request decided but not yet run, until it runs or a load is
     /// seen in a snapshot, so a scroll cannot queue the request twice. A request from an
     /// earlier attachment never blocks one from the current attachment.
@@ -51,6 +55,7 @@ final class CommitPickerContainerView: NSView {
         configureTable()
         for view in [header, searchBackground, searchField, scrollView] { addSubview(view) }
         header.onCopy = { [weak self] in self?.returnFocusToSearchField() }
+        observeDisplayOptions()
         renderChrome()
         updatePreferredHeight()
     }
@@ -59,7 +64,12 @@ final class CommitPickerContainerView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func configureSearchField() {
-        searchField.placeholderString = "Search"
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: "Search commits",
+            attributes: [
+                .font: searchField.font ?? .systemFont(ofSize: NSFont.systemFontSize),
+                .foregroundColor: PickerStyle.placeholder,
+            ])
         searchField.setAccessibilityLabel("Search commits")
         searchField.controlSize = .large
         searchField.sendsSearchStringImmediately = true
@@ -74,7 +84,8 @@ final class CommitPickerContainerView: NSView {
         tableView.addTableColumn(column)
         tableView.headerView = nil
         tableView.style = .plain
-        tableView.rowHeight = PickerMetrics.rowHeight
+        // Only a fallback: `rowHeight(forItem:)` sizes every row.
+        tableView.rowHeight = PickerStyle.rowHeight
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
         tableView.selectionHighlightStyle = .regular
@@ -115,12 +126,6 @@ final class CommitPickerContainerView: NSView {
     }
 
     override var isFlipped: Bool { true }
-
-    /// Fills below the header with the list's colour; the header shows the popover's own.
-    override func draw(_ dirtyRect: NSRect) {
-        PickerMetrics.listBackground.setFill()
-        NSRect(x: 0, y: header.frame.maxY, width: bounds.width, height: bounds.height - header.frame.maxY).fill()
-    }
 
     override var acceptsFirstResponder: Bool { false }
 
@@ -182,8 +187,8 @@ final class CommitPickerContainerView: NSView {
         }
     }
 
-    /// Moves the table's selection to the highlight without scrolling. The rows' colours
-    /// and copy buttons follow the highlight.
+    /// Moves the table's selection to the highlight without scrolling. The rows' copy
+    /// buttons follow the highlight.
     func syncSelection() {
         let wasApplying = isApplyingSelection
         isApplyingSelection = true
@@ -340,14 +345,16 @@ final class CommitPickerContainerView: NSView {
         let width = bounds.width
         let headerHeight = header.fittingHeight(width: width)
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
+        let searchInset = PickerStyle.edgeInset - PickerStyle.searchOutset
+        // The header's bottom padding is the whole gap, as above the branch picker's tabs.
         searchBackground.frame = NSRect(
-            x: PickerMetrics.searchInset, y: headerHeight + PickerMetrics.searchTopGap,
-            width: width - PickerMetrics.searchInset * 2, height: PickerMetrics.searchHeight)
+            x: searchInset, y: headerHeight, width: width - searchInset * 2,
+            height: PickerStyle.searchHeight)
         let fieldHeight = searchField.intrinsicContentSize.height
         searchField.frame = NSRect(
-            x: searchBackground.frame.minX + 4, y: searchBackground.frame.midY - fieldHeight / 2,
-            width: searchBackground.frame.width - 8, height: fieldHeight)
-        let tableTop = searchBackground.frame.maxY + PickerMetrics.listTopGap
+            x: searchBackground.frame.minX + 6, y: searchBackground.frame.midY - fieldHeight / 2,
+            width: searchBackground.frame.width - 12, height: fieldHeight)
+        let tableTop = searchBackground.frame.maxY + Self.listTopGap
         scrollView.frame = NSRect(
             x: 0, y: tableTop, width: width, height: max(bounds.height - tableTop - Self.bottomGap, 0))
         tableView.sizeLastColumnToFit()
@@ -375,12 +382,12 @@ final class CommitPickerContainerView: NSView {
         }
     }
 
+    /// The one source of row heights, for the table and the popover's height alike.
     func rowHeight(forItem index: Int) -> CGFloat {
         switch state.items[index] {
-        case .header: PickerMetrics.headerRowHeight
+        case .header: PickerStyle.sectionHeaderHeight
         case .message: CommitPickerMessageRowView.height
-        case .workingTree: CommitPickerRowView.singleLineHeight
-        case .commit: PickerMetrics.rowHeight
+        case .workingTree, .commit: PickerStyle.rowHeight
         }
     }
 
@@ -391,16 +398,17 @@ final class CommitPickerContainerView: NSView {
         guard state.query.isEmpty else { return }
         let list = state.items.indices.reduce(CGFloat(0)) { $0 + rowHeight(forItem: $1) }
         let chrome =
-            header.fittingHeight(width: PickerMetrics.width) + PickerMetrics.searchTopGap + PickerMetrics.searchHeight
-            + PickerMetrics.listTopGap + Self.bottomGap
-        let height = min(chrome + list, PickerMetrics.maximumHeight).rounded(.up)
+            header.fittingHeight(width: PickerStyle.width) + PickerStyle.searchHeight
+            + Self.listTopGap + Self.bottomGap
+        let listHeight = max(min(list, PickerStyle.maximumListHeight), PickerStyle.minimumListHeight)
+        let height = (chrome + listHeight).rounded(.up)
         guard height > preferredHeight else { return }
         preferredHeight = height
         invalidateIntrinsicContentSize()
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: PickerMetrics.width, height: preferredHeight)
+        NSSize(width: PickerStyle.width, height: preferredHeight)
     }
 
     // MARK: Window
@@ -453,6 +461,8 @@ final class CommitPickerContainerView: NSView {
         removeKeyObserver()
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
+        if let displayOptionsObserver { NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver) }
+        displayOptionsObserver = nil
         teardownGeneration += 1
     }
 

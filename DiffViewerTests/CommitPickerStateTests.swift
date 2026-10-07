@@ -112,6 +112,14 @@ struct CommitPickerStateTests {
         #expect(picker.rows.map(\.status.text) == ["Not pushed", ""])
     }
 
+    /// A recency header names the day, so its rows show the short form; Selected doesn't,
+    /// so its row shows the full date.
+    @Test func rowTimesFollowTheirSection() {
+        let picked = Self.commit("picked", 18, 9)
+        let picker = state(snapshot(scope: .commit(picked.ref), displayedCommit: picked, commits: [today1, older]))
+        #expect(picker.rows.map(\.timeText) == ["Yesterday 09:00", "13:00", "1 Sep"])
+    }
+
     @Test func workingTreeShowsItsChangeCountOnceKnown() {
         #expect(workingTree(state(snapshot(commits: [], count: 3)))?.detail == "3 changes")
         #expect(workingTree(state(snapshot(commits: [], count: nil)))?.detail == nil)

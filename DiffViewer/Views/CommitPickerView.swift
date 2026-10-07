@@ -29,8 +29,7 @@ struct CommitPickerPopover: View {
             }
         )
         // The height follows the list, through the representable's `sizeThatFits`.
-        .frame(width: PickerMetrics.width)
-        .presentationBackground(Color(nsColor: PickerMetrics.popoverBackground))
+        .frame(width: PickerStyle.width)
     }
 }
 
@@ -55,7 +54,7 @@ struct CommitPickerView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: CommitPickerContainerView, context: Context) -> CGSize? {
-        CGSize(width: PickerMetrics.width, height: nsView.preferredHeight)
+        CGSize(width: PickerStyle.width, height: nsView.preferredHeight)
     }
 
     static func dismantleNSView(_ view: CommitPickerContainerView, coordinator: ()) {

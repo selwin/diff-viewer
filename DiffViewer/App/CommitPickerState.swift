@@ -39,7 +39,8 @@ struct CommitPickerState {
             items.append(.workingTree(.init(detail: detail, isSelectedScope: snapshot.displayedScope == .workingTree)))
         }
         if let selected = selectedOutsidePage, matches(selected) {
-            items += [.header(.selected, firstSha: selected.ref.sha), .commit(row(for: selected))]
+            let selectedRow = row(for: selected, timeText: grouping.commitDateText(for: selected.committedAt))
+            items += [.header(.selected, firstSha: selected.ref.sha), .commit(selectedRow)]
         }
         // A header opens wherever the group differs from the row above, so a clock-skewed
         // history repeats one rather than reordering git's commits.
@@ -48,7 +49,7 @@ struct CommitPickerState {
             let commitGroup = grouping.recencyGroup(for: commit.committedAt)
             if commitGroup != group { items.append(.header(.recency(commitGroup), firstSha: commit.ref.sha)) }
             group = commitGroup
-            items.append(.commit(row(for: commit)))
+            items.append(.commit(row(for: commit, timeText: grouping.rowTimeText(for: commit.committedAt))))
         }
         let hasCommitMatches = items.contains { $0.commitRow != nil }
         if let message = Self.message(
@@ -67,11 +68,11 @@ struct CommitPickerState {
         return commit
     }
 
-    private func row(for commit: CommitSummary) -> CommitPickerRow {
+    private func row(for commit: CommitSummary, timeText: String) -> CommitPickerRow {
         let scope = DiffScope.commit(commit.ref)
         return CommitPickerRow(
             scope: scope, sha: commit.ref.sha, shortSha: commit.ref.shortSha, subject: commit.subject,
-            authorName: commit.author,
+            authorName: commit.author, timeText: timeText,
             status: snapshot.unpushedShas.contains(commit.ref.sha) ? .notPushed : .none,
             isSelectedScope: scope == snapshot.displayedScope)
     }

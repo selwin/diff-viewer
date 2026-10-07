@@ -1,25 +1,12 @@
 import AppKit
 
-/// A table row whose highlight is a neutral fill, inset from the popover's sides with
+/// A table row whose highlight is a raised fill, inset from the popover's sides with
 /// rounded corners. It never paints a background of its own, and has no hover fill:
 /// hover moves the highlight.
 final class PickerTableRowView: NSTableRowView {
-    /// The highlight's look. The defaults are the commit picker's.
-    @MainActor
-    struct Style {
-        var highlightColor = PickerMetrics.highlightColor
-        var inset = PickerMetrics.rowInset
-        var radius = PickerMetrics.cornerRadius
-        /// Outlines the highlight with the separator colour while Increase Contrast is on.
-        var drawsContrastBorder = false
-    }
-
     static let identifier = NSUserInterfaceItemIdentifier("PickerTableRowView")
 
-    private let style: Style
-
-    init(style: Style = Style()) {
-        self.style = style
+    init() {
         super.init(frame: .zero)
         clipsToBounds = true
         identifier = Self.identifier
@@ -35,12 +22,14 @@ final class PickerTableRowView: NSTableRowView {
     /// Drawn rather than layered, so a dynamic colour follows appearance changes.
     override func drawSelection(in dirtyRect: NSRect) {
         guard isSelected else { return }
+        let radius = PickerStyle.highlightRadius
         let path = NSBezierPath(
-            roundedRect: bounds.insetBy(dx: style.inset, dy: 0), xRadius: style.radius, yRadius: style.radius)
-        style.highlightColor.setFill()
+            roundedRect: bounds.insetBy(dx: PickerStyle.highlightInset, dy: 0), xRadius: radius, yRadius: radius)
+        PickerStyle.raisedFill(.highlight).setFill()
         path.fill()
-        if style.drawsContrastBorder, NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
-            BranchPickerStyle.strokeRim(of: path, color: .separatorColor)
+        // Increase Contrast outlines the highlight, which its translucent fill doesn't set apart.
+        if NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+            PickerStyle.strokeRim(of: path, color: .separatorColor)
         }
     }
 }

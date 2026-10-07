@@ -3,7 +3,7 @@ import AppKit
 /// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
 /// subtitle for how far that branch is from its upstream and how the fetch went, a raised
 /// round Fetch button that spins while a round runs, and the current branch's Pull and
-/// Push after it. No hairline: the panel's glass runs on under it.
+/// Push after it. The panel's glass runs on under it.
 final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
     private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: SyncPillButton.focusRingMargin)
@@ -24,13 +24,7 @@ final class BranchPickerHeaderView: PickerHeaderView {
     private var text = BranchPickerHeaderText(title: "")
 
     init() {
-        super.init(
-            wrapsTitle: false,
-            style: Style(
-                topPadding: 20, bottomPadding: 12, leadingPadding: BranchPickerStyle.edgeInset,
-                trailingPadding: BranchPickerStyle.edgeInset,
-                titleFont: BranchPickerStyle.titleFont, subtitleFont: BranchPickerStyle.headerStatusFont,
-                showsDivider: false))
+        super.init(wrapsTitle: false)
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
         titleAccessory = copyButton
@@ -247,8 +241,8 @@ final class FetchButton: NSButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let state: BranchPickerStyle.Raised =
+        let state: PickerStyle.Raised =
             !isEnabled ? .rest : isHighlighted ? .pressed : isHovered ? .hover : .rest
-        BranchPickerStyle.drawRaised(circle, fill: BranchPickerStyle.raisedFill(state))
+        PickerStyle.drawRaised(circle, fill: PickerStyle.raisedFill(state))
     }
 }
