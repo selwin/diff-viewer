@@ -68,12 +68,15 @@ struct ContentView: View {
             }
             // A bare name, not a glass pill.
             .sharedBackgroundVisibility(.hidden)
-            // One item, so the two pickers stay side by side; the shared background is
-            // hidden because each one draws its own capsule.
+            // One item, so the pickers sit 8pt apart: as separate items the toolbar would
+            // share one glass capsule between them, and a splitter item leaves a wide gap.
+            // Each picker draws its own glass instead.
             ToolbarItem(placement: .navigation) {
-                HStack(spacing: 8) {
-                    BranchPickerView()
-                    ScopePickerView()
+                GlassEffectContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        BranchPickerView()
+                        ScopePickerView()
+                    }
                 }
             }
             .sharedBackgroundVisibility(.hidden)

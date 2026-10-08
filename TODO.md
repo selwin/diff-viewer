@@ -286,11 +286,11 @@ a non-delimiter token (unchanged behaviour).
 **Goal.** Refine how the branch and commit pickers look in the title bar, and redesign
 the commit picker popover to match the branch picker.
 
-**Title bar faces.** On 2026-09-28 both became 36pt capsules (`TitleBarPickerLabel`):
-white with a thin outline at rest, tinted on hover, filled grey while open. Still to
-refine:
-- Dark mode: the capsule is darker than the title bar and its outline barely shows.
-- Hover has not been checked on screen.
+**Title bar faces.** On 2026-10-08 both moved to Liquid Glass, matching the sidebar
+toggle and Stashes, and the outlined capsule went. Each picker draws its own
+`.glassEffect`, because the toolbar would wrap both items in one capsule and a splitter
+item leaves a wide gap. Pull/Push sit inside the branch capsule. `snapshot.sh` doesn't
+render custom glass; check it with `screenshot.sh`. Still to check on screen: hover.
 
 **Commit picker popover.** Make it resemble the branch picker: header with the current
 scope and a status line, a search field, rows grouped by day (Today, Yesterday, This
