@@ -32,6 +32,8 @@ protocol RepoClient: Sendable {
     func recentCommits(startingAt revision: String, skip: Int, limit: Int) async throws -> [CommitSummary]
     /// The commit `ref` resolves to, or nil when it names no commit.
     func commitSha(of ref: String) async throws -> String?
+    /// The stash list, newest first.
+    func stashes() async throws -> [StashEntry]
     /// The commits on `tip`'s first-parent chain that `upstreamTip` cannot reach. Both are
     /// object ids, never ref names, so the answer belongs to exactly those two commits.
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String>

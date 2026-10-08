@@ -125,6 +125,8 @@ final class WindowState {
     private(set) var remoteBranches: [RemoteBranch] = []
     /// How the last paired HEAD + branch read went, so the picker can tell unread from empty.
     private(set) var branchReadStatus: BranchReadStatus = .unread
+    /// The stash list and its read status, for the Stashes capsule and picker.
+    let stashList = StashList()
     /// The branch names the picker's menu lists, in the order they were read.
     var localBranches: [String] { branches.map(\.name) }
     /// The list's entry for the branch HEAD is on, or nil when HEAD is detached, unread, or
@@ -216,6 +218,8 @@ final class WindowState {
             Task { @MainActor [weak self] in await self?.fetchForBranchPicker() }
         }
     }
+    /// The stash picker popover is up, on the same terms as the commit picker's flag.
+    var isStashPickerPresented = false
     /// The branch picker's last tab, so the popover reopens on it. Kept for the window's
     /// life only.
     var branchPickerTab: BranchPickerTab = .switchBranch
@@ -308,6 +312,7 @@ final class WindowState {
         }
         refreshHistory(session: session)
         Task { [weak self] in await self?.refreshHeadState(session: session) }
+        scheduleStashRefresh(session: session)
         return true
     }
 
@@ -326,6 +331,7 @@ final class WindowState {
         isCommitSheetPresented = false
         isCommitPickerPresented = false
         isBranchPickerPresented = false
+        isStashPickerPresented = false
         isNewBranchSheetPresented = false
         pendingMerge = nil
         session?.historySerial += 1
@@ -380,6 +386,7 @@ final class WindowState {
     func refresh() async {
         guard let session else { return }
         // ⌘R re-reads everything, including a commit's files: the user asked.
+        scheduleStashRefresh(session: session)
         await refresh(session: session, cause: .manual)
         refreshHistory(session: session)
         await refreshHeadState(session: session)
@@ -444,6 +451,7 @@ final class WindowState {
         // Before the first suspension, so the read's generation is settled the moment
         // the tick is accepted.
         if work.commitDefaults { startCommitDefaultsRead(session: session) }
+        if work.repositoryMetadata { scheduleStashRefresh(session: session) }
         if work.status {
             await refresh(session: session, cause: .watcher, watcherGeneration: watcherGeneration)
         } else if scope != .workingTree {
@@ -616,9 +624,12 @@ final class WindowState {
         guard case let .changeset(document)? = diffLoader.content else { return false }
         return document.sections.contains { if case .failed = $0.outcome { return true } else { return false } }
     }
+}
 
-    // MARK: - Diff
+// MARK: - Diff
 
+/// Loading the selection's diff.
+extension WindowState {
     /// A setting that changes diff content changed. The diff reloads at once (or is
     /// marked stale while hidden); the line counts depend on Hide Whitespace too, so
     /// a refresh follows to recompute them.
@@ -839,7 +850,13 @@ extension WindowState {
     }
 
     private func select(scope newScope: DiffScope, commit: CommitSummary?) {
-        guard let session, !isClosed, newScope != scope else { return }
+        guard let session, !isClosed else { return }
+        guard newScope != scope else {
+            // Two stashes can share a commit under different messages, and an abbreviation
+            // can lengthen: the diff stays, the label follows the summary just chosen.
+            if let commit { selectedCommit = commit }
+            return
+        }
         session.scopeSerial += 1
         // Leaving the working tree drops its unfinished status and line-count reads, so a
         // churn still waiting on either needs a read of its own.

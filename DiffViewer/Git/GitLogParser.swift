@@ -66,7 +66,7 @@ enum GitLogParser {
         return commits
     }
 
-    private static func isObjectID(_ field: String) -> Bool {
+    static func isObjectID(_ field: String) -> Bool {
         let bytes = field.utf8
         guard objectIDLengths.contains(bytes.count) else { return false }
         return bytes.allSatisfy { byte in

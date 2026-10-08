@@ -41,6 +41,10 @@ final class RepoSession {
     /// finish in. Separate from `headCheckSerial` because the two run independently: a
     /// HEAD-state read must not cancel a HEAD check, nor a HEAD check a HEAD-state read.
     var headStateCheckSerial = 0
+    /// Incremented per stash-list read, so only the newest read publishes.
+    var stashSerial = 0
+    /// The newest stash-list read. Older ones run on; their tickets keep them from publishing.
+    var stashTask: Task<Void, Never>?
     /// The commit-list read in flight, if any.
     var historyTask: Task<Void, Never>?
     /// The last unpushed read. Keyed by commit ids, so it stays true for its key and a

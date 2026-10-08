@@ -26,6 +26,7 @@ struct RepoEventFilterTests {
         (".git/rebase-merge", .commitState),
         (".git/rebase-merge/done", .commitState),
         (".git/rebase-apply/patch", .commitState),
+        (".git/logs/refs/stash", .refs),
         (".git/config", .configuration),
         (".git/config.worktree", .configuration),
         (".git/info/exclude", .configuration),

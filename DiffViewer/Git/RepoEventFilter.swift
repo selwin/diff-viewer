@@ -13,8 +13,9 @@ enum RepoChange: Hashable, Sendable {
 }
 
 /// Sorts FSEvents paths into `RepoChange`s and drops the ones nothing shown depends on,
-/// such as `.git/objects` and `.git/logs`, which git touches on every operation. A
-/// configured dependency, such as a commit template kept under `.git`, is kept by path.
+/// such as `.git/objects` and `.git/logs`, which git touches on every operation, except
+/// the stash reflog. A configured dependency, such as a commit template kept under `.git`,
+/// is kept by path.
 enum RepoEventFilter {
     private static let scanFlags = FSEventStreamEventFlags(
         kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
@@ -57,6 +58,8 @@ enum RepoEventFilter {
         default: break
         }
         if rel.hasPrefix("refs/") { return .refs }
+        // Dropping a stash below the top rewrites only this reflog, leaving `refs/stash` alone.
+        if rel == "logs/refs/stash" { return .refs }
         // The directory itself too: starting or finishing a rebase creates or removes it.
         for state in ["rebase-merge", "rebase-apply"] where rel == state || rel.hasPrefix(state + "/") {
             return .commitState

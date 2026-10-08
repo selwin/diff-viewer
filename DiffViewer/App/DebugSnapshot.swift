@@ -22,6 +22,7 @@ import Foundation
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way;
 ///   `DIFFVIEWER_BRANCH_PICKER_TAB=merge` opens it on the Merge tab.
+/// - `DIFFVIEWER_STASH_PICKER=1` opens the stash picker popover, rendered the same way.
 /// - `DIFFVIEWER_NEW_BRANCH_SHEET=1` opens the New Branch sheet, rendered like the commit
 ///   sheet; `DIFFVIEWER_KEYS` types into its name field.
 /// - `DIFFVIEWER_MERGE_SHEET=<branch>` opens the Merge sheet for that local branch (or a
@@ -107,12 +108,14 @@ enum DebugLaunchOptions {
             let commitSheet = env["DIFFVIEWER_COMMIT_SHEET"] == "1"
             let commitPicker = env["DIFFVIEWER_COMMIT_PICKER"] == "1"
             let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
+            let stashPicker = env["DIFFVIEWER_STASH_PICKER"] == "1"
             let newBranchSheet = env["DIFFVIEWER_NEW_BRANCH_SHEET"] == "1"
             let findQuery = env["DIFFVIEWER_FIND"] ?? ""
             // Any other value is ignored, so a typo never clears the saved state.
             let trayExpansion = ["expanded": true, "collapsed": false][env["DIFFVIEWER_STAGING_TRAY"] ?? ""]
             let needsWindow =
-                !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || newBranchSheet
+                !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || stashPicker
+                || newBranchSheet
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
                 || env["DIFFVIEWER_MERGE_SHEET"] != nil
@@ -178,6 +181,7 @@ enum DebugLaunchOptions {
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
+                windowState.isStashPickerPresented = stashPicker
                 windowState.isNewBranchSheetPresented = newBranchSheet
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
@@ -504,18 +508,6 @@ enum DebugLaunchOptions {
             else { return }
             pane.mouseDown(with: event)
             return
-        }
-    }
-
-    /// A picker popover's window while it is up: a child of `window` hosting either
-    /// picker's container.
-    @MainActor
-    private static func pickerWindow(of window: NSWindow) -> NSWindow? {
-        let candidates = (window.childWindows ?? []) + NSApp.windows
-        return candidates.first { candidate in
-            guard candidate.isVisible, let content = candidate.contentView else { return false }
-            return content.descendant(CommitPickerContainerView.self) != nil
-                || content.descendant(BranchPickerContainerView.self) != nil
         }
     }
 

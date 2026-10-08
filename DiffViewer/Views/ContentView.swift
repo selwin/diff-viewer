@@ -27,6 +27,13 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(focusedList: $focusedSidebarList)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 280)
+                // On the sidebar, not the split view, so it sits in the sidebar's part of
+                // the title bar beside the sidebar toggle.
+                .toolbar {
+                    ToolbarItem {
+                        StashesCapsuleView()
+                    }
+                }
         } detail: {
             detail
         }
