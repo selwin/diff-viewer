@@ -25,6 +25,7 @@ enum StubCall {
     case commitDefaults
     case stagedPatch
     case mergePreview
+    case stashes
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -166,6 +167,9 @@ actor StubRepoClient: RepoClient {
     private var failsCommitSha = false
     /// Every ref `commitSha(of:)` was asked to resolve, in order.
     private(set) var commitShaCalls: [String] = []
+    private var stubbedStashes: [StashEntry] = []
+    private var failsStashes = false
+    private(set) var stashesCalls = 0
     private var stubbedUnpushed: Set<String> = []
     private var failsUnpushed = false
     /// Every `unpushedCommits` read, in order.
@@ -528,6 +532,8 @@ actor StubRepoClient: RepoClient {
 
     func set(commitSha sha: String?, for ref: String) { stubbedCommitShas[ref] = sha }
     func fail(commitSha on: Bool) { failsCommitSha = on }
+    func set(stashes list: [StashEntry]) { stubbedStashes = list }
+    func fail(stashes on: Bool) { failsStashes = on }
     func set(unpushed shas: Set<String>) { stubbedUnpushed = shas }
     func fail(unpushed on: Bool) { failsUnpushed = on }
 
@@ -537,6 +543,17 @@ actor StubRepoClient: RepoClient {
         if let sha = stubbedCommitShas[ref] { return sha }
         guard ref.hasPrefix("refs/heads/") else { return nil }
         return stubbedLocalBranches.first { "refs/heads/\($0.name)" == ref }?.tipSha
+    }
+
+    func stashes() async throws -> [StashEntry] {
+        stashesCalls += 1
+        // The whole result is taken before suspending, the way `status()` does: a held read
+        // answers for the repository as it was when asked, list or failure.
+        let snapshot = stubbedStashes
+        let fails = failsStashes
+        if isHeld(.stashes) { await park(.stashes) }
+        if fails { throw ProcessError.failed(command: "git stash list", status: 128, stderr: "gone") }
+        return snapshot
     }
 
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {

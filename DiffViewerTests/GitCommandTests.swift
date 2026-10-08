@@ -1671,6 +1671,79 @@ import Testing
         }
     }
 
+    // MARK: Stashes
+
+    /// A repository with `a.txt` and `b.txt` committed, ready to stash edits to.
+    private func stashableRepo() async throws -> Repo {
+        try await committedRepo(["a.txt": "one\ntwo\n", "b.txt": "x\n"])
+    }
+
+    @Test func stashesListNewestFirstWithTheirSourceBranches() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "first\n")
+        try await repo.git(["stash", "push", "-m", "first"])
+        try await repo.git(["switch", "-c", "feature"])
+        try repo.write("a.txt", "second\n")
+        try await repo.git(["stash", "push", "-m", "second"])
+
+        let stashes = try await repo.client.stashes()
+        #expect(stashes.map(\.message) == ["second", "first"])
+        #expect(stashes.map(\.sourceBranch) == ["feature", "main"])
+    }
+
+    @Test func stashChurnCountsStagedAndUnstagedChanges() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "one\nTWO\nthree\n")
+        try repo.write("b.txt", "y\n")
+        try await repo.git(["add", "b.txt"])
+        try await repo.git(["stash", "push"])
+
+        let stash = try #require(try await repo.client.stashes().first)
+        #expect(stash.churn == StashEntry.Churn(additions: 3, deletions: 2))
+    }
+
+    @Test func anUntrackedOnlyStashHasNoChurnButAnUntrackedParent() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("new.txt", "fresh\n")
+        try await repo.git(["stash", "push", "--include-untracked"])
+
+        let stash = try #require(try await repo.client.stashes().first)
+        #expect(stash.churn == StashEntry.Churn(additions: 0, deletions: 0))
+        #expect(stash.hasUntrackedParent)
+    }
+
+    /// Git writes the third parent for `-u` even when there was nothing untracked.
+    @Test func aTrackedOnlyIncludeUntrackedStashIsStillFlagged() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "changed\n")
+        try await repo.git(["stash", "push", "--include-untracked"])
+        try repo.write("b.txt", "changed\n")
+        try await repo.git(["stash", "push"])
+
+        let stashes = try await repo.client.stashes()
+        #expect(stashes.map(\.hasUntrackedParent) == [false, true])
+    }
+
+    /// `stash store` of a commit that is not on top adds a second reflog entry for it.
+    @Test func entriesSharingACommitStayDistinct() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "one\n")
+        try await repo.git(["stash", "push", "-m", "older"])
+        try repo.write("a.txt", "two\n")
+        try await repo.git(["stash", "push", "-m", "newer"])
+        let older = try await repo.git(["rev-parse", "stash@{1}"])
+        try await repo.git(["stash", "store", "-m", "custom", older])
+
+        let stashes = try await repo.client.stashes()
+        #expect(stashes.map(\.message) == ["custom", "newer", "older"])
+        #expect(stashes[0].sha == stashes[2].sha)
+    }
+
+    @Test func noStashesIsAnEmptyList() async throws {
+        let repo = try await stashableRepo()
+        #expect(try await repo.client.stashes().isEmpty)
+    }
+
     // MARK: Fingerprints
 
     /// A repository with one committed file and an unstaged edit to it.

@@ -1,6 +1,6 @@
 import AppKit
 
-/// The header both pickers share: a title over a subtitle and up to three accessory views.
+/// Shared picker header: a title over a subtitle and up to three accessory views.
 /// It draws no background, so the popover's glass shows.
 ///
 /// Accessories report their size through `intrinsicContentSize` and are placed by their

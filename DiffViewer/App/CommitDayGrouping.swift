@@ -24,7 +24,8 @@ enum RecencyGroup: CaseIterable, Sendable {
 /// Every input is injected so tests can pin the calendar, the zone and "now".
 struct CommitDayGrouping {
     private let calendar: Calendar
-    private let now: Date
+    /// The presentation time every grouping decision is made against.
+    let now: Date
     private let dayMonth: DateFormatter
     private let dayMonthYear: DateFormatter
     private let time: DateFormatter

@@ -155,7 +155,7 @@ struct WindowStateBranchPickerTests {
     // MARK: Presentation
 
     private static let overlays: [WindowState.Overlay] = [
-        .commitSheet, .commitPicker, .branchPicker, .newBranchSheet, .mergeSheet,
+        .commitSheet, .commitPicker, .branchPicker, .stashPicker, .newBranchSheet, .mergeSheet,
     ]
 
     private func setPresented(_ overlay: WindowState.Overlay, _ on: Bool, in state: WindowState) {
@@ -163,6 +163,7 @@ struct WindowStateBranchPickerTests {
         case .commitSheet: state.isCommitSheetPresented = on
         case .commitPicker: state.isCommitPickerPresented = on
         case .branchPicker: state.isBranchPickerPresented = on
+        case .stashPicker: state.isStashPickerPresented = on
         case .newBranchSheet: state.isNewBranchSheetPresented = on
         case .mergeSheet: state.pendingMerge = on ? mergeTarget : nil
         }
@@ -173,13 +174,16 @@ struct WindowStateBranchPickerTests {
         case .commitSheet: state.canOpenCommitSheet
         case .commitPicker: state.canOpenCommitPicker
         case .branchPicker: state.canOpenBranchPicker
+        case .stashPicker: state.canOpenStashPicker
         case .newBranchSheet: state.canOpenNewBranchSheet
         case .mergeSheet: state.canOpenMergeSheet
         }
     }
 
     /// Only one picker or sheet is up at a time, and Stage All waits for it to close.
-    @Test(arguments: [WindowState.Overlay.commitSheet, .commitPicker, .branchPicker, .newBranchSheet, .mergeSheet])
+    @Test(arguments: [
+        WindowState.Overlay.commitSheet, .commitPicker, .branchPicker, .stashPicker, .newBranchSheet, .mergeSheet,
+    ])
     func anOpenOverlayBlocksTheOthersAndStageAll(_ presented: WindowState.Overlay) async {
         let h = Harness()
         let state = h.makeState()
