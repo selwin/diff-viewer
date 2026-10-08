@@ -9,7 +9,7 @@ final class PickerCopyButton: NSButton {
 
     private static let feedbackDuration: TimeInterval = 1.2
     private static let hoverDuration: TimeInterval = 0.15
-    private static let copyImage = symbol("doc.on.doc")
+    private static let copyImage = symbol("square.on.square")
     private static let copiedImage = symbol("checkmark")
 
     /// After the copy; the picker returns focus to its search field.

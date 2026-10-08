@@ -57,7 +57,7 @@ extension DiffPaneView {
         let copyRect: NSRect
     }
 
-    private static let scopeCopyImage = scopeSymbol("doc.on.doc")
+    private static let scopeCopyImage = scopeSymbol("square.on.square")
     private static let scopeCopiedImage = scopeSymbol("checkmark")
 
     private static func scopeSymbol(_ name: String) -> NSImage? {

@@ -33,9 +33,9 @@ enum PickerStyle {
 
     static let titleFont = NSFont.systemFont(ofSize: 18, weight: .bold)
     static let headerStatusFont = NSFont.systemFont(ofSize: 12)
-    static let nameFont = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
+    static let nameFont = NSFont.systemFont(ofSize: 13.5, weight: .medium)
     /// A search's matched characters, a step heavier than the name.
-    static let matchFont = NSFont.systemFont(ofSize: 13.5, weight: .heavy)
+    static let matchFont = NSFont.systemFont(ofSize: 13.5, weight: .bold)
     static let metaFont = NSFont.systemFont(ofSize: 11.5)
     static let sectionFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let pillFont = NSFont.systemFont(ofSize: 12, weight: .semibold)

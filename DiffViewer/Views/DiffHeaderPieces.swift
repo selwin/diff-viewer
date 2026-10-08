@@ -59,6 +59,10 @@ struct FileHeaderView: View {
                         .layoutPriority(1)
                 }
                 CopyButton(label: "Copy Relative Path", action: copyRelativePath)
+                    // Tucked closer to the name than the row's spacing, past the button's
+                    // hover padding; the glyph also sits a little high against the text.
+                    .padding(.leading, -6)
+                    .offset(y: 1)
                 if let showsPreview {
                     Picker("View", selection: showsPreview) {
                         Label("Preview", systemImage: "photo").tag(true)
@@ -111,7 +115,7 @@ struct CopyButton: View {
 
     var body: some View {
         Button(action: copy) {
-            Image(systemName: showsCheckmark ? "checkmark" : "doc.on.doc")
+            Image(systemName: showsCheckmark ? "checkmark" : "square.on.square")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(glyphStyle)
                 .contentTransition(.symbolEffect(.replace))

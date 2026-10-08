@@ -9,6 +9,9 @@ extension DiffPaneView {
 
     // MARK: - File header
 
+    /// `HeaderStrip`'s padding, so the badge lines up with the file header above the panes.
+    private static let fileHeaderInset: CGFloat = 12
+
     /// The same layout as `FileHeaderView`, split across the two panes: the old pane
     /// names the file, the new pane carries the trailing rail with the directory and the
     /// churn. In the rail the counts are right-aligned and the directory is truncated into
@@ -28,7 +31,7 @@ extension DiffPaneView {
         case .old:
             let badgeSize = rowRect.height - 6
             let badgeRect = NSRect(
-                x: rowRect.minX + textInset, y: rowRect.minY + 3, width: badgeSize, height: badgeSize)
+                x: rowRect.minX + Self.fileHeaderInset, y: rowRect.minY + 3, width: badgeSize, height: badgeSize)
             drawBadge(section.file.kind, in: badgeRect, context: context)
             let textX = badgeRect.maxX + 6
             if let name = lines.name,
