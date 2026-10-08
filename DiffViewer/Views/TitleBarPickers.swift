@@ -12,22 +12,35 @@ struct BranchPickerView: View {
     @State private var departure: SegmentDeparture?
     /// How far the departing segments have collapsed, 0 to 1.
     @State private var departureProgress = 0.0
+    /// What the pill shows, set one update after the window state changes, so a switch
+    /// starts from what was on screen.
+    @State private var shown: PillFace?
+    /// The face before a branch switch, fading out while the pill eases to the new width.
+    @State private var previous: PillFace?
+    /// How far the switch has eased from `previous` to `shown`, 0 to 1.
+    @State private var switchProgress = 0.0
 
-    /// How long a departing segment takes to collapse.
+    /// How long a departing segment takes to collapse, and a switch to ease.
     static let collapseDuration = Duration.milliseconds(250)
 
     var body: some View {
         @Bindable var windowState = windowState
-        let live = windowState.currentBranchSync
+        let current = PillFace(title: windowState.branchDisplayTitle, sync: windowState.currentBranchSync)
+        let face = shown ?? settled(current, after: PillFace(title: current.title, sync: nil))
+        let live = face.sync
         let sync = live.map { departure?.applied(to: $0) ?? $0 }
         let showsSegments = sync?.showsSegments ?? false
-        // Eased, so the collapse starts and ends gently.
-        let remaining = 1 - departureProgress * departureProgress * (3 - 2 * departureProgress)
+        let remaining = 1 - Self.eased(departureProgress)
         // Every segment is leaving, so the divider goes with them.
         let tailDeparts = departure != nil && !(live?.showsSegments ?? false)
         // Otherwise one segment leaves on its own, and the other stays.
         let departsPull = !tailDeparts && live.map { departure?.departsPull(in: $0) ?? false } ?? false
         let departsPush = !tailDeparts && live.map { departure?.departsPush(in: $0) ?? false } ?? false
+        let fade = Crossfade(progress: Self.easedOut(switchProgress))
+        // The name's end padding narrows beside segments, and eases with a switch.
+        let trailing = showsSegments ? 14 - 4 * (tailDeparts ? remaining : 1) : 14
+        let previousTrailing: CGFloat = previous?.sync?.showsSegments == true ? 10 : 14
+        let nameTrailing = previous == nil ? trailing : previousTrailing + (trailing - previousTrailing) * fade.progress
         HStack(spacing: 0) {
             // Capped like the scope picker, so a long branch name can't push the toolbar's
             // other items into overflow. Only the name part is capped: the name keeps the
@@ -36,11 +49,14 @@ struct BranchPickerView: View {
                 Button {
                     windowState.isBranchPickerPresented = true
                 } label: {
-                    TitleBarPickerContent(icon: .gitBranch, title: windowState.branchDisplayTitle)
-                        .padding(.leading, 14)
-                        .padding(.trailing, showsSegments ? 14 - 4 * (tailDeparts ? remaining : 1) : 14)
-                        .frame(height: 36)
-                        .modifier(PillPartHover { isBranchTinted = $0 })
+                    TitleBarPickerContent(
+                        icon: .gitBranch, title: face.title,
+                        transition: previous.map { TitleTransition(previous: $0.title, fade: fade) }
+                    )
+                    .padding(.leading, 14)
+                    .padding(.trailing, nameTrailing)
+                    .frame(height: 36)
+                    .modifier(PillPartHover { isBranchTinted = $0 })
                 }
                 .buttonStyle(.plain)
                 .disabled(!windowState.canOpenBranchPicker)
@@ -49,31 +65,36 @@ struct BranchPickerView: View {
                     BranchPickerPopover()
                 }
             }
-            if let sync, showsSegments {
-                HStack(spacing: 0) {
-                    Rectangle()
-                        .fill(.separator)
-                        .frame(width: 1, height: 18)
-                        // Steps aside for a tinted neighbour, like a native segmented control's
-                        // separator. Opacity, not removal, so the pill's width doesn't change.
-                        .opacity(isBranchTinted || isLeadingSegmentTinted ? 0 : 1)
-                    BranchSyncSegments(
-                        sync: sync,
-                        pullWidth: departsPull ? remaining : 1,
-                        pushWidth: departsPush ? remaining : 1,
-                        onLeadingTintChange: { isLeadingSegmentTinted = $0 }
-                    )
-                    .fixedSize()
-                    // Disabled while another sheet or picker is up, like the branch button.
-                    .disabled(!windowState.canOpenBranchPicker)
+            if let previous {
+                // Both branches' segments are laid out, so the pill's width moves straight from
+                // the old total to the new one.
+                CrossfadeLayout(progress: fade.progress) {
+                    switchingSegments(previous.sync)
+                        .opacity(fade.outgoing)
+                    switchingSegments(face.sync)
+                        .opacity(fade.incoming)
                 }
-                .modifier(Collapsing(width: tailDeparts ? remaining : 1))
+                .clipped()
+                .allowsHitTesting(false)
+            } else if let sync, showsSegments {
+                segments(sync: sync, remaining: remaining, departsPull: departsPull, departsPush: departsPush)
+                    .modifier(Collapsing(width: tailDeparts ? remaining : 1))
             }
         }
         // Clips each part's hover tint to the glass's round ends.
         .clipShape(Capsule())
         // Its own glass, since the toolbar's would wrap both pickers in one capsule.
         .glassEffect(in: .capsule)
+        .onChange(of: current, initial: true) { _, new in
+            let from = shown ?? PillFace(title: new.title, sync: nil)
+            let next = settled(new, after: from)
+            // A switch eases from what was on screen; anything else shows at once.
+            if next.title != from.title, !from.title.isEmpty, !reduceMotion {
+                previous = from
+                switchProgress = 0
+            }
+            shown = next
+        }
         .onChange(of: live) { old, new in
             if !reduceMotion, let next = SegmentDeparture.between(old, new) {
                 departure = next
@@ -84,20 +105,88 @@ struct BranchPickerView: View {
         }
         .task(id: departure) {
             guard departure != nil else { return }
-            // Stepped by hand rather than animated: the toolbar sizes its item from the
-            // pill's actual width, so only real width changes move the neighbours with it.
-            let start = ContinuousClock.now
-            while !Task.isCancelled {
-                let progress = (ContinuousClock.now - start) / Self.collapseDuration
-                if progress >= 1 { break }
-                departureProgress = progress
-                try? await Task.sleep(for: .milliseconds(8))
-            }
-            guard !Task.isCancelled else { return }
+            guard await Self.step({ departureProgress = $0 }) else { return }
             departure = nil
             departureProgress = 0
         }
+        .task(id: previous) {
+            guard previous != nil else { return }
+            guard await Self.step({ switchProgress = $0 }) else { return }
+            previous = nil
+            switchProgress = 0
+        }
     }
+
+    /// The face to show for `new`. The branch list and HEAD are read separately; until they
+    /// name the same branch, the segments stay as they were, or hide if the name changed,
+    /// so one branch's segments never sit beside another's name.
+    private func settled(_ new: PillFace, after old: PillFace) -> PillFace {
+        guard let sync = new.sync, sync.branch != windowState.currentBranchName else { return new }
+        return PillFace(title: new.title, sync: new.title == old.title ? old.sync : nil)
+    }
+
+    /// The divider, then Pull and Push or Publish.
+    private func segments(
+        sync: CurrentBranchSyncPresentation, remaining: Double, departsPull: Bool, departsPush: Bool
+    ) -> some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(.separator)
+                .frame(width: 1, height: 18)
+                // Steps aside for a tinted neighbour, like a native segmented control's
+                // separator. Opacity, not removal, so the pill's width doesn't change.
+                .opacity(isBranchTinted || isLeadingSegmentTinted ? 0 : 1)
+            BranchSyncSegments(
+                sync: sync,
+                pullWidth: departsPull ? remaining : 1,
+                pushWidth: departsPush ? remaining : 1,
+                onLeadingTintChange: { isLeadingSegmentTinted = $0 }
+            )
+            .fixedSize()
+            // Disabled while another sheet or picker is up, like the branch button.
+            .disabled(!windowState.canOpenBranchPicker)
+        }
+    }
+
+    /// One side of a switch's segments: a branch's segments, or nothing at zero width.
+    @ViewBuilder
+    private func switchingSegments(_ sync: CurrentBranchSyncPresentation?) -> some View {
+        if let sync, sync.showsSegments {
+            segments(sync: sync, remaining: 1, departsPull: false, departsPush: false)
+        } else {
+            Color.clear.frame(width: 0, height: 0)
+        }
+    }
+
+    /// Eased, so a width change starts and ends gently.
+    private static func eased(_ progress: Double) -> Double {
+        progress * progress * (3 - 2 * progress)
+    }
+
+    /// Fast at first and gentle at the end, so a switch answers the click at once.
+    private static func easedOut(_ progress: Double) -> Double {
+        1 - pow(1 - progress, 3)
+    }
+
+    /// Reports progress from 0 towards 1 over `collapseDuration`; false if cancelled first.
+    /// Stepped by hand rather than animated: the toolbar sizes its item from the pill's
+    /// actual width, so only real width changes move the neighbours with it.
+    private static func step(_ update: (Double) -> Void) async -> Bool {
+        let start = ContinuousClock.now
+        while !Task.isCancelled {
+            let progress = (ContinuousClock.now - start) / collapseDuration
+            if progress >= 1 { return true }
+            update(progress)
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+        return false
+    }
+}
+
+/// The pill's name and the segments beside it.
+private struct PillFace: Equatable {
+    let title: String
+    let sync: CurrentBranchSyncPresentation?
 }
 
 /// The pill's Pull, then Push or Publish, each shown only when the sync rules say so.
@@ -338,6 +427,8 @@ struct ScopePickerView: View {
 private struct TitleBarPickerContent: View {
     let icon: ImageResource
     let title: String
+    /// Set while the title changes, so the face eases to the new title's width.
+    var transition: TitleTransition?
 
     // A plain-style button draws no disabled state of its own, so the face dims itself.
     @Environment(\.isEnabled) private var isEnabled
@@ -350,17 +441,77 @@ private struct TitleBarPickerContent: View {
                 .resizable()
                 .frame(width: 14, height: 14)
                 .foregroundStyle(.secondary)
-            Text(title)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-                // Centred by its line box, the text reads low against the icons; lift it to the eye.
-                .offset(y: -1)
+            if let transition {
+                CrossfadeLayout(progress: transition.fade.progress) {
+                    titleText(transition.previous)
+                        .opacity(transition.fade.outgoing)
+                        .accessibilityHidden(true)
+                    titleText(title)
+                        .opacity(transition.fade.incoming)
+                }
+                .clipped()
+            } else {
+                titleText(title)
+            }
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func titleText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+            // Centred by its line box, the text reads low against the icons; lift it to the eye.
+            .offset(y: -1)
+    }
+}
+
+/// A title on its way out, and how the old and new titles are fading.
+private struct TitleTransition {
+    let previous: String
+    let fade: Crossfade
+}
+
+/// How far a switch has eased, 0 to 1, and how strongly the old and new faces show.
+private struct Crossfade {
+    let progress: Double
+
+    // The fades barely overlap: two different faces drawn on top of each other at similar
+    // strength read as a smudge.
+    var outgoing: Double { max(0, 1 - progress / 0.4) }
+    var incoming: Double { max(0, (progress - 0.3) / 0.7) }
+}
+
+/// Stacks the old face and the new one, and reports a width between theirs, so the pill
+/// eases to the new width instead of jumping. Each keeps its own width and is clipped
+/// rather than truncated while the width moves. Lays out exactly two children.
+private struct CrossfadeLayout: Layout {
+    let progress: Double
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        assert(subviews.count == 2)
+        let from = idealSize(of: subviews[0], height: proposal.height)
+        let to = idealSize(of: subviews[1], height: proposal.height)
+        let width = from.width + (to.width - from.width) * progress
+        // Never wider than offered, so a capped pill still holds its width.
+        return CGSize(width: min(width, proposal.width ?? width), height: max(from.height, to.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            let ideal = idealSize(of: subview, height: proposal.height)
+            subview.place(
+                at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                proposal: ProposedViewSize(width: ideal.width, height: bounds.height))
+        }
+    }
+
+    private func idealSize(of subview: LayoutSubview, height: CGFloat?) -> CGSize {
+        subview.sizeThatFits(ProposedViewSize(width: nil, height: height))
     }
 }
 
