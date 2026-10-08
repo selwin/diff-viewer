@@ -117,11 +117,11 @@ struct BranchPickerView: View {
         }
     }
 
-    /// The face to show for `new`. The branch list and HEAD are read separately; until they
-    /// name the same branch, the segments stay as they were, or hide if the name changed,
-    /// so one branch's segments never sit beside another's name.
+    /// The face to show for `new`. Segments for a branch other than the one named stay as
+    /// they were while the name holds, and hide when it changes, so one branch's segments
+    /// never sit beside another's name.
     private func settled(_ new: PillFace, after old: PillFace) -> PillFace {
-        guard let sync = new.sync, sync.branch != windowState.currentBranchName else { return new }
+        guard let sync = new.sync, sync.branch != windowState.displayedBranchName else { return new }
         return PillFace(title: new.title, sync: new.title == old.title ? old.sync : nil)
     }
 

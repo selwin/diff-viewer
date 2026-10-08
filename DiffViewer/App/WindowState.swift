@@ -119,6 +119,9 @@ final class WindowState {
     private(set) var history = CommitHistory()
     /// Where HEAD points, or nil until the first read returns: nil shows no branch, not a wrong one.
     private(set) var headState: HeadState?
+    /// The branch a checkout is moving to, which the title bar's pill names until a branch
+    /// read confirms where HEAD is. `headState` stays what the last read found.
+    private(set) var pendingBranchName: String?
     /// The local branches the picker lists, read with `headState` on the same ticket.
     private(set) var branches: [LocalBranch] = []
     /// Every remote-tracking branch, tracked or not, published with `branches`.
@@ -334,6 +337,7 @@ final class WindowState {
         isStashPickerPresented = false
         isNewBranchSheetPresented = false
         pendingMerge = nil
+        pendingBranchName = nil
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -1059,6 +1063,9 @@ extension WindowState {
         if let upstreamRemotesByBranch { configuredUpstreamRemotes = upstreamRemotesByBranch }
         if unpushed != unpushedCommitShas { unpushedCommitShas = unpushed }
         branchReadStatus = .loaded
+        // A name left pending by a failed read after the checkout. While a switch runs, it
+        // settles its own name, and an older read must not clear it early.
+        if !isSwitchingBranch { pendingBranchName = nil }
         publishPendingFetchRound(session: session)
         publishedBranchRead(session: session)
         return true
@@ -1459,7 +1466,7 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
             activeSync != ActiveSync(branch: branch, operation: .delete)
         else { return }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
+        await startHeadChange(session: session, checkoutBranchName: branch, clearsNewRemoteBranches: true) { client in
             try await client.switchBranch(to: branch)
         }
     }
@@ -1467,9 +1474,10 @@ extension WindowState {
     /// Runs `operation` (a checkout or a merge) on the write chain, holding `isSwitchingBranch`
     /// until it and its re-reads finish. The flag is set before the first suspension: callers
     /// guard on it. Only a checkout leaves the remote branches' "new" badges behind;
-    /// `clearsNewRemoteBranches` says whether this one does.
+    /// `clearsNewRemoteBranches` says whether this one does. `checkoutBranchName` is the
+    /// branch a checkout moves to; a merge leaves HEAD's branch where it is and passes nil.
     private func startHeadChange(
-        session: RepoSession, clearsNewRemoteBranches: Bool,
+        session: RepoSession, checkoutBranchName: String?, clearsNewRemoteBranches: Bool,
         operation: @escaping (any RepoClient) async throws -> Void
     ) async {
         isSwitchingBranch = true
@@ -1478,18 +1486,23 @@ extension WindowState {
         cancelCommitMessageGeneration()
         await enqueueWrite(session: session) { [weak self] in
             await self?.runHeadChange(
-                session: session, clearsNewRemoteBranches: clearsNewRemoteBranches, operation: operation)
+                session: session, checkoutBranchName: checkoutBranchName,
+                clearsNewRemoteBranches: clearsNewRemoteBranches,
+                operation: operation)
         }
     }
 
     /// `operation` is the git call that moves HEAD or its branch; everything after it is shared.
     private func runHeadChange(
-        session: RepoSession, clearsNewRemoteBranches: Bool,
+        session: RepoSession, checkoutBranchName: String?, clearsNewRemoteBranches: Bool,
         operation: (any RepoClient) async throws -> Void
     ) async {
         guard isLive(session) else { return }
         let headBefore = headState
         var failure: (any Error)?
+        // Set here rather than on request, so a checkout queued behind another write does
+        // not name its branch while it waits.
+        pendingBranchName = checkoutBranchName
         do { try await operation(session.client) } catch { failure = error }
         guard isLive(session) else { return }
         // Refresh after either outcome: a failed post-checkout hook can leave HEAD changed,
@@ -1520,8 +1533,14 @@ extension WindowState {
         // Reloads history only when HEAD moved or a previous read failed, and resets the
         // page when it did; two branches at one commit keep their list.
         await reloadHistoryIfHeadMoved(session: session)
-        await refreshHeadState(session: session)
+        // The pending name is settled by a read that published: if a newer read supersedes
+        // this one, wait for it.
+        await awaitBranchRead(session: session)
         guard isLive(session) else { return }
+        // A failed read keeps the HEAD from before the checkout. If git accepted the
+        // checkout, that HEAD is stale, so the pill keeps naming the new branch until a read
+        // succeeds; if git refused it, the old HEAD is still the best answer.
+        if failure != nil || branchReadStatus == .loaded { pendingBranchName = nil }
         // A failed post-checkout hook can still have moved HEAD, and a successful checkout
         // whose re-read failed still did. A failed checkout whose re-read also failed may
         // have moved HEAD unseen; dropping the flags beats leaving stale ones.
@@ -1537,7 +1556,7 @@ extension WindowState {
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {
         guard let session, !isClosed, !isSwitchingBranch else { return }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
+        await startHeadChange(session: session, checkoutBranchName: name, clearsNewRemoteBranches: true) { client in
             try await client.createBranch(name)
         }
     }
@@ -1553,7 +1572,9 @@ extension WindowState {
             errorMessage = branch.localNameCollisionMessage
             return
         }
-        await startHeadChange(session: session, clearsNewRemoteBranches: true) { client in
+        await startHeadChange(
+            session: session, checkoutBranchName: branch.name, clearsNewRemoteBranches: true
+        ) { client in
             try await client.checkoutTracking(branch: branch.name, trackingRef: branch.ref)
         }
     }
@@ -1564,7 +1585,7 @@ extension WindowState {
         guard let session, !isClosed, !isSwitchingBranch, headState == .named(target.destinationBranch) else {
             return
         }
-        await startHeadChange(session: session, clearsNewRemoteBranches: false) { client in
+        await startHeadChange(session: session, checkoutBranchName: nil, clearsNewRemoteBranches: false) { client in
             try await target.validateDestination(in: client)
             try await client.merge(sourceTipSha: target.sourceTipSha, sourceRef: target.sourceRef)
         }

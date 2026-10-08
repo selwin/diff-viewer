@@ -70,6 +70,52 @@ struct WindowStateBranchSwitchTests {
         #expect(state.errorMessage == nil)
     }
 
+    /// The pill names the checkout's branch, with that branch's segments, until the branch
+    /// read after it lands; then it shows what the read confirms: the new branch, or the
+    /// old one again for a refused checkout.
+    @Test(arguments: [true, false])
+    func checkoutNamesItsBranchUntilTheReadConfirms(accepted: Bool) async throws {
+        let (_, state, client, _) = try await settled()
+        await client.set(localBranches: ["main", "side"])
+        await state.refresh()
+        if accepted { await stubSwitch(client, to: "side") } else { await client.fail(switchBranch: true) }
+        await client.hold(.localBranches)
+
+        let task = Task { await state.switchBranch(to: "side") }
+        #expect(await eventually { await client.heldCount(.localBranches) == 1 })
+
+        #expect(state.branchDisplayTitle == "side")
+        #expect(state.currentBranchSync?.branch == "side")
+        #expect(state.headState == .named("main"))
+
+        await client.hold(.localBranches, false)
+        await client.release(.localBranches)
+        await task.value
+
+        #expect(state.pendingBranchName == nil)
+        #expect(state.branchDisplayTitle == (accepted ? "side" : "main"))
+    }
+
+    /// A failed read keeps the HEAD from before a checkout git accepted, so the pill keeps
+    /// the new name until a read succeeds rather than easing back to the old one.
+    @Test func aFailedReadKeepsTheNameOfAnAcceptedCheckout() async throws {
+        let (_, state, client, _) = try await settled()
+        await stubSwitch(client, to: "side")
+        await client.fail(localBranches: true)
+
+        await state.switchBranch(to: "side")
+
+        #expect(state.branchReadStatus == .failed)
+        #expect(state.headState == .named("main"))
+        #expect(state.branchDisplayTitle == "side")
+
+        await client.fail(localBranches: false)
+        await state.refresh()
+
+        #expect(state.pendingBranchName == nil)
+        #expect(state.headState == .named("side"))
+    }
+
     /// A commit's files and diff cannot change under a checkout, so commit scope re-reads
     /// neither; only the branch and its history can have moved.
     @Test func switchInCommitScopeReloadsHistoryAndHeadButNotTheCommit() async throws {
@@ -256,6 +302,7 @@ struct WindowStateBranchSwitchTests {
         let switchTask = Task { await state.switchBranch(to: "side") }
         #expect(await eventually { await state.isSwitchingBranch })
         #expect(await client.switchBranchCalls.isEmpty, "queued, not started")
+        #expect(state.branchDisplayTitle == "main", "nor named in the pill")
 
         await client.hold(.actions, false)
         await client.release(.actions)
@@ -343,6 +390,7 @@ struct WindowStateBranchSwitchTests {
         #expect(h.published.count == publishes)
         #expect(state.errorMessage == nil)
         #expect(state.headState == .named("main"))
+        #expect(state.pendingBranchName == nil)
         #expect(state.localBranches == ["main"])
         #expect(await client.localBranchesCalls == branchReads)
         #expect(await client.historyCalls == historyReads)
