@@ -70,9 +70,10 @@ struct BranchPickerView: View {
                 .modifier(Collapsing(width: tailDeparts ? remaining : 1))
             }
         }
-        .background(TitleBarCapsule(isOpen: windowState.isBranchPickerPresented))
-        // Clips each part's hover tint to the round ends.
+        // Clips each part's hover tint to the glass's round ends.
         .clipShape(Capsule())
+        // Its own glass, since the toolbar's would wrap both pickers in one capsule.
+        .glassEffect(in: .capsule)
         .onChange(of: live) { old, new in
             if !reduceMotion, let next = SegmentDeparture.between(old, new) {
                 departure = next
@@ -200,7 +201,7 @@ private struct SyncSegmentLabel: View {
     let title: String
     let shortcut: String?
     let state: PickerButtonState
-    /// The last segment pads its end so the title clears the capsule's round end.
+    /// The last segment pads its end so the title clears the pill's round end.
     let isLast: Bool
     var onTintChange: ((Bool) -> Void)?
 
@@ -215,9 +216,10 @@ private struct SyncSegmentLabel: View {
             Image(systemName: arrow)
                 .font(.system(size: 10, weight: .bold))
             Text(title)
-                .fontWeight(.medium)
+                .font(.system(size: 13, weight: .medium))
             if let shown = count ?? (isRunning ? lastCount : nil) {
                 Text("\(shown)")
+                    .font(.system(size: 13, weight: .medium))
                     .monospacedDigit()
             }
             // Styled as on the commit sheet's Commit button.
@@ -305,12 +307,16 @@ struct ScopePickerView: View {
             Button {
                 windowState.isCommitPickerPresented = true
             } label: {
-                TitleBarPickerLabel(
-                    icon: .gitCommit,
-                    title: windowState.scopeDisplayTitle,
-                    isOpen: windowState.isCommitPickerPresented)
+                TitleBarPickerContent(icon: .gitCommit, title: windowState.scopeDisplayTitle)
+                    // Wider than the height needs, so the text clears the round ends.
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    // The whole capsule opens the picker, not only the text.
+                    .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            // Its own glass, like the branch pill beside it.
+            .glassEffect(.regular.interactive(), in: .capsule)
             .disabled(!windowState.canOpenCommitPicker)
             .help(help)
             .popover(isPresented: $windowState.isCommitPickerPresented, arrowEdge: .bottom) {
@@ -328,34 +334,7 @@ struct ScopePickerView: View {
     }
 }
 
-/// The scope picker's face: a one-line outlined capsule at toolbar control height, tinted
-/// on hover and filled grey while its popover is open. Plain data in, so it does not
-/// depend on `WindowState`.
-private struct TitleBarPickerLabel: View {
-    let icon: ImageResource
-    let title: String
-    /// Whether the picker's popover is showing.
-    var isOpen = false
-
-    @State private var isHovering = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        TitleBarPickerContent(icon: icon, title: title)
-            // Wider than the height needs, so the text clears the capsule's round ends.
-            .padding(.horizontal, 14)
-            .frame(height: 36)
-            .background(TitleBarCapsule(isOpen: isOpen, isHovering: isHovering && isEnabled))
-            // The whole capsule opens the picker, not only the text.
-            .contentShape(Rectangle())
-            // Not `onHover`: in a toolbar item that makes AppKit draw its own bezel at rest.
-            .onContinuousHover { phase in
-                if case .active = phase { isHovering = true } else { isHovering = false }
-            }
-    }
-}
-
-/// What both title bar pickers show inside their capsule: an icon, the title and a chevron.
+/// What both title bar pickers show on their glass: an icon, the title and a chevron.
 private struct TitleBarPickerContent: View {
     let icon: ImageResource
     let title: String
@@ -372,7 +351,7 @@ private struct TitleBarPickerContent: View {
                 .frame(width: 14, height: 14)
                 .foregroundStyle(.secondary)
             Text(title)
-                .fontWeight(.medium)
+                .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
@@ -381,25 +360,6 @@ private struct TitleBarPickerContent: View {
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// The title bar pickers' outlined capsule: tinted on hover, filled grey while a popover is open.
-private struct TitleBarCapsule: View {
-    var isOpen = false
-    var isHovering = false
-
-    var body: some View {
-        if isOpen {
-            Capsule().fill(.quaternary)
-        } else {
-            Capsule()
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    if isHovering { Capsule().fill(.quinary) }
-                }
-                .overlay(Capsule().strokeBorder(.separator))
         }
     }
 }
