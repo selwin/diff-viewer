@@ -30,14 +30,25 @@ extension WindowState {
 
     static let scopeSelectionHelp = "Choose what to compare: the working tree, or a commit against its parent"
 
-    /// The branch picker's face: the current branch, or where a detached HEAD sits.
+    /// The branch picker's face: the branch a checkout is moving to, else the current
+    /// branch, or where a detached HEAD sits.
     var branchDisplayTitle: String {
-        headState?.displayTitle ?? ""
+        pendingBranchName ?? headState?.displayTitle ?? ""
     }
 
-    /// What the title bar pill's Pull and Push show. Nil when HEAD's branch isn't known.
+    /// The branch the pill names: the one a checkout is moving to, else HEAD's.
+    var displayedBranchName: String? {
+        pendingBranchName ?? currentBranchName
+    }
+
+    /// What the title bar pill's Pull and Push show, for the branch it names. Nil when that
+    /// branch isn't in the list.
     var currentBranchSync: CurrentBranchSyncPresentation? {
-        CurrentBranchSyncPresentation.make(snapshot: branchPickerSnapshot)
+        var snapshot = branchPickerSnapshot
+        // A checkout's branch is usually listed already, so its segments arrive with its
+        // name rather than partway through the pill's switch.
+        if let pendingBranchName { snapshot.headState = .named(pendingBranchName) }
+        return CurrentBranchSyncPresentation.make(snapshot: snapshot)
     }
 
     /// The branch picker's help: the upstream, named whenever there is one, and where the
