@@ -17,7 +17,7 @@ enum StagingTrayLayout {
     /// Room below the Changes list's last row so it can scroll clear of the staging capsule.
     static let changesCapsulePadding: CGFloat = 64
     /// The tray's header, commit button and padding.
-    static let trayChrome: CGFloat = 76
+    static let trayChrome: CGFloat = 80
     /// Extra top padding while the staging capsule sits on the tray's edge, so the capsule's
     /// lower half does not cover the header.
     static let capsuleClearance: CGFloat = 12
