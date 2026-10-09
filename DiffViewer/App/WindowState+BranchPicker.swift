@@ -30,6 +30,29 @@ extension WindowState {
         newBranchInitialName = nil
     }
 
+    /// What the New Branch sheet names as the branch it starts from.
+    var newBranchBaseTitle: String {
+        switch headState {
+        case let .named(name): name
+        case .detached: "Detached HEAD"
+        case nil: "Current branch"
+        }
+    }
+
+    /// HEAD's commit for the New Branch sheet, or nil when it can't be told for sure. Branch
+    /// state and history refresh separately, so after an outside checkout the history's
+    /// first commit may still be the old branch's tip.
+    var newBranchBaseCommit: CommitSummary? {
+        let tip: String? =
+            switch headState {
+            case .named: currentBranch?.tipSha
+            case let .detached(sha): sha
+            case nil: nil
+            }
+        guard let tip, let commit = history.commits.first, commit.ref.sha == tip else { return nil }
+        return commit
+    }
+
     /// Like `canOpenNewBranchSheet`: a merge changes the branch HEAD is on, which a queued
     /// switch is about to move.
     var canOpenMergeSheet: Bool {

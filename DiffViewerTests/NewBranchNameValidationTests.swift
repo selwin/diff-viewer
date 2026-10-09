@@ -91,11 +91,18 @@ struct NewBranchNameValidationTests {
             exists: { existing.contains($0) }, check: { await held.check($0) }, debounce: debounce)
     }
 
-    /// Blank, option-like and taken names are judged locally, so git is never asked.
+    /// Blank, locally invalid and taken names are judged without git.
     @Test(arguments: [
         (text: "   ", status: NewBranchNameValidation.Status.empty, message: String?.none),
-        (text: "-x", status: .invalid, message: "Not a valid branch name"),
-        (text: " main ", status: .exists, message: "A branch named main already exists"),
+        (
+            text: "-x", status: .invalid(reason: "Branch names can’t start with “-”"),
+            message: "Branch names can’t start with “-”"
+        ),
+        (
+            text: "a b", status: .invalid(reason: "Spaces aren’t allowed — use a dash"),
+            message: "Spaces aren’t allowed — use a dash"
+        ),
+        (text: " main ", status: .exists, message: "main already exists"),
     ])
     func aNameJudgedLocallyNeverAsksGit(text: String, status: NewBranchNameValidation.Status, message: String?) {
         let held = HeldCheck()
@@ -128,25 +135,71 @@ struct NewBranchNameValidationTests {
         #expect(validation.name == "feature/x")
     }
 
-    /// The answer for "foo" arrives after the field says "foo..": it must not enable
-    /// Create for the new text, which gets its own answer.
-    @Test func anAnswerForEarlierTextIsIgnored() async throws {
+    /// Each rule's message, the first failing rule winning; only what git forbids is flagged.
+    @Test(arguments: [
+        (name: "a b", message: String?.some("Spaces aren’t allowed — use a dash")),
+        (name: "a b~", message: "Spaces aren’t allowed — use a dash"),
+        (name: "a\tb", message: "Control characters aren’t allowed in branch names"),
+        (name: "a\u{01}b", message: "Control characters aren’t allowed in branch names"),
+        (name: "a\u{7F}b", message: "Control characters aren’t allowed in branch names"),
+        (name: "a:b?", message: "“:” can’t be used in a branch name"),
+        (name: "a~b", message: "“~” can’t be used in a branch name"),
+        (name: "a^b", message: "“^” can’t be used in a branch name"),
+        (name: "a?b", message: "“?” can’t be used in a branch name"),
+        (name: "a*b", message: "“*” can’t be used in a branch name"),
+        (name: "a[b", message: "“[” can’t be used in a branch name"),
+        (name: "a\\b", message: "“\\” can’t be used in a branch name"),
+        (name: "a//b..c", message: "“//” can’t be used in a branch name"),
+        (name: "a@{b", message: "“@{” can’t be used in a branch name"),
+        (name: "-a..b", message: "“..” can’t be used in a branch name"),
+        (name: "-a", message: "Branch names can’t start with “-”"),
+        (name: "/a", message: "Branch names can’t start or end with “/”"),
+        (name: "a/", message: "Branch names can’t start or end with “/”"),
+        (name: "a.", message: "Branch names can’t end with “.”"),
+        (name: "a.lock", message: "Branch names can’t end with “.lock”"),
+        (name: "topic-", message: nil),
+        (name: "a\u{00A0}b", message: nil),
+        (name: "feature/x", message: nil),
+    ])
+    func localValidationNamesTheFirstProblem(name: String, message: String?) {
+        #expect(NewBranchNameValidation.localValidationMessage(for: name) == message)
+    }
+
+    /// The answer for "foo" arrives after the field says "foo..": it must not replace the
+    /// reason the new text was already rejected for.
+    @Test func anAnswerCannotOverwriteALocallyInvalidName() async throws {
         let held = HeldCheck()
         let validation = model(held)
         validation.update("foo")
         let first = try #require(validation.pendingCheck)
         validation.update("foo..")
+        #expect(validation.pendingCheck == nil)
+
+        held.answer("foo", valid: true)
+        await first.value
+
+        #expect(validation.status == .invalid(reason: "“..” can’t be used in a branch name"))
+        #expect(held.asked == ["foo"])
+    }
+
+    /// The answer for "foo" arrives after the field says "a/.b": it must not enable Create
+    /// for the new text, which gets its own answer from git.
+    @Test func anAnswerForEarlierTextIsIgnored() async throws {
+        let held = HeldCheck()
+        let validation = model(held)
+        validation.update("foo")
+        let first = try #require(validation.pendingCheck)
+        validation.update("a/.b")
         let second = try #require(validation.pendingCheck)
 
         held.answer("foo", valid: true)
         await first.value
         #expect(validation.status == .pending)
-        #expect(!validation.canCreate)
 
-        held.answer("foo..", valid: false)
+        held.answer("a/.b", valid: false)
         await second.value
-        #expect(validation.status == .invalid)
-        #expect(held.asked == ["foo", "foo.."])
+        #expect(validation.status == .invalid(reason: "Not a valid branch name"))
+        #expect(held.asked == ["foo", "a/.b"])
     }
 
     /// A name typed while the first waits out its debounce cancels that wait, so git hears
@@ -215,7 +268,7 @@ struct NewBranchNameValidationTests {
     /// off until the check finishes.
     @Test(arguments: [
         (name: "feature-x", gitSays: true, status: NewBranchNameValidation.Status.valid),
-        (name: "a..b", gitSays: false, status: .invalid),
+        (name: "a/.b", gitSays: false, status: .invalid(reason: "Not a valid branch name")),
         (name: "main", gitSays: true, status: .exists),
     ])
     func anInitialNameIsValidated(name: String, gitSays: Bool, status: NewBranchNameValidation.Status) async {

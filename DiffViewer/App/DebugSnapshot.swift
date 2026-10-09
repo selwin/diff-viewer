@@ -182,6 +182,7 @@ enum DebugLaunchOptions {
                 windowState.isCommitPickerPresented = commitPicker
                 windowState.isBranchPickerPresented = branchPicker
                 windowState.isStashPickerPresented = stashPicker
+                windowState.newBranchInitialName = env["DIFFVIEWER_NEW_BRANCH_NAME"]
                 windowState.isNewBranchSheetPresented = newBranchSheet
                 let keys = (env["DIFFVIEWER_KEYS"] ?? "").split(separator: ",").map(String.init)
                 if !keys.isEmpty {
