@@ -19,7 +19,7 @@ struct StagingTrayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let sheetFill = Color(nsColor: .controlBackgroundColor).opacity(0.85)
-    private static let rowInsets = EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
+    private static let rowInsets = EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 4)
 
     var body: some View {
         let staged = windowState.stagedFiles
@@ -28,9 +28,14 @@ struct StagingTrayView: View {
             header(summary, stagedIDs: staged.map(\.id))
             if listHeight > 0 {
                 stagedList
-                    // Under Reduce Motion the toggle has no animation, so the list's own
-                    // fade is what cross-fades it in place of the slide.
-                    .transition(reduceMotion ? .opacity.animation(.easeInOut(duration: 0.2)) : .opacity)
+                    // Opens like a drawer but leaves at once: a list on its way out keeps its
+                    // old place and size, so the header would slide over its rows. Under
+                    // Reduce Motion the toggle has no animation, so the list fades itself.
+                    .transition(
+                        reduceMotion
+                            ? AnyTransition.opacity.animation(.easeInOut(duration: 0.2))
+                            : .asymmetric(insertion: AnyTransition(DrawerTransition()), removal: .identity)
+                    )
             }
             commitButton(summary)
         }
@@ -54,33 +59,39 @@ struct StagingTrayView: View {
             // Handed over before the list goes: once it is removed, the focus binding may
             // already read nil, and the sidebar's own fallback would not see it was focused.
             if isExpanded, focusedList.wrappedValue == .staged { focusedList.wrappedValue = .changes }
-            withAnimation(reduceMotion ? nil : .snappy) {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) {
                 windowState.preferences.setStagingTrayExpanded(!isExpanded, for: root)
             }
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                Text("Staged")
-                    .font(.system(size: 11, weight: .bold))
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // Centred on the title; on its baseline the chevron reads low.
+                HStack(spacing: 6) {
+                    // The app's heading size, as on the window title and the New Branch sheet.
+                    Text("Staged")
+                        .font(.system(size: 15, weight: .bold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
                 Text(summary.fileCountText)
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if let churn = summary.churn {
-                    ChurnLabel(stats: churn, font: .system(size: 11, weight: .medium).monospacedDigit())
+                    // The rows' own churn font, so the total reads as their sum.
+                    ChurnLabel(stats: churn)
                 }
             }
             .contentTransition(.numericText())
             .animation(.default, value: stagedIDs)
             .animation(.default, value: summary.churn)
-            .padding(.leading, 8)
+            // Lines the title up with the Changes heading and both lists' rows.
+            .padding(.leading, 10)
             // The list insets its rows 8pt more than this; matching it lines the total
             // up with the rows' churn.
             .padding(.trailing, 16)
-            .frame(height: 24)
+            .frame(height: 28)
         }
         .buttonStyle(TrayHeaderButtonStyle())
         .padding(.horizontal, 4)
@@ -130,6 +141,16 @@ struct StagingTrayView: View {
         .accessibilityLabel(summary.commitAccessibilityLabel)
         .padding(.horizontal, 8)
         .padding(.top, 6)
+    }
+}
+
+/// Opens the list like a drawer: its height grows from 0 with the rows pinned to its top,
+/// so they rise with the header from behind the commit button.
+private struct DrawerTransition: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .frame(height: phase.isIdentity ? nil : 0, alignment: .top)
+            .clipped()
     }
 }
 
