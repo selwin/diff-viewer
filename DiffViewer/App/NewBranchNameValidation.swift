@@ -1,7 +1,8 @@
 import Foundation
 
 /// Whether the New Branch sheet's name can be created, re-checked as the reader types.
-/// Git's own rules decide, through `check`, so the app keeps no copy of them.
+/// Checks common naming problems locally, with a reason the reader can act on; git
+/// validates the remaining rules through `check`.
 @MainActor
 @Observable
 final class NewBranchNameValidation {
@@ -11,7 +12,7 @@ final class NewBranchNameValidation {
         /// Waiting out the debounce, or for git's answer.
         case pending
         case valid
-        case invalid
+        case invalid(reason: String)
         /// A local branch already has the name.
         case exists
     }
@@ -45,11 +46,36 @@ final class NewBranchNameValidation {
     /// Why Create is off, or nil while there is nothing to say yet.
     var message: String? {
         switch status {
-        case .invalid: "Not a valid branch name"
-        case .exists: "A branch named \(name) already exists"
+        case .invalid(let reason): reason
+        case .exists: "\(name) already exists"
         case .empty, .pending, .valid: nil
         }
     }
+
+    /// Why git would reject the trimmed `name`, or nil when none of the rules checked here
+    /// apply. Unicode spaces pass because git accepts them.
+    static func localValidationMessage(for name: String) -> String? {
+        if name.unicodeScalars.contains(where: { $0.value == 0x20 }) {
+            return "Spaces aren’t allowed — use a dash"
+        }
+        if name.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
+            return "Control characters aren’t allowed in branch names"
+        }
+        if let scalar = name.unicodeScalars.first(where: { "~^:?*[\\".unicodeScalars.contains($0) }) {
+            return unusable(String(scalar))
+        }
+        let sequence = ["..", "@{", "//"]
+            .compactMap { sequence in name.range(of: sequence).map { (token: sequence, start: $0.lowerBound) } }
+            .min { $0.start < $1.start }
+        if let sequence { return unusable(sequence.token) }
+        if name.hasPrefix("-") { return "Branch names can’t start with “-”" }
+        if name.hasPrefix("/") || name.hasSuffix("/") { return "Branch names can’t start or end with “/”" }
+        if name.hasSuffix(".") { return "Branch names can’t end with “.”" }
+        if name.hasSuffix(".lock") { return "Branch names can’t end with “.lock”" }
+        return nil
+    }
+
+    private static func unusable(_ text: String) -> String { "“\(text)” can’t be used in a branch name" }
 
     /// Takes the field's text. Whitespace at either end changes nothing.
     func update(_ text: String) {
@@ -80,8 +106,8 @@ final class NewBranchNameValidation {
         cancel()
         if name.isEmpty {
             status = .empty
-        } else if name.hasPrefix("-") {
-            status = .invalid
+        } else if let reason = Self.localValidationMessage(for: name) {
+            status = .invalid(reason: reason)
         } else if exists(name) {
             status = .exists
         } else {
@@ -92,7 +118,8 @@ final class NewBranchNameValidation {
                 let valid = await check(name)
                 guard let self, generation == self.generation else { return }
                 // The list may have been re-read while git answered.
-                self.status = !valid ? .invalid : self.exists(name) ? .exists : .valid
+                self.status =
+                    !valid ? .invalid(reason: "Not a valid branch name") : self.exists(name) ? .exists : .valid
                 self.pendingCheck = nil
             }
         }
