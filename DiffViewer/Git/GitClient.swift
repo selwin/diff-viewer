@@ -215,7 +215,9 @@ struct GitClient: RepoClient {
         return try GitLogParser.parse(result.stdout)
     }
 
-    func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {
+    /// The files `commit` changed against its first parent, or the empty tree at a root
+    /// commit. `changedFiles(in:)` adds a stash's untracked files.
+    func firstParentChanges(in commit: CommitRef) async throws -> [ChangedFile] {
         let result = try await ProcessRunner.check(
             Self.executable,
             arguments: ["diff-tree"] + Self.commitComparisonFlags(commit)

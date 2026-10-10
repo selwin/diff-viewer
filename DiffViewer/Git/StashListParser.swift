@@ -12,8 +12,8 @@ enum StashListParseError: Error, LocalizedError {
 
 /// Parses `git stash list` written with the layout in `GitClient.stashes`: each record
 /// is NUL, six NUL-terminated fields (sha, abbreviated sha, parents, committer date,
-/// author name, reflog subject), then the `--shortstat` text, which is empty or blank
-/// for a stash with no tracked changes. Splitting on NUL therefore leaves an empty
+/// author name, reflog subject), then the `--shortstat` text of the stash's tracked
+/// changes, which is empty or blank when there are none. Splitting on NUL therefore leaves an empty
 /// first token and seven tokens per stash.
 ///
 /// Framing is positional only, as in `GitLogParser`: git messages cannot contain NUL,
@@ -88,5 +88,26 @@ enum StashListParser {
         guard let match = stat.wholeMatch(of: pattern) else { return nil }
         return StashEntry.Churn(
             additions: match.output.1.flatMap { Int($0) } ?? 0, deletions: match.output.2.flatMap { Int($0) } ?? 0)
+    }
+
+    /// Reads the `git log --format=%x00%H --shortstat` that `GitClient.stashes` runs over
+    /// third parents: each record is NUL, the sha and a newline, then the stat text. Returns
+    /// the readable counts by sha; an unreadable stat is left out.
+    static func parseUntrackedChurn(_ data: Data) throws -> [String: StashEntry.Churn] {
+        var records = data.split(separator: 0, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
+        guard records.removeFirst() == "" else {
+            throw StashListParseError.malformed("untracked stats do not start with a record separator")
+        }
+        var churn: [String: StashEntry.Churn] = [:]
+        for record in records {
+            let lines = record.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            let sha = String(lines[0])
+            guard GitLogParser.isObjectID(sha) else {
+                throw StashListParseError.malformed("not an object id: \(sha.prefix(32))")
+            }
+            churn[sha] = parseChurn(lines.count > 1 ? String(lines[1]) : "")
+        }
+        return churn
     }
 }

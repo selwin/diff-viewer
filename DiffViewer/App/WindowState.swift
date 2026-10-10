@@ -720,8 +720,8 @@ extension WindowState {
     private static func joinLineStats(
         to files: [ChangedFile], areas: [ChangedFile.Area], ignoreWhitespace: Bool, client: any RepoClient
     ) async -> (joined: [ChangedFile], numstat: [ChangedFile.Area: [NumstatEntry]]) {
-        // The working tree's two areas are independent processes and stay concurrent;
-        // a commit scope has a single area.
+        // Each area is an independent process, so they run concurrently: the working
+        // tree's two, or a stash's tracked changes and its untracked files.
         let numstat = await withTaskGroup(of: (ChangedFile.Area, [NumstatEntry]?).self) { group in
             for area in areas {
                 group.addTask {

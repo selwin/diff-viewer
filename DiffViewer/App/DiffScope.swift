@@ -13,8 +13,11 @@ enum DiffScope: Hashable, Sendable {
     /// The areas whose line counts this scope needs.
     var areas: [ChangedFile.Area] {
         switch self {
-        case .workingTree: [.unstaged, .staged]
-        case let .commit(ref): [.commit(ref)]
+        case .workingTree: return [.unstaged, .staged]
+        case let .commit(ref):
+            var areas: [ChangedFile.Area] = [.commit(ref)]
+            if let untracked = ref.untrackedCommit { areas.append(.commit(untracked)) }
+            return areas
         }
     }
 }

@@ -6,10 +6,10 @@ import Testing
 /// How a window reads and publishes the stash list, and what choosing a stash does.
 @MainActor
 struct WindowStateStashTests {
-    private func stash(_ index: Int, _ message: String) -> StashEntry {
+    private func stash(_ index: Int, _ message: String, untracked: Bool = false) -> StashEntry {
         StashEntry(
             stashIndex: index, sha: objectID("stash\(index)\(message)"), shortSha: "s\(index)",
-            parents: [objectID("base"), objectID("index\(index)")],
+            parents: [objectID("base"), objectID("index\(index)")] + (untracked ? [objectID("untracked\(index)")] : []),
             committedAt: Date(timeIntervalSince1970: 1_789_300_000), author: "Tester", message: message,
             sourceBranch: "main", hasDefaultMessage: false, churn: .init(additions: 1, deletions: 0))
     }
@@ -105,6 +105,65 @@ struct WindowStateStashTests {
         }
         #expect(ref.sha == entry.sha)
         #expect(ref.firstParentSHA == objectID("base"))
+    }
+
+    /// A stash's untracked files are an area of their own, and their lines are counted too.
+    @Test func choosingAStashCountsItsUntrackedFiles() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let entry = stash(0, "both", untracked: true)
+        let ref = entry.commitSummary.ref
+        let untracked = try #require(ref.untrackedCommit)
+        let w = try await adopt(h, state, stashes: [entry])
+        await w.client.set(
+            files: [
+                ChangedFile(path: "a.swift", originalPath: nil, kind: .modified, area: .commit(ref)),
+                ChangedFile(path: "new.swift", originalPath: nil, kind: .added, area: .commit(untracked)),
+            ], forCommit: entry.sha)
+        await w.client.set(
+            numstat: [NumstatEntry(path: "a.swift", stats: .counted(added: 1, deleted: 1))], area: .commit(ref))
+        await w.client.set(
+            numstat: [NumstatEntry(path: "new.swift", stats: .counted(added: 3, deleted: 0))],
+            area: .commit(untracked))
+
+        state.selectStash(entry)
+
+        let expected: [String: LineStats?] = [
+            "a.swift": .counted(added: 1, deleted: 1), "new.swift": .counted(added: 3, deleted: 0),
+        ]
+        #expect(
+            await eventually {
+                await Dictionary(uniqueKeysWithValues: state.files.map { ($0.path, $0.lineStats) }) == expected
+            })
+    }
+
+    /// The stash and the history row of one commit are different scopes: switching either
+    /// way loads the other's list, adding or dropping the untracked files.
+    @Test func theStashAndTheHistoryViewOfItsCommitAreDifferentScopes() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let entry = stash(0, "both", untracked: true)
+        let stashRef = entry.commitSummary.ref
+        let untracked = try #require(stashRef.untrackedCommit)
+        let plain = CommitSummary(
+            sha: entry.sha, shortSha: entry.shortSha, parents: entry.parents, subject: entry.message,
+            committedAt: entry.committedAt, author: entry.author)
+        let w = try await adopt(h, state, stashes: [entry])
+        await w.client.set(
+            files: [ChangedFile(path: "a.swift", originalPath: nil, kind: .modified, area: .commit(stashRef))],
+            forCommit: entry.sha)
+        await w.client.set(
+            files: [ChangedFile(path: "new.swift", originalPath: nil, kind: .added, area: .commit(untracked))],
+            forCommit: untracked.sha)
+
+        state.select(commit: plain)
+        #expect(await eventually { await state.files.map(\.path) == ["a.swift"] })
+        state.selectStash(entry)
+        #expect(await eventually { await state.files.map(\.path) == ["a.swift", "new.swift"] })
+        state.select(commit: plain)
+        #expect(await eventually { await state.files.map(\.path) == ["a.swift"] })
+        let picker = StashPickerState(snapshot: state.stashPickerSnapshot, grouping: CommitDayGrouping())
+        #expect(picker.rows.map(\.isDisplayed) == [false], "the history view does not tick the stash")
     }
 
     /// Choosing a summary of the shown commit refreshes its label, such as a longer abbreviation.

@@ -50,7 +50,7 @@ extension LineStats {
 struct ChangedFile: Identifiable, Hashable, Sendable {
     /// Which pair of versions a file's diff comes from. The two working-tree cases are
     /// the areas git's status reports; `.commit` is one previous commit against its
-    /// first parent.
+    /// first parent, or a stash's untracked files as a root commit.
     enum Area: Hashable, Sendable {
         case unstaged
         case staged

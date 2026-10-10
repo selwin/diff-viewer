@@ -1702,26 +1702,59 @@ import Testing
         #expect(stash.churn == StashEntry.Churn(additions: 3, deletions: 2))
     }
 
-    @Test func anUntrackedOnlyStashHasNoChurnButAnUntrackedParent() async throws {
-        let repo = try await stashableRepo()
-        try repo.write("new.txt", "fresh\n")
-        try await repo.git(["stash", "push", "--include-untracked"])
+    /// One `stash push` of edits to `stashableRepo()`, and what the stash then lists.
+    struct StashShapeCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let includeUntracked: Bool
+        let writes: [String: String]
+        /// `<kind> <path>`, with ` (untracked)` for a file read from the third parent.
+        let listing: [String]
+        let churn: StashEntry.Churn
 
-        let stash = try #require(try await repo.client.stashes().first)
-        #expect(stash.churn == StashEntry.Churn(additions: 0, deletions: 0))
-        #expect(stash.hasUntrackedParent)
+        var testDescription: String { name }
     }
 
-    /// Git writes the third parent for `-u` even when there was nothing untracked.
-    @Test func aTrackedOnlyIncludeUntrackedStashIsStillFlagged() async throws {
-        let repo = try await stashableRepo()
-        try repo.write("a.txt", "changed\n")
-        try await repo.git(["stash", "push", "--include-untracked"])
-        try repo.write("b.txt", "changed\n")
-        try await repo.git(["stash", "push"])
+    static let stashShapeCases: [StashShapeCase] = [
+        StashShapeCase(
+            name: "plain", includeUntracked: false, writes: ["a.txt": "one\nTWO\n"], listing: ["M a.txt"],
+            churn: .init(additions: 1, deletions: 1)),
+        StashShapeCase(
+            name: "mixed -u", includeUntracked: true, writes: ["a.txt": "one\nTWO\n", "new.txt": "fresh\nlines\n"],
+            listing: ["M a.txt", "A new.txt (untracked)"], churn: .init(additions: 3, deletions: 1)),
+        StashShapeCase(
+            name: "untracked-only -u", includeUntracked: true, writes: ["new.txt": "fresh\nlines\n"],
+            listing: ["A new.txt (untracked)"], churn: .init(additions: 2, deletions: 0)),
+        // Git writes the third parent for `-u` even with nothing untracked: an empty tree.
+        StashShapeCase(
+            name: "tracked-only -u", includeUntracked: true, writes: ["a.txt": "one\nTWO\n"], listing: ["M a.txt"],
+            churn: .init(additions: 1, deletions: 1)),
+    ]
 
-        let stashes = try await repo.client.stashes()
-        #expect(stashes.map(\.hasUntrackedParent) == [false, true])
+    /// A stash lists its tracked changes and, as added files read from its third parent,
+    /// the untracked files it saved; its churn counts both.
+    @Test(arguments: stashShapeCases) func aStashListsWhatItSaved(_ testCase: StashShapeCase) async throws {
+        let repo = try await stashableRepo()
+        for (path, contents) in testCase.writes { try repo.write(path, contents) }
+        try await repo.git(["stash", "push"] + (testCase.includeUntracked ? ["--include-untracked"] : []))
+
+        let entry = try #require(try await repo.client.stashes().first)
+        #expect(entry.hasUntrackedParent == testCase.includeUntracked)
+        #expect(entry.churn == testCase.churn)
+        let ref = entry.commitSummary.ref
+        let files = try await repo.client.changedFiles(in: ref)
+        #expect(
+            files.map { "\($0.kind.rawValue) \($0.path)\($0.area == .commit(ref) ? "" : " (untracked)")" }
+                == testCase.listing)
+
+        for file in files where file.area != .commit(ref) {
+            let parent = try #require(entry.untrackedParentSHA)
+            #expect(file.area == .commit(try #require(ref.untrackedCommit)))
+            let sides = try #require(file.commitSides)
+            #expect(sides.old == nil)
+            #expect(sides.new?.revision == parent && sides.new?.path == file.path)
+            let saved = try await repo.client.contents(of: file.path, at: parent)
+            #expect(saved == Data(try #require(testCase.writes[file.path]).utf8))
+        }
     }
 
     /// `stash store` of a commit that is not on top adds a second reflog entry for it.
