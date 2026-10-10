@@ -128,7 +128,9 @@ enum CommitPickerItem: Equatable {
     enum Key: Hashable {
         case workingTree
         case header(Section, firstSha: String)
-        case commit(sha: String)
+        /// By scope, not sha, so a displayed stash's row and the history row of its
+        /// commit stay distinct.
+        case commit(DiffScope)
         case message
     }
 
@@ -136,7 +138,7 @@ enum CommitPickerItem: Equatable {
         switch self {
         case .workingTree: .workingTree
         case let .header(section, firstSha): .header(section, firstSha: firstSha)
-        case let .commit(row): .commit(sha: row.sha)
+        case let .commit(row): .commit(row.scope)
         case .message: .message
         }
     }

@@ -38,7 +38,7 @@ protocol RepoClient: Sendable {
     /// object ids, never ref names, so the answer belongs to exactly those two commits.
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String>
     /// The files `commit` changed against its first parent, or against the empty tree at
-    /// a root commit.
+    /// a root commit. A stash also lists the untracked files it saved, as added files.
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile]
     /// Per-file added/deleted line counts for `area`: HEAD → index for `.staged`,
     /// index → worktree for `.unstaged`, first parent → commit for `.commit`. Untracked

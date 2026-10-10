@@ -13,9 +13,10 @@ struct StashPickerSnapshot: Equatable, Sendable {
     /// In git's order, newest first.
     var stashes: [StashEntry]
     var readStatus: StashReadStatus
-    /// The SHA of the commit scope the diff shows, nil in the working-tree scope. It need
-    /// not match a listed stash; every listed entry with this SHA is marked displayed.
-    var displayedSha: String?
+    /// The commit scope the diff shows, nil in the working-tree scope. It need not match a
+    /// listed stash; every listed entry whose ref equals it is marked displayed, so the
+    /// history view of a stash's commit, which leaves out its untracked files, is not.
+    var displayedRef: CommitRef?
 }
 
 struct StashPickerRow: Equatable {

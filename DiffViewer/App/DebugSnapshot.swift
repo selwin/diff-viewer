@@ -11,9 +11,9 @@ import Foundation
 ///   `DIFFVIEWER_SIDEBAR_SCROLL=<points>|bottom` scrolls the file list, and
 ///   `DIFFVIEWER_FOCUS_LIST=1` makes it first responder, all after the selection, so the
 ///   sidebar can be screenshotted at a given size, scroll and focus.
-/// - `DIFFVIEWER_SCOPE=<sha>` points the commit picker at that commit (a prefix is
-///   enough) once its history has loaded, before `DIFFVIEWER_SELECT` is applied, so a
-///   commit's sidebar and diffs can be screenshotted.
+/// - `DIFFVIEWER_SCOPE=<sha>` shows that commit or stash (a prefix is enough) once the
+///   history or the stash list has loaded it, before `DIFFVIEWER_SELECT` is applied, so
+///   its sidebar and diffs can be screenshotted.
 /// - `DIFFVIEWER_COMMIT_SHEET=1` opens the commit sheet after the selection is applied;
 ///   `DIFFVIEWER_SNAPSHOT` then renders the sheet instead of the window.
 /// - `DIFFVIEWER_STAGING_TRAY=expanded|collapsed` sets the window repository's staging
@@ -361,13 +361,18 @@ enum DebugLaunchOptions {
         fflush(stdout)
     }
 
-    /// Points the commit picker at `sha` (a prefix is enough) once the history that
-    /// contains it has loaded, then gives the commit's file list a moment to arrive.
+    /// Shows the commit or stash at `sha` (a prefix is enough) once the history or the
+    /// stash list holds it, then gives its file list a moment to arrive. History wins
+    /// when both do.
     @MainActor
     private static func selectScope(_ sha: String, in windowState: WindowState) async {
-        _ = await eventually(attempts: 100) { windowState.history.commits.contains { $0.ref.sha.hasPrefix(sha) } }
-        guard let commit = windowState.history.commits.first(where: { $0.ref.sha.hasPrefix(sha) }) else {
-            print("### DIFFVIEWER_SCOPE: no commit matching \(sha) in the loaded history")
+        func match() -> CommitSummary? {
+            windowState.history.commits.first { $0.ref.sha.hasPrefix(sha) }
+                ?? windowState.stashList.entries.first { $0.sha.hasPrefix(sha) }?.commitSummary
+        }
+        _ = await eventually(attempts: 100) { match() != nil }
+        guard let commit = match() else {
+            print("### DIFFVIEWER_SCOPE: no commit or stash matching \(sha)")
             return
         }
         windowState.select(commit: commit)

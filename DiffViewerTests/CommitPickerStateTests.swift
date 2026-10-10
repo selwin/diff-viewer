@@ -64,7 +64,7 @@ struct CommitPickerStateTests {
     }
 
     private func index(_ commit: CommitSummary, in picker: CommitPickerState) throws -> Int {
-        try #require(picker.items.firstIndex { $0.key == .commit(sha: commit.ref.sha) })
+        try #require(picker.items.firstIndex { $0.key == .commit(.commit(commit.ref)) })
     }
 
     private func workingTree(_ picker: CommitPickerState) -> CommitPickerWorkingTreeRow? {

@@ -83,4 +83,28 @@ struct StashListParserTests {
             #expect(throws: StashListParseError.self) { try StashListParser.parse(Data(text.utf8)) }
         }
     }
+
+    /// `git log --no-walk --root --format=%x00%H --shortstat` over third parents: an empty
+    /// tree prints no stat, an unreadable one is left out, and a bad sha is an error.
+    @Test func readsTheUntrackedParentsShortstat() throws {
+        let shaC = String(repeating: "c", count: 40)
+        let text = "\0\(shaA)\n\n 2 files changed, 3 insertions(+)\n\0\(shaB)\n\0\(shaC)\n\nsomething else\n"
+        let churn = try StashListParser.parseUntrackedChurn(Data(text.utf8))
+        #expect(churn == [shaA: .init(additions: 3, deletions: 0), shaB: .init(additions: 0, deletions: 0)])
+        #expect(throws: StashListParseError.self) {
+            try StashListParser.parseUntrackedChurn(Data("\0nothex\n".utf8))
+        }
+    }
+
+    /// The third parent's counts add to the tracked ones; missing counts make the churn
+    /// unknown rather than an undercount.
+    @Test func untrackedChurnAddsToTheTrackedChurn() throws {
+        let stat = "\n\n 1 file changed, 1 insertion(+)\n"
+        let entry = try #require(
+            try StashListParser.parse(listOutput([("On main: m", stat)], parents: "\(shaB) \(shaB) \(shaA)")).first)
+        let counts = [shaA: StashEntry.Churn(additions: 2, deletions: 1)]
+        #expect(entry.addingUntrackedChurn(counts).churn == StashEntry.Churn(additions: 3, deletions: 1))
+        #expect(entry.addingUntrackedChurn([:]).churn == nil)
+        #expect(entry.addingUntrackedChurn(nil).churn == nil)
+    }
 }

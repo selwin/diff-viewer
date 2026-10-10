@@ -1,9 +1,8 @@
 import AppKit
 
-/// A stash row: a round archive tile, the message with its `+X −Y` line counts over
-/// `branch · time`, and `Tracked only` when the stash has an untracked-files parent. The
-/// displayed stash's tile is the accent checkmark. A press, or the named accessibility
-/// action, activates the row.
+/// A stash row: a round archive tile, and the message with its `+X −Y` line counts over
+/// `branch · time`. The displayed stash's tile is the accent checkmark. A press, or the
+/// named accessibility action, activates the row.
 final class StashPickerRowView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("StashPickerRowView")
 
@@ -30,13 +29,12 @@ final class StashPickerRowView: NSTableCellView {
     private let churn = PickerLabel.make(font: churnFont, color: PickerStyle.meta, alignment: .right)
     private let branch = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
     private let time = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
-    private let detail = PickerLabel.make(font: PickerStyle.rowStatusFont, color: PickerStyle.meta, alignment: .right)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
         identifier = Self.identifier
-        for view in [tile, name, churn, branch, time, detail] { addSubview(view) }
+        for view in [tile, name, churn, branch, time] { addSubview(view) }
     }
 
     @available(*, unavailable)
@@ -59,7 +57,6 @@ final class StashPickerRowView: NSTableCellView {
         branch.stringValue = entry.sourceBranch ?? ""
         // The labels' own padding spaces the dot.
         time.stringValue = entry.sourceBranch == nil ? row.timeText : "· \(row.timeText)"
-        detail.stringValue = entry.hasUntrackedParent ? "Tracked only" : ""
 
         var parts = [entry.message]
         if row.isDisplayed { parts.append("current") }
@@ -68,7 +65,6 @@ final class StashPickerRowView: NSTableCellView {
         if let churn = entry.churn {
             parts.append("\(churn.additions) additions, \(churn.deletions) deletions")
         }
-        if entry.hasUntrackedParent { parts.append("tracked changes only") }
         setAccessibilityLabel(parts.joined(separator: ", "))
         needsLayout = true
     }
@@ -116,9 +112,9 @@ final class StashPickerRowView: NSTableCellView {
 
     private var contentMaxX: CGFloat { bounds.width - PickerStyle.highlightInset - PickerStyle.contentInset }
 
-    /// The tile is centred on the row, and so is the text as a two-line block. Each line is
-    /// laid out right to left: the first's line counts, then the message, truncating; the
-    /// second's `Tracked only`, `· time` at its natural width, then the branch, truncating.
+    /// The tile is centred on the row, and so is the text as a two-line block. The first
+    /// line is laid out right to left: the line counts, then the message, truncating. On the
+    /// second, the branch truncates so `· time` keeps its natural width.
     override func layout() {
         super.layout()
         let side = PickerStyle.iconTileSize
@@ -137,11 +133,7 @@ final class StashPickerRowView: NSTableCellView {
         name.frame = NSRect(x: Self.textX, y: top, width: max(nameMaxX - Self.textX, 0), height: nameHeight)
 
         let metaY = name.frame.maxY + Self.lineGap
-        let metaMaxX =
-            placeFlushRight(detail, onBaselineOf: branch, lineY: metaY, lineHeight: metaHeight).map {
-                $0 - PickerStyle.trailingGap
-            } ?? contentMaxX
-        let available = max(metaMaxX - Self.textX, 0)
+        let available = max(contentMaxX - Self.textX, 0)
         let timeWidth = min(PickerViewGeometry.naturalSize(of: time).width, available)
         let branchWidth =
             branch.stringValue.isEmpty

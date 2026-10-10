@@ -8,12 +8,12 @@ extension WindowState {
     }
 
     var stashPickerSnapshot: StashPickerSnapshot {
-        let displayedSha: String? = if case let .commit(ref) = scope { ref.sha } else { nil }
+        let displayedRef: CommitRef? = if case let .commit(ref) = scope { ref } else { nil }
         return StashPickerSnapshot(
-            stashes: stashList.entries, readStatus: stashList.readStatus, displayedSha: displayedSha)
+            stashes: stashList.entries, readStatus: stashList.readStatus, displayedRef: displayedRef)
     }
 
-    /// Shows the stash's tracked changes against its first parent, as a commit scope.
+    /// Shows the stash as a commit scope: its tracked changes and any untracked files it saved.
     func selectStash(_ entry: StashEntry) {
         isStashPickerPresented = false
         select(commit: entry.commitSummary)

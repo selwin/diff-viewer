@@ -36,7 +36,9 @@ struct StashPickerStateTests {
     private func snapshot(
         _ stashes: [StashEntry], status: StashReadStatus = .loaded, displayed: String? = nil
     ) -> StashPickerSnapshot {
-        StashPickerSnapshot(stashes: stashes, readStatus: status, displayedSha: displayed)
+        StashPickerSnapshot(
+            stashes: stashes, readStatus: status,
+            displayedRef: displayed.map { CommitRef(sha: $0, shortSha: "short", firstParentSHA: "p") })
     }
 
     private func state(_ snapshot: StashPickerSnapshot) -> StashPickerState {

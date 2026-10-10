@@ -568,7 +568,9 @@ actor StubRepoClient: RepoClient {
         if failsCommitFiles {
             throw ProcessError.failed(command: "git diff-tree", status: 128, stderr: "bad object")
         }
-        return commitFiles[commit.sha] ?? []
+        // Like `GitClient`, a stash's untracked files come from its third parent's own list.
+        let untracked = commit.untrackedCommit.flatMap { commitFiles[$0.sha] } ?? []
+        return (commitFiles[commit.sha] ?? []) + untracked
     }
 
     func contents(of path: String, at revision: String) async throws -> Data {

@@ -33,7 +33,7 @@ struct StashPickerState {
             items.append(
                 .stash(
                     StashPickerRow(
-                        entry: entry, isDisplayed: entry.sha == snapshot.displayedSha,
+                        entry: entry, isDisplayed: entry.commitSummary.ref == snapshot.displayedRef,
                         timeText: grouping.rowTimeText(for: entry.committedAt))))
         }
         return items
