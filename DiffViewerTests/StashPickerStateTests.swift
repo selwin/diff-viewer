@@ -234,4 +234,64 @@ struct StashPickerStateTests {
         let picker = state(snapshot(Self.today(["a", "d", "b", "d"]), displayed: "sha-d"))
         #expect(picker.rows.map(\.isDisplayed) == [false, true, false, true])
     }
+
+    // MARK: Buttons
+
+    private struct Pair: Equatable {
+        let pop: PickerButtonState
+        let drop: PickerButtonState
+    }
+
+    private static let busy = PickerButtonState.disabled(reason: "Another stash action is running")
+
+    /// Pop and Drop for each stash row, in table order.
+    private func buttons(_ picker: StashPickerState) -> [Pair] {
+        picker.items.indices.compactMap { index in
+            picker.buttons(forItem: index).map { Pair(pop: $0.pop, drop: $0.drop) }
+        }
+    }
+
+    private func running(_ stashes: [StashEntry], _ operation: ActiveStashOperation.Operation, index: Int, sha: String)
+        -> StashPickerSnapshot
+    {
+        var running = snapshot(stashes)
+        running.activeOperation = ActiveStashOperation(stashIndex: index, sha: sha, operation: operation)
+        return running
+    }
+
+    @Test func buttonsAreEnabledWithNoOperationAndNoBlockedReason() {
+        let picker = state(snapshot(Self.today(["a", "b"])))
+        #expect(buttons(picker) == Array(repeating: Pair(pop: .enabled, drop: .enabled), count: 2))
+    }
+
+    @Test(arguments: [ActiveStashOperation.Operation.pop, .drop])
+    func theRunningRowShowsRunningAndEveryOtherButtonIsDisabled(operation: ActiveStashOperation.Operation) {
+        let stashes = Self.today(["a", "b"])
+        let picker = state(running(stashes, operation, index: 0, sha: stashes[0].sha))
+        let first =
+            operation == .pop ? Pair(pop: .running, drop: Self.busy) : Pair(pop: Self.busy, drop: .running)
+        #expect(buttons(picker) == [first, Pair(pop: Self.busy, drop: Self.busy)])
+    }
+
+    @Test func anotherShaOrAnotherIndexIsNotTheRunningRow() {
+        // Two entries can share a sha; the index tells them apart.
+        let stashes = Self.today(["a", "a"])
+        let disabled = Array(repeating: Pair(pop: Self.busy, drop: Self.busy), count: 2)
+        #expect(buttons(state(running(stashes, .pop, index: 0, sha: "other"))) == disabled)
+        #expect(buttons(state(running(stashes, .pop, index: 5, sha: stashes[0].sha))) == disabled)
+    }
+
+    @Test func aBlockedReasonDisablesBothButtons() {
+        var blocked = snapshot(Self.today(["a", "b"]))
+        blocked.actionsBlockedReason = "A commit is running"
+        let reason = PickerButtonState.disabled(reason: "A commit is running")
+        #expect(buttons(state(blocked)) == Array(repeating: Pair(pop: reason, drop: reason), count: 2))
+    }
+
+    @Test func buttonsAreEnabledAgainOnceTheOperationClears() {
+        let stashes = Self.today(["a", "b"])
+        var picker = state(running(stashes, .pop, index: 0, sha: stashes[0].sha))
+        _ = picker.apply(snapshot(stashes))
+        #expect(buttons(picker) == Array(repeating: Pair(pop: .enabled, drop: .enabled), count: 2))
+    }
 }

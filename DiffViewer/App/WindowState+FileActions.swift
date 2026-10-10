@@ -3,8 +3,8 @@ import AppKit
 /// Running one sidebar context-menu action over the rows it was invoked on.
 ///
 /// An extension in its own file: the class body is long enough, and these, with the
-/// commit and branch-switch extensions, are the only places in the app that write to
-/// the repository.
+/// commit, branch-switch and stash-action extensions, are the only places in the app that
+/// write to the repository.
 /// Everything they need from the class is `internal`, apart from the pending selection,
 /// which `restoreSelectionAfterNextRefresh` hands over.
 ///

@@ -6,7 +6,7 @@ import AppKit
 /// Push after it. The panel's glass runs on under it.
 final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
-    private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: SyncPillButton.focusRingMargin)
+    private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: PickerPillButton.focusRingMargin)
     private let controls = BranchHeaderControls()
     private var syncButtons: BranchRowSyncButtons { controls.syncButtons }
     private var fetchButton: FetchButton { controls.fetchButton }
@@ -104,7 +104,7 @@ final class BranchPickerHeaderView: PickerHeaderView {
 /// of the buttons at its ends.
 private final class BranchHeaderControls: NSView {
     private static let controlGap: CGFloat = 8
-    private static let margin = SyncPillButton.focusRingMargin
+    private static let margin = PickerPillButton.focusRingMargin
 
     let fetchButton = FetchButton(frame: .zero)
     let syncButtons = BranchRowSyncButtons(style: .header)
@@ -146,7 +146,7 @@ private final class BranchHeaderControls: NSView {
 final class FetchButton: NSButton {
     private static let side: CGFloat = 34
     /// The circle plus room for its focus ring, which would otherwise be clipped.
-    static let frameSide = side + SyncPillButton.focusRingMargin * 2
+    static let frameSide = side + PickerPillButton.focusRingMargin * 2
 
     private let symbol = NSImageView()
 
@@ -215,12 +215,12 @@ final class FetchButton: NSButton {
 
     /// The visible circle, without the focus ring's margin.
     override var alignmentRectInsets: NSEdgeInsets {
-        let margin = SyncPillButton.focusRingMargin
+        let margin = PickerPillButton.focusRingMargin
         return NSEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
     }
 
     override var focusRingMaskBounds: NSRect {
-        let inset = SyncPillButton.focusRingMargin
+        let inset = PickerPillButton.focusRingMargin
         return bounds.insetBy(dx: inset, dy: inset)
     }
 

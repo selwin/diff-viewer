@@ -1777,6 +1777,174 @@ import Testing
         #expect(try await repo.client.stashes().isEmpty)
     }
 
+    // MARK: Popping and dropping stashes
+
+    /// The listed entry at `index`, as the picker would hand it over.
+    private func listedStash(_ index: Int, in repo: Repo) async throws -> StashEntry {
+        try #require(try await repo.client.stashes().first { $0.stashIndex == index })
+    }
+
+    private func stashShas(_ repo: Repo) async throws -> [String] {
+        try await repo.client.stashes().map(\.sha)
+    }
+
+    private func read(_ path: String, in repo: Repo) throws -> String {
+        try String(contentsOf: repo.url.appendingPathComponent(path), encoding: .utf8)
+    }
+
+    private func unmergedPaths(_ repo: Repo) async throws -> String {
+        try await repo.git(["diff", "--name-only", "--diff-filter=U"])
+    }
+
+    @Test func popRestoresTrackedEditsAndUntrackedFilesAndRemovesTheEntry() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("b.txt", "older\n")
+        try await repo.git(["stash", "push", "-m", "older"])
+        try repo.write("a.txt", "one\nTWO\n")
+        try repo.write("new.txt", "fresh\n")
+        try await repo.git(["stash", "push", "--include-untracked", "-m", "newer"])
+        let older = try await listedStash(1, in: repo)
+
+        try await repo.client.pop(try await listedStash(0, in: repo))
+
+        #expect(try read("a.txt", in: repo) == "one\nTWO\n")
+        #expect(try read("new.txt", in: repo) == "fresh\n")
+        #expect(try await stashShas(repo) == [older.sha])
+    }
+
+    @Test func dropRemovesOnlyThatEntry() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "older\n")
+        try await repo.git(["stash", "push", "-m", "older"])
+        try repo.write("a.txt", "newer\n")
+        try await repo.git(["stash", "push", "-m", "newer"])
+        let newer = try await listedStash(0, in: repo)
+
+        try await repo.client.drop(try await listedStash(1, in: repo))
+
+        #expect(try await stashShas(repo) == [newer.sha])
+        #expect(try read("a.txt", in: repo) == "one\ntwo\n")
+    }
+
+    /// How a listed entry's selector went stale before the action ran.
+    enum StaleSelector: CaseIterable, Sendable {
+        /// Another stash was pushed on top, so the selector names it instead.
+        case namesAnotherStash
+        /// The entry was dropped elsewhere, so the selector names nothing.
+        case missing
+    }
+
+    @Test(arguments: StashAction.allCases, StaleSelector.allCases)
+    func aStaleSelectorChangesNothing(_ action: StashAction, _ stale: StaleSelector) async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push", "-m", "listed"])
+        let listed = try await listedStash(0, in: repo)
+        switch stale {
+        case .namesAnotherStash:
+            try repo.write("b.txt", "other\n")
+            try await repo.git(["stash", "push", "-m", "other"])
+        case .missing:
+            try await repo.git(["stash", "drop"])
+        }
+        let shasBefore = try await stashShas(repo)
+
+        let error = await #expect(throws: StashError.self) { try await action.run(listed, with: repo.client) }
+
+        #expect(error?.kind == .staleEntry)
+        #expect(try await stashShas(repo) == shasBefore)
+        #expect(try await repo.git(["status", "--porcelain"]).isEmpty)
+    }
+
+    @Test func popRefusesWhileFilesAreUnmerged() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("b.txt", "kept\n")
+        try await repo.git(["stash", "push", "-m", "clean"])
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push", "-m", "conflicting"])
+        try repo.write("a.txt", "committed\n")
+        try await repo.commit("Conflicting edit")
+        _ = try? await repo.git(["stash", "apply", "stash@{0}"])
+        let shasBefore = try await stashShas(repo)
+
+        let error = await #expect(throws: StashError.self) {
+            try await repo.client.pop(try await self.listedStash(1, in: repo))
+        }
+
+        #expect(error?.kind == .unresolvedConflicts)
+        #expect(try await stashShas(repo) == shasBefore)
+        #expect(try read("b.txt", in: repo) == "x\n")
+        #expect(try await unmergedPaths(repo) == "a.txt")
+    }
+
+    @Test func aConflictingPopKeepsTheEntryAndLeavesTheFileUnmerged() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push"])
+        try repo.write("a.txt", "committed\n")
+        try await repo.commit("Conflicting edit")
+        let entry = try await listedStash(0, in: repo)
+
+        let error = await #expect(throws: StashError.self) { try await repo.client.pop(entry) }
+
+        #expect(error?.kind == .conflicts)
+        #expect(try await stashShas(repo) == [entry.sha])
+        #expect(try await unmergedPaths(repo) == "a.txt")
+    }
+
+    /// Git refuses before touching anything, so its own words are the message.
+    @Test func aPopGitRefusesReportsGitsDiagnosticsAndKeepsTheEntry() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push"])
+        try repo.write("a.txt", "dirty\n")
+        let entry = try await listedStash(0, in: repo)
+
+        let error = await #expect(throws: ProcessError.self) { try await repo.client.pop(entry) }
+
+        #expect(error?.localizedDescription.contains("would be overwritten") == true)
+        #expect(try await stashShas(repo) == [entry.sha])
+        #expect(try read("a.txt", in: repo) == "dirty\n")
+    }
+
+    /// Another stash pushed between apply and drop: the selector now names it, so the drop
+    /// is refused and both stashes stay.
+    @Test func aDropAfterApplyKeepsTheStashWhenAnotherWasPushedMeanwhile() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push", "-m", "listed"])
+        let entry = try await listedStash(0, in: repo)
+
+        try await repo.git(["stash", "apply", entry.sha])
+        try repo.write("b.txt", "other\n")
+        try await repo.git(["stash", "push", "-m", "other", "--", "b.txt"])
+        let other = try await listedStash(0, in: repo)
+        let moved = await #expect(throws: StashError.self) { try await repo.client.dropAfterApply(entry) }
+        #expect(moved?.kind == .appliedButNotDropped)
+        #expect(moved?.localizedDescription.contains("try again") == false)
+        #expect(try await stashShas(repo) == [other.sha, entry.sha])
+        #expect(try read("a.txt", in: repo) == "stashed\n")
+    }
+
+    /// A held stash lock: git refuses the drop and says why, while the applied changes and
+    /// the stash stay.
+    @Test func aDropAfterApplyKeepsTheStashWhenTheStashRefIsLocked() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "stashed\n")
+        try await repo.git(["stash", "push", "-m", "listed"])
+        let entry = try await listedStash(0, in: repo)
+
+        try await repo.git(["stash", "apply", entry.sha])
+        let lock = repo.url.appendingPathComponent(".git/refs/stash.lock")
+        try Data().write(to: lock)
+        defer { try? FileManager.default.removeItem(at: lock) }
+        let locked = await #expect(throws: StashError.self) { try await repo.client.dropAfterApply(entry) }
+        #expect(locked?.kind == .appliedButNotDropped)
+        #expect(locked?.localizedDescription.contains("cannot lock ref") == true)
+        #expect(try await stashShas(repo) == [entry.sha])
+        #expect(try read("a.txt", in: repo) == "stashed\n")
+    }
+
     // MARK: Fingerprints
 
     /// A repository with one committed file and an unstaged edit to it.
@@ -1887,6 +2055,35 @@ import Testing
 }
 
 // MARK: Shared fixtures
+
+/// The two stash actions, for tests they share.
+enum StashAction: CaseIterable, Sendable {
+    case pop
+    case drop
+
+    func run(_ entry: StashEntry, with client: any RepoClient) async throws {
+        switch self {
+        case .pop: try await client.pop(entry)
+        case .drop: try await client.drop(entry)
+        }
+    }
+}
+
+extension StashError {
+    enum Kind {
+        case staleEntry, unresolvedConflicts, conflicts, appliedButNotDropped
+    }
+
+    /// The case without its payload, for comparing.
+    var kind: Kind {
+        switch self {
+        case .staleEntry: .staleEntry
+        case .unresolvedConflicts: .unresolvedConflicts
+        case .conflicts: .conflicts
+        case .appliedButNotDropped: .appliedButNotDropped
+        }
+    }
+}
 
 /// A new repository on `main` with `files` committed as "Root commit".
 func committedRepo(_ files: [String: String] = ["a.txt": "one\n"]) async throws -> GitCommandTests.Repo {

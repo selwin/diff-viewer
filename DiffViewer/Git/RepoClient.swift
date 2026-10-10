@@ -34,6 +34,13 @@ protocol RepoClient: Sendable {
     func commitSha(of ref: String) async throws -> String?
     /// The stash list, newest first.
     func stashes() async throws -> [StashEntry]
+    /// Applies `entry`'s commit, then removes it from the stash list. Throws `StashError`
+    /// when the list moved, conflicts stand in the way or were left, or the entry could not
+    /// be removed after applying; git's diagnostics for any other refusal.
+    func pop(_ entry: StashEntry) async throws
+    /// Removes `entry` from the stash list. Throws `StashError.staleEntry` when its
+    /// selector no longer names its commit, and git's diagnostics when git refuses.
+    func drop(_ entry: StashEntry) async throws
     /// The commits on `tip`'s first-parent chain that `upstreamTip` cannot reach. Both are
     /// object ids, never ref names, so the answer belongs to exactly those two commits.
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String>
