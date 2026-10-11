@@ -78,8 +78,8 @@ struct WindowAccessor: NSViewRepresentable {
             detach()
             guard let window else { return }
             self.window = window
-            // The coordinator persists the session itself; AppKit must not save or
-            // restore these windows.
+            // The coordinator persists the session itself, so AppKit's session restoration
+            // stays off; `WindowFrameStore` persists the frame.
             window.isRestorable = false
             // Tabs are the policy, not the system preference: every repository window
             // joins the key window's tab group when it is first ordered front.
@@ -87,10 +87,15 @@ struct WindowAccessor: NSViewRepresentable {
             // ("in full screen") yields separate windows.
             window.tabbingMode = .preferred
             window.tabbingIdentifier = "repository"
+            // Later windows join this one's tab group and take its frame. A held restoration
+            // restores the group's actual anchor again in `NativeWindowRegistry.reveal`.
+            if services.windows.isEmpty { services.windowFrameStore.restore(window) }
             services.windows[windowID] = window
             updateTabChurn()
             let coordinator = services.coordinator
             coordinator.windowDidAttach(windowID, sceneRoot: sceneRoot)
+            let frameStore = services.windowFrameStore
+            let windows = services.windows
             let center = NotificationCenter.default
             let id = windowID
             observers = [
@@ -116,6 +121,22 @@ struct WindowAccessor: NSViewRepresentable {
                     }
                 },
             ]
+            // Saved on every move and resize except held restoration windows, which move while
+            // their tab group is assembled; background tabs, which follow their group; and the
+            // steps of a live resize, which saves once at its end.
+            let frameChanges = [
+                NSWindow.didMoveNotification, NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+            ]
+            observers += frameChanges.map { name in
+                center.addObserver(forName: name, object: window, queue: .main) { [weak window] _ in
+                    MainActor.assumeIsolated {
+                        guard let window, window.isVisible, !windows.isHoldingWindows,
+                            name == NSWindow.didEndLiveResizeNotification || !window.inLiveResize
+                        else { return }
+                        frameStore.save(window)
+                    }
+                }
+            }
             // Notifications sent before the observers existed are not replayed.
             coordinator.windowOcclusionChanged(windowID, visible: window.occlusionState.contains(.visible))
             if window.isKeyWindow { coordinator.windowDidBecomeKey(windowID) }
