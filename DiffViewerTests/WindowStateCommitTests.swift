@@ -518,24 +518,24 @@ struct WindowStateCommitTests {
         #expect(state.commitMessage == mergeText)
     }
 
-    /// Matches generated text, including after restoration; differs after editing or clearing.
+    /// Matches only the model's unedited text: any edit, even typing it back, ends the match.
     @Test func theDraftMatchesGeneratedTextOnlyWhileItIsTheModelsText() async throws {
         let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(texts: ["Add the picker"]))
         await client.set(stagedPatch: stagedPatch)
-        #expect(!state.commitDraftMatchesGeneratedText)
+        #expect(!state.isCommitDraftUneditedGeneratedText)
 
         state.generateCommitMessage()
         #expect(await eventually { await !state.isGeneratingCommitMessage })
-        #expect(state.commitDraftMatchesGeneratedText)
+        #expect(state.isCommitDraftUneditedGeneratedText)
 
         state.commitMessage = "Add the picker, reworded"
-        #expect(!state.commitDraftMatchesGeneratedText)
+        #expect(!state.isCommitDraftUneditedGeneratedText)
 
         state.commitMessage = "Add the picker"
-        #expect(state.commitDraftMatchesGeneratedText)
+        #expect(!state.isCommitDraftUneditedGeneratedText)
 
         state.commitMessage = ""
-        #expect(!state.commitDraftMatchesGeneratedText)
+        #expect(!state.isCommitDraftUneditedGeneratedText)
     }
 
     /// Partial text left by a failed run is still the model's, so it counts as generated.
@@ -547,7 +547,7 @@ struct WindowStateCommitTests {
         state.generateCommitMessage()
         let task = try #require(state.session?.commitGenerationTask)
         await task.value
-        #expect(state.commitDraftMatchesGeneratedText)
+        #expect(state.isCommitDraftUneditedGeneratedText)
     }
 
     /// A model that gave up says so in the sheet, and what the reader had written stays.
@@ -827,30 +827,35 @@ struct WindowStateCommitTests {
         #expect(channel.lastRequest?.draftNote == nil)
     }
 
-    /// Pressing Generate again does not feed the model its own answer; editing that
-    /// answer first makes it the reader's note.
-    @Test func regeneratingSendsOnlyAnEditedAnswerAsTheNote() async throws {
+    /// Regenerating resends the note the answer was written from, even after the editor writes
+    /// it back unchanged; editing the answer makes the edit the note.
+    @Test func regeneratingKeepsTheNoteUntilTheAnswerIsEdited() async throws {
         let channel = StubGenerationChannel()
         let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
         await client.set(stagedPatch: stagedPatch)
 
         await generate(state, channel, writing: message)
         await generate(state, channel, writing: message)
-        #expect(channel.generateCalls == 2)
         #expect(channel.lastRequest?.draftNote == nil)
+
+        state.commitMessage = "fix flicker"
+        await generate(state, channel, writing: message)
+        state.commitMessage = state.commitMessage  // the editor writing back an unchanged value
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == "fix flicker")
 
         state.commitMessage = "Add the picker for commits"
         await generate(state, channel, writing: message)
-        #expect(channel.generateCalls == 3)
         #expect(channel.lastRequest?.draftNote == "Add the picker for commits")
     }
 
-    /// A rejected commit puts the generated message back, and it is still the model's
-    /// answer rather than a note.
-    @Test func aGeneratedMessageRestoredAfterAFailedCommitIsNoNote() async throws {
+    /// A rejected commit puts the generated message back, and Generate still sends the
+    /// note it was written from.
+    @Test func aGeneratedMessageRestoredAfterAFailedCommitKeepsItsNote() async throws {
         let channel = StubGenerationChannel()
         let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
         await client.set(stagedPatch: stagedPatch)
+        state.commitMessage = "fix flicker"
         await generate(state, channel, writing: message)
 
         await client.fail(commit: true)
@@ -858,7 +863,46 @@ struct WindowStateCommitTests {
         #expect(state.commitMessage == message)
 
         await generate(state, channel, writing: message)
-        #expect(channel.generateCalls == 2)
+        #expect(channel.lastRequest?.draftNote == "fix flicker")
+    }
+
+    /// The note survives a cancelled or failed run, is gone once the draft is cleared, comes back
+    /// as the reader's own words when the output is retyped, and ends with a commit.
+    @Test func theNoteFollowsCancelFailClearRetypeAndCommit() async throws {
+        let channel = StubGenerationChannel()
+        let (_, state, client, _) = try await settled(generator: StubCommitMessageGenerator(channel: channel))
+        await client.set(stagedPatch: stagedPatch)
+        state.commitMessage = "fix flicker"
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 1 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+        state.cancelCommitMessageGeneration()
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == "fix flicker")
+
+        state.generateCommitMessage()
+        #expect(await eventually { channel.generateCalls == 3 })
+        channel.yield("Add")
+        #expect(await eventually { await state.commitMessage == "Add" })
+        channel.fail()
+        #expect(await eventually { await !state.isGeneratingCommitMessage })
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == "fix flicker")
+
+        state.commitMessage = ""
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == nil)
+
+        state.commitMessage = ""
+        state.commitMessage = message
+        await generate(state, channel, writing: message)
+        #expect(channel.lastRequest?.draftNote == message)
+
+        await state.commit()
+        #expect(state.commitMessage == "")
+        await generate(state, channel, writing: message)
         #expect(channel.lastRequest?.draftNote == nil)
     }
 
