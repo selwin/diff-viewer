@@ -56,7 +56,9 @@ struct MergeSheetModelTests {
     /// The model answers from the shared cache and the commit list, and stops asking on `stop()`.
     @Test func startLoadsThePreviewAndTheCommitsOnce() async throws {
         let client = StubRepoClient(files: [])
-        await client.set(mergePreview: .conflicts(commits: 2, paths: ["a.swift"]), for: target.previewKey)
+        await client.set(
+            mergePreview: .conflicts(commits: 2, files: [MergeConflict(path: "a.swift", kind: .contents)]),
+            for: target.previewKey)
         let loads = CommitLoads()
         let model = model(client, loads: loads, commits: [commitSummary("c1"), commitSummary("c2")])
 
@@ -65,7 +67,9 @@ struct MergeSheetModelTests {
 
         #expect(await eventually { await model.previewStatus != .loading })
         #expect(await eventually { await model.commits != nil })
-        #expect(model.previewStatus == .ready(.conflicts(commits: 2, paths: ["a.swift"])))
+        #expect(
+            model.previewStatus
+                == .ready(.conflicts(commits: 2, files: [MergeConflict(path: "a.swift", kind: .contents)])))
         #expect(model.conflictText == "Merging will conflict in 1 file: a.swift")
         #expect(model.moreCommitsText == nil)
         #expect(model.canMerge)

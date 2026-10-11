@@ -235,9 +235,17 @@ struct MergePreviewTextTests {
             (.clean(commits: 1), BranchRowLabel(text: "1 commit", style: .secondary)),
             (.clean(commits: 3), BranchRowLabel(text: "3 commits", style: .secondary)),
             (.alreadyMerged, BranchRowLabel(text: "Already merged", style: .secondary)),
-            (.conflicts(commits: 2, paths: ["a"]), BranchRowLabel(text: "Conflict in 1 file", style: .warning)),
-            (.conflicts(commits: 2, paths: ["a", "b"]), BranchRowLabel(text: "Conflict in 2 files", style: .warning)),
-            (.conflicts(commits: 2, paths: []), BranchRowLabel(text: "Conflicts predicted", style: .warning)),
+            (
+                .conflicts(commits: 2, files: [MergeConflict(path: "a", kind: .contents)]),
+                BranchRowLabel(text: "Conflict in 1 file", style: .warning)
+            ),
+            (
+                .conflicts(
+                    commits: 2,
+                    files: [MergeConflict(path: "a", kind: .contents), MergeConflict(path: "b", kind: .contents)]),
+                BranchRowLabel(text: "Conflict in 2 files", style: .warning)
+            ),
+            (.conflicts(commits: 2, files: []), BranchRowLabel(text: "Conflicts predicted", style: .warning)),
         ]
         for (preview, label) in cases {
             #expect(MergePreviewText.label(for: preview) == label)

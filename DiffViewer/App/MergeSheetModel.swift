@@ -117,8 +117,8 @@ final class MergeSheetModel {
 
     /// Nil unless conflicts are predicted.
     var conflictText: String? {
-        guard case let .conflicts(_, paths)? = preview else { return nil }
-        return Self.conflictText(paths: paths)
+        guard case let .conflicts(_, files)? = preview else { return nil }
+        return Self.conflictText(paths: files.map(\.path))
     }
 
     static func conflictText(paths: [String]) -> String {

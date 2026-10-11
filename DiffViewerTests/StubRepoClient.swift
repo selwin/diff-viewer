@@ -25,6 +25,7 @@ enum StubCall {
     case commitDefaults
     case stagedPatch
     case mergePreview
+    case incomingChanges
     case stashes
     /// `stash`, `pop` and `drop`.
     case stashActions
@@ -127,6 +128,10 @@ actor StubRepoClient: RepoClient {
     private var failingMergePreviews: Set<MergePreviewKey> = []
     /// Every `mergePreview` call, in order.
     private(set) var mergePreviewCalls: [MergePreviewKey] = []
+    private var stubbedIncomingChanges = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    private var failsIncomingChanges = false
+    /// Every `incomingChanges` call, in order.
+    private(set) var incomingChangesCalls: [MergePreviewKey] = []
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     private var stubbedCommitsToMerge: [CommitSummary] = []
@@ -441,6 +446,9 @@ actor StubRepoClient: RepoClient {
     func fail(mergePreview on: Bool, for key: MergePreviewKey) {
         if on { failingMergePreviews.insert(key) } else { failingMergePreviews.remove(key) }
     }
+    func set(incomingChanges summary: IncomingChangeSummary) { stubbedIncomingChanges = summary }
+    /// Read once a held call is released, so a test can change it meanwhile.
+    func fail(incomingChanges on: Bool) { failsIncomingChanges = on }
     func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
     func fail(merge on: Bool) { failsMerge = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
@@ -508,6 +516,15 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git merge-tree", status: 128, stderr: "unrelated histories")
         }
         return mergePreviewsByKey[key] ?? stubbedMergePreview
+    }
+
+    func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary {
+        incomingChangesCalls.append(MergePreviewKey(headSha: headSha, sourceTipSha: sourceTipSha))
+        if isHeld(.incomingChanges) { await park(.incomingChanges) }
+        if failsIncomingChanges {
+            throw ProcessError.failed(command: "git diff", status: 128, stderr: "no merge base")
+        }
+        return stubbedIncomingChanges
     }
 
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {

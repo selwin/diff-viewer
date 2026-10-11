@@ -1210,7 +1210,7 @@ import Testing
         let (conflicting, main, side) = try await divergedRepo(conflicting: true)
         #expect(
             try await conflicting.client.mergePreview(headSha: main, sourceTipSha: side)
-                == .conflicts(commits: 1, paths: ["a.txt"]))
+                == .conflicts(commits: 1, files: [MergeConflict(path: "a.txt", kind: .contents)]))
         #expect(try await conflicting.git(["status", "--porcelain"]).isEmpty, "a preview leaves the tree alone")
     }
 
@@ -1221,6 +1221,48 @@ import Testing
         await #expect(throws: (any Error).self) {
             try await repo.client.mergePreview(headSha: main, sourceTipSha: unrelated)
         }
+    }
+
+    /// A binary file counts as a file without lines, and an edit only `main` made is left out.
+    @Test func incomingChangesCountTheSourceSinceTheMergeBase() async throws {
+        let repo = try await committedRepo()
+        try await repo.git(["checkout", "-b", "side"])
+        try repo.write("new.txt", "1\n2\n3\n")
+        try Data([0x00, 0x01, 0x02]).write(to: repo.url.appendingPathComponent("bin.dat"))
+        let side = try await repo.commit("Side commit")
+        try await repo.git(["checkout", "main"])
+        try repo.write("a.txt", "main\nedit\n")
+        let main = try await repo.commit("Main commit")
+
+        #expect(
+            try await repo.client.incomingChanges(headSha: main, sourceTipSha: side)
+                == IncomingChangeSummary(fileCount: 2, addedLineCount: 3, deletedLineCount: 0))
+    }
+
+    /// `--find-renames` overrides the config, so an unchanged rename is one file.
+    @Test func incomingChangesDetectRenamesWhenConfiguredOff() async throws {
+        let repo = try await committedRepo()
+        try await repo.git(["config", "diff.renames", "false"])
+        try await repo.git(["checkout", "-b", "side"])
+        try await repo.git(["mv", "a.txt", "b.txt"])
+        let side = try await repo.commit("Rename")
+        #expect(
+            try await repo.client.incomingChanges(headSha: "main", sourceTipSha: side)
+                == IncomingChangeSummary(fileCount: 1, addedLineCount: 0, deletedLineCount: 0))
+    }
+
+    /// Measured from the merge base, so an edit both branches made still counts.
+    @Test func incomingChangesCountEditsMadeByBothBranches() async throws {
+        let shared = try await committedRepo()
+        try await shared.git(["checkout", "-b", "side"])
+        try shared.write("a.txt", "same\n")
+        let sharedSide = try await shared.commit("Side edit")
+        try await shared.git(["checkout", "main"])
+        try shared.write("a.txt", "same\n")
+        let sharedMain = try await shared.commit("Main edit")
+        #expect(
+            try await shared.client.incomingChanges(headSha: sharedMain, sourceTipSha: sharedSide)
+                == IncomingChangeSummary(fileCount: 1, addedLineCount: 1, deletedLineCount: 1))
     }
 
     /// Commits reached only through a merge on the source branch count, as in the preview.

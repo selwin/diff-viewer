@@ -129,6 +129,9 @@ protocol RepoClient: Sendable {
     /// What merging `sourceTipSha` into `headSha` would do, without touching the working
     /// tree. Both are object ids. Throws when git cannot tell, as for unrelated histories.
     func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview
+    /// Files and lines `sourceTipSha` changed since its merge base with `headSha`. Both are
+    /// object ids.
+    func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary
     /// Up to `limit` commits `sourceTipSha` brings in that `headSha` lacks, newest first,
     /// following every parent.
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary]

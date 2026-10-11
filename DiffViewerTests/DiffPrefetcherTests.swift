@@ -92,6 +92,9 @@ struct TaggedClient: RepoClient {
     func fastForward(branch: String, remote: String, remoteRef: String, localRef: String) async throws {}
     func configuredUpstreamRemotes() async throws -> [String: String] { [:] }
     func mergePreview(headSha: String, sourceTipSha: String) async throws -> MergePreview { .alreadyMerged }
+    func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary {
+        IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    }
     func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] { [] }
     func merge(sourceTipSha: String, sourceRef: String) async throws {}
 }
