@@ -19,11 +19,14 @@ final class AppServices {
     let prefetcher: DiffPrefetcher
     let coordinator: WindowCoordinator
     let windows = NativeWindowRegistry()
+    let windowFrameStore: WindowFrameStore
 
     init(defaults: UserDefaults = .standard, cache: DifftCache = .bundled()) {
         preferences = Preferences(defaults: defaults)
         self.cache = cache
         prefetcher = DiffPrefetcher(cache: cache)
+        let frameStore = WindowFrameStore(defaults: defaults)
+        windowFrameStore = frameStore
         let windows = windows
         let opener = WindowOpener()
         coordinator = WindowCoordinator(
@@ -35,7 +38,7 @@ final class AppServices {
                 focusWindow: { id in windows[id]?.makeKeyAndOrderFront(nil) },
                 presentError: WindowCoordinator.presentError,
                 holdWindow: { windows.hold($0) },
-                revealWindows: { windows.reveal(ordered: $0, selected: $1) },
+                revealWindows: { windows.reveal(ordered: $0, selected: $1, restoreFrame: frameStore.restore) },
                 isWindowVisible: { windows[$0].map { $0.occlusionState.contains(.visible) } },
                 schedule: { delay, action in
                     let (seconds, attoseconds) = delay.components
@@ -89,6 +92,10 @@ final class WindowOpener {
 @MainActor
 final class NativeWindowRegistry {
     private var windows: [WindowID: NSWindow] = [:]
+    /// From the first `hold` until `reveal` has shown the group.
+    private(set) var isHoldingWindows = false
+
+    var isEmpty: Bool { windows.isEmpty }
 
     subscript(id: WindowID) -> NSWindow? {
         get { windows[id] }
@@ -103,18 +110,24 @@ final class NativeWindowRegistry {
     /// `reveal`.
     func hold(_ id: WindowID) {
         guard let window = windows[id] else { return }
+        isHoldingWindows = true
         window.alphaValue = 0
         window.tabbingMode = .disallowed
         window.ignoresMouseEvents = true
     }
 
     /// Groups the transparent windows, selects the active tab, then reveals them.
-    /// Returns the selected window's id.
-    func reveal(ordered ids: [WindowID], selected: WindowID?) -> WindowID? {
+    /// Returns the selected window's id. The first window anchors the group, so it takes
+    /// the saved frame and the tabs added to it follow.
+    func reveal(
+        ordered ids: [WindowID], selected: WindowID?, restoreFrame: (NSWindow) -> Void
+    ) -> WindowID? {
+        defer { isHoldingWindows = false }
         let live = ids.compactMap { id in windows[id].map { (id: id, window: $0) } }
         guard let first = live.first else { return nil }
         let (selectedID, selectedWindow) = live.first { $0.id == selected } ?? first
         let group = live.map(\.window)
+        restoreFrame(first.window)
         // Enable tabbing before explicitly assembling the group.
         for window in group { window.tabbingMode = .preferred }
         for (previous, next) in zip(group, group.dropFirst()) {
