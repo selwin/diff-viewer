@@ -37,6 +37,8 @@ struct StashPickerSnapshot: Equatable, Sendable {
     var activeOperation: ActiveStashOperation?
     /// Why the window refuses stash actions, from the same policy as their admission.
     var actionsBlockedReason: String?
+    /// Why the header's Stash Changes… button is disabled, or nil when it can open the sheet.
+    var stashChangesDisabledReason: String?
 }
 
 struct StashPickerRow: Equatable {

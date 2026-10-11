@@ -123,6 +123,11 @@ final class PickerPillButton: NSButton {
         return NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2)
     }
 
+    /// The capsule without the focus ring's margin, so a header can place the visible shape.
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: focusMargin, left: focusMargin, bottom: focusMargin, right: focusMargin)
+    }
+
     override var focusRingMaskBounds: NSRect {
         bounds.insetBy(dx: focusMargin, dy: focusMargin)
     }

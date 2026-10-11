@@ -39,7 +39,7 @@ struct ExactMovePairingTests {
             result == [
                 ChangedFile(
                     path: "dir/b.txt", originalPath: "a.txt", kind: .renamed, area: .unstaged,
-                    fingerprint: fingerprint)
+                    fingerprint: fingerprint, isUntrackedMove: true)
             ])
     }
 

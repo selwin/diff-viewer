@@ -245,6 +245,12 @@ struct SidebarFileContextMenu: View {
             ForEach(harmless, id: \.self) { action in
                 Button(action.title(for: files)) { run(action, on: files) }
             }
+            // Stashing takes the whole working tree, whatever rows are selected.
+            if windowState.scope == .workingTree {
+                Divider()
+                Button("Stash All Changes…") { windowState.openStashSheet() }
+                    .disabled(!windowState.canOpenStashSheet)
+            }
         }
     }
 

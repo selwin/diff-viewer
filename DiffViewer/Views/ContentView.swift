@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var commitDraftChanged = false
     /// The branch name the reader confirmed, held until the New Branch sheet is gone.
     @State private var pendingBranchName: String?
+    /// The stash the reader confirmed, held until the Stash sheet is gone; nil means cancelled.
+    @State private var pendingStashSubmission: StashSubmission?
     /// The merge the reader confirmed, held until the Merge sheet is gone.
     @State private var confirmedMergeTarget: MergeTarget?
     /// An error alert is up; a new message waits for it to be dismissed rather than
@@ -145,6 +147,12 @@ struct ContentView: View {
                     windowState.isNewBranchSheetPresented = false
                 })
         }
+        .sheet(isPresented: $windowState.isStashSheetPresented, onDismiss: handleStashSheetDismissal) {
+            StashSheet { submission in
+                pendingStashSubmission = submission
+                windowState.isStashSheetPresented = false
+            }
+        }
         .sheet(item: $windowState.pendingMerge, onDismiss: handleMergeSheetDismissal) { target in
             MergeSheet(
                 model: MergeSheetModel(
@@ -182,6 +190,15 @@ struct ContentView: View {
         guard let name = pendingBranchName else { return }
         pendingBranchName = nil
         Task { await windowState.createBranch(named: name) }
+    }
+
+    /// Stashes once the sheet is gone, as for the New Branch sheet.
+    private func handleStashSheetDismissal() {
+        guard let submission = pendingStashSubmission else { return }
+        pendingStashSubmission = nil
+        Task {
+            await windowState.stashChanges(message: submission.message, includeUntracked: submission.includeUntracked)
+        }
     }
 
     /// Merges once the sheet is gone, as for the New Branch sheet.

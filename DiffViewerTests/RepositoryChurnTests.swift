@@ -10,7 +10,26 @@ struct RepositoryChurnTests {
             changedFile("b.swift").with(lineStats: .counted(added: 1, deleted: 3)),
             changedFile("new.txt", kind: .untracked).with(lineStats: .counted(added: 10, deleted: 0)),
         ])
-        #expect(churn == RepositoryChurn(changedFileCount: 3, added: 16, deleted: 5))
+        #expect(churn == RepositoryChurn(changedFileCount: 3, untrackedFileCount: 1, added: 16, deleted: 5))
+    }
+
+    /// What a stash takes without untracked files: tracked paths, each once.
+    @Test func untrackedPathsAreCountedApartFromTrackedOnes() {
+        let churn = RepositoryChurn([
+            changedFile("a.swift", area: .staged), changedFile("a.swift"), changedFile("b.swift"),
+            changedFile("new.txt", kind: .untracked), changedFile("other.txt", kind: .untracked),
+        ])
+        #expect(churn.untrackedFileCount == 2)
+        #expect(churn.trackedFileCount == 2)
+    }
+
+    /// A paired move's old path is a tracked deletion and its new path is untracked.
+    @Test func aPairedMoveIsOneTrackedAndOneUntrackedPath() {
+        let move = ChangedFile(
+            path: "new.txt", originalPath: "old.txt", kind: .renamed, area: .unstaged, isUntrackedMove: true)
+        let churn = RepositoryChurn([move])
+        #expect(churn.trackedFileCount == 1)
+        #expect(churn.untrackedFileCount == 1)
     }
 
     @Test func aPathBothStagedAndUnstagedIsOneFileWithBothDiffsLines() {

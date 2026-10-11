@@ -77,17 +77,18 @@ extension WindowState {
 
     /// The sheets and popovers that open one at a time.
     enum Overlay {
-        case commitSheet, commitPicker, branchPicker, stashPicker, newBranchSheet, mergeSheet
+        case commitSheet, commitPicker, branchPicker, stashPicker, newBranchSheet, mergeSheet, stashSheet
     }
 
-    /// Whether an overlay other than `overlay` is up. Only one opens at a time.
-    func isOtherOverlayPresented(besides overlay: Overlay) -> Bool {
-        (overlay != .commitSheet && isCommitSheetPresented)
-            || (overlay != .commitPicker && isCommitPickerPresented)
-            || (overlay != .branchPicker && isBranchPickerPresented)
-            || (overlay != .stashPicker && isStashPickerPresented)
-            || (overlay != .newBranchSheet && isNewBranchSheetPresented)
-            || (overlay != .mergeSheet && pendingMerge != nil)
+    /// Whether any presented overlay is outside the allowed exclusions. Only one opens at a time.
+    func isOtherOverlayPresented(besides overlays: Overlay...) -> Bool {
+        (!overlays.contains(.commitSheet) && isCommitSheetPresented)
+            || (!overlays.contains(.commitPicker) && isCommitPickerPresented)
+            || (!overlays.contains(.branchPicker) && isBranchPickerPresented)
+            || (!overlays.contains(.stashPicker) && isStashPickerPresented)
+            || (!overlays.contains(.newBranchSheet) && isNewBranchSheetPresented)
+            || (!overlays.contains(.mergeSheet) && pendingMerge != nil)
+            || (!overlays.contains(.stashSheet) && isStashSheetPresented)
     }
 }
 

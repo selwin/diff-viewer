@@ -11,7 +11,24 @@ extension WindowState {
         let displayedRef: CommitRef? = if case let .commit(ref) = scope { ref } else { nil }
         return StashPickerSnapshot(
             stashes: stashList.entries, readStatus: stashList.readStatus, displayedRef: displayedRef,
-            activeOperation: activeStashOperation, actionsBlockedReason: stashActionsBlockedReason)
+            activeOperation: activeStashOperation, actionsBlockedReason: stashActionsBlockedReason,
+            // Repository availability only; presentation guards are checked when opening the sheet.
+            stashChangesDisabledReason: stashChangesUnavailableReason)
+    }
+
+    /// An open window with changes to stash and no overlay up other than the stash picker,
+    /// which the sheet replaces.
+    var canOpenStashSheet: Bool {
+        session != nil && !isClosed && stashChangesUnavailableReason == nil && !isStashSheetPresented
+            && !isOtherOverlayPresented(besides: .stashSheet, .stashPicker)
+    }
+
+    /// The picker's Stash Changes…, the Changes menu and the sidebar: the picker closes
+    /// first, since only one of them is up at a time.
+    func openStashSheet() {
+        guard canOpenStashSheet else { return }
+        isStashPickerPresented = false
+        isStashSheetPresented = true
     }
 
     /// Shows the stash as a commit scope: its tracked changes and any untracked files it saved.
@@ -38,4 +55,11 @@ extension WindowState {
     private func isCurrentStashRead(session: RepoSession, ticket: Int) -> Bool {
         isLive(session) && ticket == session.stashSerial
     }
+}
+
+/// What the Stash sheet hands back when the reader clicks Stash: the raw message, trimmed
+/// later by `stashChanges`.
+struct StashSubmission: Equatable {
+    let message: String
+    let includeUntracked: Bool
 }

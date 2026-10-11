@@ -42,6 +42,12 @@ final class Preferences {
         didSet { defaults.set(fontSize, forKey: Keys.fontSize) }
     }
 
+    /// The Stash sheet's "Include untracked files" box. Saved as soon as it is toggled,
+    /// so the choice sticks even when that sheet is cancelled.
+    var stashIncludesUntracked: Bool {
+        didSet { defaults.set(stashIncludesUntracked, forKey: Keys.stashIncludesUntracked) }
+    }
+
     /// The side find searches. Stored as "left"/"right", which read the same whatever
     /// the sides are called.
     var findSide: DocumentSide {
@@ -78,6 +84,7 @@ final class Preferences {
         static let confirmDestructiveFileActions = "confirmDestructiveFileActions"
         static let findScope = "findScope"
         static let stagingTrayExpansion = "stagingTrayExpansion"
+        static let stashIncludesUntracked = "stashIncludesUntracked"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -92,6 +99,7 @@ final class Preferences {
         confirmDestructiveFileActions =
             defaults.object(forKey: Keys.confirmDestructiveFileActions) as? Bool ?? true
         findSide = defaults.string(forKey: Keys.findScope) == "left" ? .old : .new
+        stashIncludesUntracked = defaults.bool(forKey: Keys.stashIncludesUntracked)
         stagingTrayExpansionByRoot =
             defaults.dictionary(forKey: Keys.stagingTrayExpansion) as? [String: Bool] ?? [:]
         foldOptions = FoldOptions.validated(contextLines: defaults.object(forKey: Keys.collapseContextLines) as? Int)

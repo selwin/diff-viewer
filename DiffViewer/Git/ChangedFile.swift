@@ -131,6 +131,9 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     /// The index entry's mode, such as `100644` or `120000`. Set only on an unstaged
     /// deletion, where `ExactMovePairing` needs it: a symlink's blob is its target path.
     var indexMode: String?
+    /// A rename `ExactMovePairing` made from a plain `mv`: the destination is untracked,
+    /// so a stash without `-u` takes only the deletion.
+    var isUntrackedMove = false
 
     var id: String { "\(area.identity):\(path)" }
 

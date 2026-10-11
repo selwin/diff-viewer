@@ -26,7 +26,7 @@ enum StubCall {
     case stagedPatch
     case mergePreview
     case stashes
-    /// `pop` and `drop`.
+    /// `stash`, `pop` and `drop`.
     case stashActions
 }
 
@@ -175,6 +175,8 @@ actor StubRepoClient: RepoClient {
     /// Every entry `pop` or `drop` was asked for, in order, whether or not it succeeded.
     private(set) var popCalls: [StashEntry] = []
     private(set) var dropCalls: [StashEntry] = []
+    /// Every `stash` push asked for, in order, whether or not it succeeded.
+    private(set) var stashPushCalls: [StashPushCall] = []
     private var stashActionError: (any Error)?
     private var filesAfterPop: [ChangedFile]?
     private var stubbedUnpushed: Set<String> = []
@@ -565,11 +567,36 @@ actor StubRepoClient: RepoClient {
 
     // MARK: Stash actions
 
-    /// Makes `pop` and `drop` throw `error` after recording the call; nil lets them succeed.
+    /// Makes `stash`, `pop` and `drop` throw `error` after recording the call; nil lets them succeed.
     func fail(stashActionsWith error: (any Error)?) { stashActionError = error }
     /// What `status()` reports once a pop returns, whatever its outcome: a pop that stops on
     /// conflicts or before its drop has still changed the working tree.
     func set(filesAfterPop list: [ChangedFile]?) { filesAfterPop = list }
+
+    /// Like git: a new top entry when `files` hold a change the options include, removing
+    /// those rows; otherwise nothing, as for "No local changes to save".
+    func stash(message: String?, includeUntracked: Bool) async throws {
+        stashPushCalls.append(StashPushCall(message: message, includeUntracked: includeUntracked))
+        if isHeld(.stashActions) { await park(.stashActions) }
+        if let stashActionError { throw stashActionError }
+        // A paired move is a tracked deletion plus an untracked destination.
+        let hasTracked = files.contains { $0.kind != .untracked }
+        let hasUntracked = files.contains { $0.kind == .untracked || $0.isUntrackedMove }
+        guard hasTracked || (includeUntracked && hasUntracked) else { return }
+        // Without `-u`, git stashes a paired move's deletion and leaves its destination.
+        let leftBehind =
+            includeUntracked ? [] : files.filter(\.isUntrackedMove).map { changedFile($0.path, kind: .untracked) }
+        files.removeAll { $0.kind != .untracked || includeUntracked }
+        files += leftBehind
+        let savesUntracked = includeUntracked && hasUntracked
+        let pushed = StashEntry(
+            stashIndex: 0, sha: objectID("pushed\(stashPushCalls.count)"), shortSha: "p\(stashPushCalls.count)",
+            parents: [objectID("base"), objectID("index")] + (savesUntracked ? [objectID("untracked")] : []),
+            committedAt: Date(timeIntervalSince1970: 1_789_300_000), author: "Tester",
+            message: message ?? "WIP on main", sourceBranch: "main", hasDefaultMessage: message == nil,
+            churn: nil)
+        stubbedStashes = [pushed] + stubbedStashes.map { $0.reindexed(to: $0.stashIndex + 1) }
+    }
 
     func pop(_ entry: StashEntry) async throws {
         popCalls.append(entry)
@@ -770,4 +797,20 @@ final class NoopWatcher: RepoWatching {
     private(set) var dependencies: [Set<String>] = []
     func setDependencies(_ paths: Set<String>) { dependencies.append(paths) }
     func stop() { stopped = true }
+}
+
+/// One `stash` push the stub was asked for.
+struct StashPushCall: Equatable, Sendable {
+    let message: String?
+    let includeUntracked: Bool
+}
+
+extension StashEntry {
+    /// The same entry at another position, as a push shifts every older one down.
+    fileprivate func reindexed(to index: Int) -> StashEntry {
+        StashEntry(
+            stashIndex: index, sha: sha, shortSha: shortSha, parents: parents, committedAt: committedAt,
+            author: author, message: message, sourceBranch: sourceBranch, hasDefaultMessage: hasDefaultMessage,
+            churn: churn)
+    }
 }

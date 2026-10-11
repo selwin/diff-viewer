@@ -1777,6 +1777,85 @@ import Testing
         #expect(try await repo.client.stashes().isEmpty)
     }
 
+    // MARK: Stashing changes
+
+    /// One `stash(message:includeUntracked:)` over a staged edit, an unstaged edit and an
+    /// untracked file.
+    struct StashPushCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let message: String?
+        let includeUntracked: Bool
+
+        var testDescription: String { name }
+    }
+
+    static let stashPushCases: [StashPushCase] = [
+        StashPushCase(name: "defaultMessage", message: nil, includeUntracked: false),
+        StashPushCase(name: "customMessage", message: "Half-done refactor", includeUntracked: false),
+        StashPushCase(name: "includeUntracked", message: nil, includeUntracked: true),
+    ]
+
+    @Test(arguments: stashPushCases)
+    func stashingSavesTrackedChangesAndUntrackedFilesOnlyWhenAsked(_ testCase: StashPushCase) async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "one\nTWO\n")
+        try repo.write("b.txt", "y\n")
+        try await repo.git(["add", "b.txt"])
+        try repo.write("new.txt", "fresh\n")
+
+        try await repo.client.stash(message: testCase.message, includeUntracked: testCase.includeUntracked)
+
+        #expect(try await repo.client.status().map(\.path) == (testCase.includeUntracked ? [] : ["new.txt"]))
+        let entry = try #require(try await repo.client.stashes().first)
+        if let message = testCase.message {
+            #expect(entry.message == message)
+        } else {
+            #expect(entry.hasDefaultMessage)
+        }
+        #expect(entry.hasUntrackedParent == testCase.includeUntracked)
+    }
+
+    @Test func aStashWithUntrackedFilesKeepsEveryFilesContents() async throws {
+        let repo = try await stashableRepo()
+        try repo.write("a.txt", "one\nTWO\n")
+        try repo.write("new.txt", "fresh\n")
+
+        try await repo.client.stash(message: nil, includeUntracked: true)
+
+        #expect(try await repo.git(["show", "stash@{0}:a.txt"]) == "one\nTWO")
+        #expect(try await repo.git(["show", "stash@{0}^3:new.txt"]) == "fresh")
+    }
+
+    struct MoveStashCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let includeUntracked: Bool
+
+        var testDescription: String { name }
+    }
+
+    static let moveStashCases: [MoveStashCase] = [
+        MoveStashCase(name: "withoutUntracked", includeUntracked: false),
+        MoveStashCase(name: "withUntracked", includeUntracked: true),
+    ]
+
+    /// A plain move shows as one rename, but git sees a tracked deletion and an untracked
+    /// file: without `-u` the stash takes only the deletion.
+    @Test(arguments: moveStashCases)
+    func stashingAPlainMoveLeavesItsDestinationUnlessUntrackedIsIncluded(_ testCase: MoveStashCase) async throws {
+        let repo = try await stashableRepo()
+        try move("a.txt", to: "moved.txt", in: repo)
+        let files = try await repo.client.status()
+        #expect(files.map(\.kind) == [.renamed])
+        let churn = RepositoryChurn(files)
+        #expect(churn.trackedFileCount == 1 && churn.untrackedFileCount == 1)
+
+        try await repo.client.stash(message: nil, includeUntracked: testCase.includeUntracked)
+
+        #expect(try read("a.txt", in: repo) == "one\ntwo\n")
+        let destination = repo.url.appendingPathComponent("moved.txt").path
+        #expect(FileManager.default.fileExists(atPath: destination) == !testCase.includeUntracked)
+    }
+
     // MARK: Popping and dropping stashes
 
     /// The listed entry at `index`, as the picker would hand it over.
