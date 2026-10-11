@@ -221,7 +221,7 @@ struct CommitSheetView: View {
     private var generateTitle: String {
         if windowState.isGeneratingCommitMessage {
             "Writing…"
-        } else if windowState.commitDraftMatchesGeneratedText {
+        } else if windowState.isCommitDraftUneditedGeneratedText {
             "Regenerate"
         } else {
             "Generate"

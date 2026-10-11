@@ -171,15 +171,17 @@ final class WindowState {
     /// defaults do not.
     ///
     /// The setter is the reader's path (the editor, tests), so it bumps `commitDraftRevision`.
-    /// A real change while the model is writing means the reader has taken over: generation
-    /// is cancelled and what it streamed stays. The equality check ignores SwiftUI's
-    /// `TextEditor` writing an unchanged value back.
+    /// A real change cancels a running generation and marks a generated draft as edited.
+    /// The equality check ignores SwiftUI's `TextEditor` writing an unchanged value back.
     /// A defaults read writes `storedCommitMessage` directly, the way `applySelection`
     /// bypasses the `selection` setter, so automatic text never counts as an edit.
     var commitMessage: String {
         get { storedCommitMessage }
         set {
-            if isGeneratingCommitMessage, newValue != storedCommitMessage { cancelCommitMessageGeneration() }
+            if newValue != storedCommitMessage {
+                if isGeneratingCommitMessage { cancelCommitMessageGeneration() }
+                generatedDraftIsUntouched = false
+            }
             storedCommitMessage = newValue
             commitDraftRevision += 1
         }
@@ -192,9 +194,10 @@ final class WindowState {
     private(set) var commitDefaults = CommitDefaults.none
     /// Last automatically applied message, used to preserve edited drafts.
     private var lastAppliedDefaultMessage: String?
-    /// The latest text the model streamed into the draft, so pressing Generate again does
-    /// not hand the model its own output as the reader's note.
-    private var lastGeneratedMessage: String?
+    /// The draft is the model's output as it streamed, unedited.
+    private var generatedDraftIsUntouched = false
+    /// The note sent with the latest Generate, reused while its output is untouched.
+    private var lastGenerationNote: String?
     /// A commit is queued or running.
     private(set) var isCommitting = false
     /// The commit sheet is up. Drives the presentation the way `errorMessage` drives the alert.
@@ -1266,12 +1269,12 @@ extension WindowState {
         if commitDraftRevision == revision {
             if failure == nil {
                 storedCommitMessage = ""
-                lastGeneratedMessage = nil
+                generatedDraftIsUntouched = false
             } else {
                 // A defaults read that landed while git ran may have replaced or emptied
                 // the draft. Put the submitted message back, and count it as the reader's
-                // own from now on so no later refresh can take it away. It is still no
-                // note for Generate if the model wrote it: `lastGeneratedMessage` stays.
+                // own from now on so no later refresh can take it away. If the model wrote
+                // the message, Generate still sends the note it was written from.
                 storedCommitMessage = message
             }
             lastAppliedDefaultMessage = nil
@@ -1342,6 +1345,7 @@ extension WindowState {
         guard storedCommitMessage == (lastAppliedDefaultMessage ?? "") else { return }
         let text = new.suggestion?.text
         storedCommitMessage = text ?? ""  // not the setter: this is not an edit
+        generatedDraftIsUntouched = false
         lastAppliedDefaultMessage = text
     }
 
@@ -1365,24 +1369,26 @@ extension WindowState {
         commitGenerationError = nil
         // Read now: streaming replaces the draft.
         let note = draftNote
+        lastGenerationNote = note
         let branch = currentBranchName
         session.commitGenerationTask = Task { [weak self] in
             await self?.runCommitMessageGeneration(note: note, branch: branch, session: session)
         }
     }
 
-    /// The draft, when it is the reader's own words: not blank, not git's untouched
-    /// suggestion, and not the model's last answer left as it was.
+    /// The model's untouched answer sends the note it was written from; otherwise the draft,
+    /// when it is the reader's own words: not blank and not git's untouched suggestion.
     private var draftNote: String? {
+        if generatedDraftIsUntouched { return lastGenerationNote }
         let draft = storedCommitMessage
-        guard draft != lastAppliedDefaultMessage, draft != lastGeneratedMessage else { return nil }
+        guard draft != lastAppliedDefaultMessage else { return nil }
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Whether the nonempty draft matches the latest generated text.
-    var commitDraftMatchesGeneratedText: Bool {
-        !storedCommitMessage.isEmpty && storedCommitMessage == lastGeneratedMessage
+    /// Whether the nonempty draft is the model's answer, unedited.
+    var isCommitDraftUneditedGeneratedText: Bool {
+        generatedDraftIsUntouched && !storedCommitMessage.isEmpty
     }
 
     /// Stops the generation in flight. Whatever it has written by then stays in the draft:
@@ -1400,7 +1406,7 @@ extension WindowState {
     /// model reproduced that suggestion word for word.
     private func applyGeneratedText(_ text: String) {
         storedCommitMessage = text
-        lastGeneratedMessage = text
+        generatedDraftIsUntouched = true
         lastAppliedDefaultMessage = nil
         commitDraftRevision += 1
     }
