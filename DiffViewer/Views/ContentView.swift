@@ -157,7 +157,7 @@ struct ContentView: View {
             MergeSheet(
                 model: MergeSheetModel(
                     target: target, previews: windowState.session?.mergePreviews,
-                    loadCommits: { [windowState] in await windowState.commitsToMerge(target, limit: $0) }),
+                    loadIncomingChanges: { [windowState] in await windowState.incomingChanges(target) }),
                 onMerge: { target in
                     confirmedMergeTarget = target
                     windowState.pendingMerge = nil

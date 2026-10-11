@@ -95,7 +95,6 @@ struct TaggedClient: RepoClient {
     func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary {
         IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
     }
-    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] { [] }
     func merge(sourceTipSha: String, sourceRef: String) async throws {}
 }
 

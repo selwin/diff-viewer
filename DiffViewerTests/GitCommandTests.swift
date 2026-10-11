@@ -1265,33 +1265,20 @@ import Testing
                 == IncomingChangeSummary(fileCount: 1, addedLineCount: 1, deletedLineCount: 1))
     }
 
-    /// Commits reached only through a merge on the source branch count, as in the preview.
-    @Test func commitsToMergeFollowsEveryParentAndHonoursTheLimit() async throws {
+    /// Commits reached only through a merge on the source branch count.
+    @Test func mergePreviewCountsCommitsReachedThroughMergedParents() async throws {
         let (repo, main, _) = try await divergedRepo(conflicting: false)
         try await repo.git(["checkout", "-b", "feature", "main~1"])
         try await repo.git(["checkout", "-b", "inner"])
         try repo.write("inner.txt", "inner\n")
-        let inner = try await repo.commit("Inner commit")
+        try await repo.commit("Inner commit")
         try await repo.git(["checkout", "feature"])
         try repo.write("feature.txt", "feature\n")
         try await repo.commit("Feature commit")
         try await repo.git(["merge", "--no-ff", "inner", "-m", "Merge inner"])
         let tip = try await repo.git(["rev-parse", "HEAD"])
 
-        let all = try await repo.client.commitsToMerge(headSha: main, sourceTipSha: tip, limit: 10)
-        #expect(all.count == 3)
-        #expect(all.map(\.ref.sha).contains(inner))
         #expect(try await repo.client.mergePreview(headSha: main, sourceTipSha: tip) == .clean(commits: 3))
-        #expect(try await repo.client.commitsToMerge(headSha: main, sourceTipSha: tip, limit: 2).count == 2)
-    }
-
-    /// A limit of zero or less returns nothing before git runs: the revisions don't exist.
-    @Test func commitsToMergeWithoutALimitIsEmpty() async throws {
-        let repo = try Repo()
-        for limit in [0, -1] {
-            let commits = try await repo.client.commitsToMerge(headSha: "none", sourceTipSha: "none", limit: limit)
-            #expect(commits.isEmpty)
-        }
     }
 
     /// Git's usual message names the branch by its short name, and the merge takes the

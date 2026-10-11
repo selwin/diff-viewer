@@ -63,26 +63,6 @@ extension GitClient {
         return IncomingChangeSummary(fileCount: entries.count, addedLineCount: added, deletedLineCount: deleted)
     }
 
-    /// Up to `limit` commits that `sourceTipSha` brings in and `headSha` lacks, newest
-    /// first. Follows every parent, not only the first, so the list agrees with the count
-    /// `mergePreview` reports.
-    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {
-        // Git reads a negative count as no limit at all.
-        guard limit > 0 else { return [] }
-        try Self.rejectOption(headSha, kind: "object id", command: "git log")
-        try Self.rejectOption(sourceTipSha, kind: "object id", command: "git log")
-        let result = try await ProcessRunner.check(
-            Self.executable,
-            arguments: [
-                "log", "-z", "--max-count=\(limit)", "--format=%H%x00%h%x00%P%x00%cI%x00%an%x00%s",
-                sourceTipSha, "--not", headSha,
-            ],
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
-        return try GitLogParser.parse(result.stdout)
-    }
-
     /// Merges exactly `sourceTipSha`, the commit the reader confirmed, so a ref that a
     /// fetch has moved since can't bring in commits the sheet never showed. `sourceRef`, a
     /// full ref such as `refs/heads/x` or `refs/remotes/origin/x`, only names the branch

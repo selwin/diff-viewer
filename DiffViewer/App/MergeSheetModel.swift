@@ -1,18 +1,28 @@
 import Foundation
 import Observation
 
-/// What the Merge sheet shows about one merge: the commits it brings in and the predicted
-/// outcome, which share the picker's preview cache. Loading starts with `start()` and
-/// stops with `stop()`, so a sheet that is closed asks for nothing more.
+/// How the merge illustration marks the commits coming in: one dot each up to five, a
+/// capsule beyond that, nothing while the count is unknown or zero.
+enum CommitMarks: Equatable {
+    case none
+    case dots(Int)
+    case capsule
+
+    static func forCount(_ count: Int) -> CommitMarks {
+        switch count {
+        case ..<1: .none
+        case 1...5: .dots(count)
+        default: .capsule
+        }
+    }
+}
+
+/// What the Merge sheet shows about one merge: the predicted outcome, which shares the
+/// picker's preview cache, and how much the source changes. Loading starts with `start()`
+/// and stops with `stop()`, so a sheet that is closed asks for nothing more.
 @MainActor
 @Observable
 final class MergeSheetModel {
-    /// One more than shown, so a longer list is noticed without counting it.
-    static let commitRequestLimit = 21
-    static let shownCommitLimit = 20
-    /// Longer lists would make the warning taller than the sheet's other content.
-    static let conflictPathLimit = 5
-
     /// Where the conflict prediction stands.
     enum PreviewStatus: Equatable {
         case loading
@@ -21,33 +31,60 @@ final class MergeSheetModel {
         case unavailable
     }
 
+    /// Where the file and line counts stand.
+    enum IncomingChangesStatus: Equatable {
+        case loading
+        case ready(IncomingChangeSummary)
+        /// Git could not count them; the merge is still allowed.
+        case unavailable
+    }
+
+    /// The headline result, which the view maps to an icon and colour.
+    enum Outcome: Equatable {
+        case checking
+        case clean
+        case conflicts
+        case alreadyMerged
+        case unknown
+    }
+
+    /// The status box's second line.
+    enum Statistics: Equatable {
+        case hidden
+        /// Still counting; the view reserves the line.
+        case pending
+        case ready(files: String, added: String, deleted: String)
+    }
+
     let target: MergeTarget
     private(set) var previewStatus: PreviewStatus = .loading
-    /// Nil until read, or if git could not list them.
-    private(set) var commits: [CommitSummary]?
-    private(set) var isLoadingCommits = true
+    private(set) var incomingChangesStatus: IncomingChangesStatus = .loading
 
     @ObservationIgnored private let previews: MergePreviewLoader?
-    @ObservationIgnored private let loadCommits: (Int) async -> [CommitSummary]?
+    @ObservationIgnored private let loadIncomingChanges: () async -> IncomingChangeSummary?
+    @ObservationIgnored private let locale: Locale
     @ObservationIgnored private var token: MergePreviewLoader.ConsumerToken?
-    @ObservationIgnored private(set) var commitsTask: Task<Void, Never>?
+    /// Exposed so tests can await it.
+    @ObservationIgnored private(set) var summaryTask: Task<Void, Never>?
+    /// Tells a restarted request from the one `stop()` cancelled, whose late answer is dropped.
+    @ObservationIgnored private var summaryTaskID = 0
 
-    /// `loadCommits` is asked for at most `commitRequestLimit` commits.
-    init(target: MergeTarget, previews: MergePreviewLoader?, loadCommits: @escaping (Int) async -> [CommitSummary]?) {
+    /// `loadIncomingChanges` returns nil when git could not count.
+    init(
+        target: MergeTarget, previews: MergePreviewLoader?, locale: Locale = .current,
+        loadIncomingChanges: @escaping () async -> IncomingChangeSummary?
+    ) {
         self.target = target
         self.previews = previews
-        self.loadCommits = loadCommits
+        self.locale = locale
+        self.loadIncomingChanges = loadIncomingChanges
     }
 
     func start() {
-        if token == nil { startPreview() }
-        // Nothing to list, so don't spend a git call on it.
-        if isAlreadyMerged {
-            commits = []
-            isLoadingCommits = false
-        } else {
-            loadCommitsIfNeeded()
-        }
+        // A finished preview is never asked for again; an unfinished one joins the loader's running call.
+        if token == nil, previewStatus == .loading { startPreview() }
+        // Summary state is ignored when the preview is already merged; no summary request is started.
+        if !isAlreadyMerged, incomingChangesStatus == .loading, summaryTask == nil { startSummary() }
     }
 
     /// Answers from the cache when it can; otherwise `loading` until the loader reports
@@ -71,23 +108,24 @@ final class MergeSheetModel {
         }
     }
 
+    private func startSummary() {
+        summaryTaskID += 1
+        let id = summaryTaskID
+        summaryTask = Task { [weak self, loadIncomingChanges] in
+            let summary = await loadIncomingChanges()
+            guard !Task.isCancelled, let self, summaryTaskID == id else { return }
+            incomingChangesStatus = summary.map { .ready($0) } ?? .unavailable
+            summaryTask = nil
+        }
+    }
+
     /// Stops results reaching the model and releases the loader's request. A git process
     /// already running is not terminated: `ProcessRunner` does not kill it on cancellation.
     func stop() {
         if let token { previews?.unregisterConsumer(token) }
         token = nil
-        commitsTask?.cancel()
-        commitsTask = nil
-    }
-
-    private func loadCommitsIfNeeded() {
-        guard commitsTask == nil, commits == nil else { return }
-        commitsTask = Task { [weak self, loadCommits] in
-            let loaded = await loadCommits(Self.commitRequestLimit)
-            guard !Task.isCancelled, let self else { return }
-            commits = loaded
-            isLoadingCommits = false
-        }
+        summaryTask?.cancel()
+        summaryTask = nil
     }
 
     // MARK: What the sheet says
@@ -101,31 +139,100 @@ final class MergeSheetModel {
         if case let .ready(preview) = previewStatus { preview } else { nil }
     }
 
-    var shownCommits: [CommitSummary] { Array((commits ?? []).prefix(Self.shownCommitLimit)) }
+    /// Nil while the preview is loading or unavailable.
+    var commitCount: Int? { preview?.commitCount }
 
-    /// "and N more" when the preview knows the total, else "and more" once the list was
-    /// cut off; nil when every commit is shown.
-    var moreCommitsText: String? {
-        Self.moreCommitsText(listed: commits?.count ?? 0, total: preview?.commitCount)
+    var commitMarks: CommitMarks { CommitMarks.forCount(commitCount ?? 0) }
+
+    /// Nil when the count is unknown or zero.
+    var commitsText: String? {
+        guard let commitCount, commitCount > 0 else { return nil }
+        return Self.commitsText(commitCount, locale: locale)
     }
 
-    static func moreCommitsText(listed: Int, total: Int?) -> String? {
-        let shown = min(listed, shownCommitLimit)
-        if let total, total > shown { return "and \(total - shown) more" }
-        return listed > shownCommitLimit ? "and more" : nil
+    var outcome: Outcome {
+        switch previewStatus {
+        case .loading: .checking
+        case .unavailable: .unknown
+        case let .ready(preview):
+            switch preview {
+            case .alreadyMerged: .alreadyMerged
+            case .clean: .clean
+            case .conflicts: .conflicts
+            }
+        }
     }
 
-    /// Nil unless conflicts are predicted.
-    var conflictText: String? {
-        guard case let .conflicts(_, files)? = preview else { return nil }
-        return Self.conflictText(paths: files.map(\.path))
+    var statusTitle: String {
+        switch outcome {
+        case .checking: "Checking…"
+        case .clean: "No Conflicts"
+        case .conflicts: Self.conflictTitle(fileCount: conflicts.count, locale: locale)
+        case .alreadyMerged: "Already Merged"
+        case .unknown: "Couldn't Predict Conflicts"
+        }
     }
 
-    static func conflictText(paths: [String]) -> String {
-        guard !paths.isEmpty else { return "Merging will conflict." }
-        let noun = paths.count == 1 ? "1 file" : "\(paths.count) files"
-        let listed = paths.prefix(conflictPathLimit).joined(separator: ", ")
-        let rest = paths.count - conflictPathLimit
-        return "Merging will conflict in \(noun): \(listed)" + (rest > 0 ? " and \(rest) more" : "")
+    var statistics: Statistics {
+        guard !isAlreadyMerged else { return .hidden }
+        switch incomingChangesStatus {
+        case .loading: return .pending
+        case .unavailable: return .hidden
+        case let .ready(summary):
+            return .ready(
+                files: Self.filesText(summary.fileCount, locale: locale),
+                added: Self.addedText(summary.addedLineCount, locale: locale),
+                deleted: Self.deletedText(summary.deletedLineCount, locale: locale))
+        }
+    }
+
+    /// Empty unless conflicts are predicted.
+    var conflicts: [MergeConflict] {
+        if case let .conflicts(_, files)? = preview { files } else { [] }
+    }
+
+    /// Nil unless conflicts are predicted, even when git named no file.
+    var conflictNote: String? {
+        outcome == .conflicts ? Self.conflictNote(fileCount: conflicts.count, locale: locale) : nil
+    }
+
+    var primaryTitle: String { outcome == .conflicts ? "Merge Anyway" : "Merge" }
+
+    var accessibilityLabel: String {
+        guard let commitsText else { return "Merge \(target.sourceName) into \(target.destinationBranch)" }
+        return "\(target.sourceName), with \(commitsText), merges into \(target.destinationBranch)"
+    }
+
+    // MARK: Wording
+
+    static func commitsText(_ count: Int, locale: Locale) -> String {
+        count == 1 ? "1 commit" : "\(count.formatted(.number.locale(locale))) commits"
+    }
+
+    static func filesText(_ count: Int, locale: Locale) -> String {
+        count == 1 ? "1 file" : "\(count.formatted(.number.locale(locale))) files"
+    }
+
+    static func conflictTitle(fileCount: Int, locale: Locale) -> String {
+        switch fileCount {
+        case 0: "Conflicts Predicted"
+        case 1: "1 File with Conflicts"
+        default: "\(fileCount.formatted(.number.locale(locale))) Files with Conflicts"
+        }
+    }
+
+    static func conflictNote(fileCount: Int, locale: Locale) -> String {
+        let place = fileCount == 0 ? "" : " in \(filesText(fileCount, locale: locale))"
+        return
+            "Conflicts are predicted\(place). If the merge stops, resolve them in your editor, then stage and commit here."
+    }
+
+    static func addedText(_ count: Int, locale: Locale) -> String {
+        "+" + count.formatted(.number.locale(locale))
+    }
+
+    /// With a true minus sign (U+2212), which lines up with the plus.
+    static func deletedText(_ count: Int, locale: Locale) -> String {
+        "\u{2212}" + count.formatted(.number.locale(locale))
     }
 }

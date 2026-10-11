@@ -132,9 +132,6 @@ protocol RepoClient: Sendable {
     /// Files and lines `sourceTipSha` changed since its merge base with `headSha`. Both are
     /// object ids.
     func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary
-    /// Up to `limit` commits `sourceTipSha` brings in that `headSha` lacks, newest first,
-    /// following every parent.
-    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary]
     /// Merges the commit `sourceTipSha` into the current branch; the full ref `sourceRef`
     /// only names the branch in the message. Throws git's and the hooks' diagnostics when
     /// it refuses or stops on conflicts.

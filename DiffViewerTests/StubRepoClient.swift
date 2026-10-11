@@ -134,7 +134,6 @@ actor StubRepoClient: RepoClient {
     private(set) var incomingChangesCalls: [MergePreviewKey] = []
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
-    private var stubbedCommitsToMerge: [CommitSummary] = []
     struct MergeCall: Equatable {
         let sourceTipSha: String
         let sourceRef: String
@@ -449,7 +448,6 @@ actor StubRepoClient: RepoClient {
     func set(incomingChanges summary: IncomingChangeSummary) { stubbedIncomingChanges = summary }
     /// Read once a held call is released, so a test can change it meanwhile.
     func fail(incomingChanges on: Bool) { failsIncomingChanges = on }
-    func set(commitsToMerge commits: [CommitSummary]) { stubbedCommitsToMerge = commits }
     func fail(merge on: Bool) { failsMerge = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
@@ -525,10 +523,6 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git diff", status: 128, stderr: "no merge base")
         }
         return stubbedIncomingChanges
-    }
-
-    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {
-        limit > 0 ? Array(stubbedCommitsToMerge.prefix(limit)) : []
     }
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {
