@@ -338,6 +338,9 @@ struct ChangesCommands: Commands {
                 .disabled(!(sceneWindowState?.canStageAll ?? false))
             button("Discard Changes…", for: .discard, in: groups)
             button("Move to Trash…", for: .trash, in: groups)
+            Divider()
+            Button("Stash All Changes…") { sceneWindowState?.openStashSheet() }
+                .disabled(!(sceneWindowState?.canOpenStashSheet ?? false))
         }
     }
 

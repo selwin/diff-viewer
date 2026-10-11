@@ -34,6 +34,10 @@ protocol RepoClient: Sendable {
     func commitSha(of ref: String) async throws -> String?
     /// The stash list, newest first.
     func stashes() async throws -> [StashEntry]
+    /// Saves the staged and unstaged changes, and untracked files when `includeUntracked`,
+    /// as a new top entry: `git stash push`. A nil message keeps git's default. Throws
+    /// git's diagnostics when it refuses, as with unmerged paths.
+    func stash(message: String?, includeUntracked: Bool) async throws
     /// Applies `entry`'s commit, then removes it from the stash list. Throws `StashError`
     /// when the list moved, conflicts stand in the way or were left, or the entry could not
     /// be removed after applying; git's diagnostics for any other refusal.

@@ -16,6 +16,7 @@ struct StashPickerPopover: View {
             grouping: grouping,
             onActivate: { entry in windowState.selectStash(entry) },
             onDismiss: { windowState.isStashPickerPresented = false },
+            onStash: { windowState.openStashSheet() },
             onPop: { entry in Task { await windowState.popStash(entry) } },
             onDrop: { entry, pickerWindow in
                 Task {
@@ -38,6 +39,7 @@ struct StashPickerView: NSViewRepresentable {
     let grouping: CommitDayGrouping
     let onActivate: (StashEntry) -> Void
     let onDismiss: () -> Void
+    let onStash: () -> Void
     let onPop: (StashEntry) -> Void
     let onDrop: (StashEntry, NSWindow?) -> Void
 
@@ -63,6 +65,7 @@ struct StashPickerView: NSViewRepresentable {
     private func setCallbacks(on view: StashPickerContainerView) {
         view.onActivate = onActivate
         view.onDismiss = onDismiss
+        view.onStash = onStash
         view.onPop = onPop
         view.onDrop = onDrop
     }

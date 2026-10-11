@@ -14,6 +14,7 @@ final class StashPickerContainerView: NSView {
 
     var onActivate: (StashEntry) -> Void = { _ in }
     var onDismiss: () -> Void = {}
+    var onStash: () -> Void = {}
     var onPop: (StashEntry) -> Void = { _ in }
     /// With the popover's window, for the confirmation sheet.
     var onDrop: (StashEntry, NSWindow?) -> Void = { _, _ in }
@@ -26,6 +27,9 @@ final class StashPickerContainerView: NSView {
     let tableView = PickerTableView()
     /// Over the list, for an empty list or a search with no match.
     private let emptyState = PickerEmptyStateView(frame: .zero)
+    /// The header's one trailing accessory; its state follows the snapshot.
+    private let stashButton = PickerPillButton(
+        title: "Stash Changes…", height: 34, focusMargin: PickerPillButton.focusRingMargin, surface: .raised)
 
     /// Set while the container itself moves the table's selection, which the delegate
     /// must not read back as the reader's choice.
@@ -43,6 +47,7 @@ final class StashPickerContainerView: NSView {
         self.state = state
         super.init(frame: .zero)
         clipsToBounds = true
+        configureStashButton()
         configureSearchField()
         configureTable()
         for view in [header, searchBackground, searchField, scrollView, emptyState] { addSubview(view) }
@@ -53,6 +58,17 @@ final class StashPickerContainerView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    private func configureStashButton() {
+        stashButton.target = self
+        stashButton.action = #selector(stashClicked)
+        stashButton.setAccessibilityLabel("Stash Changes")
+        header.trailingAccessory = stashButton
+    }
+
+    @objc private func stashClicked() {
+        onStash()
+    }
 
     private func configureSearchField() {
         searchField.placeholderAttributedString = NSAttributedString(
@@ -194,6 +210,8 @@ final class StashPickerContainerView: NSView {
         header.title = headerText.title
         header.subtitle = headerText.subtitle
         emptyState.configure(text: state.emptyText, isLoading: false)
+        let stashDisabledReason = state.snapshot.stashChangesDisabledReason
+        stashButton.apply(stashDisabledReason.map { .disabled(reason: $0) } ?? .enabled, title: "Stash Changes…")
         needsLayout = true
     }
 

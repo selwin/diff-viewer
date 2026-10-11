@@ -5,20 +5,42 @@ import Foundation
 struct RepositoryChurn: Equatable, Sendable {
     /// Distinct changed paths: a file both staged and unstaged counts once.
     let changedFileCount: Int
+    /// Distinct tracked paths with staged or unstaged changes: what a stash takes without `-u`.
+    let trackedFileCount: Int
+    /// The distinct untracked paths, which a stash leaves behind unless asked.
+    let untrackedFileCount: Int
     /// Line counts summed the way the All changes row sums them: a path in both areas
     /// counts twice, and binaries and uncounted files add nothing.
     let added: Int
     let deleted: Int
 
-    init(changedFileCount: Int, added: Int, deleted: Int) {
+    /// A nil `trackedFileCount` means every changed path that is not untracked.
+    init(changedFileCount: Int, trackedFileCount: Int? = nil, untrackedFileCount: Int = 0, added: Int, deleted: Int) {
         self.changedFileCount = changedFileCount
+        self.trackedFileCount = trackedFileCount ?? changedFileCount - untrackedFileCount
+        self.untrackedFileCount = untrackedFileCount
         self.added = added
         self.deleted = deleted
     }
 
-    /// The churn of a working-tree list, with whatever line counts its files carry.
+    /// The churn of a working-tree list, with whatever line counts its files carry. A paired
+    /// move is both: its old path is a tracked deletion and its new path is untracked.
     init(_ changed: [ChangedFile]) {
+        var tracked: Set<String> = []
+        var untracked: Set<String> = []
+        for file in changed {
+            if file.isUntrackedMove {
+                tracked.insert(file.originalPath ?? file.path)
+                untracked.insert(file.path)
+            } else if file.kind == .untracked {
+                untracked.insert(file.path)
+            } else {
+                tracked.insert(file.path)
+            }
+        }
         changedFileCount = Set(changed.map(\.path)).count
+        trackedFileCount = tracked.count
+        untrackedFileCount = untracked.count
         if case let .counted(added, deleted)? = LineStats.total(of: changed) {
             self.added = added
             self.deleted = deleted

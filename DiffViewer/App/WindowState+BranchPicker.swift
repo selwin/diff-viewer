@@ -30,8 +30,8 @@ extension WindowState {
         newBranchInitialName = nil
     }
 
-    /// What the New Branch sheet names as the branch it starts from.
-    var newBranchBaseTitle: String {
+    /// The branch HEAD is on, as the New Branch and Stash sheets name it.
+    var currentHeadTitle: String {
         switch headState {
         case let .named(name): name
         case .detached: "Detached HEAD"

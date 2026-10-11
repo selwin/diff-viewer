@@ -66,7 +66,7 @@ struct NewBranchSheet: View {
 
     private var baseText: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(windowState.newBranchBaseTitle)
+            Text(windowState.currentHeadTitle)
                 .font(.system(size: 15, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -125,12 +125,12 @@ struct NewBranchSheet: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 30)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color(nsColor: NewBranchSheetPalette.fieldFill)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color(nsColor: SheetFieldPalette.fieldFill)))
         .overlay {
             // A subtle focus cue instead of the system ring; validation never tints the field.
             RoundedRectangle(cornerRadius: 9)
                 .strokeBorder(
-                    nameFocused ? Color.primary.opacity(0.3) : Color(nsColor: NewBranchSheetPalette.fieldBorder),
+                    nameFocused ? Color.primary.opacity(0.3) : Color(nsColor: SheetFieldPalette.fieldBorder),
                     lineWidth: 0.5)
         }
         .anchorPreference(key: FieldBoundsKey.self, value: .bounds) { $0 }
@@ -235,9 +235,6 @@ private struct BranchConnector: Shape {
 private enum NewBranchSheetPalette {
     static let commitDot = DiffTheme.dynamic(light: rgb(174, 174, 178), dark: NSColor(white: 1, alpha: 0.40))
     static let connector = DiffTheme.dynamic(light: rgb(184, 184, 189), dark: NSColor(white: 1, alpha: 0.30))
-    static let fieldFill = DiffTheme.dynamic(light: .textBackgroundColor, dark: NSColor(white: 0, alpha: 0.25))
-    static let fieldBorder = DiffTheme.dynamic(
-        light: NSColor(white: 0, alpha: 0.15), dark: NSColor(white: 1, alpha: 0.14))
     static let errorText = DiffTheme.dynamic(light: rgb(215, 0, 21), dark: rgb(255, 105, 97))
 
     private static func rgb(_ r: Int, _ g: Int, _ b: Int, _ a: CGFloat = 1) -> NSColor {

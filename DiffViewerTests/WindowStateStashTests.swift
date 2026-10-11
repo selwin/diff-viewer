@@ -14,10 +14,14 @@ struct WindowStateStashTests {
             sourceBranch: "main", hasDefaultMessage: false, churn: .init(additions: 1, deletions: 0))
     }
 
-    /// Adopts a repository whose first stash read returns `stashes`, and waits for it.
-    private func adopt(_ h: Harness, _ state: WindowState, stashes: [StashEntry]) async throws -> Window {
-        let repo = await h.adopt(state, "A", files: [changedFile("a.swift")]) { await $0.set(stashes: stashes) }
+    /// Adopts a repository whose first stash read returns `stashes`, and waits for it and
+    /// the working tree's churn.
+    private func adopt(
+        _ h: Harness, _ state: WindowState, stashes: [StashEntry], files: [ChangedFile] = [changedFile("a.swift")]
+    ) async throws -> Window {
+        let repo = await h.adopt(state, "A", files: files) { await $0.set(stashes: stashes) }
         try #require(await eventually { await state.stashList.readStatus == .loaded })
+        try #require(await eventually { await state.workingTreeChurn != nil })
         return (h, state, repo.client, repo.root)
     }
 
@@ -288,6 +292,40 @@ struct WindowStateStashTests {
         case switchingBranch
     }
 
+    /// A running `blocker`, held in git until `finish`.
+    struct RunningBlocker {
+        let client: StubRepoClient
+        let held: StubCall
+        let task: Task<Void, Never>
+
+        func finish() async {
+            await client.hold(held, false)
+            await client.release(held)
+            await task.value
+        }
+    }
+
+    /// Starts `blocker` in a window with a staged file to commit, and waits until git holds it.
+    private func start(_ blocker: Blocker, in state: WindowState, client: StubRepoClient) async throws
+        -> RunningBlocker
+    {
+        let held: StubCall
+        let task: Task<Void, Never>
+        switch blocker {
+        case .committing:
+            held = .actions
+            state.commitMessage = "Commit"
+            await client.hold(held)
+            task = Task { await state.commit() }
+        case .switchingBranch:
+            held = .switchBranch
+            await client.hold(held)
+            task = Task { await state.switchBranch(to: "side") }
+        }
+        try #require(await eventually { await client.heldCount(held) == 1 })
+        return RunningBlocker(client: client, held: held, task: task)
+    }
+
     @Test(arguments: Blocker.allCases, StashAction.allCases)
     func stashActionsWaitForNoCommitOrBranchSwitch(_ blocker: Blocker, _ action: StashAction) async throws {
         let h = Harness()
@@ -296,31 +334,15 @@ struct WindowStateStashTests {
         let repo = await h.adopt(state, "A", files: [changedFile("a.swift", area: .staged)]) {
             await $0.set(stashes: [entry])
         }
-        let client = repo.client
-        let held: StubCall
-        let blocking: Task<Void, Never>
-        switch blocker {
-        case .committing:
-            held = .actions
-            state.commitMessage = "Commit"
-            await client.hold(held)
-            blocking = Task { await state.commit() }
-        case .switchingBranch:
-            held = .switchBranch
-            await client.hold(held)
-            blocking = Task { await state.switchBranch(to: "side") }
-        }
-        try #require(await eventually { await client.heldCount(held) == 1 })
+        let running = try await start(blocker, in: state, client: repo.client)
         #expect(state.stashPickerSnapshot.actionsBlockedReason != nil)
 
         await action.run(entry, in: state)
 
         #expect(state.activeStashOperation == nil)
-        await client.hold(held, false)
-        await client.release(held)
-        await blocking.value
-        #expect(await client.popCalls.isEmpty)
-        #expect(await client.dropCalls.isEmpty)
+        await running.finish()
+        #expect(await repo.client.popCalls.isEmpty)
+        #expect(await repo.client.dropCalls.isEmpty)
     }
 
     @Test(arguments: StashAction.allCases)
@@ -382,6 +404,217 @@ struct WindowStateStashTests {
         await running.value
         #expect(await w.client.popCalls == [first])
         #expect(await w.client.dropCalls.isEmpty)
+    }
+
+    // MARK: Stashing changes
+
+    /// One submission from the Stash sheet, and what git and Changes then hold.
+    struct PushCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let typedMessage: String
+        let includeUntracked: Bool
+        let expectedCall: StashPushCall
+        let remainingPaths: [String]
+
+        var testDescription: String { name }
+    }
+
+    nonisolated static let pushCases = [
+        PushCase(
+            name: "trimmed message", typedMessage: "  Half-done refactor \n", includeUntracked: false,
+            expectedCall: StashPushCall(message: "Half-done refactor", includeUntracked: false),
+            remainingPaths: ["new.txt"]),
+        PushCase(
+            name: "blank message with untracked", typedMessage: " \n ", includeUntracked: true,
+            expectedCall: StashPushCall(message: nil, includeUntracked: true), remainingPaths: []),
+    ]
+
+    @Test(arguments: pushCases)
+    func stashingRunsGitOnceAndRereadsChangesAndTheList(_ testCase: PushCase) async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let w = try await adopt(
+            h, state, stashes: [stash(0, "older")],
+            files: [changedFile("a.swift"), changedFile("new.txt", kind: .untracked)])
+
+        await state.stashChanges(message: testCase.typedMessage, includeUntracked: testCase.includeUntracked)
+
+        #expect(await w.client.stashPushCalls == [testCase.expectedCall])
+        #expect(state.files.map(\.path) == testCase.remainingPaths)
+        #expect(state.stashList.entries.map(\.message) == [testCase.expectedCall.message ?? "WIP on main", "older"])
+        #expect(!state.isStashingChanges)
+    }
+
+    @Test func anUntrackedOnlyTreeOpensTheSheetButStashesOnlyWithUntrackedIncluded() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let w = try await adopt(h, state, stashes: [], files: [changedFile("new.txt", kind: .untracked)])
+        #expect(state.canOpenStashSheet)
+        #expect(state.stashSubmissionBlockedReason(includeUntracked: true) == nil)
+
+        await state.stashChanges(message: "", includeUntracked: false)
+        #expect(await w.client.stashPushCalls.isEmpty)
+
+        await state.stashChanges(message: "", includeUntracked: true)
+        #expect(await w.client.stashPushCalls == [StashPushCall(message: nil, includeUntracked: true)])
+    }
+
+    @Test func aCleanTreeHasNothingToStash() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        _ = try await adopt(h, state, stashes: [], files: [])
+        #expect(state.stashChangesUnavailableReason == "No changes to stash")
+        #expect(!state.canOpenStashSheet)
+    }
+
+    @Test func aRunningPopKeepsTheSheetClosed() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let entry = stash(0, "popped")
+        let w = try await adopt(h, state, stashes: [entry])
+        await w.client.hold(.stashActions)
+        let pop = Task { await state.popStash(entry) }
+        try #require(await eventually { await w.client.heldCount(.stashActions) == 1 })
+        #expect(state.stashChangesUnavailableReason == "Another stash action is running")
+        #expect(!state.canOpenStashSheet)
+        await w.client.hold(.stashActions, false)
+        await w.client.release(.stashActions)
+        await pop.value
+    }
+
+    @Test func aPushInCommitScopeRecountsTheWorkingTreeAndKeepsTheCommit() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let shown = stash(0, "shown")
+        _ = try await adopt(h, state, stashes: [shown], files: [changedFile("a.swift"), changedFile("b.swift")])
+        try await show(shown, in: state)
+
+        await state.stashChanges(message: "", includeUntracked: false)
+
+        #expect(state.workingTreeChurn?.changedFileCount == 0)
+        #expect(state.scope == .commit(shown.commitSummary.ref))
+    }
+
+    /// What refuses a push outright: a running write, a pop still in git, or another sheet.
+    enum PushBlocker: CustomTestStringConvertible, Sendable {
+        case write(Blocker)
+        case heldPop
+        case commitSheet
+
+        static let allCases = Blocker.allCases.map(PushBlocker.write) + [.heldPop, .commitSheet]
+
+        var testDescription: String {
+            switch self {
+            case let .write(blocker): "\(blocker)"
+            case .heldPop: "heldPop"
+            case .commitSheet: "commitSheet"
+            }
+        }
+    }
+
+    @Test(arguments: PushBlocker.allCases)
+    func aPushIsRefusedWhileSomethingElseHoldsTheWindow(_ blocker: PushBlocker) async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let entry = stash(0, "listed")
+        let w = try await adopt(h, state, stashes: [entry], files: [changedFile("a.swift", area: .staged)])
+        var running: RunningBlocker?
+        switch blocker {
+        case let .write(write):
+            running = try await start(write, in: state, client: w.client)
+        case .heldPop:
+            await w.client.hold(.stashActions)
+            let pop = Task { await state.popStash(entry) }
+            try #require(await eventually { await w.client.heldCount(.stashActions) == 1 })
+            running = RunningBlocker(client: w.client, held: .stashActions, task: pop)
+        case .commitSheet:
+            state.isCommitSheetPresented = true
+        }
+
+        await state.stashChanges(message: "", includeUntracked: false)
+
+        #expect(!state.isStashingChanges)
+        await running?.finish()
+        #expect(await w.client.stashPushCalls.isEmpty)
+    }
+
+    @Test func aHeldPushRefusesAnotherPushAPopAndADrop() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let entry = stash(0, "listed")
+        let w = try await adopt(h, state, stashes: [entry])
+        await w.client.hold(.stashActions)
+        let push = Task { await state.stashChanges(message: "first", includeUntracked: false) }
+        try #require(await eventually { await w.client.heldCount(.stashActions) == 1 })
+
+        await state.stashChanges(message: "second", includeUntracked: false)
+        await state.popStash(entry)
+        await state.dropStash(entry)
+
+        await w.client.hold(.stashActions, false)
+        await w.client.release(.stashActions)
+        await push.value
+        #expect(await w.client.stashPushCalls == [StashPushCall(message: "first", includeUntracked: false)])
+        #expect(await w.client.popCalls.isEmpty)
+        #expect(await w.client.dropCalls.isEmpty)
+    }
+
+    @Test func aPushQueuedWhenTheWindowClosesNeverRuns() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let w = try await adopt(h, state, stashes: [])
+        await w.client.hold(.actions)
+        let stage = Task { await state.perform(.stage, on: [changedFile("a.swift")]) }
+        try #require(await eventually { await w.client.heldCount(.actions) == 1 })
+        let queued = Task { await state.stashChanges(message: "", includeUntracked: false) }
+        try #require(await eventually { await state.isStashingChanges })
+
+        state.close()
+        await w.client.hold(.actions, false)
+        await w.client.release(.actions)
+        await stage.value
+        await queued.value
+
+        #expect(await w.client.stashPushCalls.isEmpty)
+        #expect(!state.isStashingChanges)
+    }
+
+    @Test func aFailedPushReportsRereadsTheListAndLetsTheNextOneRun() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        let w = try await adopt(h, state, stashes: [])
+        let error = ProcessError.failed(command: "git stash push", status: 1, stderr: "needs merge")
+        await w.client.fail(stashActionsWith: error)
+        await w.client.set(stashes: [stash(0, "outside")])
+
+        await state.stashChanges(message: "", includeUntracked: false)
+        #expect(state.errorMessage == error.localizedDescription)
+        #expect(state.stashList.entries.map(\.message) == ["outside"])
+
+        await w.client.fail(stashActionsWith: nil)
+        await state.stashChanges(message: "retried", includeUntracked: false)
+        #expect(state.stashList.entries.map(\.message) == ["retried", "outside"])
+    }
+
+    @Test func thePickerHandsOverToTheSheet() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        _ = try await adopt(h, state, stashes: [])
+        state.isStashPickerPresented = true
+        #expect(state.stashPickerSnapshot.stashChangesDisabledReason == nil)
+
+        state.openStashSheet()
+        #expect(!state.isStashPickerPresented)
+        #expect(state.isStashSheetPresented)
+    }
+
+    @Test func anotherOverlayBesideThePickerKeepsTheSheetClosed() async throws {
+        let h = Harness()
+        let state = h.makeState()
+        _ = try await adopt(h, state, stashes: [])
+        state.isStashPickerPresented = true
+        state.isCommitSheetPresented = true
+        #expect(!state.canOpenStashSheet)
     }
 }
 

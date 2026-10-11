@@ -226,6 +226,9 @@ final class WindowState {
     }
     /// The stash picker popover is up, on the same terms as the commit picker's flag.
     var isStashPickerPresented = false
+    /// The Stash sheet is up. It opens only while no other overlay is, apart from the stash
+    /// picker it replaces.
+    var isStashSheetPresented = false
     /// The branch picker's last tab, so the popover reopens on it. Kept for the window's
     /// life only.
     var branchPickerTab: BranchPickerTab = .switchBranch
@@ -248,6 +251,9 @@ final class WindowState {
     private(set) var activeSync: ActiveSync?
     /// The stash pop or drop queued or running, and its entry, or nil when neither is.
     private(set) var activeStashOperation: ActiveStashOperation?
+    /// A stash push is queued or running. Set before enqueueing, so repeated submissions
+    /// cannot queue duplicate pushes.
+    private(set) var isStashingChanges = false
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -341,6 +347,7 @@ final class WindowState {
         isBranchPickerPresented = false
         isStashPickerPresented = false
         isNewBranchSheetPresented = false
+        isStashSheetPresented = false
         pendingMerge = nil
         pendingBranchName = nil
         session?.historySerial += 1
@@ -2114,15 +2121,77 @@ extension WindowState {
 
 // MARK: - Stash actions
 
-/// Popping and dropping stashes from the picker's rows. Same file as the class so
-/// `activeStashOperation` stays `private(set)` and the churn read can stay private.
+/// Stashing the working tree, and popping and dropping stashes from the picker's rows. Same
+/// file as the class so `activeStashOperation` and `isStashingChanges` stay `private(set)`
+/// and the churn read can stay private.
 extension WindowState {
     /// Why the window refuses stash actions right now, or nil. Admission and the picker's
     /// buttons read this one answer.
     var stashActionsBlockedReason: String? {
         if isSwitchingBranch { return "A branch switch is running" }
         if isCommitting { return "A commit is running" }
+        // A push shifts every index, so a pop or drop chosen meanwhile could name another entry.
+        if isStashingChanges { return "Changes are being stashed" }
         return nil
+    }
+
+    /// Why the Stash sheet cannot open, or nil. An untracked-only tree passes, so the
+    /// reader can choose to include those files.
+    var stashChangesUnavailableReason: String? {
+        if let reason = stashActionsBlockedReason { return reason }
+        if activeStashOperation != nil { return "Another stash action is running" }
+        guard let churn = workingTreeChurn else { return "Reading changes…" }
+        if churn.changedFileCount == 0 { return "No changes to stash" }
+        return nil
+    }
+
+    /// Why a push with these options would be refused, or nil: the opening reason, or a
+    /// tree whose only changes are untracked files left out.
+    func stashSubmissionBlockedReason(includeUntracked: Bool) -> String? {
+        if let reason = stashChangesUnavailableReason { return reason }
+        if !includeUntracked, workingTreeChurn?.trackedFileCount == 0 {
+            return "Only untracked files changed. Include them to stash."
+        }
+        return nil
+    }
+
+    /// Stashes the working tree on the write chain. A blank message keeps git's default.
+    func stashChanges(message: String, includeUntracked: Bool) async {
+        guard let session, !isClosed, stashSubmissionBlockedReason(includeUntracked: includeUntracked) == nil,
+            !isOtherOverlayPresented(besides: .stashSheet)
+        else { return }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Before the first suspension: the admission guard.
+        isStashingChanges = true
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runStashPush(
+                message: trimmed.isEmpty ? nil : trimmed, includeUntracked: includeUntracked, session: session)
+        }
+    }
+
+    /// Runs git and re-reads the working tree and the stash list; the watcher ignores this
+    /// process's own events. The displayed commit stays. The reservation is released on every exit.
+    private func runStashPush(message: String?, includeUntracked: Bool, session: RepoSession) async {
+        defer { isStashingChanges = false }
+        guard isLive(session) else { return }
+
+        var failure: (any Error)?
+        do { try await session.client.stash(message: message, includeUntracked: includeUntracked) } catch {
+            failure = error
+        }
+        guard isLive(session) else { return }
+
+        if scope == .workingTree {
+            await refresh(session: session, cause: .fileAction)
+        } else {
+            await refreshWorkingTreeChurn(session: session)
+        }
+        guard isLive(session) else { return }
+        scheduleStashRefresh(session: session)
+        await session.stashTask?.value
+        guard isLive(session), let failure else { return }
+        // After the awaited refresh and stash read, so the news survives them.
+        errorMessage = failure.localizedDescription
     }
 
     /// Applies `entry` to the working tree and removes it, on the write chain. A second

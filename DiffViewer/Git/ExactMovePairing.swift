@@ -102,6 +102,7 @@ enum ExactMovePairing {
             old: old.fingerprint?.old ?? .unknown, new: .notApplicable,
             worktree: new.fingerprint?.worktree ?? .unknown, kind: .renamed, originalPath: old.path)
         return ChangedFile(
-            path: new.path, originalPath: old.path, kind: .renamed, area: .unstaged, fingerprint: fingerprint)
+            path: new.path, originalPath: old.path, kind: .renamed, area: .unstaged, fingerprint: fingerprint,
+            isUntrackedMove: true)
     }
 }

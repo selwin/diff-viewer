@@ -40,6 +40,18 @@ extension GitClient {
         return try await tracked + added
     }
 
+    // MARK: Push
+
+    /// Saves the staged and unstaged changes, and untracked files when asked, as a new
+    /// stash and cleans them from the working tree. Hook environment, as for pop's apply:
+    /// clean filters such as LFS need the login PATH.
+    func stash(message: String?, includeUntracked: Bool) async throws {
+        var arguments = ["stash", "push"]
+        if includeUntracked { arguments.append("--include-untracked") }
+        if let message { arguments += ["-m", message] }
+        try await runReportingDiagnostics(arguments, command: "git stash push", environment: await hookEnvironment())
+    }
+
     // MARK: Pop and drop
 
     /// Removes `entry` from the stash list once its selector still names the confirmed commit.

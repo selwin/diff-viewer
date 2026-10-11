@@ -84,7 +84,8 @@ struct WindowStateWorkingTreeChurnTests {
         #expect(state.adopt(root: repo.root, client: repo.client))
         #expect(
             await eventually {
-                await state.workingTreeChurn == RepositoryChurn(changedFileCount: 2, added: 2, deleted: 0)
+                await state.workingTreeChurn
+                    == RepositoryChurn(changedFileCount: 2, untrackedFileCount: 1, added: 2, deleted: 0)
             })
     }
 
