@@ -243,6 +243,8 @@ final class WindowState {
     private(set) var newRemoteBranches: Set<String> = []
     /// The pull or push queued or running, and its branch, or nil when neither is.
     private(set) var activeSync: ActiveSync?
+    /// The stash pop or drop queued or running, and its entry, or nil when neither is.
+    private(set) var activeStashOperation: ActiveStashOperation?
     /// A commit message is being written by the model.
     private(set) var isGeneratingCommitMessage = false
     /// Why the last generation stopped, for the sheet's caption. Cleared when another
@@ -2101,5 +2103,92 @@ extension WindowState {
         }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+    }
+}
+
+// MARK: - Stash actions
+
+/// Popping and dropping stashes from the picker's rows. Same file as the class so
+/// `activeStashOperation` stays `private(set)` and the churn read can stay private.
+extension WindowState {
+    /// Why the window refuses stash actions right now, or nil. Admission and the picker's
+    /// buttons read this one answer.
+    var stashActionsBlockedReason: String? {
+        if isSwitchingBranch { return "A branch switch is running" }
+        if isCommitting { return "A commit is running" }
+        return nil
+    }
+
+    /// Applies `entry` to the working tree and removes it, on the write chain. A second
+    /// stash action while one is queued or running does nothing.
+    func popStash(_ entry: StashEntry) async {
+        await startStashOperation(.pop, on: entry)
+    }
+
+    /// Removes `entry` from the stash list, on the same terms as `popStash`.
+    func dropStash(_ entry: StashEntry) async {
+        await startStashOperation(.drop, on: entry)
+    }
+
+    private func startStashOperation(_ operation: ActiveStashOperation.Operation, on entry: StashEntry) async {
+        guard let session, !isClosed, stashActionsBlockedReason == nil, activeStashOperation == nil else { return }
+        // Before the first suspension: the admission guard.
+        activeStashOperation = ActiveStashOperation(stashIndex: entry.stashIndex, sha: entry.sha, operation: operation)
+        await enqueueWrite(session: session) { [weak self] in
+            await self?.runStashOperation(operation, on: entry, session: session)
+        }
+    }
+
+    /// Runs git, moves to the working tree when the stash on screen is gone or its changes
+    /// landed there, and re-reads what changed. The watcher ignores this process's own
+    /// events, so nothing else would. The reservation is released on every exit.
+    private func runStashOperation(
+        _ operation: ActiveStashOperation.Operation, on entry: StashEntry, session: RepoSession
+    ) async {
+        defer { activeStashOperation = nil }
+        guard isLive(session) else { return }
+
+        var failure: (any Error)?
+        do {
+            switch operation {
+            case .pop: try await session.client.pop(entry)
+            case .drop: try await session.client.drop(entry)
+            }
+        } catch { failure = error }
+        guard isLive(session) else { return }
+
+        // The stash on screen is gone, or a failed pop's changes are in Changes anyway.
+        let leavesForWorkingTree =
+            if let failure {
+                operation == .pop && Self.popAppliedChanges(failure)
+            } else {
+                scope == .commit(entry.commitSummary.ref)
+            }
+        if leavesForWorkingTree, scope != .workingTree {
+            selectWorkingTree()
+        } else if operation == .pop {
+            // Drop never touches the working tree; any pop attempt may have.
+            if scope == .workingTree {
+                await refresh(session: session, cause: .fileAction)
+            } else {
+                await refreshWorkingTreeChurn(session: session)
+            }
+        }
+        guard isLive(session) else { return }
+        // A newer read that supersedes this one owns publication.
+        scheduleStashRefresh(session: session)
+        await session.stashTask?.value
+        guard isLive(session), let failure else { return }
+        // After the awaited refresh and stash read. A scope switch's reload may still be
+        // landing, but a successful refresh clears only an error a refresh raised.
+        errorMessage = failure.localizedDescription
+    }
+
+    /// A pop that failed after its changes reached the working tree.
+    private static func popAppliedChanges(_ failure: any Error) -> Bool {
+        switch failure as? StashError {
+        case .conflicts, .appliedButNotDropped: true
+        default: false
+        }
     }
 }

@@ -10,7 +10,8 @@ extension WindowState {
     var stashPickerSnapshot: StashPickerSnapshot {
         let displayedRef: CommitRef? = if case let .commit(ref) = scope { ref } else { nil }
         return StashPickerSnapshot(
-            stashes: stashList.entries, readStatus: stashList.readStatus, displayedRef: displayedRef)
+            stashes: stashList.entries, readStatus: stashList.readStatus, displayedRef: displayedRef,
+            activeOperation: activeStashOperation, actionsBlockedReason: stashActionsBlockedReason)
     }
 
     /// Shows the stash as a commit scope: its tracked changes and any untracked files it saved.

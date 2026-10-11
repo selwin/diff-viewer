@@ -16,12 +16,21 @@ extension StashPickerContainerView: NSTableViewDataSource, NSTableViewDelegate {
                 as? PickerGroupHeaderView ?? PickerGroupHeaderView()
             header.configure(title: group.title)
             return header
-        case let .stash(stashRow):
+        case .stash:
             let view =
                 tableView.makeView(withIdentifier: StashPickerRowView.identifier, owner: nil) as? StashPickerRowView
                 ?? StashPickerRowView(frame: .zero)
             view.onActivate = activationHandler(for: view)
-            view.configure(stashRow)
+            // The popover stays up during an action, and the search field keeps the keyboard.
+            view.onPop = { [weak self] entry in
+                self?.onPop(entry)
+                self?.returnFocusToSearchField()
+            }
+            view.onDrop = { [weak self] entry in
+                self?.onDrop(entry, self?.window)
+                self?.returnFocusToSearchField()
+            }
+            configureButtons(of: view, row: row)
             return view
         }
     }

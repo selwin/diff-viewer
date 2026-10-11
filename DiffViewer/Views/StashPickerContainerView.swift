@@ -14,6 +14,9 @@ final class StashPickerContainerView: NSView {
 
     var onActivate: (StashEntry) -> Void = { _ in }
     var onDismiss: () -> Void = {}
+    var onPop: (StashEntry) -> Void = { _ in }
+    /// With the popover's window, for the confirmation sheet.
+    var onDrop: (StashEntry, NSWindow?) -> Void = { _, _ in }
 
     let header = PickerHeaderView(wrapsTitle: false)
     let searchField = FilledSearchField()
@@ -119,11 +122,20 @@ final class StashPickerContainerView: NSView {
     /// An unchanged snapshot is skipped.
     func apply(_ snapshot: StashPickerSnapshot) {
         guard snapshot != state.snapshot else { return }
+        let buttonsChanged =
+            snapshot.activeOperation != state.snapshot.activeOperation
+            || snapshot.actionsBlockedReason != state.snapshot.actionsBlockedReason
         // A reload can move or drop the table's selection; none of that is the reader's.
         isApplyingSelection = true
         applyTableChange(state.apply(snapshot))
         isApplyingSelection = false
-        syncSelection()
+        let synced = syncSelection()
+        // Reloaded cells configured their buttons already, and the selection sync updated
+        // its rows; the others are updated here.
+        if buttonsChanged {
+            let visible = tableView.rows(in: tableView.visibleRect)
+            updateRows((visible.lowerBound..<visible.upperBound).filter { !synced.contains($0) })
+        }
         renderChrome()
         updatePreferredHeight()
         // Rows that arrive after the first layout get the initial reveal here: layout
@@ -142,15 +154,37 @@ final class StashPickerContainerView: NSView {
         }
     }
 
-    /// Moves the table's selection to the highlight without scrolling.
-    func syncSelection() {
+    /// Moves the table's selection to the highlight without scrolling. The pills follow it.
+    /// Returns the rows it re-configured.
+    @discardableResult
+    func syncSelection() -> Set<Int> {
         let wasApplying = isApplyingSelection
         isApplyingSelection = true
         defer { isApplyingSelection = wasApplying }
+        let previous = tableView.selectedRow
         if let row = state.highlightedItemIndex {
             tableView.selectRowIndexes([row], byExtendingSelection: false)
         } else {
             tableView.deselectAll(nil)
+        }
+        let changed = Set([previous, state.highlightedItemIndex].compactMap { $0 })
+        updateRows(changed)
+        return changed
+    }
+
+    /// Sets `cell`'s pills from the current snapshot and highlight.
+    func configureButtons(of cell: StashPickerRowView, row: Int) {
+        guard let stashRow = state.items[row].stashRow else { return }
+        cell.configure(
+            stashRow, buttons: state.buttons(forItem: row), isHighlighted: row == state.highlightedItemIndex)
+    }
+
+    /// Re-configures whichever of `rows` have a cell on screen.
+    private func updateRows(_ rows: some Sequence<Int>) {
+        for row in rows where row >= 0 && row < tableView.numberOfRows && row < state.items.count {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? StashPickerRowView
+            else { continue }
+            configureButtons(of: cell, row: row)
         }
     }
 
@@ -299,6 +333,15 @@ final class StashPickerContainerView: NSView {
         guard !hasFocusedSearchField, let window, window.isKeyWindow else { return }
         hasFocusedSearchField = true
         window.makeFirstResponder(searchField)
+    }
+
+    /// The search field holds focus. Only a field that lost it is refocused, with the caret
+    /// at the end: refocusing selects the text, and the next key would replace the query.
+    func returnFocusToSearchField() {
+        guard searchField.currentEditor() == nil else { return }
+        window?.makeFirstResponder(searchField)
+        let end = searchField.stringValue.utf16.count
+        searchField.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
     }
 
     private func removeKeyObserver() {

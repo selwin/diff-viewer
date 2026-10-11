@@ -91,6 +91,21 @@ struct StashPickerState {
         highlightedItemIndex.flatMap(activation(forItem:))
     }
 
+    /// A row's Pop and Drop. While an operation runs, only its own button is live, as a
+    /// spinner; otherwise the window's blocked reason disables both. Nil for a header.
+    func buttons(forItem index: Int) -> (pop: PickerButtonState, drop: PickerButtonState)? {
+        guard let entry = activation(forItem: index) else { return nil }
+        if let active = snapshot.activeOperation {
+            let busy = PickerButtonState.disabled(reason: "Another stash action is running")
+            guard active.acts(on: entry) else { return (busy, busy) }
+            return active.operation == .pop ? (.running, busy) : (busy, .running)
+        }
+        if let reason = snapshot.actionsBlockedReason {
+            return (.disabled(reason: reason), .disabled(reason: reason))
+        }
+        return (.enabled, .enabled)
+    }
+
     // MARK: Snapshots
 
     /// Takes a new snapshot and reports what the table must do. The header is re-read

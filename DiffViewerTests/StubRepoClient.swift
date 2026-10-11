@@ -26,6 +26,8 @@ enum StubCall {
     case stagedPatch
     case mergePreview
     case stashes
+    /// `pop` and `drop`.
+    case stashActions
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -170,6 +172,11 @@ actor StubRepoClient: RepoClient {
     private var stubbedStashes: [StashEntry] = []
     private var failsStashes = false
     private(set) var stashesCalls = 0
+    /// Every entry `pop` or `drop` was asked for, in order, whether or not it succeeded.
+    private(set) var popCalls: [StashEntry] = []
+    private(set) var dropCalls: [StashEntry] = []
+    private var stashActionError: (any Error)?
+    private var filesAfterPop: [ChangedFile]?
     private var stubbedUnpushed: Set<String> = []
     private var failsUnpushed = false
     /// Every `unpushedCommits` read, in order.
@@ -554,6 +561,33 @@ actor StubRepoClient: RepoClient {
         if isHeld(.stashes) { await park(.stashes) }
         if fails { throw ProcessError.failed(command: "git stash list", status: 128, stderr: "gone") }
         return snapshot
+    }
+
+    // MARK: Stash actions
+
+    /// Makes `pop` and `drop` throw `error` after recording the call; nil lets them succeed.
+    func fail(stashActionsWith error: (any Error)?) { stashActionError = error }
+    /// What `status()` reports once a pop returns, whatever its outcome: a pop that stops on
+    /// conflicts or before its drop has still changed the working tree.
+    func set(filesAfterPop list: [ChangedFile]?) { filesAfterPop = list }
+
+    func pop(_ entry: StashEntry) async throws {
+        popCalls.append(entry)
+        if isHeld(.stashActions) { await park(.stashActions) }
+        if let filesAfterPop { files = filesAfterPop }
+        try finishStashAction(on: entry)
+    }
+
+    func drop(_ entry: StashEntry) async throws {
+        dropCalls.append(entry)
+        if isHeld(.stashActions) { await park(.stashActions) }
+        try finishStashAction(on: entry)
+    }
+
+    /// Throws the configured error, or removes the entry as git would.
+    private func finishStashAction(on entry: StashEntry) throws {
+        if let stashActionError { throw stashActionError }
+        stubbedStashes.removeAll { $0.stashIndex == entry.stashIndex && $0.sha == entry.sha }
     }
 
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> {

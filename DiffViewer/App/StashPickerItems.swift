@@ -8,6 +8,23 @@ enum StashReadStatus: Equatable, Sendable {
     case failed
 }
 
+/// The stash pop or drop queued or running, and the entry it acts on.
+struct ActiveStashOperation: Equatable, Sendable {
+    enum Operation: Equatable, Sendable {
+        case pop
+        case drop
+    }
+
+    let stashIndex: Int
+    let sha: String
+    let operation: Operation
+
+    /// Index and sha together: either alone can name another entry once the list moves.
+    func acts(on entry: StashEntry) -> Bool {
+        entry.stashIndex == stashIndex && entry.sha == sha
+    }
+}
+
 /// What the window hands the stash picker on every change.
 struct StashPickerSnapshot: Equatable, Sendable {
     /// In git's order, newest first.
@@ -17,6 +34,9 @@ struct StashPickerSnapshot: Equatable, Sendable {
     /// listed stash; every listed entry whose ref equals it is marked displayed, so the
     /// history view of a stash's commit, which leaves out its untracked files, is not.
     var displayedRef: CommitRef?
+    var activeOperation: ActiveStashOperation?
+    /// Why the window refuses stash actions, from the same policy as their admission.
+    var actionsBlockedReason: String?
 }
 
 struct StashPickerRow: Equatable {
