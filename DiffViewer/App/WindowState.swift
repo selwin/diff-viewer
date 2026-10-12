@@ -1606,11 +1606,11 @@ extension WindowState {
         }
     }
 
-    /// The commits `target` would bring in, newest first, or nil when git could not say.
-    func commitsToMerge(_ target: MergeTarget, limit: Int) async -> [CommitSummary]? {
+    /// What `target` would change, or nil when git could not say.
+    func incomingChanges(_ target: MergeTarget) async -> IncomingChangeSummary? {
         guard let session, !isClosed else { return nil }
-        return try? await session.client.commitsToMerge(
-            headSha: target.destinationTipSha, sourceTipSha: target.sourceTipSha, limit: limit)
+        return try? await session.client.incomingChanges(
+            headSha: target.destinationTipSha, sourceTipSha: target.sourceTipSha)
     }
 }
 

@@ -26,8 +26,7 @@ struct CommitSheetView: View {
         .padding(22)
         // Fits a 70-character message line, git's usual wrap width, without wrapping.
         .frame(width: 500)
-        // The same translucent material as the branch and commit pickers, rather than opaque white.
-        .presentationBackground(.regularMaterial)
+        .glassSheetBackground()
         .onAppear { editorFocused = true }
     }
 

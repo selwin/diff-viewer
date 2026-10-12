@@ -755,7 +755,8 @@ struct BranchPickerStateTests {
         let picker = state(snapshot(branches: [main, feature]), tab: .merge)
         let other = try index(.local(name: "feature"), in: picker)
         #expect(
-            picker.trailingLabel(forTableRow: other, preview: .conflicts(commits: 1, paths: ["a"]))
+            picker.trailingLabel(
+                forTableRow: other, preview: .conflicts(commits: 1, files: [MergeConflict(path: "a", kind: .contents)]))
                 == BranchRowLabel(text: "Conflict in 1 file", style: .warning))
     }
 

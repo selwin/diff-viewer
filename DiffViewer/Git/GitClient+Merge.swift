@@ -23,7 +23,7 @@ extension GitClient {
 
         let result = try await ProcessRunner.run(
             Self.executable,
-            arguments: ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", headSha, sourceTipSha],
+            arguments: ["merge-tree", "--write-tree", "--name-only", "-z", headSha, sourceTipSha],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
@@ -31,31 +31,36 @@ extension GitClient {
         // as for histories with no common ancestor.
         switch result.status {
         case 0: return .clean(commits: commits)
-        case 1: return .conflicts(commits: commits, paths: MergeTreeParser.conflictedPaths(result.stdoutString))
+        case 1: return .conflicts(commits: commits, files: MergeTreeParser.conflicts(result.stdoutString))
         default:
             throw ProcessError.failed(
                 command: "git merge-tree", status: result.status, stderr: result.stderrString)
         }
     }
 
-    /// Up to `limit` commits that `sourceTipSha` brings in and `headSha` lacks, newest
-    /// first. Follows every parent, not only the first, so the list agrees with the count
-    /// `mergePreview` reports.
-    func commitsToMerge(headSha: String, sourceTipSha: String, limit: Int) async throws -> [CommitSummary] {
-        // Git reads a negative count as no limit at all.
-        guard limit > 0 else { return [] }
-        try Self.rejectOption(headSha, kind: "object id", command: "git log")
-        try Self.rejectOption(sourceTipSha, kind: "object id", command: "git log")
+    /// How much `sourceTipSha` brings in, measured against the merge base with `headSha`
+    /// (`head...source`): an edit both branches made still counts. `--find-renames` turns
+    /// rename detection on explicitly, overriding `diff.renames`, with git's default
+    /// similarity, so a detected rename counts as one file.
+    func incomingChanges(headSha: String, sourceTipSha: String) async throws -> IncomingChangeSummary {
+        try Self.rejectOption(headSha, kind: "object id", command: "git diff")
+        try Self.rejectOption(sourceTipSha, kind: "object id", command: "git diff")
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: [
-                "log", "-z", "--max-count=\(limit)", "--format=%H%x00%h%x00%P%x00%cI%x00%an%x00%s",
-                sourceTipSha, "--not", headSha,
-            ],
+            arguments: ["diff", "--numstat", "-z", "--find-renames", "\(headSha)...\(sourceTipSha)"],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
-        return try GitLogParser.parse(result.stdout)
+        var added = 0
+        var deleted = 0
+        let entries = GitNumstatParser.parse(result.stdout)
+        for entry in entries {
+            if case let .counted(entryAdded, entryDeleted) = entry.stats {
+                added += entryAdded
+                deleted += entryDeleted
+            }
+        }
+        return IncomingChangeSummary(fileCount: entries.count, addedLineCount: added, deletedLineCount: deleted)
     }
 
     /// Merges exactly `sourceTipSha`, the commit the reader confirmed, so a ref that a

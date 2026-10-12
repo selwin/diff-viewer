@@ -37,19 +37,8 @@ struct SheetCapsuleButtonStyle: ButtonStyle {
             switch appearance {
             case .tinted: AnyShapeStyle(Color(nsColor: SheetCapsuleButtonPalette.tintedText))
             case .neutral: AnyShapeStyle(.primary)
-            case .prominent: AnyShapeStyle(Self.textOnAccent)
+            case .prominent: AnyShapeStyle(AccentForeground.color)
             }
-        }
-
-        /// White, except on a light accent such as yellow, where white text is hard to read.
-        /// The cut-off sits above macOS's blue, orange and green so those keep white text.
-        private static var textOnAccent: Color {
-            guard let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) else { return .white }
-            func linear(_ c: CGFloat) -> CGFloat { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-            let luminance =
-                0.2126 * linear(accent.redComponent) + 0.7152 * linear(accent.greenComponent)
-                + 0.0722 * linear(accent.blueComponent)
-            return luminance > 0.5 ? .black : .white
         }
 
         @ViewBuilder

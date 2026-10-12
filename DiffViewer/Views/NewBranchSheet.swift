@@ -29,8 +29,7 @@ struct NewBranchSheet: View {
         }
         .padding(20)
         .frame(width: 380)
-        // The same translucent material as the commit sheet.
-        .presentationBackground(.regularMaterial)
+        .glassSheetBackground()
         .onAppear {
             nameFocused = true
             // `.onChange` skips the initial value, so a prefilled name is checked here.

@@ -7,11 +7,11 @@ enum MergePreviewText {
             BranchRowLabel(text: "Already merged", style: .secondary)
         case let .clean(commits):
             BranchRowLabel(text: commits == 1 ? "1 commit" : "\(commits) commits", style: .secondary)
-        case let .conflicts(_, paths) where paths.isEmpty:
+        case let .conflicts(_, files) where files.isEmpty:
             BranchRowLabel(text: "Conflicts predicted", style: .warning)
-        case let .conflicts(_, paths):
+        case let .conflicts(_, files):
             BranchRowLabel(
-                text: paths.count == 1 ? "Conflict in 1 file" : "Conflict in \(paths.count) files", style: .warning)
+                text: files.count == 1 ? "Conflict in 1 file" : "Conflict in \(files.count) files", style: .warning)
         }
     }
 }
