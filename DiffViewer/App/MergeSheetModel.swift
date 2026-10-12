@@ -193,7 +193,7 @@ final class MergeSheetModel {
 
     /// Nil unless conflicts are predicted, even when git named no file.
     var conflictNote: String? {
-        outcome == .conflicts ? Self.conflictNote(fileCount: conflicts.count, locale: locale) : nil
+        outcome == .conflicts ? "Resolve conflicts in your editor, then stage and commit here." : nil
     }
 
     var primaryTitle: String { outcome == .conflicts ? "Merge Anyway" : "Merge" }
@@ -219,12 +219,6 @@ final class MergeSheetModel {
         case 1: "1 File with Conflicts"
         default: "\(fileCount.formatted(.number.locale(locale))) Files with Conflicts"
         }
-    }
-
-    static func conflictNote(fileCount: Int, locale: Locale) -> String {
-        let place = fileCount == 0 ? "" : " in \(filesText(fileCount, locale: locale))"
-        return
-            "Conflicts are predicted\(place). If the merge stops, resolve them in your editor, then stage and commit here."
     }
 
     static func addedText(_ count: Int, locale: Locale) -> String {

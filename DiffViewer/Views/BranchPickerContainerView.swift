@@ -33,8 +33,6 @@ final class BranchPickerContainerView: NSView {
     var onFetch: () -> Void = {}
     /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
     var onNewBranch: (String?) -> Void = { _ in }
-    /// The tab the reader chose, or the one Merge fell back to; the window remembers it.
-    var onTabChange: (BranchPickerTab) -> Void = { _ in }
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
 
@@ -221,7 +219,6 @@ final class BranchPickerContainerView: NSView {
         if !isAnimatingRows { tableView.refreshHover() }
         reloadRowsWithChangedMergePreviewKeys(since: oldKeys)
         requestVisibleMergePreviews()
-        if tabChanged { onTabChange(state.tab) }
     }
 
     /// Rows that go fade out as the rows below slide up over them; new rows fade in as the
@@ -278,7 +275,6 @@ final class BranchPickerContainerView: NSView {
         renderChrome()
         tableView.refreshHover()
         requestVisibleMergePreviews()
-        onTabChange(state.tab)
     }
 
     // MARK: Query

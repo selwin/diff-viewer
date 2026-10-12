@@ -49,15 +49,12 @@ struct MergeSheetModelTests {
     }
 
     @Test(arguments: [
-        (0, "Conflicts Predicted", "Conflicts are predicted."),
-        (1, "1 File with Conflicts", "Conflicts are predicted in 1 file."),
-        (23, "23 Files with Conflicts", "Conflicts are predicted in 23 files."),
+        (0, "Conflicts Predicted"),
+        (1, "1 File with Conflicts"),
+        (23, "23 Files with Conflicts"),
     ])
-    func conflictWordingFollowsTheFileCount(count: Int, title: String, notePrefix: String) {
+    func conflictTitleFollowsTheFileCount(count: Int, title: String) {
         #expect(MergeSheetModel.conflictTitle(fileCount: count, locale: english) == title)
-        #expect(
-            MergeSheetModel.conflictNote(fileCount: count, locale: english)
-                == notePrefix + " If the merge stops, resolve them in your editor, then stage and commit here.")
     }
 
     @Test func lineCountsUseTheLocaleAndATrueMinus() {
@@ -96,7 +93,7 @@ struct MergeSheetModelTests {
         #expect(await eventually { await model.previewStatus != .loading })
         #expect(model.statusTitle == "Conflicts Predicted")
         #expect(model.primaryTitle == "Merge Anyway")
-        #expect(model.conflictNote?.hasPrefix("Conflicts are predicted. If the merge stops") == true)
+        #expect(model.conflictNote != nil)
         model.stop()
     }
 

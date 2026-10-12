@@ -44,7 +44,6 @@ struct BranchPickerPopover: View {
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
             onNewBranch: { windowState.openNewBranchSheet(initialName: $0) },
-            onTabChange: { windowState.branchPickerTab = $0 },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
@@ -68,7 +67,6 @@ struct BranchPickerListView: NSViewRepresentable {
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
     let onNewBranch: (String?) -> Void
-    let onTabChange: (BranchPickerTab) -> Void
     let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
@@ -100,7 +98,6 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onDelete = onDelete
         view.onFetch = onFetch
         view.onNewBranch = onNewBranch
-        view.onTabChange = onTabChange
         view.now = now
     }
 }

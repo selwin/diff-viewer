@@ -326,7 +326,7 @@ final class DiffPaneView: NSView {
                 ofRow: index, lineIndex: cell.lineIndex, cached: cached, in: rowRect, context: context)
             context.restoreGState()
         } else {
-            drawPad(rowRect, context: context)
+            drawPad(rowRect, side: model.side, context: context)
         }
         drawGutter(cell, inRow: index, rowRect: rowRect, gutterColor: gutterColor, context: context)
     }
@@ -358,23 +358,11 @@ final class DiffPaneView: NSView {
         }
     }
 
-    private func drawPad(_ rowRect: NSRect, context: CGContext) {
-        let fullRect = fullWidthRect(rowRect)
-        DiffTheme.padBackground.setFill()
-        context.fill(fullRect)
-        context.saveGState()
-        context.clip(to: fullRect)
-        context.setStrokeColor(DiffTheme.padStripe.cgColor)
-        context.setLineWidth(1)
-        let step: CGFloat = 8
-        var x = floor(fullRect.minX / step) * step - rowRect.height
-        while x < fullRect.maxX {
-            context.move(to: CGPoint(x: x, y: fullRect.maxY))
-            context.addLine(to: CGPoint(x: x + rowRect.height, y: fullRect.minY))
-            x += step
-        }
-        context.strokePath()
-        context.restoreGState()
+    /// A faint wash in the colour of the line across: a new-side pad faces removed lines, an
+    /// old-side pad faces added ones.
+    private func drawPad(_ rowRect: NSRect, side: PaneModel.Side, context: CGContext) {
+        (side == .new ? DiffTheme.padDeleted : DiffTheme.padAdded).setFill()
+        context.fill(fullWidthRect(rowRect))
     }
 
     private func drawGutter(

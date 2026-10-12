@@ -46,8 +46,9 @@ enum DiffTheme {
     static let findCurrentMatch = dynamic(light: rgb(255, 176, 0), dark: rgb(255, 150, 0))
     static let findMatchText = NSColor.black
 
-    static let padBackground = dynamic(light: rgb(246, 248, 250), dark: rgb(28, 30, 34))
-    static let padStripe = dynamic(light: rgb(0, 0, 0, 0.06), dark: rgb(255, 255, 255, 0.05))
+    /// The gap opposite changed lines: a wash well below the changed rows' own tint.
+    static let padDeleted = dynamic(light: rgb(207, 34, 46, 0.035), dark: rgb(248, 81, 73, 0.05))
+    static let padAdded = dynamic(light: rgb(26, 127, 55, 0.035), dark: rgb(46, 160, 67, 0.05))
 
     static let foldBackground = dynamic(light: rgb(240, 244, 250), dark: rgb(34, 38, 46))
     static let foldControl = dynamic(light: rgb(0, 0, 0, 0.07), dark: rgb(255, 255, 255, 0.09))

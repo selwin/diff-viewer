@@ -229,8 +229,8 @@ final class WindowState {
     /// The Stash sheet is up. It opens only while no other overlay is, apart from the stash
     /// picker it replaces.
     var isStashSheetPresented = false
-    /// The branch picker's last tab, so the popover reopens on it. Kept for the window's
-    /// life only.
+    /// The tab the branch picker opens on. Always Switch; only the Debug launch option
+    /// `DIFFVIEWER_BRANCH_PICKER_TAB` sets Merge.
     var branchPickerTab: BranchPickerTab = .switchBranch
     /// Where the fetch round is: it drives the header's spinner and holds a pull while the
     /// remotes are listed.
