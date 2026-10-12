@@ -53,7 +53,11 @@ import Foundation
 /// - `DIFFVIEWER_SCROLL_Y=<points>[,...]` then does the same vertically, so a move band
 ///   with one end off screen can be snapshotted.
 /// - `DIFFVIEWER_SNAPSHOT=<path.png>` renders the window contents to a PNG afterwards
-///   (works even when the window is on another Space, unlike `screencapture`).
+///   (works even when the window is on another Space, unlike `screencapture`). The
+///   in-app render (`cacheDisplay`) applies `.destinationOut` cut-outs through the window
+///   background, so cut-outs such as the Merge sheet's hollow commit dots come out
+///   transparent (white or black in the PNG); check those in a real window capture
+///   (`scripts/screenshot.sh`).
 /// - `DIFFVIEWER_OPEN=<JSON array of paths>` opens those repositories, in order, as if
 ///   from Finder, once the saved session has finished restoring.
 /// - `DIFFVIEWER_DUMP_WINDOWS=1` prints each window's title, tab-group size, key and

@@ -13,8 +13,6 @@ struct MergeSheet: View {
     private static let rowHeight: CGFloat = 32
     private static let separatorHeight: CGFloat = 0.5
     private static let maxListHeight: CGFloat = 224
-    private static let panelFill = Color(nsColor: .quaternarySystemFill)
-    private static let statusBoxMaxWidth: CGFloat = 216
 
     init(model: MergeSheetModel, onMerge: @escaping (MergeTarget) -> Void, onCancel: @escaping () -> Void) {
         _model = State(initialValue: model)
@@ -25,11 +23,7 @@ struct MergeSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Merge Branch").font(.system(size: 15, weight: .semibold))
-            illustration
-            HStack {
-                Spacer(minLength: 0)
-                statusSlot
-            }
+            overview
             if !model.conflicts.isEmpty { conflictPanel }
             if let note = model.conflictNote {
                 Text(note)
@@ -41,26 +35,35 @@ struct MergeSheet: View {
         }
         .padding(24)
         .frame(width: 500)
-        .presentationBackground(.regularMaterial)
+        .glassSheetBackground()
         .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
 
-    // MARK: Illustration
+    // MARK: Overview
 
-    /// A plain stand-in until the drawing replaces it.
-    private var illustration: some View {
-        VStack(spacing: 6) {
-            Text(verbatim: model.target.sourceName)
-            if let commitsText = model.commitsText { Text(commitsText).foregroundStyle(.secondary) }
-            Text(verbatim: model.target.destinationBranch)
+    /// The status box is centred under the merge commit, so it sits
+    /// `illustrationHeight - mergeCommitY + statusGap` below the commit's centre.
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: MergeOverviewLayout.statusGap) {
+            MergeIllustration(
+                sourceName: model.target.sourceName,
+                destinationName: model.target.destinationBranch,
+                marks: model.commitMarks,
+                commitsText: model.commitsText,
+                marker: marker,
+                accessibilityLabel: model.accessibilityLabel)
+            statusSlot
+                .padding(.leading, MergeOverviewLayout.mergeCommitX - MergeOverviewLayout.statusSlotWidth / 2)
         }
-        .font(.system(size: 12, design: .monospaced))
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .frame(width: 452, height: 96)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.accessibilityLabel)
+    }
+
+    private var marker: MergeIllustration.Marker {
+        switch model.outcome {
+        case .clean: .clean
+        case .conflicts: .conflict
+        case .checking, .alreadyMerged, .unknown: .neutral
+        }
     }
 
     // MARK: Status
@@ -72,44 +75,28 @@ struct MergeSheet: View {
             statusBox.fixedSize()
             statusBox.fixedSize(horizontal: false, vertical: true)
         }
-        .frame(width: Self.statusBoxMaxWidth)
+        .frame(width: MergeOverviewLayout.statusSlotWidth)
     }
 
     private var statusBox: some View {
         VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                statusIcon.frame(width: 14, height: 14)
-                Text(model.statusTitle)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(titleColor)
-            }
+            Text(model.statusTitle)
+                .font(.system(size: 13))
+                .foregroundStyle(titleColor)
             statistics
         }
         .monospacedDigit()
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Self.panelFill))
+        .background(RoundedRectangle(cornerRadius: 14).fill(MergeSheetPalette.cardFill))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14).strokeBorder(MergeSheetPalette.cardBorder, lineWidth: 0.5)
+        )
         .accessibilityElement(children: .combine)
     }
 
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch model.outcome {
-        case .checking:
-            ProgressView().controlSize(.mini)
-        case .clean:
-            Image(systemName: "checkmark").foregroundStyle(Color(nsColor: .systemGreen))
-        case .conflicts:
-            Image(systemName: "exclamationmark.triangle").foregroundStyle(Color(nsColor: .systemOrange))
-        case .alreadyMerged:
-            Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
-        case .unknown:
-            Image(systemName: "questionmark.circle").foregroundStyle(.secondary)
-        }
-    }
-
     private var titleColor: Color {
-        model.outcome == .conflicts ? Color(nsColor: MergeSheetPalette.warningText) : .primary
+        model.outcome == .conflicts ? Color(nsColor: .systemOrange) : .primary
     }
 
     @ViewBuilder
@@ -148,8 +135,11 @@ struct MergeSheet: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Self.panelFill))
+        .background(RoundedRectangle(cornerRadius: 16).fill(MergeSheetPalette.cardFill))
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16).strokeBorder(MergeSheetPalette.cardBorder, lineWidth: 0.5)
+        )
     }
 
     private var expandedHeight: CGFloat {
@@ -254,13 +244,10 @@ extension MergeConflictKind {
     }
 }
 
-/// Colours specific to the Merge sheet.
-private enum MergeSheetPalette {
-    /// System orange is too light for 12pt text on the light fill; this darker amber reads
-    /// at about 4.9:1. Dark appearance keeps system orange, which already contrasts well.
-    static let warningText = DiffTheme.dynamic(light: rgb(160, 78, 0), dark: .systemOrange)
-
-    private static func rgb(_ r: Int, _ g: Int, _ b: Int, _ a: CGFloat = 1) -> NSColor {
-        NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: a)
-    }
+/// Colours shared by the Merge sheet and its illustration.
+enum MergeSheetPalette {
+    /// The card behind the current branch, the status box and the conflict list.
+    static let cardFill = Color(nsColor: DiffTheme.dynamic(light: .white, dark: NSColor(white: 1, alpha: 0.08)))
+    static let cardBorder = Color(
+        nsColor: DiffTheme.dynamic(light: NSColor(white: 0, alpha: 0.06), dark: NSColor(white: 1, alpha: 0.10)))
 }

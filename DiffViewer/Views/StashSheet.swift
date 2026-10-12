@@ -32,8 +32,7 @@ struct StashSheet: View {
         }
         .padding(20)
         .frame(width: 380)
-        // The same translucent material as the commit sheet.
-        .presentationBackground(.regularMaterial)
+        .glassSheetBackground()
         .onAppear { messageFocused = true }
     }
 
