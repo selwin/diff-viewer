@@ -55,6 +55,8 @@ final class BranchPickerContainerView: NSView {
     private var hasFocusedSearchField = false
     private var keyObserver: (any NSObjectProtocol)?
     private var scrollObserver: (any NSObjectProtocol)?
+    /// Fades the list out before the footer; the glass alone leaves rows legible behind it.
+    let listFadeMask = CAGradientLayer()
     var displayOptionsObserver: (any NSObjectProtocol)?
     /// Nil without a session, when Merge rows show no previews.
     let mergePreviews: MergePreviewLoader?
@@ -161,6 +163,7 @@ final class BranchPickerContainerView: NSView {
         // Lets the last row scroll clear of the footer, and keeps `scrollRowToVisible` above
         // it. The scroller follows content insets, so it stops above the footer too.
         scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: Self.footerInset, right: 0)
+        configureListFade()
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
@@ -378,6 +381,7 @@ final class BranchPickerContainerView: NSView {
         let footerTop = height - Self.footerBottomGap - PickerStyle.footerHeight
         let tableTop = searchBackground.frame.maxY + Self.listTopGap
         scrollView.frame = NSRect(x: 0, y: tableTop, width: width, height: max(height - tableTop, 0))
+        updateListFadeMask(footerTop: footerTop)
         // Centred on what the footer leaves visible.
         emptyState.frame = NSRect(
             x: 0, y: tableTop, width: width, height: max(footerTop - Self.footerTopGap - tableTop, 0))

@@ -1,8 +1,11 @@
 import AppKit
 
-/// The segmented control, the search field's placeholder, and redrawing for the
-/// accessibility display options.
+/// The segmented control, the search field's placeholder, the list's fade under the
+/// footer, and redrawing for the accessibility display options.
 extension BranchPickerContainerView {
+    /// How far above the footer the rows start to fade, so the glass has little left to hide.
+    private static let footerFadeLength: CGFloat = 16
+
     func configureTabControl() {
         let segments = [("Switch", "arrow.left.arrow.right"), ("Merge", "arrow.triangle.merge")]
         tabControl.segmentCount = segments.count
@@ -19,6 +22,34 @@ extension BranchPickerContainerView {
         tabControl.target = self
         tabControl.action = #selector(tabControlChanged)
         tabControl.setAccessibilityLabel("Branch action")
+    }
+
+    func configureListFade() {
+        scrollView.wantsLayer = true
+        // AppKit flips the layer to match this flipped container, so y = 0 is the list's top.
+        listFadeMask.startPoint = CGPoint(x: 0.5, y: 0)
+        listFadeMask.endPoint = CGPoint(x: 0.5, y: 1)
+        listFadeMask.colors = [
+            NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor, NSColor.clear.cgColor,
+        ]
+        scrollView.layer?.mask = listFadeMask
+    }
+
+    /// Opaque down to just above the capsule, clear by its middle.
+    func updateListFadeMask(footerTop: CGFloat) {
+        let listHeight = scrollView.frame.height
+        let capsuleTop = footerTop - scrollView.frame.minY
+        let clearAt = capsuleTop + PickerStyle.footerHeight / 2
+        func fraction(_ y: CGFloat) -> Double {
+            listHeight > 0 ? Double(min(max(y / listHeight, 0), 1)) : 0
+        }
+        let fadeStart = fraction(capsuleTop - Self.footerFadeLength)
+        let fadeEnd = fraction(clearAt)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        listFadeMask.frame = scrollView.bounds
+        listFadeMask.locations = [0, fadeStart, max(fadeEnd, fadeStart), 1].map { NSNumber(value: $0) }
+        CATransaction.commit()
     }
 
     @objc private func tabControlChanged() {
