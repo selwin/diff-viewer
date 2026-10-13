@@ -1,26 +1,13 @@
 import AppKit
 
-/// The segmented control, the search field's placeholder, the list's fade under the
+/// The Switch/Merge tabs, the search field's placeholder, the list's fade under the
 /// footer, and redrawing for the accessibility display options.
 extension BranchPickerContainerView {
     /// How far above the footer the rows start to fade, so the glass has little left to hide.
     private static let footerFadeLength: CGFloat = 16
 
     func configureTabControl() {
-        let segments = [("Switch", "arrow.left.arrow.right"), ("Merge", "arrow.triangle.merge")]
-        tabControl.segmentCount = segments.count
-        tabControl.trackingMode = .selectOne
-        tabControl.controlSize = .small
-        tabControl.segmentDistribution = .fillEqually
-        tabControl.refusesFirstResponder = true
-        for (index, (label, symbol)) in segments.enumerated() {
-            tabControl.setLabel(label, forSegment: index)
-            tabControl.setImage(
-                NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-                    .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)), forSegment: index)
-        }
-        tabControl.target = self
-        tabControl.action = #selector(tabControlChanged)
+        tabControl.onSelect = { [weak self] index in self?.tabControlChanged(index) }
         tabControl.setAccessibilityLabel("Branch action")
     }
 
@@ -52,10 +39,10 @@ extension BranchPickerContainerView {
         CATransaction.commit()
     }
 
-    @objc private func tabControlChanged() {
-        selectTab(tabControl.selectedSegment == 1 ? .merge : .switchBranch)
+    private func tabControlChanged(_ index: Int) {
+        selectTab(index == 1 ? .merge : .switchBranch)
         // A refused tab leaves the selection where the state is.
-        tabControl.selectedSegment = state.tab == .merge ? 1 : 0
+        tabControl.selectedTabIndex = state.tab == .merge ? 1 : 0
         returnFocusToSearchField()
     }
 
@@ -71,6 +58,7 @@ extension BranchPickerContainerView {
 
     private func refreshRendering() {
         header.refreshRendering()
+        tabControl.refreshRendering()
         newBranchRow.refreshRendering()
         searchBackground.needsDisplay = true
         tableView.enumerateAvailableRowViews { rowView, _ in

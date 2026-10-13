@@ -14,7 +14,7 @@ enum PickerStyle {
     static let sectionHeaderHeight: CGFloat = 30
     /// How far the row highlight stays from the panel's sides.
     static let highlightInset: CGFloat = 8
-    /// The one edge everything lines up on: the title, segmented control, search field,
+    /// The one edge everything lines up on: the title, tabs, search field,
     /// section headers, row tiles and footer. Only the row highlight reaches past it.
     static let edgeInset: CGFloat = 22
     /// Row content sits this far inside the highlight, which puts the tile on `edgeInset`.
@@ -41,6 +41,7 @@ enum PickerStyle {
     static let pillFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
     static let rowStatusFont = NSFont.systemFont(ofSize: 11.5, weight: .medium)
     static let footerFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    static let tabFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
 
     // MARK: Colours
 

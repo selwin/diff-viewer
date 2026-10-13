@@ -1,14 +1,13 @@
 import AppKit
 
 /// The branch picker's AppKit root, laid out top-down by hand on the popover's glass: the
-/// header, the Switch/Merge segmented control, the search field, the branch table or its
+/// header, the Switch/Merge tabs, the search field, the branch table or its
 /// empty state, and the New Branch… button floating over the list's foot. Owns the
 /// `BranchPickerState` and applies each snapshot, query and tab to the table as the state
 /// directs.
 @MainActor
 final class BranchPickerContainerView: NSView {
-    private static let tabControlWidth: CGFloat = 200
-    /// Between the segmented control and the search field.
+    /// Between the tabs and the search field.
     private static let searchTopGap: CGFloat = 12
     /// Between the search field and the first row.
     private static let listTopGap: CGFloat = 8
@@ -38,7 +37,9 @@ final class BranchPickerContainerView: NSView {
 
     let header = BranchPickerHeaderView()
     /// Never takes focus: the search field keeps the keyboard, and ⇥ toggles it.
-    let tabControl = NSSegmentedControl()
+    let tabControl = PickerTabControl(tabs: [
+        ("Switch", "arrow.left.arrow.right"), ("Merge", "arrow.triangle.merge"),
+    ])
     let searchField = FilledSearchField()
     /// The search field's rounded fill; the field itself draws no bezel.
     let searchBackground = RoundedFillView(frame: .zero)
@@ -327,9 +328,9 @@ final class BranchPickerContainerView: NSView {
         header.configure(state.headerText, fetch: state.fetchText(now: now()))
         let shortcuts = state.shortcutTargets
         header.setShortcutGlyphs(pull: shortcuts.pull == .header, push: shortcuts.push == .header)
-        tabControl.selectedSegment = state.tab == .merge ? 1 : 0
-        tabControl.setEnabled(state.isMergeAvailable, forSegment: 1)
-        tabControl.setToolTip(state.isMergeAvailable ? nil : "Check out a branch to merge into it", forSegment: 1)
+        tabControl.selectedTabIndex = state.tab == .merge ? 1 : 0
+        tabControl.setEnabled(state.isMergeAvailable, forTab: 1)
+        tabControl.setToolTip(state.isMergeAvailable ? nil : "Check out a branch to merge into it", forTab: 1)
         renderPlaceholder()
         newBranchRow.isEnabled = state.isNewBranchEnabled
         wireKeyViewLoop()
@@ -367,8 +368,7 @@ final class BranchPickerContainerView: NSView {
         let headerHeight = header.fittingHeight(width: width)
         header.frame = NSRect(x: 0, y: 0, width: width, height: headerHeight)
         tabControl.frame = NSRect(
-            x: PickerStyle.edgeInset, y: headerHeight, width: Self.tabControlWidth,
-            height: tabControl.intrinsicContentSize.height)
+            origin: NSPoint(x: PickerStyle.edgeInset, y: headerHeight), size: tabControl.intrinsicContentSize)
         let inset = PickerStyle.edgeInset
         let searchInset = inset - PickerStyle.searchOutset
         searchBackground.frame = NSRect(
