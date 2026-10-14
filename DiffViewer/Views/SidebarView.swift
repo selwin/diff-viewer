@@ -98,12 +98,20 @@ struct SidebarView: View {
         .alignmentGuide(.stagingCapsule) { showsTray ? $0[VerticalAlignment.center] : $0[.bottom] + 14 }
     }
 
+    private var emptyListText: String {
+        switch windowState.scope {
+        case .workingTree: "No changes"
+        case .commit: "No changes in this commit"
+        case .range: "No differences"
+        }
+    }
+
     private var changesList: some View {
         @Bindable var windowState = windowState
         let unstagedFiles = windowState.unstagedFiles
-        let commitFiles = windowState.commitFiles
+        let revisionFiles = windowState.revisionFiles
         let unstagedGroups = DirectoryGrouping.groups(fromSortedFiles: unstagedFiles)
-        let commitGroups = DirectoryGrouping.groups(fromSortedFiles: commitFiles)
+        let revisionGroups = DirectoryGrouping.groups(fromSortedFiles: revisionFiles)
         // Both lists bind the one selection, and the model's setter keeps it to one list:
         // a click, ⌘-click or ⇧-click in either clears the other's rows, so a selection
         // always has one staging action. The arrow keys stay within one list. The setter
@@ -129,8 +137,7 @@ struct SidebarView: View {
                             .controlSize(.small)
                     }
                 } else {
-                    Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
-                        .foregroundStyle(.secondary)
+                    Text(emptyListText).foregroundStyle(.secondary)
                 }
             }
             // Outside every section, so the whole-list row sits above the headings
@@ -156,13 +163,13 @@ struct SidebarView: View {
                 }
                 ForEach(unstagedGroups) { DirectoryFileSection(group: $0) }
             }
-            // A commit has one list: its own staging is long settled.
-            if !commitGroups.isEmpty {
+            // A commit or range has one list: its own staging is long settled.
+            if !revisionGroups.isEmpty {
                 Section {
                 } header: {
-                    Text("Changed (\(commitFiles.count))")
+                    Text("Changed (\(revisionFiles.count))")
                 }
-                ForEach(commitGroups) { DirectoryFileSection(group: $0) }
+                ForEach(revisionGroups) { DirectoryFileSection(group: $0) }
             }
         }
         .listStyle(.sidebar)

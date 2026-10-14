@@ -1,6 +1,6 @@
 import Foundation
 
-/// Parses `git diff-tree -r -z --name-status` output into a commit's changed files.
+/// Parses `git diff-tree -r -z --name-status` output into a commit's or range's changed files.
 ///
 /// Each record is a status field followed by a path field: `M\0path\0A\0path\0`. A
 /// rename or copy status carries a similarity score and is followed by *two* paths,

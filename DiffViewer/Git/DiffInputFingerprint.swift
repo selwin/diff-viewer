@@ -7,7 +7,7 @@ import Foundation
 /// The fields follow the engine's reads per area. Unstaged: the index blob (at the old
 /// path for a rename) and the worktree file. Staged: the HEAD blob and the index blob. Untracked: the worktree file
 /// alone. Unmerged: the engine reads HEAD, which status does not report, so `old` is
-/// `.unknown`. Commit-scope files get no fingerprint at all; their content cannot change.
+/// `.unknown`. Commit and range files get no fingerprint at all; their content cannot change.
 struct DiffInputFingerprint: Hashable, Sendable {
     /// One side that git holds: a blob in the index or at HEAD.
     enum Blob: Hashable, Sendable {

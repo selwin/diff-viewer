@@ -66,6 +66,7 @@ struct TaggedClient: RepoClient {
     func drop(_ entry: StashEntry) async throws {}
     func unpushedCommits(tip: String, upstreamTip: String) async throws -> Set<String> { [] }
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
+    func changedFiles(in range: CommitRange) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
     func objectSizes(of specs: [String]) async throws -> [Int64?] { specs.map { _ in nil } }
     func indexContents(of path: String) async throws -> Data? { nil }

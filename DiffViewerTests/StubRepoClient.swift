@@ -135,7 +135,7 @@ actor StubRepoClient: RepoClient {
     private var stubbedRefs: [GitRef] = []
     private var failsRefs = false
     /// Merge bases keyed by the two SHAs asked about, in the order asked; unlisted pairs have none.
-    private var mergeBases: [MergePreviewKey: String] = [:]
+    private var mergeBases: [RevisionPair: String] = [:]
     private var stubbedChurn = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
     private var failsChurn = false
     private(set) var runningMergePreviews = 0
@@ -168,6 +168,8 @@ actor StubRepoClient: RepoClient {
     private var commitFiles: [String: [ChangedFile]] = [:]
     private var failsHistory = false
     private var failsCommitFiles = false
+    private var rangeFiles: [ChangedFile] = []
+    private var failsRangeFiles = false
     private(set) var headCalls = 0
     private(set) var historyCalls = 0
     private(set) var lastHistoryRevision: String?
@@ -323,6 +325,8 @@ actor StubRepoClient: RepoClient {
     func set(files list: [ChangedFile], forCommit sha: String) { commitFiles[sha] = list }
     func fail(history on: Bool) { failsHistory = on }
     func fail(commitFiles on: Bool) { failsCommitFiles = on }
+    func set(rangeFiles list: [ChangedFile]) { rangeFiles = list }
+    func fail(rangeFiles on: Bool) { failsRangeFiles = on }
 
     func headSha() async throws -> String? {
         headCalls += 1
@@ -458,7 +462,7 @@ actor StubRepoClient: RepoClient {
     func set(refs list: [GitRef]) { stubbedRefs = list }
     func fail(refs on: Bool) { failsRefs = on }
     func set(mergeBase sha: String?, for first: String, _ second: String) {
-        mergeBases[MergePreviewKey(headSha: first, sourceTipSha: second)] = sha
+        mergeBases[RevisionPair(baseSHA: first, targetSHA: second)] = sha
     }
     func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
     func fail(churn on: Bool) { failsChurn = on }
@@ -544,7 +548,7 @@ actor StubRepoClient: RepoClient {
     }
 
     func mergeBase(_ first: String, _ second: String) async throws -> String? {
-        mergeBases[MergePreviewKey(headSha: first, sourceTipSha: second)]
+        mergeBases[RevisionPair(baseSHA: first, targetSHA: second)]
     }
 
     func churn(base: String, target: String) async throws -> IncomingChangeSummary {
@@ -670,6 +674,11 @@ actor StubRepoClient: RepoClient {
         // Like `GitClient`, a stash's untracked files come from its third parent's own list.
         let untracked = commit.untrackedCommit.flatMap { commitFiles[$0.sha] } ?? []
         return (commitFiles[commit.sha] ?? []) + untracked
+    }
+
+    func changedFiles(in range: CommitRange) async throws -> [ChangedFile] {
+        if failsRangeFiles { throw ProcessError.failed(command: "git diff-tree", status: 128, stderr: "bad object") }
+        return rangeFiles
     }
 
     func contents(of path: String, at revision: String) async throws -> Data {

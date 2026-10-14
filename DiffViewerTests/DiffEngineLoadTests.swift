@@ -31,6 +31,14 @@ private func document(_ output: DiffEngine.Output) -> DiffDocument? {
 private let commitFile = changedFile(
     "a.swift", area: .commit(CommitRef(sha: objectID("c1"), shortSha: "c1", firstParentSHA: objectID("c0"))))
 
+private func rangeFile(mergeBase: String = "m0") -> ChangedFile {
+    changedFile(
+        "a.swift",
+        area: .range(
+            CommitRange(
+                baseName: "main", targetName: "feature", mergeBaseSHA: objectID(mergeBase), targetSHA: objectID("t1"))))
+}
+
 struct DiffEngineLoadTests {
     let client = StubRepoClient(files: [])
     let cache = succeedingCache()
@@ -54,8 +62,8 @@ struct DiffEngineLoadTests {
 
     // MARK: Reuse
 
-    /// A working-tree file by its fingerprint, a commit's file by its SHA.
-    @Test(arguments: [changedFile("a.swift"), commitFile])
+    /// A working-tree file by its fingerprint, a commit's or range's file by its SHAs.
+    @Test(arguments: [changedFile("a.swift"), commitFile, rangeFile()])
     func anUnchangedFileIsReusedWithoutReading(_ file: ChangedFile) async throws {
         await vouch(for: file, in: client)
 
@@ -65,6 +73,13 @@ struct DiffEngineLoadTests {
 
         #expect(await reads(client) == before, "nothing is read")
         #expect(document(second)?.id == document(first)?.id, "the same document comes back")
+    }
+
+    @Test func theSamePathUnderAnotherMergeBaseReadsAgain() async throws {
+        _ = try await load(rangeFile())
+        let before = await reads(client)
+        _ = try await load(rangeFile(mergeBase: "m1"))
+        #expect(await reads(client) > before)
     }
 
     enum Change: CaseIterable {

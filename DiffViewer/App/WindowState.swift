@@ -517,6 +517,8 @@ final class WindowState {
                 outcome = .success(try await client.status())
             case let .commit(ref):
                 outcome = .success(try await client.changedFiles(in: ref))
+            case let .range(range):
+                outcome = .success(try await client.changedFiles(in: range))
             }
         } catch {
             outcome = .failure(error)
@@ -846,7 +848,7 @@ extension WindowState {
     }
 
     /// The picker's choice: a commit is looked up in `selectableCommits`, and an unknown
-    /// ref is ignored.
+    /// ref is ignored. So is a range, which the picker never offers.
     func select(scope newScope: DiffScope) {
         switch newScope {
         case .workingTree:
@@ -854,6 +856,8 @@ extension WindowState {
         case let .commit(ref):
             guard let commit = selectableCommits.first(where: { $0.ref == ref }) else { return }
             select(commit: commit)
+        case .range:
+            return
         }
     }
 

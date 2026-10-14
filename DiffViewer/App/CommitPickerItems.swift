@@ -170,9 +170,9 @@ enum CommitPickerHighlight: Equatable {
 struct CommitPickerHeaderText: Equatable {
     let title: String
     var detailParts: [String] = []
-    /// Drawn monospaced after the detail parts; nil for Working Tree.
+    /// Drawn monospaced after the detail parts; nil for Working Tree and a range.
     var shortSha: String?
-    /// What the copy button copies; nil for Working Tree.
+    /// What the copy button copies; nil for Working Tree and a range.
     var sha: String?
 
     static func make(snapshot: CommitPickerSnapshot, grouping: CommitDayGrouping) -> CommitPickerHeaderText {
@@ -188,6 +188,8 @@ struct CommitPickerHeaderText: Equatable {
             return CommitPickerHeaderText(
                 title: commit.subject, detailParts: [commit.author, grouping.commitDateText(for: commit.committedAt)],
                 shortSha: commit.ref.shortSha, sha: commit.ref.sha)
+        case let .range(range):
+            return CommitPickerHeaderText(title: range.title)
         }
     }
 }

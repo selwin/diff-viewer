@@ -51,9 +51,12 @@ protocol RepoClient: Sendable {
     /// The files `commit` changed against its first parent, or against the empty tree at
     /// a root commit. A stash also lists the untracked files it saved, as added files.
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile]
+    /// The files `range`'s target changed since its merge base. Only a rename with
+    /// identical content counts as one file.
+    func changedFiles(in range: CommitRange) async throws -> [ChangedFile]
     /// Per-file added/deleted line counts for `area`: HEAD → index for `.staged`,
-    /// index → worktree for `.unstaged`, first parent → commit for `.commit`. Untracked
-    /// files never appear.
+    /// index → worktree for `.unstaged`, first parent → commit for `.commit`, merge base
+    /// → target for `.range`. Untracked files never appear.
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry]
     /// The stored size of each object, one entry per spec in order: a blob id or a
     /// `<rev>:<path>`. Nil where git has no such object. An empty list never launches git.

@@ -19,7 +19,7 @@ let testRepository = RepositoryRoot(path: "/repo")
 
 /// A working-tree file carries a deterministic fingerprint derived from its path, area and
 /// kind, known for every kind but `.unmerged`, whose `old` is `.unknown` as the parser
-/// leaves it. A commit-scope file has none, as the real client produces.
+/// leaves it. A commit or range file has none, as the real client produces.
 func changedFile(_ path: String, area: ChangedFile.Area = .unstaged, kind: ChangedFile.Kind = .modified) -> ChangedFile
 {
     ChangedFile(path: path, originalPath: nil, kind: kind, area: area, fingerprint: fingerprint(path, area, kind))
@@ -33,7 +33,7 @@ func inPublishedFileOrder(_ files: [ChangedFile]) -> [ChangedFile] {
 private func fingerprint(_ path: String, _ area: ChangedFile.Area, _ kind: ChangedFile.Kind) -> DiffInputFingerprint? {
     let stat = DiffInputFingerprint.Worktree.file(mtimeNs: 1, ctimeNs: 1, size: 10, inode: 1)
     switch (area, kind) {
-    case (.commit, _):
+    case (.commit, _), (.range, _):
         return nil
     case (.staged, _):
         return DiffInputFingerprint(

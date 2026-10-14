@@ -115,8 +115,8 @@ extension WindowState {
     /// What Stage All writes: staging a conflict marks it resolved, which a bulk action
     /// should not do silently. Those rows keep Mark Resolved on their own menu.
     var stageableUnstagedFiles: [ChangedFile] { unstagedFiles.filter { $0.kind != .unmerged } }
-    /// The selected commit's files. Empty in working-tree scope.
-    var commitFiles: [ChangedFile] { files.filter(\.area.isCommit) }
+    /// The selected commit's or range's files. Empty in working-tree scope.
+    var revisionFiles: [ChangedFile] { files.filter(\.area.hasFixedRevisions) }
 
     /// Whether a staging control (the capsule and the Changes menu's staging items) may start: the
     /// working tree is shown and no branch switch, confirmation, commit or overlay is in
@@ -130,10 +130,10 @@ extension WindowState {
     /// Whether Stage All can run: a staging action can start and Changes holds something to stage.
     var canStageAll: Bool { canStartStagingAction && !stageableUnstagedFiles.isEmpty }
 
-    /// Sidebar order: unstaged, staged, then commit files. `files` puts staged first;
+    /// Sidebar order: unstaged, staged, then commit or range files. `files` puts staged first;
     /// directory order is kept within each area. Any rule that speaks of "the row above"
     /// or "the next row" means an index here.
-    var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + commitFiles }
+    var sidebarRows: [ChangedFile] { unstagedFiles + stagedFiles + revisionFiles }
 
     /// The sidebar docks the staged files and the commit button below the other rows. A
     /// merge keeps it with nothing staged, because the merge itself is still to commit.

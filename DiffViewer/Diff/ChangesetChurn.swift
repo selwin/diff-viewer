@@ -31,11 +31,11 @@ enum ChangesetChurn {
         return currentFile.lineStats
     }
 
-    /// A commit's content cannot change, so its files match without a fingerprint. A
-    /// working-tree file matches only on known, equal fingerprints: equal unknown ones
-    /// prove nothing, as `DiffInputFingerprint.mayHaveChanged` says.
+    /// A commit's or range's content cannot change, so its files match without a
+    /// fingerprint. A working-tree file matches only on known, equal fingerprints: equal
+    /// unknown ones prove nothing, as `DiffInputFingerprint.mayHaveChanged` says.
     private static func sameInputs(_ built: ChangedFile, _ current: ChangedFile) -> Bool {
-        if built.area.isCommit { return true }
+        if built.area.hasFixedRevisions { return true }
         return !DiffInputFingerprint.mayHaveChanged(built.fingerprint, current.fingerprint)
     }
 }

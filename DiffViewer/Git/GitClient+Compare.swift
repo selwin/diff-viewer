@@ -53,4 +53,9 @@ extension GitClient {
         )
         return try ShortstatParser.parse(result.stdoutString)
     }
+
+    /// The files `range`'s target changed since its merge base.
+    func changedFiles(in range: CommitRange) async throws -> [ChangedFile] {
+        try await treeChanges(range.revisions, area: .range(range))
+    }
 }

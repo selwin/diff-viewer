@@ -50,11 +50,13 @@ extension LineStats {
 struct ChangedFile: Identifiable, Hashable, Sendable {
     /// Which pair of versions a file's diff comes from. The two working-tree cases are
     /// the areas git's status reports; `.commit` is one previous commit against its
-    /// first parent, or a stash's untracked files as a root commit.
+    /// first parent, or a stash's untracked files as a root commit; `.range` is a branch
+    /// against its merge base with another.
     enum Area: Hashable, Sendable {
         case unstaged
         case staged
         case commit(CommitRef)
+        case range(CommitRange)
 
         /// The stable half of `ChangedFile.id`. Never derived from presentation, so
         /// reordering the sidebar can never change a selection. The two working-tree
@@ -65,20 +67,28 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
             case .unstaged: "unstaged"
             case .staged: "staged"
             case let .commit(ref): "commit:\(ref.sha)"
+            case let .range(range): "range:\(range.mergeBaseSHA)..\(range.targetSHA)"
             }
         }
 
-        var isCommit: Bool {
-            if case .commit = self { return true }
-            return false
+        /// The revisions a commit or range compares; nil for the working-tree areas.
+        var revisionPair: RevisionPair? {
+            switch self {
+            case .unstaged, .staged: nil
+            case let .commit(ref): ref.revisions
+            case let .range(range): range.revisions
+            }
         }
+
+        /// A commit or range, whose content cannot change.
+        var hasFixedRevisions: Bool { revisionPair != nil }
 
         /// Sidebar and sort order only. Staged first, as the old lexical sort produced.
         var sortOrder: Int {
             switch self {
             case .staged: 0
             case .unstaged: 1
-            case .commit: 2
+            case .commit, .range: 2
             }
         }
 
@@ -90,6 +100,7 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
             case let .commit(ref):
                 ref.firstParentSHA == nil
                     ? "Empty tree → \(ref.shortSha)" : "\(ref.shortSha)^ → \(ref.shortSha)"
+            case let .range(range): "\(range.mergeBaseSHA.prefix(7)) → \(range.targetSHA.prefix(7))"
             }
         }
     }
@@ -126,7 +137,8 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
     let area: Area
     /// Added/deleted line counts, or a binary file's byte counts, or nil while unknown.
     var lineStats: LineStats?
-    /// What the diff reads for this file, or nil for a commit, whose content cannot change.
+    /// What the diff reads for this file, or nil for a commit or range, whose content
+    /// cannot change.
     var fingerprint: DiffInputFingerprint?
     /// The index entry's mode, such as `100644` or `120000`. Set only on an unstaged
     /// deletion, where `ExactMovePairing` needs it: a symlink's blob is its target path.
@@ -151,16 +163,16 @@ struct ChangedFile: Identifiable, Hashable, Sendable {
         return copy
     }
 
-    /// The revision and path each side of a commit's diff reads, or nil outside a commit.
-    /// A side is nil when the change kind or a root commit says it does not exist, so no
-    /// reader has to guess.
-    var commitSides: (old: (revision: String, path: String)?, new: (revision: String, path: String)?)? {
-        guard case let .commit(commit) = area else { return nil }
+    /// The revision and path each side of a commit's or range's diff reads, or nil in the
+    /// working tree. A side is nil when the change kind or a root commit says it does not
+    /// exist, so no reader has to guess.
+    var revisionSides: (old: (revision: String, path: String)?, new: (revision: String, path: String)?)? {
+        guard let pair = area.revisionPair else { return nil }
         var old: (revision: String, path: String)?
-        if kind != .added, let parent = commit.firstParentSHA {
-            old = (parent, originalPath ?? path)
+        if kind != .added, let base = pair.baseSHA {
+            old = (base, originalPath ?? path)
         }
-        let new: (revision: String, path: String)? = kind == .deleted ? nil : (commit.sha, path)
+        let new: (revision: String, path: String)? = kind == .deleted ? nil : (pair.targetSHA, path)
         return (old, new)
     }
 

@@ -418,7 +418,7 @@ struct ScopePickerView: View {
     private var help: String {
         switch windowState.scope {
         case .workingTree: WindowState.scopeSelectionHelp
-        case .commit: windowState.scopeDisplayTitle
+        case .commit, .range: windowState.scopeDisplayTitle
         }
     }
 }
