@@ -41,32 +41,21 @@ Do these first, before the rest of Requested.
 
 ### P1. Compare any two commits or branches (requested 2026-09-27)
 
-**Goal.** Pick two refs (commit, branch, tag, or the working tree) and read the diff
-between them, e.g. a feature branch against `main` before opening a PR, or two commits
-of the same branch. Today the commit picker shows one commit against its parent, and
-the working tree against HEAD. This reverses the "Ref-range compare" entry under Not
-doing; README's Not doing list changes with it.
+**Shipped: Branches mode.** Compare… (⇧⌘D, or the branch picker) opens a Compare window
+with two searchable ref lists (local, remote, tags). Compare opens `base...target` from
+the merge base, like GitHub, in a read-only tab of the repository window, with a
+file-and-line preview in the window first.
 
-**Design.**
-- A Compare… item (⇧⌘K or similar) opens a sheet with two fields, Base and Compare,
-  each a searchable list of branches (local and remote), recent commits and tags, plus
-  "Working tree" for Compare. Swap button between them.
-- From the commit picker, offer "Compare with…" on a commit and let the user choose
-  another commit. The selected commit fills Base and the second fills Compare; the
-  sheet shows both hashes and subjects before opening the diff. This should work for
-  commits that are not adjacent in the first-parent history.
-- For two selected commits, compare their exact trees (`base..compare`) by default.
-  For branch comparisons, use a merge-base toggle with `base...compare` (what the
-  branch adds, the PR view) by default and `base..compare` when off.
-- The title bar and the pinned row show the comparison (`main … feature/x`), with a
-  way back to the working tree. Staging and discarding are disabled while comparing,
-  as they are for a picked commit.
-- Reuses the commit picker's rows and the All changes loader; only the git arguments
-  and the diff's two sides differ.
+**Remaining.**
+- Commits mode: two commits of the branch, compared directly (`base..compare`), also
+  from a "Compare with…" item in the commit picker.
+- Pull Request mode.
+- The working tree as a side.
+- A toggle between merge-base (`...`) and direct (`..`) for branches.
+- Refreshing the ref lists while the Compare window is open; today they are read once.
+- Restoring comparison tabs on relaunch.
 
-**Tests.** The git arguments for each pair (including non-adjacent commits,
-branch/branch with and without the merge base, and branch/working tree), the Base and
-Compare ordering from the commit picker, and name-status parsing of a comparison that
+**Tests.** The git arguments for each pair, and name-status parsing of a comparison that
 includes renames.
 
 ---
@@ -528,8 +517,8 @@ Roughly in priority order.
 - **Inline / unified text layout.** Side by side only (CLAUDE.md). Sublime Merge's
   `diff_style` auto-switching and Kaleidoscope's Unified layout are not goals.
 - **Folder compare, blame, file history.** Non-goals in CLAUDE.md. Sublime Merge's blame
-  is a git-client feature, not a viewer feature. Comparing two refs is now requested
-  (priority item P1), and commit browsing shipped as the commit picker.
+  is a git-client feature, not a viewer feature. Comparing two branches shipped (P1) and
+  commit browsing shipped as the commit picker.
 - **Hunk cherry-picking** (Sublime Merge). Hunk-level staging and discarding are now
   requested (item E); moving hunks between commits is not.
 - **Regex text filters and JSON normalisation** (Kaleidoscope). Interesting, but it

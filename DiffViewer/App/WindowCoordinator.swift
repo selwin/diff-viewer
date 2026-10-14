@@ -720,6 +720,11 @@ extension WindowCoordinator {
         compareWindows[owner] = WeakWindow(window: window)
     }
 
+    /// `owner`'s open Compare window, if any.
+    func compareWindow(for owner: WindowID) -> NSWindow? {
+        compareWindows[owner]?.window
+    }
+
     /// `id`'s state while it is an open repository window; a comparison tab owns nothing.
     private func liveOwner(_ id: WindowID) -> WindowState? {
         guard let state = windows[id], !state.isClosed, !state.isEmpty, !state.isComparisonTab else { return nil }

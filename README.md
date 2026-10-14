@@ -66,6 +66,10 @@ experience. We want this to be speedy when reviewing large diffs.
   Pull when the branch is ahead of or behind its upstream, and Publish when it tracks
   nothing. Copy a row's name with the copy button on the highlighted row, right-click, or
   ⌘C; the header has a copy button for the current branch.
+- **Compare…** (⇧⌘D, or the branch picker's Compare… button) compares two branches or tags
+  from their merge base, like GitHub's three-dot view, and opens the result in a read-only
+  tab of the repository window. Comparisons use revisions captured when the Compare window
+  opens. Reopen it to load updated branches. Comparison tabs aren't restored on relaunch.
 - **Commit** (⌘Return): records the index with your message, prefilled the way
   `git commit` would. ⌘G drafts a message with Apple's on-device model. Hooks run with
   your login shell's PATH, so a pre-commit hook finds Homebrew tools even from a Finder
@@ -121,7 +125,7 @@ Comparison as of September 2026 (Kaleidoscope 7.0, Sublime Merge build 2125, Jux
 ## Not doing
 
 - **Inline or unified layout.** Side by side only.
-- **Ref-range compare, folder compare, blame, file history, merge conflict resolution.**
+- **Folder compare, blame, file history, merge conflict resolution.**
   These are git-client features, not viewer features. Browsing a branch's commits is in
   scope and has shipped.
 - **Hunk-level staging or discarding.** Nothing finer than a file.

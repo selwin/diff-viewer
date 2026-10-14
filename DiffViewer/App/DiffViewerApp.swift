@@ -81,6 +81,17 @@ struct DiffViewerApp: App {
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
         .handlesExternalEvents(matching: [])
+        // One per repository window, opened from its menu or branch picker: never at launch
+        // and never restored.
+        WindowGroup(id: AppServices.compareSceneID, for: CompareWindowTarget.self) { $target in
+            CompareWindowRoot(target: target, services: services)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: [])
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 820, height: 540)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -230,6 +241,13 @@ struct RepositoryCommands: Commands {
             Button("Choose Branch…") { windowState?.isBranchPickerPresented = true }
                 .keyboardShortcut("b")
                 .disabled(!(windowState?.canOpenBranchPicker ?? false))
+            // No Compare window publishes a `windowState`, so this disables itself while one is key.
+            Button("Compare…") {
+                guard let id = windowState?.id else { return }
+                openWindow(id: AppServices.compareSceneID, value: CompareWindowTarget(owner: id))
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .disabled(!(windowState?.canOpenCompareWindow ?? false))
             syncItems
         }
         // Replaced rather than extended: this group holds the default Find submenu, which

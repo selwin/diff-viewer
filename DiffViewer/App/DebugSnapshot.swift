@@ -64,6 +64,9 @@ import Foundation
 ///   (or any names `git rev-parse` resolves) beside the target window after the opens and
 ///   before the dump and tab steps; `DIFFVIEWER_SELECT`, `DIFFVIEWER_SNAPSHOT` and the rest
 ///   then act on the tab.
+/// - `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>` opens the target window's Compare window
+///   with those refs chosen (an empty value or a missing side chooses nothing), and
+///   `DIFFVIEWER_SNAPSHOT` then renders it instead of the repository window.
 /// - `DIFFVIEWER_DUMP_WINDOWS=1` prints each window's title, tab-group size, key and
 ///   occlusion state, plus the coordinator's routing table, phase, the saved session,
 ///   and the prefetch-worker and difft-process peaks, to stdout after the opens, and
@@ -129,6 +132,7 @@ enum DebugLaunchOptions {
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
                 || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_COMPARE"] != nil
+                || env["DIFFVIEWER_COMPARE_WINDOW"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -188,6 +192,7 @@ enum DebugLaunchOptions {
                     try? await Task.sleep(for: .seconds(2))
                     for _ in 0..<nextCount { windowState.nextChange() }
                 }
+                await applyCompareWindow(env: env, services: services, owner: windowState)
                 await finishSequence(
                     env: env, afterNext: nextCount > 0, windowState: windowState, window: window,
                     services: services)
@@ -538,7 +543,10 @@ extension DebugLaunchOptions {
         }
         if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
             try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty || scrolled ? 1 : 3))
-            snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
+            let target =
+                services.coordinator.compareWindow(for: windowState.id) ?? pickerWindow(of: window)
+                ?? window.attachedSheet ?? window
+            snapshot(target, to: path)
         }
     }
 

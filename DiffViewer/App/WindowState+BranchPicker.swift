@@ -9,6 +9,11 @@ extension WindowState {
         session != nil && !isClosed && !isComparisonTab && !isOtherOverlayPresented(besides: .branchPicker)
     }
 
+    /// The Compare window reads refs of an open repository; a comparison tab owns none.
+    var canOpenCompareWindow: Bool {
+        session != nil && !isClosed && !isComparisonTab
+    }
+
     /// Like `canOpenBranchPicker`, with the branch picker down too and no switch queued or
     /// running: the new branch starts at HEAD, which a switch is about to move.
     var canOpenNewBranchSheet: Bool {

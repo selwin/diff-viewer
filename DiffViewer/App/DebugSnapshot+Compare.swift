@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 extension DebugLaunchOptions {
@@ -45,5 +46,33 @@ extension DebugLaunchOptions {
         }
         _ = await eventually { tab() != nil }
         return tab() ?? failure("the comparison tab did not register")
+    }
+}
+
+extension DebugLaunchOptions {
+    /// `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>`: the names a Compare window starts with.
+    /// An empty value chooses nothing, and a missing side stays unchosen. Nil when unset.
+    static var compareWindowSelection: (base: String?, target: String?)? {
+        guard let spec = ProcessInfo.processInfo.environment["DIFFVIEWER_COMPARE_WINDOW"] else { return nil }
+        let names = spec.components(separatedBy: "...")
+        func name(_ index: Int) -> String? {
+            index < names.count && !names[index].isEmpty ? names[index] : nil
+        }
+        return (name(0), name(1))
+    }
+
+    /// Opens the Compare window for `owner` when `DIFFVIEWER_COMPARE_WINDOW` is set, then gives
+    /// its refs and preview a second to load; the snapshot then captures it. Prints why when it
+    /// does not open.
+    @MainActor
+    static func applyCompareWindow(env: [String: String], services: AppServices, owner: WindowState) async {
+        guard env["DIFFVIEWER_COMPARE_WINDOW"] != nil else { return }
+        let coordinator = services.coordinator
+        services.opener.action?(id: AppServices.compareSceneID, value: CompareWindowTarget(owner: owner.id))
+        guard await eventually({ coordinator.compareWindow(for: owner.id) != nil }) else {
+            fputs("### DIFFVIEWER_COMPARE_WINDOW FAILED: the Compare window did not open\n", stderr)
+            return
+        }
+        try? await Task.sleep(for: .seconds(1))
     }
 }

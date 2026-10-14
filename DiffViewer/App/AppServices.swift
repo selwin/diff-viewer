@@ -14,6 +14,8 @@ final class AppServices {
     static let repositorySceneID = "repository"
     /// The comparison tab scene, opened with a `ComparisonToken`.
     static let comparisonSceneID = "comparison"
+    /// The Compare window scene, opened with a `CompareWindowTarget`.
+    static let compareSceneID = "compare"
 
     let preferences: Preferences
     let cache: DifftCache
@@ -55,7 +57,8 @@ final class AppServices {
         self.opener = opener
     }
 
-    private let opener: WindowOpener
+    /// Also used by the debug hooks, which have no view to take `openWindow` from.
+    let opener: WindowOpener
     private var hooksInstalled = false
 
     /// Connects the app delegate and SwiftUI's window opener to the coordinator. Runs

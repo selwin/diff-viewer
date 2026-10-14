@@ -60,6 +60,7 @@ extension BranchPickerContainerView {
         header.refreshRendering()
         tabControl.refreshRendering()
         newBranchRow.refreshRendering()
+        compareRow.refreshRendering()
         searchBackground.needsDisplay = true
         tableView.enumerateAvailableRowViews { rowView, _ in
             rowView.needsDisplay = true
