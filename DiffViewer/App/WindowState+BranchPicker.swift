@@ -6,13 +6,14 @@ extension WindowState {
     /// An open window with a repository, and no commit sheet, commit picker, New Branch
     /// sheet or Merge sheet up: the popover never opens over another one.
     var canOpenBranchPicker: Bool {
-        session != nil && !isClosed && !isOtherOverlayPresented(besides: .branchPicker)
+        session != nil && !isClosed && !isComparisonTab && !isOtherOverlayPresented(besides: .branchPicker)
     }
 
     /// Like `canOpenBranchPicker`, with the branch picker down too and no switch queued or
     /// running: the new branch starts at HEAD, which a switch is about to move.
     var canOpenNewBranchSheet: Bool {
-        session != nil && !isClosed && !isSwitchingBranch && !isOtherOverlayPresented(besides: .newBranchSheet)
+        session != nil && !isClosed && !isComparisonTab && !isSwitchingBranch
+            && !isOtherOverlayPresented(besides: .newBranchSheet)
             && !isNewBranchSheetPresented
     }
 
@@ -56,7 +57,8 @@ extension WindowState {
     /// Like `canOpenNewBranchSheet`: a merge changes the branch HEAD is on, which a queued
     /// switch is about to move.
     var canOpenMergeSheet: Bool {
-        session != nil && !isClosed && !isSwitchingBranch && !isOtherOverlayPresented(besides: .mergeSheet)
+        session != nil && !isClosed && !isComparisonTab && !isSwitchingBranch
+            && !isOtherOverlayPresented(besides: .mergeSheet)
             && pendingMerge == nil
     }
 

@@ -118,25 +118,26 @@ struct SidebarView: View {
         // also drops All changes from a multi-selection, so ⌘A and a ⇧-click range from
         // the top select only files.
         return List(selection: $windowState.selection) {
+            // Above any rows a failed re-read left, which are from before it: a comparison
+            // has no watcher to read again, so Retry is the only way back.
+            if windowState.listReadFailed, !windowState.isLoadingScope {
+                HStack(spacing: 6) {
+                    Text("Couldn't load changes").foregroundStyle(.secondary)
+                    Button("Retry") { Task { await windowState.refresh() } }
+                        .buttonStyle(.link)
+                        .controlSize(.small)
+                }
+            }
             if !windowState.isEmpty, windowState.files.isEmpty {
-                // A scope change empties the list before the read that refills it
-                // returns; on a slow repository, saying "no changes" in that gap would
-                // report a result nobody has yet.
+                // Adoption and a scope change start from an empty list; on a slow
+                // repository, saying "no changes" before the read returns would report a
+                // result nobody has yet. Nor does a failed read mean "no changes".
                 if windowState.isLoadingScope {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Loading…").foregroundStyle(.secondary)
                     }
-                } else if windowState.listReadFailed {
-                    // The list was emptied for a re-read that then threw: "no changes"
-                    // would describe a working tree nobody has read.
-                    HStack(spacing: 6) {
-                        Text("Couldn't load changes").foregroundStyle(.secondary)
-                        Button("Retry") { Task { await windowState.refresh() } }
-                            .buttonStyle(.link)
-                            .controlSize(.small)
-                    }
-                } else {
+                } else if !windowState.listReadFailed {
                     Text(emptyListText).foregroundStyle(.secondary)
                 }
             }

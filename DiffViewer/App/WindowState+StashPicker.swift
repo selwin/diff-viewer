@@ -4,7 +4,7 @@ import Foundation
 extension WindowState {
     /// An open window with a repository and no other overlay up.
     var canOpenStashPicker: Bool {
-        session != nil && !isClosed && !isOtherOverlayPresented(besides: .stashPicker)
+        session != nil && !isClosed && !isComparisonTab && !isOtherOverlayPresented(besides: .stashPicker)
     }
 
     var stashPickerSnapshot: StashPickerSnapshot {

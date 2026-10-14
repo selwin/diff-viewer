@@ -29,6 +29,10 @@ enum StubCall {
     case stashes
     /// `stash`, `pop` and `drop`.
     case stashActions
+    /// `contents(of:at:)`, a commit or range side.
+    case revisionReads
+    /// `changedFiles(in:)` for a range.
+    case rangeFiles
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -677,6 +681,7 @@ actor StubRepoClient: RepoClient {
     }
 
     func changedFiles(in range: CommitRange) async throws -> [ChangedFile] {
+        if isHeld(.rangeFiles) { await park(.rangeFiles) }
         if failsRangeFiles { throw ProcessError.failed(command: "git diff-tree", status: 128, stderr: "bad object") }
         return rangeFiles
     }
@@ -684,6 +689,7 @@ actor StubRepoClient: RepoClient {
     func contents(of path: String, at revision: String) async throws -> Data {
         beginRead(path)
         defer { endRead() }
+        if isHeld(.revisionReads) { await park(.revisionReads) }
         contentRevisions.append((path, revision))
         return Data("\(revision):\(path)".utf8)
     }

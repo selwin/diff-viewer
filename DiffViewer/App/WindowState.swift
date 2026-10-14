@@ -84,24 +84,12 @@ final class WindowState {
     /// highlight work, and its watcher only keeps `workingTreeChurn` current for the tab
     /// bar, refreshing the file list only in working-tree scope, where the churn comes from
     /// it. Showing restarts watching and schedules a rescan; stale or changed content reloads.
+    /// A comparison tab has no watcher, so showing reloads a stale diff directly.
     var isVisible = true {
         didSet {
             guard isVisible != oldValue, !isClosed else { return }
-            if isVisible {
-                guard let session else { return }
-                stopWatcher(session: session)
-                let watcherGeneration = startWatcher(session: session)
-                Task {
-                    await repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: [.rescan])
-                }
-            } else {
-                if let session {
-                    // A new generation drops the visible watcher's refreshes still in flight.
-                    stopWatcher(session: session)
-                    startWatcher(session: session)
-                }
-                if diffLoader.cancelActiveWork() { diffStale = true }
-            }
+            restartWatcherForVisibility()
+            updateDiffWorkForVisibility()
         }
     }
 
@@ -110,8 +98,14 @@ final class WindowState {
     /// What the running or last changeset load was asked to show; nil while a file is shown.
     private var changesetRequest: ChangesetRequest?
 
-    /// What the sidebar is showing: the working tree, or one previous commit.
+    /// What the sidebar is showing: the working tree, one previous commit, or a comparison's range.
     private(set) var scope: DiffScope = .workingTree
+    /// A read-only window showing a fixed range. The scope can never leave a range, so
+    /// this holds for the window's life.
+    var isComparisonTab: Bool {
+        if case .range = scope { return true }
+        return false
+    }
     /// The selected commit's display details, kept whether or not it is still in the
     /// loaded page: a branch switch or a page reset can drop it from `history`, and the
     /// picker still has to label and tick the thing the user chose.
@@ -152,11 +146,11 @@ final class WindowState {
     /// The working tree's changed files and line churn, or nil while unread or after a
     /// failed read. Kept current by every watcher tick, in any scope and while hidden.
     private(set) var workingTreeChurn: RepositoryChurn?
-    /// True from a scope change until that scope's file list arrives, so an unfinished
-    /// read is not drawn as a commit that changed nothing.
+    /// True from adoption or a scope change until that scope's file list arrives, so an
+    /// unfinished read is not drawn as a scope that changed nothing.
     private(set) var isLoadingScope = false
-    /// The last working-tree read threw and nothing has replaced its list since: an
-    /// empty `files` then means unread, not clean.
+    /// The last list read threw and nothing has replaced its list since: any rows on show
+    /// predate it, and an empty `files` means unread, not clean.
     private(set) var listReadFailed = false
     /// What to select once the new list arrives. Held here rather than after the write's
     /// or the branch switch's own `refresh`, which may be superseded by a watcher refresh
@@ -300,8 +294,8 @@ final class WindowState {
         }
     }
 
-    /// The window and tab title. The repository name, extended with parent folders by
-    /// the coordinator when another open repository has the same name.
+    /// The window and tab title: a repository name or comparison range. The coordinator
+    /// extends a repository name with parent folders when another open repository shares it.
     var title = "DiffViewer"
 
     // MARK: - Lifecycle
@@ -311,23 +305,42 @@ final class WindowState {
     /// populated or closed.
     @discardableResult
     func adopt(root: RepositoryRoot, client: any RepoClient) -> Bool {
-        guard session == nil, !isClosed else { return false }
-        let session = RepoSession(root: root, client: client)
-        startWatcher(session: session)
-        self.session = session
-        title = root.name
-        selection = []
-        pendingAllChanges = true
-        errorMessage = nil
-        isLoading = true
-        initialRefresh = Task { [weak self] in
-            await self?.refresh(session: session, cause: .initial)
-            self?.isLoading = false
+        guard let session = install(root: root, client: client, scope: .workingTree, title: root.name) else {
+            return false
         }
+        startWatcher(session: session)
         refreshHistory(session: session)
         Task { [weak self] in await self?.refreshHeadState(session: session) }
         scheduleStashRefresh(session: session)
         return true
+    }
+
+    /// Installs `root` as a read-only comparison of `range`, on the same one-time terms.
+    /// Nothing is watched and no history, HEAD or stash is read: the range is fixed.
+    @discardableResult
+    func adopt(root: RepositoryRoot, client: any RepoClient, comparing range: CommitRange) -> Bool {
+        install(root: root, client: client, scope: .range(range), title: range.title) != nil
+    }
+
+    /// The part of adoption every window shares: the session, its scope, and the first refresh.
+    private func install(
+        root: RepositoryRoot, client: any RepoClient, scope: DiffScope, title: String
+    ) -> RepoSession? {
+        guard session == nil, !isClosed else { return nil }
+        let session = RepoSession(root: root, client: client)
+        self.session = session
+        self.scope = scope
+        self.title = title
+        selection = []
+        pendingAllChanges = true
+        errorMessage = nil
+        isLoading = true
+        isLoadingScope = true
+        initialRefresh = Task { [weak self] in
+            await self?.refresh(session: session, cause: .initial)
+            self?.isLoading = false
+        }
+        return session
     }
 
     /// Ends this window's work for good: no refresh in flight can publish, no diff
@@ -401,6 +414,11 @@ final class WindowState {
 
     func refresh() async {
         guard let session else { return }
+        // A comparison reads only its range; it shows no stashes, history or HEAD.
+        if isComparisonTab {
+            await refresh(session: session, cause: .manual)
+            return
+        }
         // ⌘R re-reads everything, including a commit's files: the user asked.
         scheduleStashRefresh(session: session)
         await refresh(session: session, cause: .manual)
@@ -644,6 +662,36 @@ final class WindowState {
     }
 }
 
+// MARK: - Visibility
+
+/// The two halves of `isVisible`: watching the repository, and the diff work it owes.
+extension WindowState {
+    private func restartWatcherForVisibility() {
+        // A comparison's revisions are fixed, so it has nothing to watch.
+        guard let session, !isComparisonTab else { return }
+        if isVisible {
+            stopWatcher(session: session)
+            let watcherGeneration = startWatcher(session: session)
+            Task {
+                await repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: [.rescan])
+            }
+        } else {
+            // A new generation drops the visible watcher's refreshes still in flight.
+            stopWatcher(session: session)
+            startWatcher(session: session)
+        }
+    }
+
+    private func updateDiffWorkForVisibility() {
+        if isVisible {
+            // A watched window pays this debt through its rescan refresh.
+            if isComparisonTab, diffStale { reloadDiff() }
+        } else {
+            if diffLoader.cancelActiveWork() { diffStale = true }
+        }
+    }
+}
+
 // MARK: - Diff
 
 /// Loading the selection's diff.
@@ -870,7 +918,7 @@ extension WindowState {
     }
 
     private func select(scope newScope: DiffScope, commit: CommitSummary?) {
-        guard let session, !isClosed else { return }
+        guard let session, !isClosed, !isComparisonTab else { return }
         guard newScope != scope else {
             // Two stashes can share a commit under different messages, and an abbreviation
             // can lengthen: the diff stays, the label follows the summary just chosen.
@@ -1482,7 +1530,7 @@ extension WindowState {
     /// is queued or running does nothing, and so does choosing the branch already checked
     /// out or the one being deleted. The scope is kept: a selected commit stays selected.
     func switchBranch(to branch: String) async {
-        guard let session, !isClosed, !isSwitchingBranch, headState != .named(branch),
+        guard let session, !isClosed, !isComparisonTab, !isSwitchingBranch, headState != .named(branch),
             activeSync != ActiveSync(branch: branch, operation: .delete)
         else { return }
         await startHeadChange(session: session, checkoutBranchName: branch, clearsNewRemoteBranches: true) { client in
@@ -1574,7 +1622,7 @@ extension WindowState {
     /// Creates `name` at HEAD and switches to it, on the same terms as `switchBranch(to:)`.
     /// The sheet has already checked the name; git still has the final say.
     func createBranch(named name: String) async {
-        guard let session, !isClosed, !isSwitchingBranch else { return }
+        guard let session, !isClosed, !isComparisonTab, !isSwitchingBranch else { return }
         await startHeadChange(session: session, checkoutBranchName: name, clearsNewRemoteBranches: true) { client in
             try await client.createBranch(name)
         }
@@ -1584,7 +1632,7 @@ extension WindowState {
     /// `switchBranch(to:)`. A local branch of the same name is reported rather than
     /// switched to or renamed around: it may track something else entirely.
     func checkoutRemoteBranch(_ branch: RemoteBranch) async {
-        guard let session, !isClosed, !isSwitchingBranch else { return }
+        guard let session, !isClosed, !isComparisonTab, !isSwitchingBranch else { return }
         // Git would refuse too; this says why in words. One created since the last read
         // still reaches git, whose refusal is reported the same way.
         guard !branches.contains(where: { $0.name == branch.name }) else {
@@ -1601,7 +1649,9 @@ extension WindowState {
     /// Merges the confirmed source commit after validating the destination on the write
     /// queue. Refreshes repository state before reporting validation or merge failures.
     func merge(_ target: MergeTarget) async {
-        guard let session, !isClosed, !isSwitchingBranch, headState == .named(target.destinationBranch) else {
+        guard let session, !isClosed, !isComparisonTab, !isSwitchingBranch,
+            headState == .named(target.destinationBranch)
+        else {
             return
         }
         await startHeadChange(session: session, checkoutBranchName: nil, clearsNewRemoteBranches: false) { client in
@@ -1655,7 +1705,7 @@ extension WindowState {
     /// request still gets every remote fetched: it upgrades a round that hasn't applied the
     /// cooldown yet, and queues one follow-up behind a round whose cooldown skipped a remote.
     private func fetchRound(_ kind: FetchRoundKind) async {
-        guard let session, !isClosed else { return }
+        guard let session, !isClosed, !isComparisonTab else { return }
         if let running = session.activeFetchRound {
             if kind == .manual {
                 switch session.fetchRoundSkippedRemotes {
@@ -1837,7 +1887,7 @@ extension WindowState {
     /// Pushes `branch`, which tracks nothing, to the same name on `remote` and makes that
     /// its upstream. Admitted on the same terms as a pull or push, and on the same chain.
     func publish(branch: String, to remote: String) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting,
+        guard let session, !isClosed, !isComparisonTab, activeSync == nil, !isSwitchingBranch, !isCommitting,
             branchReadStatus == .loaded,
             !SyncPolicy.isFetching(remote: remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
         else { return }
@@ -1861,7 +1911,9 @@ extension WindowState {
     /// push away, so a push waits for the round fetching its remote instead and `runSync`
     /// re-checks.
     private func sync(_ operation: SyncOperation, branch: String) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting else { return }
+        guard let session, !isClosed, !isComparisonTab, activeSync == nil, !isSwitchingBranch, !isCommitting else {
+            return
+        }
         var isCurrent = headState == .named(branch)
         guard
             let target = SyncPolicy.target(branch: branch, readStatus: branchReadStatus, branches: branches),
@@ -2068,7 +2120,7 @@ extension WindowState {
     /// Delete, on the write chain, and one operation at a time with pull and push. A fetch
     /// of its remote may bring the remote branch back, so the delete waits it out.
     func deleteBranch(_ branch: LocalBranch) async {
-        guard let session, !isClosed, activeSync == nil, !isSwitchingBranch, !isCommitting,
+        guard let session, !isClosed, !isComparisonTab, activeSync == nil, !isSwitchingBranch, !isCommitting,
             branchReadStatus == .loaded,
             Self.isDeletable(branch, in: branches, headState: headState), let upstream = branch.upstream,
             !SyncPolicy.isFetching(remote: upstream.remote, fetchStatus: fetchStatus, fetchingRemotes: fetchingRemotes)
@@ -2132,6 +2184,7 @@ extension WindowState {
     /// Why the window refuses stash actions right now, or nil. Admission and the picker's
     /// buttons read this one answer.
     var stashActionsBlockedReason: String? {
+        if isComparisonTab { return "Comparisons are read-only" }
         if isSwitchingBranch { return "A branch switch is running" }
         if isCommitting { return "A commit is running" }
         // A push shifts every index, so a pop or drop chosen meanwhile could name another entry.
