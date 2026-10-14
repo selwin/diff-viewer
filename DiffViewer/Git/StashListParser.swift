@@ -79,15 +79,11 @@ enum StashListParser {
         return (subject, nil, false)
     }
 
-    /// Reads `N files changed[, X insertions(+)][, Y deletions(-)]`. Blank text is a stash
-    /// with no tracked changes, and any other text is nil rather than a guess.
+    /// Reads the shortstat text with `ShortstatParser`. Blank text is a stash with no
+    /// tracked changes, and unreadable text is nil rather than a guess.
     static func parseChurn(_ stat: String) -> StashEntry.Churn? {
-        let stat = stat.trimmingCharacters(in: .whitespacesAndNewlines)
-        if stat.isEmpty { return StashEntry.Churn(additions: 0, deletions: 0) }
-        let pattern = #/\d+ files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/#
-        guard let match = stat.wholeMatch(of: pattern) else { return nil }
-        return StashEntry.Churn(
-            additions: match.output.1.flatMap { Int($0) } ?? 0, deletions: match.output.2.flatMap { Int($0) } ?? 0)
+        guard let summary = try? ShortstatParser.parse(stat) else { return nil }
+        return StashEntry.Churn(additions: summary.addedLineCount, deletions: summary.deletedLineCount)
     }
 
     /// Reads the `git log --format=%x00%H --shortstat` that `GitClient.stashes` runs over
