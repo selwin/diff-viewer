@@ -78,6 +78,13 @@ final class WindowCoordinator {
     /// Saved roots whose window the user closed during startup.
     private var restoreClosed: Set<RepositoryRoot> = []
     private var restoreStarted = false
+    /// Comparison tabs asked for, not yet registered.
+    private(set) var pendingComparisons: [ComparisonToken: PendingComparison] = [:]
+    /// Each repository window's Compare window, held weakly.
+    private var compareWindows: [WindowID: WeakWindow] = [:]
+    /// Registered comparison tabs not yet in their owner's tab group, by tab: the owner, and
+    /// its root when asked. Either `NSWindow` may attach after registration.
+    private var untabbedComparisons: [WindowID: (owner: WindowID, root: RepositoryRoot)] = [:]
     /// Restoring several repositories keeps their windows transparent until the tab
     /// group is assembled, so it appears once instead of growing a tab at a time.
     private var isHoldingRestorationWindows = false
@@ -277,8 +284,12 @@ final class WindowCoordinator {
 
     // MARK: - Window lifecycle
 
-    /// The window's accessor found its `NSWindow`; runs before the state registers.
+    /// The window's accessor found its `NSWindow`; usually runs before the state registers.
+    /// A comparison tab that registered first joins its owner's group now.
     func windowDidAttach(_ id: WindowID, sceneRoot: RepositoryRoot?) {
+        for (tab, pending) in untabbedComparisons where tab == id || pending.owner == id {
+            tabComparison(tab)
+        }
         if let sceneRoot, pendingCreates[sceneRoot] != nil {
             pendingCreates[sceneRoot]?.windowID = id
         }
@@ -360,16 +371,21 @@ final class WindowCoordinator {
         }
         windows[id] = nil
         state.close()
-        if let root = state.repositoryRoot {
-            if rootIndex[root] == id { rootIndex[root] = nil }
+        // A comparison tab shares its owner's root but is not indexed, so it leaves the
+        // owner's entries alone.
+        if let root = state.repositoryRoot, rootIndex[root] == id {
+            rootIndex[root] = nil
             openOrder.removeAll { $0 == root }
             if phase == .restoring, restoreList.contains(root) { restoreClosed.insert(root) }
         }
         sceneRootSetters[id] = nil
         visibility[id] = nil
         heldWindowIDs.removeAll { $0 == id }
+        pendingComparisons = pendingComparisons.filter { $0.value.owner != id }
+        untabbedComparisons = untabbedComparisons.filter { $0.key != id && $0.value.owner != id }
         updateTitles()
         persist()
+        compareWindows.removeValue(forKey: id)?.window?.close()
     }
 
     // MARK: - Key and visibility
@@ -382,8 +398,10 @@ final class WindowCoordinator {
         window.isKey = true
         // Defer active-window bookkeeping while this window is held.
         guard !isHeld(id), let root = window.repositoryRoot else { return }
-        lastActiveRepositoryRoot = root
         prefetch(for: id)
+        // A comparison tab is never the saved active repository.
+        guard !window.isComparisonTab else { return }
+        lastActiveRepositoryRoot = root
         persist()
     }
 
@@ -637,6 +655,78 @@ extension WindowCoordinator {
     }
 }
 
+// MARK: - Comparisons
+
+extension WindowCoordinator {
+    /// Asks for a comparison tab of `range` in `owner`'s tab group. Refused unless `owner`
+    /// is an open repository window.
+    @discardableResult
+    func openComparison(owner: WindowID, range: CommitRange) -> Bool {
+        guard let state = liveOwner(owner), let root = state.repositoryRoot, let client = state.session?.client
+        else { return false }
+        let token = ComparisonToken()
+        pendingComparisons[token] = PendingComparison(owner: owner, root: root, client: client, range: range)
+        hooks.createComparisonWindow(token)
+        return true
+    }
+
+    /// Registers a comparison tab and adopts the range its token names. The request is
+    /// consumed whatever happens, so a refused one never lingers. The tab stays out of
+    /// the root index, open order, saved session and titles, which are per repository.
+    @discardableResult
+    func registerComparison(_ state: WindowState, token: ComparisonToken) -> Bool {
+        // SwiftUI may run the tab's task again; its token is spent, but the tab is fine.
+        if windows[state.id] === state, state.isComparisonTab { return true }
+        guard let pending = pendingComparisons.removeValue(forKey: token), !state.isClosed, state.isEmpty,
+            windows[state.id] == nil, !closedBeforeRegistration.contains(state.id),
+            // The owner may have closed, and its repository reopened in another window.
+            let owner = liveOwner(pending.owner), owner.repositoryRoot == pending.root
+        else { return false }
+        windows[state.id] = state
+        state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
+            self?.refreshPublished(state, cause: cause, inputsChanged: inputsChanged)
+        }
+        state.isVisible = effectiveVisibility(state.id)
+        state.isKey = keyWindowID == state.id
+        state.adopt(root: pending.root, client: pending.client, comparing: pending.range)
+        untabbedComparisons[state.id] = (pending.owner, pending.root)
+        tabComparison(state.id)
+        return true
+    }
+
+    /// Moves `tab` into its owner's tab group once both windows have attached, provided the
+    /// owner is still the window that asked. A tab whose owner is gone stays where it is.
+    private func tabComparison(_ tab: WindowID) {
+        guard let pending = untabbedComparisons[tab] else { return }
+        guard let owner = liveOwner(pending.owner), owner.repositoryRoot == pending.root else {
+            untabbedComparisons[tab] = nil
+            return
+        }
+        if hooks.tabWindow(tab, pending.owner) { untabbedComparisons[tab] = nil }
+    }
+
+    /// The owner's client while it is an open repository window.
+    func client(for owner: WindowID) -> (any RepoClient)? {
+        liveOwner(owner)?.session?.client
+    }
+
+    /// Remembers `owner`'s Compare window so closing the owner closes it too. A window
+    /// whose owner is already gone is closed at once.
+    func registerCompareWindow(_ window: NSWindow, owner: WindowID) {
+        guard liveOwner(owner) != nil else {
+            window.close()
+            return
+        }
+        compareWindows[owner] = WeakWindow(window: window)
+    }
+
+    /// `id`'s state while it is an open repository window; a comparison tab owns nothing.
+    private func liveOwner(_ id: WindowID) -> WindowState? {
+        guard let state = windows[id], !state.isClosed, !state.isEmpty, !state.isComparisonTab else { return nil }
+        return state
+    }
+}
+
 // MARK: - Supporting types
 
 extension WindowCoordinator {
@@ -667,6 +757,21 @@ extension WindowCoordinator {
         var windowID: WindowID?
     }
 
+    /// A comparison tab has been asked for but has not registered its state yet.
+    struct PendingComparison {
+        let owner: WindowID
+        /// The owner's repository when asked, so a reopened repository in another window
+        /// is not mistaken for the owner.
+        let root: RepositoryRoot
+        let client: any RepoClient
+        let range: CommitRange
+    }
+
+    /// Holds a window without keeping it open.
+    struct WeakWindow {
+        weak var window: NSWindow?
+    }
+
     /// The presentation the coordinator needs but does not own.
     struct Hooks {
         var createWindow: @MainActor (RepositoryRoot) -> Void
@@ -684,6 +789,11 @@ extension WindowCoordinator {
         /// Returns each supplied ID once, ordered within tab groups.
         /// Retains ungrouped or unavailable IDs.
         var windowIDsInTabOrder: @MainActor ([WindowID]) -> [WindowID] = { $0 }
+        /// Presents a comparison tab for the pending request the token names.
+        var createComparisonWindow: @MainActor (ComparisonToken) -> Void = { _ in }
+        /// Moves `window` into `origin`'s tab group and selects it. False while either
+        /// `NSWindow` has not attached yet.
+        var tabWindow: @MainActor (_ window: WindowID, _ origin: WindowID) -> Bool = { _, _ in true }
     }
 
     /// Defaults keys for the persisted session.
