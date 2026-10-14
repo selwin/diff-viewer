@@ -136,6 +136,13 @@ protocol RepoClient: Sendable {
     /// only names the branch in the message. Throws git's and the hooks' diagnostics when
     /// it refuses or stops on conflicts.
     func merge(sourceTipSha: String, sourceRef: String) async throws
+    /// Every local branch, remote-tracking branch and tag that resolves to a commit, unsorted.
+    func refs() async throws -> [GitRef]
+    /// The best common ancestor of two object ids, or nil when their histories share none.
+    func mergeBase(_ first: String, _ second: String) async throws -> String?
+    /// Files and lines that differ between the trees of two object ids. Only a rename with
+    /// identical content counts as one file.
+    func churn(base: String, target: String) async throws -> IncomingChangeSummary
     /// The remote of each branch with both `branch.<name>.remote` and `.merge` set, keyed
     /// by branch name. Covers branches whose upstream the fetch mapping misses, which
     /// `localBranches` reports as having none.

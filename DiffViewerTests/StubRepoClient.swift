@@ -132,6 +132,12 @@ actor StubRepoClient: RepoClient {
     private var failsIncomingChanges = false
     /// Every `incomingChanges` call, in order.
     private(set) var incomingChangesCalls: [MergePreviewKey] = []
+    private var stubbedRefs: [GitRef] = []
+    private var failsRefs = false
+    /// Merge bases keyed by the two SHAs asked about, in the order asked; unlisted pairs have none.
+    private var mergeBases: [MergePreviewKey: String] = [:]
+    private var stubbedChurn = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    private var failsChurn = false
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     struct MergeCall: Equatable {
@@ -449,6 +455,13 @@ actor StubRepoClient: RepoClient {
     /// Read once a held call is released, so a test can change it meanwhile.
     func fail(incomingChanges on: Bool) { failsIncomingChanges = on }
     func fail(merge on: Bool) { failsMerge = on }
+    func set(refs list: [GitRef]) { stubbedRefs = list }
+    func fail(refs on: Bool) { failsRefs = on }
+    func set(mergeBase sha: String?, for first: String, _ second: String) {
+        mergeBases[MergePreviewKey(headSha: first, sourceTipSha: second)] = sha
+    }
+    func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
+    func fail(churn on: Bool) { failsChurn = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -523,6 +536,20 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git diff", status: 128, stderr: "no merge base")
         }
         return stubbedIncomingChanges
+    }
+
+    func refs() async throws -> [GitRef] {
+        if failsRefs { throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone") }
+        return stubbedRefs
+    }
+
+    func mergeBase(_ first: String, _ second: String) async throws -> String? {
+        mergeBases[MergePreviewKey(headSha: first, sourceTipSha: second)]
+    }
+
+    func churn(base: String, target: String) async throws -> IncomingChangeSummary {
+        if failsChurn { throw ProcessError.failed(command: "git diff", status: 128, stderr: "gone") }
+        return stubbedChurn
     }
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {

@@ -96,6 +96,11 @@ struct TaggedClient: RepoClient {
         IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
     }
     func merge(sourceTipSha: String, sourceRef: String) async throws {}
+    func refs() async throws -> [GitRef] { [] }
+    func mergeBase(_ first: String, _ second: String) async throws -> String? { nil }
+    func churn(base: String, target: String) async throws -> IncomingChangeSummary {
+        IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    }
 }
 
 @MainActor
