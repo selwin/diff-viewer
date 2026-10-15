@@ -8,7 +8,7 @@
 **Goal**: Move the debounce/single-flight worker out of `CompareWindowModel` into a generic `ComparisonPreview` with a published `resolution`.
 **Success Criteria**: Branches mode behaves exactly as before.
 **Tests**: Existing `CompareWindowModelTests`; resolution states; stale progress and errors dropped; custom debounce.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Pull Request mode
 **Goal**: The Compare window's Pull Request segment: link input, remote choice, resolution card, wells, opening a `main … PR #n` tab.
