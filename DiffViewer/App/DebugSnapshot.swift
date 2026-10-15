@@ -67,6 +67,10 @@ import Foundation
 /// - `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>` opens the target window's Compare window
 ///   with those refs chosen (an empty value or a missing side chooses nothing), and
 ///   `DIFFVIEWER_SNAPSHOT` then renders it instead of the repository window.
+/// - `DIFFVIEWER_COMPARE_WINDOW_PR=<link or #n>` opens the Compare window in Pull Request
+///   mode with that input, applied before the remotes load; `DIFFVIEWER_COMPARE_WINDOW_WAIT=
+///   <seconds>` (default 1) sets how long it waits before the snapshot, so a short wait
+///   catches "Fetching…" and a long one the resolved state.
 /// - `DIFFVIEWER_DUMP_WINDOWS=1` prints each window's title, tab-group size, key and
 ///   occlusion state, plus the coordinator's routing table, phase, the saved session,
 ///   and the prefetch-worker and difft-process peaks, to stdout after the opens, and
@@ -132,7 +136,7 @@ enum DebugLaunchOptions {
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
                 || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_COMPARE"] != nil
-                || env["DIFFVIEWER_COMPARE_WINDOW"] != nil
+                || env["DIFFVIEWER_COMPARE_WINDOW"] != nil || env["DIFFVIEWER_COMPARE_WINDOW_PR"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the

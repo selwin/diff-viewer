@@ -61,18 +61,25 @@ extension DebugLaunchOptions {
         return (name(0), name(1))
     }
 
-    /// Opens the Compare window for `owner` when `DIFFVIEWER_COMPARE_WINDOW` is set, then gives
-    /// its refs and preview a second to load; the snapshot then captures it. Prints why when it
-    /// does not open.
+    /// `DIFFVIEWER_COMPARE_WINDOW_PR=<link or #n>`: starts the Compare window in Pull Request
+    /// mode with that input. Nil when unset.
+    static var compareWindowPullRequest: String? {
+        ProcessInfo.processInfo.environment["DIFFVIEWER_COMPARE_WINDOW_PR"]
+    }
+
+    /// Opens the Compare window for `owner` when `DIFFVIEWER_COMPARE_WINDOW` or
+    /// `DIFFVIEWER_COMPARE_WINDOW_PR` is set, then gives its refs and preview
+    /// `DIFFVIEWER_COMPARE_WINDOW_WAIT` seconds (default 1) to load; the snapshot then captures
+    /// it. Prints why when it does not open.
     @MainActor
     static func applyCompareWindow(env: [String: String], services: AppServices, owner: WindowState) async {
-        guard env["DIFFVIEWER_COMPARE_WINDOW"] != nil else { return }
+        guard env["DIFFVIEWER_COMPARE_WINDOW"] != nil || env["DIFFVIEWER_COMPARE_WINDOW_PR"] != nil else { return }
         let coordinator = services.coordinator
         services.opener.action?(id: AppServices.compareSceneID, value: CompareWindowTarget(owner: owner.id))
         guard await eventually({ coordinator.compareWindow(for: owner.id) != nil }) else {
             fputs("### DIFFVIEWER_COMPARE_WINDOW FAILED: the Compare window did not open\n", stderr)
             return
         }
-        try? await Task.sleep(for: .seconds(1))
+        try? await Task.sleep(for: .seconds(Double(env["DIFFVIEWER_COMPARE_WINDOW_WAIT"] ?? "") ?? 1))
     }
 }

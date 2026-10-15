@@ -36,6 +36,11 @@ enum StubCall {
     case refs
     case mergeBase
     case churn
+    case remotes
+    case advertisedPullRequest
+    case fetchPullRequest
+    case pinPullRequest
+    case pullRequestBase
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -151,6 +156,16 @@ actor StubRepoClient: RepoClient {
     private var failsChurn = false
     private(set) var churnRequests: [RevisionPair] = []
     var churnCalls: Int { churnRequests.count }
+    private var stubbedRemotes: [GitRemote] = []
+    private var stubbedAdvertised: AdvertisedPullRequest?
+    private var stubbedPullRequestBase = PullRequestComparisonBase(commitSHA: objectID("pr-base"), isRecovered: false)
+    /// The error each pull request call throws, after recording itself and any hold.
+    private var pullRequestErrors: [StubCall: any Error] = [:]
+    private(set) var remotesCalls = 0
+    private(set) var advertisedPullRequestCalls: [(number: Int, remote: String)] = []
+    private(set) var fetchPullRequestCalls: [AdvertisedPullRequest] = []
+    private(set) var pinPullRequestCalls: [AdvertisedPullRequest] = []
+    private(set) var pullRequestBaseRequests: [(headSHA: String, baseTipSHA: String)] = []
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     struct MergeCall: Equatable {
@@ -482,6 +497,15 @@ actor StubRepoClient: RepoClient {
     func fail(mergeBase on: Bool) { failsMergeBase = on }
     func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
     func fail(churn on: Bool) { failsChurn = on }
+    func set(remotes list: [GitRemote]) { stubbedRemotes = list }
+    /// What `advertisedPullRequest` answers; unset, it answers a default branch `main` and
+    /// fixed SHAs for whatever number and remote it is asked about.
+    func set(advertised: AdvertisedPullRequest?) { stubbedAdvertised = advertised }
+    func set(pullRequestBase base: PullRequestComparisonBase) { stubbedPullRequestBase = base }
+    /// Makes `call` throw `error`, or stop throwing with nil. Covers `.remotes`,
+    /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest` and `.pullRequestBase`;
+    /// read once a held call is released, so a test can change it meanwhile.
+    func fail(_ call: StubCall, with error: (any Error)?) { pullRequestErrors[call] = error }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -578,6 +602,45 @@ actor StubRepoClient: RepoClient {
         if isHeld(.churn) { await park(.churn) }
         if failsChurn { throw ProcessError.failed(command: "git diff", status: 128, stderr: "gone") }
         return stubbedChurn
+    }
+
+    func remotes() async throws -> [GitRemote] {
+        remotesCalls += 1
+        let snapshot = stubbedRemotes
+        if isHeld(.remotes) { await park(.remotes) }
+        if let error = pullRequestErrors[.remotes] { throw error }
+        return snapshot
+    }
+
+    func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest {
+        advertisedPullRequestCalls.append((number, remote))
+        let snapshot =
+            stubbedAdvertised
+            ?? AdvertisedPullRequest(
+                remote: remote, number: number, defaultBranch: "main", baseTipSHA: objectID("pr-base-tip"),
+                headSHA: objectID("pr-head"))
+        if isHeld(.advertisedPullRequest) { await park(.advertisedPullRequest) }
+        if let error = pullRequestErrors[.advertisedPullRequest] { throw error }
+        return snapshot
+    }
+
+    func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws {
+        fetchPullRequestCalls.append(advertised)
+        if isHeld(.fetchPullRequest) { await park(.fetchPullRequest) }
+        if let error = pullRequestErrors[.fetchPullRequest] { throw error }
+    }
+
+    func pinAdvertisedCommits(_ advertised: AdvertisedPullRequest) async throws {
+        pinPullRequestCalls.append(advertised)
+        if isHeld(.pinPullRequest) { await park(.pinPullRequest) }
+        if let error = pullRequestErrors[.pinPullRequest] { throw error }
+    }
+
+    func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase {
+        pullRequestBaseRequests.append((headSHA, baseTipSHA))
+        if isHeld(.pullRequestBase) { await park(.pullRequestBase) }
+        if let error = pullRequestErrors[.pullRequestBase] { throw error }
+        return stubbedPullRequestBase
     }
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {

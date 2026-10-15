@@ -5,7 +5,7 @@ import Foundation
 extension GitClient {
     /// Uses the hook environment and disables git's terminal credential prompts. Final:
     /// no override may turn prompting back on, since nobody is there to answer.
-    private func remoteEnvironment() async -> [String: String] {
+    func remoteEnvironment() async -> [String: String] {
         var environment = await hookEnvironment()
         environment["GIT_TERMINAL_PROMPT"] = "0"
         return environment

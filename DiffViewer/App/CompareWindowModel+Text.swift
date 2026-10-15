@@ -1,5 +1,13 @@
 import Foundation
 
+/// What a filled well shows, in either mode.
+struct CompareWellContent: Equatable {
+    let title: String
+    let subtitle: String?
+    /// Drawn in orange, as when the target is the base itself.
+    let isWarning: Bool
+}
+
 /// What the Compare window's lists, wells and preview say.
 extension CompareWindowModel {
     /// The file and line counts of a `.ready` preview.
@@ -49,6 +57,26 @@ extension CompareWindowModel {
         guard let ref = selection(side) else { return nil }
         if side == .target, isTargetSameAsBase { return "Same as base" }
         return grouping.commitDateText(for: ref.committedAt)
+    }
+
+    /// Nil when the side is empty.
+    func wellContent(_ side: Side) -> CompareWellContent? {
+        switch mode {
+        case .branches:
+            guard let ref = selection(side) else { return nil }
+            return CompareWellContent(
+                title: ref.name, subtitle: wellSubtitle(side), isWarning: side == .target && isTargetSameAsBase)
+        case .pullRequest:
+            return pullRequest.wellContent(side)
+        }
+    }
+
+    /// The dashed prompt an empty well shows.
+    func wellPlaceholder(_ side: Side) -> (title: String, subtitle: String) {
+        switch mode {
+        case .branches: (side == .base ? "Choose a base" : "Choose a branch to compare", "Pick one from the list")
+        case .pullRequest: pullRequest.wellPlaceholder(side)
+        }
     }
 
     var churnCounts: ChurnCounts? {

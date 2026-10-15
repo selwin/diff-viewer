@@ -1,13 +1,23 @@
 import Foundation
 import Observation
 
-/// What the Compare window shows and does: two filtered ref lists, the chosen base and
-/// target, a preview of how much the target changed since their merge base, and opening
-/// that range as a comparison tab. Reads run one at a time, and only the latest
-/// selection may publish.
+/// What the Compare window's Branches mode compares: a base and a target ref.
+struct BranchComparisonRequest: Sendable, Equatable {
+    let base: GitRef
+    let target: GitRef
+}
+
+/// What the Compare window shows and does. Branches mode has two filtered ref lists, the
+/// chosen base and target, and a preview of how much the target changed since their merge
+/// base; Pull Request mode is `pullRequest`. Either opens its range as a comparison tab.
 @MainActor
 @Observable
 final class CompareWindowModel {
+    enum Mode {
+        case branches
+        case pullRequest
+    }
+
     enum Side {
         case base
         case target
@@ -19,20 +29,14 @@ final class CompareWindowModel {
         case failed(String)
     }
 
-    /// The preview under the two wells.
-    enum Churn: Equatable {
-        /// A side is missing.
-        case hidden
-        /// Waiting for the debounce or a read; the view draws nothing yet.
-        case pending
-        /// The read is taking long enough to show a spinner.
-        case comparing
-        case noDifferences
-        case ready(IncomingChangeSummary)
-        /// Opening may still work: only the merge base must resolve.
-        case failed(String)
+    /// A Pull Request mode failure keeps the request generation it was for, so it hides once
+    /// the input names another request, and stays hidden if the first is entered again.
+    private struct OpenFailure {
+        let message: String
+        let generation: Int?
     }
 
+    private(set) var mode = Mode.branches
     var baseQuery = ""
     var targetQuery = ""
     private(set) var refList: RefList = .loading
@@ -40,52 +44,21 @@ final class CompareWindowModel {
     private(set) var refs: [GitRef] = []
     private(set) var base: GitRef?
     private(set) var target: GitRef?
-    private(set) var churn: Churn = .hidden
     private(set) var isOpening = false
-    private(set) var openError: String?
+    private var openFailure: OpenFailure?
     private(set) var isClosed = false
 
     @ObservationIgnored let currentBranch: String?
     @ObservationIgnored let grouping: CommitDayGrouping
     @ObservationIgnored let locale: Locale
     @ObservationIgnored private let client: any RepoClient
-    @ObservationIgnored private let clock: any Clock<Duration>
     @ObservationIgnored private let open: @MainActor (CommitRange) -> Bool
-
-    /// Bumped by every selection change and by `close()`; a read whose generation is
-    /// stale publishes nothing.
-    @ObservationIgnored private var generation = 0
-    /// Exposed so tests can await it.
-    @ObservationIgnored private(set) var debounceTask: Task<Void, Never>?
-    @ObservationIgnored private var spinnerTask: Task<Void, Never>?
-    /// The next read; a newer request replaces it rather than queueing behind it.
-    @ObservationIgnored private var queued: Request?
-    @ObservationIgnored private var running: Request?
-    /// Runs queued reads one at a time. Exposed so tests can await it.
-    @ObservationIgnored private(set) var readTask: Task<Void, Never>?
-    /// Only a success is kept, so a retry after a failure reads again.
-    @ObservationIgnored private var resolution: (generation: Int, range: CommitRange)?
-    @ObservationIgnored private var waiters: [Waiter] = []
+    @ObservationIgnored private let branchPreview: ComparisonPreview<BranchComparisonRequest>
+    /// Keeps its input and preview while Branches mode is shown.
+    @ObservationIgnored let pullRequest: PullRequestCompareModel
 
     static let debounceDelay = Duration.milliseconds(150)
     static let spinnerDelay = Duration.milliseconds(300)
-
-    private struct Request {
-        let generation: Int
-        let base: GitRef
-        let target: GitRef
-    }
-
-    private enum Resolution: Sendable {
-        case range(CommitRange)
-        case failed(String)
-    }
-
-    /// A submission waiting for the merge base; nil means the window closed.
-    private struct Waiter {
-        let generation: Int
-        let continuation: CheckedContinuation<Resolution?, Never>
-    }
 
     /// `open` returns false when the repository window is gone.
     init(
@@ -95,15 +68,68 @@ final class CompareWindowModel {
     ) {
         self.client = client
         self.currentBranch = currentBranch
-        self.clock = clock
         self.grouping = grouping
         self.locale = locale
         self.open = open
+        // The stored resolver captures only the client, so the preview never retains the model.
+        branchPreview = ComparisonPreview(
+            client: client, clock: clock, debounce: Self.debounceDelay, spinnerDelay: Self.spinnerDelay
+        ) { request, _ in
+            try await Self.range(for: request, client: client)
+        }
+        pullRequest = PullRequestCompareModel(client: client, clock: clock)
     }
+
+    private static func range(for request: BranchComparisonRequest, client: any RepoClient) async throws
+        -> CommitRange
+    {
+        guard let mergeBase = try await client.mergeBase(request.base.commitSHA, request.target.commitSHA) else {
+            throw ComparisonFailure("\(request.base.name) and \(request.target.name) share no history")
+        }
+        return CommitRange(
+            baseName: request.base.name, targetName: request.target.name, mergeBaseSHA: mergeBase,
+            targetSHA: request.target.commitSHA)
+    }
+
+    /// The preview under the two wells. Two refs on one commit need no read.
+    var churn: ComparisonChurn {
+        switch mode {
+        case .branches:
+            if let base, let target, base.commitSHA == target.commitSHA { return .noDifferences }
+            return branchPreview.churn
+        case .pullRequest:
+            return pullRequest.churn
+        }
+    }
+
+    /// The footer's error, for the shown mode's current request.
+    var openError: String? {
+        guard let openFailure else { return nil }
+        if mode == .pullRequest, openFailure.generation != pullRequest.requestGeneration { return nil }
+        return openFailure.message
+    }
+
+    /// Refused while a submission is opening.
+    func setMode(_ mode: Mode) {
+        guard !isOpening else { return }
+        openFailure = nil
+        self.mode = mode
+    }
+
+    /// Exposed so tests can await them.
+    var debounceTask: Task<Void, Never>? { branchPreview.debounceTask }
+    var readTask: Task<Void, Never>? { branchPreview.readTask }
 
     // MARK: Loading
 
+    /// Reads the refs and the remotes together.
     func load() async {
+        async let remotes: Void = pullRequest.loadRemotes()
+        await loadRefs()
+        await remotes
+    }
+
+    private func loadRefs() async {
         refList = .loading
         do {
             let loaded = try await client.refs()
@@ -171,8 +197,14 @@ final class CompareWindowModel {
     }
 
     var canCompare: Bool {
-        guard let base, let target, !isOpening else { return false }
-        return base.commitSHA != target.commitSHA
+        guard !isOpening else { return false }
+        switch mode {
+        case .branches:
+            guard let base, let target else { return false }
+            return base.commitSHA != target.commitSHA
+        case .pullRequest:
+            return pullRequest.canCompare
+        }
     }
 
     var canSwap: Bool {
@@ -186,106 +218,12 @@ final class CompareWindowModel {
     }
 
     private func selectionChanged() {
-        generation += 1
-        debounceTask?.cancel()
-        spinnerTask?.cancel()
-        resolution = nil
-        openError = nil
-        guard let base, let target else {
-            churn = .hidden
-            queued = nil
+        openFailure = nil
+        guard let base, let target, base.commitSHA != target.commitSHA else {
+            branchPreview.setRequest(nil)
             return
         }
-        guard base.commitSHA != target.commitSHA else {
-            churn = .noDifferences
-            queued = nil
-            return
-        }
-        churn = .pending
-        let request = Request(generation: generation, base: base, target: target)
-        debounceTask = Task { [weak self, clock] in
-            do { try await Task.sleep(for: Self.debounceDelay, clock: clock) } catch { return }
-            guard let self, generation == request.generation else { return }
-            enqueue(request)
-        }
-        spinnerTask = Task { [weak self, clock] in
-            do { try await Task.sleep(for: Self.spinnerDelay, clock: clock) } catch { return }
-            guard let self, generation == request.generation, churn == .pending else { return }
-            churn = .comparing
-        }
-    }
-
-    // MARK: Reads
-
-    private func enqueue(_ request: Request) {
-        queued = request
-        guard readTask == nil else { return }
-        readTask = Task { [weak self] in
-            await self?.drain()
-            self?.readTask = nil
-        }
-    }
-
-    private func drain() async {
-        while let request = queued, !isClosed {
-            queued = nil
-            guard request.generation == generation else { continue }
-            await run(request)
-        }
-    }
-
-    private func isCurrent(_ request: Request) -> Bool {
-        !isClosed && generation == request.generation
-    }
-
-    private func run(_ request: Request) async {
-        running = request
-        defer { running = nil }
-        let mergeBase: String
-        do {
-            let found = try await client.mergeBase(request.base.commitSHA, request.target.commitSHA)
-            guard isCurrent(request) else { return }
-            guard let found else {
-                fail(request, "\(request.base.name) and \(request.target.name) share no history")
-                return
-            }
-            mergeBase = found
-        } catch {
-            guard isCurrent(request) else { return }
-            fail(request, error.localizedDescription)
-            return
-        }
-        let range = CommitRange(
-            baseName: request.base.name, targetName: request.target.name, mergeBaseSHA: mergeBase,
-            targetSHA: request.target.commitSHA)
-        resolution = (request.generation, range)
-        // A submission needs only the range; it opens without waiting for the counts.
-        resumeWaiters(for: request.generation, with: .range(range))
-        do {
-            let summary = try await client.churn(base: mergeBase, target: request.target.commitSHA)
-            guard isCurrent(request) else { return }
-            publish(summary.fileCount == 0 ? .noDifferences : .ready(summary))
-        } catch {
-            guard isCurrent(request) else { return }
-            publish(.failed(error.localizedDescription))
-        }
-    }
-
-    /// Not cached: a retry reads the merge base again.
-    private func fail(_ request: Request, _ message: String) {
-        resumeWaiters(for: request.generation, with: .failed(message))
-        publish(.failed(message))
-    }
-
-    private func publish(_ result: Churn) {
-        spinnerTask?.cancel()
-        churn = result
-    }
-
-    private func resumeWaiters(for generation: Int, with resolution: Resolution?) {
-        let ready = waiters.filter { $0.generation == generation }
-        waiters.removeAll { $0.generation == generation }
-        for waiter in ready { waiter.continuation.resume(returning: resolution) }
+        branchPreview.setRequest(BranchComparisonRequest(base: base, target: target))
     }
 
     // MARK: Submitting
@@ -293,32 +231,36 @@ final class CompareWindowModel {
     /// Opens the comparison tab once the merge base resolves; the preview counts are not
     /// awaited. True means the tab opened and the window should close.
     func submit() async -> Bool {
-        guard canCompare, !isClosed, let base, let target else { return false }
+        guard canCompare, !isClosed else { return false }
         // Set before any suspension, so a second submit and selection changes are refused.
         isOpening = true
-        openError = nil
-        let generation = generation
-        let outcome: Resolution?
-        if let resolution, resolution.generation == generation {
-            outcome = .range(resolution.range)
-        } else {
-            debounceTask?.cancel()
-            if running?.generation != generation, queued?.generation != generation {
-                enqueue(Request(generation: generation, base: base, target: target))
-            }
-            outcome = await withCheckedContinuation { continuation in
-                waiters.append(Waiter(generation: generation, continuation: continuation))
-            }
+        openFailure = nil
+        switch mode {
+        case .branches:
+            return finish(await branchPreview.resolvedRange(), generation: nil)
+        case .pullRequest:
+            // Taken before awaiting, so a failure is kept with the request it was for.
+            let generation = pullRequest.requestGeneration
+            return finish(await pullRequest.resolvedRange(), generation: generation)
         }
-        guard !isClosed, let outcome else { return false }
+    }
+
+    /// `generation` is the pull request's request generation when submitted, or nil in Branches mode.
+    private func finish(_ outcome: ComparisonOutcome?, generation: Int?) -> Bool {
+        guard !isClosed else { return false }
+        guard let outcome else {
+            // The request changed or ended while opening, so Compare can be pressed again.
+            isOpening = false
+            return false
+        }
         switch outcome {
         case let .failed(message):
-            openError = message
+            openFailure = OpenFailure(message: message, generation: generation)
             isOpening = false
             return false
         case let .range(range):
             guard open(range) else {
-                openError = "The repository window was closed."
+                openFailure = OpenFailure(message: "The repository window was closed.", generation: generation)
                 isOpening = false
                 return false
             }
@@ -330,13 +272,7 @@ final class CompareWindowModel {
     /// already running are ignored (running git reads are not killed).
     func close() {
         isClosed = true
-        generation += 1
-        queued = nil
-        resolution = nil
-        debounceTask?.cancel()
-        spinnerTask?.cancel()
-        let pending = waiters
-        waiters = []
-        for waiter in pending { waiter.continuation.resume(returning: nil) }
+        branchPreview.close()
+        pullRequest.close()
     }
 }

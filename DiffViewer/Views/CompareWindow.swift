@@ -36,6 +36,13 @@ struct CompareWindowRoot: View {
         let model = CompareWindowModel(
             client: client, currentBranch: coordinator.windows[owner]?.currentBranchName,
             open: { [coordinator] range in coordinator.openComparison(owner: owner, range: range) })
+        #if DEBUG
+            // Before `load()`, so the remotes load after the input and it is matched again.
+            if let link = DebugLaunchOptions.compareWindowPullRequest {
+                model.setMode(.pullRequest)
+                model.pullRequest.input = link
+            }
+        #endif
         self.model = model
         #if DEBUG
             if let names = DebugLaunchOptions.compareWindowSelection {
@@ -53,14 +60,21 @@ struct CompareWindow: View {
     @Bindable var model: CompareWindowModel
     let dismiss: () -> Void
     @FocusState private var focus: CompareWindowModel.Side?
+    @FocusState private var isLinkFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
-            CompareModeCapsule()
+            CompareModeCapsule(model: model)
                 .frame(height: 60)
             HStack(spacing: 12) {
-                CompareRefColumn(model: model, side: .base, focus: $focus)
-                CompareRefColumn(model: model, side: .target, focus: $focus)
+                switch model.mode {
+                case .branches:
+                    CompareRefColumn(model: model, side: .base, focus: $focus)
+                    CompareRefColumn(model: model, side: .target, focus: $focus)
+                case .pullRequest:
+                    ComparePullRequestColumn(model: model, pullRequest: model.pullRequest, focus: $isLinkFocused)
+                    ComparePullRequestCard(model: model, pullRequest: model.pullRequest)
+                }
             }
             .padding(.horizontal, 12)
             // Overlays, not part of the row, so neither moves with the names' lengths.
@@ -75,7 +89,16 @@ struct CompareWindow: View {
         // The hidden title bar still reserves its safe area; the title area is ours.
         .ignoresSafeArea(.container, edges: .top)
         // Not `.defaultFocus`: it holds focus on Base, so a click or ⇥ never reaches Compare.
-        .onAppear { focus = .base }
+        .onAppear(perform: focusField)
+        // The new mode's field isn't in the view tree until after this change.
+        .onChange(of: model.mode) { Task { focusField() } }
+    }
+
+    private func focusField() {
+        switch model.mode {
+        case .branches: focus = .base
+        case .pullRequest: isLinkFocused = true
+        }
     }
 
     private var footer: some View {
@@ -120,14 +143,17 @@ struct CompareWindow: View {
     }
 }
 
-/// The title bar's mode control. Only Branches exists so far; the others are shown so the
-/// window's future shape is visible, but they cannot be chosen.
+/// The title bar's mode control. Commits is shown so the window's future shape is visible,
+/// but it cannot be chosen yet.
 private struct CompareModeCapsule: View {
+    let model: CompareWindowModel
+
     var body: some View {
         HStack(spacing: 0) {
-            segment("Branches", isSelected: true) { octicon(.gitBranch) }
+            modeButton("Branches", mode: .branches, key: "1") { octicon(.gitBranch) }
             segment("Commits", isSelected: false) { octicon(.gitCommit) }
-            segment("Pull Request", isSelected: false) { Image(systemName: "arrow.triangle.pull") }
+                .accessibilityHint("Not available yet")
+            modeButton("Pull Request", mode: .pullRequest, key: "3") { Image(systemName: "arrow.triangle.pull") }
         }
         .padding(3)
         .background(Capsule().fill(Color(nsColor: .tertiarySystemFill)))
@@ -137,6 +163,22 @@ private struct CompareModeCapsule: View {
 
     private func octicon(_ image: ImageResource) -> some View {
         Image(image).renderingMode(.template).resizable().scaledToFit().frame(width: 15, height: 15)
+    }
+
+    private func modeButton(
+        _ title: String, mode: CompareWindowModel.Mode, key: KeyEquivalent, @ViewBuilder icon: () -> some View
+    ) -> some View {
+        let isSelected = model.mode == mode
+        return Button {
+            model.setMode(mode)
+        } label: {
+            segment(title, isSelected: isSelected, icon: icon)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .keyboardShortcut(key, modifiers: .command)
+        .disabled(model.isOpening)
+        .help(Text(verbatim: "\(title) (⌘\(key.character))"))
     }
 
     private func segment(_ title: String, isSelected: Bool, @ViewBuilder icon: () -> some View) -> some View {
@@ -155,6 +197,5 @@ private struct CompareModeCapsule: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityHint(isSelected ? "" : "Not available yet")
     }
 }

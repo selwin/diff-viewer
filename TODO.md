@@ -41,15 +41,20 @@ Do these first, before the rest of Requested.
 
 ### P1. Compare any two commits or branches (requested 2026-09-27)
 
-**Shipped: Branches mode.** Compare… (⇧⌘D, or the branch picker) opens a Compare window
-with two searchable ref lists (local, remote, tags). Compare opens `base...target` from
-the merge base, like GitHub, in a read-only tab of the repository window, with a
-file-and-line preview in the window first.
+**Shipped: Branches and Pull Request modes.** Compare… (⇧⌘D, or the branch picker) opens
+a Compare window with two searchable ref lists (local, remote, tags). Compare opens
+`base...target` from the merge base, like GitHub, in a read-only tab of the repository
+window, with a file-and-line preview in the window first. Pull Request mode takes a
+GitHub link or `#n`, fetches the head with git alone, and compares it with the remote's
+default branch.
 
 **Remaining.**
 - Commits mode: two commits of the branch, compared directly (`base..compare`), also
   from a "Compare with…" item in the commit picker.
-- Pull Request mode.
+- Pull Request mode follow-ups: a PR list with titles, authors and state badges (needs
+  the GitHub API); pull requests that target a non-default branch; cleaning up
+  `refs/diffviewer/pull/*`, snapshots included; and killing stalled `ls-remote` and fetch
+  calls, which waits on "Timeout on remote git calls" in the Next list.
 - The working tree as a side.
 - A toggle between merge-base (`...`) and direct (`..`) for branches.
 - Refreshing the ref lists while the Compare window is open; today they are read once.

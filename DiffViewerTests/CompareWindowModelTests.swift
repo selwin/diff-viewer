@@ -75,6 +75,20 @@ struct CompareWindowModelTests {
         await debounce.value
     }
 
+    /// In Pull Request mode with `#61` entered on an `origin` remote on GitHub.
+    private func pullRequestModel(_ client: StubRepoClient, opener: Opener = Opener()) async -> CompareWindowModel {
+        await client.set(remotes: [GitRemote(name: "origin", fetchURL: "https://github.com/acme/widgets.git")])
+        let model = model(client, opener: opener)
+        model.setMode(.pullRequest)
+        await model.pullRequest.loadRemotes()
+        model.pullRequest.input = "#61"
+        return model
+    }
+
+    private func held(_ client: StubRepoClient, _ call: StubCall) async -> Bool {
+        await eventually { await client.heldCount(call) == 1 }
+    }
+
     private func held(_ client: StubRepoClient, _ call: StubCall, calls: Int) async -> Bool {
         await eventually {
             let count = call == .churn ? await client.churnCalls : await client.mergeBaseCalls
@@ -327,6 +341,146 @@ struct CompareWindowModelTests {
         #expect(await failing.submit())
         #expect(opener.opened.map(\.targetSHA) == [feature.commitSHA, other.commitSHA])
         await client.release(.churn)
+    }
+
+    // MARK: Modes
+
+    @Test func eachModeKeepsItsInputAndPreview() async throws {
+        let client = await client()
+        let clock = ManualClock()
+        let model = model(client, clock: clock)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await eventually { await model.churn == .ready(summary) })
+
+        let pullRequestSummary = IncomingChangeSummary(fileCount: 2, addedLineCount: 5, deletedLineCount: 1)
+        await client.set(churn: pullRequestSummary)
+        await client.set(remotes: [GitRemote(name: "origin", fetchURL: "https://github.com/acme/widgets.git")])
+        model.setMode(.pullRequest)
+        #expect(model.churn == .hidden)
+        #expect(!model.canCompare)
+        await model.pullRequest.loadRemotes()
+        model.pullRequest.input = "#61"
+        model.pullRequest.resolveNow()
+        #expect(await eventually { await model.churn == .ready(pullRequestSummary) })
+
+        model.setMode(.branches)
+        #expect(model.churn == .ready(summary))
+        #expect(model.target == feature)
+        model.setMode(.pullRequest)
+        #expect(model.churn == .ready(pullRequestSummary))
+        #expect(model.pullRequest.input == "#61")
+        #expect(await client.mergeBaseCalls == 1)
+        #expect(await client.advertisedPullRequestCalls.count == 1)
+    }
+
+    @Test func theModeCannotChangeWhileOpening() async {
+        let client = await client()
+        await client.hold(.mergeBase)
+        let model = model(client)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+
+        let submission = Task { await model.submit() }
+        #expect(await held(client, .mergeBase, calls: 1))
+        model.setMode(.pullRequest)
+        #expect(model.mode == .branches)
+        await client.release(.mergeBase)
+        #expect(await submission.value)
+    }
+
+    @Test func twoSubmitsAcrossModesOpenOneTab() async {
+        let client = await client()
+        await client.hold(.fetchPullRequest)
+        let opener = Opener()
+        let model = await pullRequestModel(client, opener: opener)
+        model.setMode(.branches)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        model.setMode(.pullRequest)
+
+        let submission = Task { await model.submit() }
+        #expect(await held(client, .fetchPullRequest))
+        model.setMode(.branches)
+        #expect(await model.submit() == false)
+        await client.release(.fetchPullRequest)
+        #expect(await submission.value)
+        #expect(opener.opened.map(\.title) == ["main … PR #61"])
+        #expect(await client.mergeBaseCalls == 0)
+    }
+
+    @Test func aRequestChangeWhileOpeningAPullRequestReenablesCompare() async {
+        let client = await client()
+        await client.hold(.fetchPullRequest)
+        let opener = Opener()
+        let model = await pullRequestModel(client, opener: opener)
+
+        let submission = Task { await model.submit() }
+        #expect(await held(client, .fetchPullRequest))
+        model.pullRequest.input = "#62"
+        #expect(await submission.value == false)
+        #expect(!model.isOpening)
+        #expect(model.canCompare)
+        #expect(model.openError == nil)
+        await client.release(.fetchPullRequest)
+        #expect(opener.opened.isEmpty)
+    }
+
+    @Test func aPullRequestFailureClearsOnceTheInputNamesAnother() async {
+        let client = await client()
+        await client.fail(
+            .fetchPullRequest, with: ProcessError.failed(command: "git fetch", status: 128, stderr: "network down"))
+        let model = await pullRequestModel(client)
+
+        #expect(await model.submit() == false)
+        #expect(model.openError == "git fetch exited with status 128: network down")
+        // Equivalent edits name the same request, so the error stays.
+        model.pullRequest.input = "#61 "
+        #expect(model.openError == "git fetch exited with status 128: network down")
+        model.pullRequest.input = "https://github.com/acme/widgets/pull/61"
+        model.pullRequest.input = "https://github.com/acme/widgets/pull/61/files"
+        #expect(model.openError == "git fetch exited with status 128: network down")
+
+        await client.fail(.fetchPullRequest, with: nil)
+        model.pullRequest.input = "#62"
+        model.pullRequest.resolveNow()
+        #expect(await eventually { await model.pullRequest.churn == .ready(summary) })
+        #expect(model.openError == nil)
+        // Naming the failed pull request again doesn't bring the old error back.
+        model.pullRequest.input = ""
+        model.pullRequest.input = "#61"
+        #expect(model.openError == nil)
+    }
+
+    @Test func closingWhileAPullRequestResolvesOpensNothing() async {
+        let client = await client()
+        await client.hold(.fetchPullRequest)
+        let opener = Opener()
+        let model = await pullRequestModel(client, opener: opener)
+
+        let submission = Task { await model.submit() }
+        #expect(await held(client, .fetchPullRequest))
+        model.close()
+        #expect(await submission.value == false)
+        await client.release(.fetchPullRequest)
+        #expect(await eventually { await model.pullRequest.readTask == nil })
+        #expect(opener.opened.isEmpty)
+        #expect(await client.pinPullRequestCalls.isEmpty)
+    }
+
+    @Test func aPullRequestCountsFailureStillSubmitsTheResolvedRange() async {
+        let client = await client()
+        await client.fail(churn: true)
+        let opener = Opener()
+        let model = await pullRequestModel(client, opener: opener)
+
+        model.pullRequest.resolveNow()
+        #expect(await eventually { await model.churn == .failed("git diff exited with status 128: gone") })
+        #expect(model.canCompare)
+        #expect(await model.submit())
+        let revisions = RevisionPair(baseSHA: objectID("pr-base"), targetSHA: objectID("pr-head"))
+        #expect(opener.opened.map(\.revisions) == [revisions])
     }
 
     // MARK: Choosing
