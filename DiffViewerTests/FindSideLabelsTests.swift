@@ -27,6 +27,19 @@ struct FindSideLabelsTests {
         #expect(labels.old == FindSideLabel(title: "Before", icon: nil))
         #expect(labels.new == FindSideLabel(title: "After", icon: nil))
     }
+
+    @Test func rangeLabelsTheBaseUnlessOverridden() {
+        func range(override: String?) -> DiffScope {
+            .range(
+                CommitRange(
+                    baseName: "main", targetName: "PR #61", mergeBaseSHA: objectID("b"), targetSHA: objectID("t"),
+                    baseLabelOverride: override))
+        }
+        #expect(FindSideLabels.make(scope: range(override: nil), headState: nil).old.title == "Merge base with main")
+        let overridden = FindSideLabels.make(scope: range(override: "Comparison base for PR #61"), headState: nil)
+        #expect(overridden.old.title == "Comparison base for PR #61")
+        #expect(overridden.new.title == "PR #61")
+    }
 }
 
 @MainActor

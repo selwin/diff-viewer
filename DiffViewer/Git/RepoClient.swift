@@ -150,4 +150,19 @@ protocol RepoClient: Sendable {
     /// by branch name. Covers branches whose upstream the fetch mapping misses, which
     /// `localBranches` reports as having none.
     func configuredUpstreamRemotes() async throws -> [String: String]
+    /// The configured remotes with their effective fetch URLs, in git's order.
+    func remotes() async throws -> [GitRemote]
+    /// What `remote` advertises for pull request `number` and for its default branch,
+    /// without touching local refs. Throws `PullRequestError.notFound` or `.noDefaultBranch`.
+    func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest
+    /// Fetches the pull request's head and the default branch into `refs/diffviewer/`,
+    /// without pruning or writing anything else. Throws git's diagnostics.
+    func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws
+    /// Pins the advertised head and base tip under `refs/diffviewer/`. Throws
+    /// `PullRequestError.commitsUnavailable` when either commit is missing locally.
+    func pinAdvertisedCommits(_ advertised: AdvertisedPullRequest) async throws
+    /// The commit to compare the pull request against: the merge base, or one recovered
+    /// from before the head was merged. Throws `PullRequestError.alreadyInBase` or
+    /// `.noCommonHistory`.
+    func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase
 }

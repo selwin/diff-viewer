@@ -102,6 +102,15 @@ struct TaggedClient: RepoClient {
     func churn(base: String, target: String) async throws -> IncomingChangeSummary {
         IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
     }
+    func remotes() async throws -> [GitRemote] { [] }
+    func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest {
+        throw PullRequestError.notFound
+    }
+    func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws {}
+    func pinAdvertisedCommits(_ advertised: AdvertisedPullRequest) async throws {}
+    func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase {
+        throw PullRequestError.alreadyInBase
+    }
 }
 
 @MainActor

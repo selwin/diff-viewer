@@ -28,7 +28,7 @@ struct FindSideLabels: Equatable {
         case let .range(range):
             // No icons: the target may be a tag or a remote-tracking branch.
             return FindSideLabels(
-                old: FindSideLabel(title: "Merge base with \(range.baseName)", icon: nil),
+                old: FindSideLabel(title: range.baseLabel, icon: nil),
                 new: FindSideLabel(title: range.targetName, icon: nil))
         case .workingTree:
             let old: FindSideLabel
