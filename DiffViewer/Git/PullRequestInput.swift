@@ -33,3 +33,11 @@ enum PullRequestInput: Equatable {
         return value
     }
 }
+
+extension PullRequestInput {
+    var number: Int {
+        switch self {
+        case let .url(_, number), let .number(number): number
+        }
+    }
+}

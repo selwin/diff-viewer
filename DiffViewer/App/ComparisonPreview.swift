@@ -23,6 +23,12 @@ enum ComparisonResolutionState: Equatable {
     case failed(String)
 }
 
+/// What a caller waiting for the range gets.
+enum ComparisonOutcome: Sendable, Equatable {
+    case range(CommitRange)
+    case failed(String)
+}
+
 /// Thrown by a resolver to show its own wording.
 struct ComparisonFailure: LocalizedError {
     let message: String
@@ -42,11 +48,6 @@ final class ComparisonPreview<Request: Sendable & Equatable> {
     /// `isCurrent` turns false once the request is superseded or the preview closes, so a
     /// resolver can skip its remaining steps.
     typealias Resolve = @MainActor (Request, _ isCurrent: @MainActor () -> Bool) async throws -> CommitRange
-
-    enum Outcome: Sendable, Equatable {
-        case range(CommitRange)
-        case failed(String)
-    }
 
     private(set) var churn: ComparisonChurn = .hidden
     private(set) var resolution: ComparisonResolutionState = .idle
@@ -81,7 +82,7 @@ final class ComparisonPreview<Request: Sendable & Equatable> {
     /// A caller waiting for the range; nil means the preview closed or the request changed.
     private struct Waiter {
         let generation: Int
-        let continuation: CheckedContinuation<Outcome?, Never>
+        let continuation: CheckedContinuation<ComparisonOutcome?, Never>
     }
 
     /// `resolve` is stored, so it must not capture the preview's owner.
@@ -119,9 +120,16 @@ final class ComparisonPreview<Request: Sendable & Equatable> {
             guard let self, generation == pending.generation else { return }
             enqueue(pending)
         }
+        startSpinner()
+    }
+
+    /// Shows the spinner if the current generation is still pending after `spinnerDelay`.
+    private func startSpinner() {
+        spinnerTask?.cancel()
+        let started = generation
         spinnerTask = Task { [weak self, clock, spinnerDelay] in
             do { try await Task.sleep(for: spinnerDelay, clock: clock) } catch { return }
-            guard let self, generation == pending.generation, churn == .pending else { return }
+            guard let self, generation == started, churn == .pending else { return }
             churn = .comparing
         }
     }
@@ -133,12 +141,17 @@ final class ComparisonPreview<Request: Sendable & Equatable> {
         debounceTask?.cancel()
         if case .resolved = resolution { return }
         guard running?.generation != generation, queued?.generation != generation else { return }
+        // A retry replaces the failure, so the churn waits again rather than showing it.
+        if case .failed = resolution {
+            churn = .pending
+            startSpinner()
+        }
         enqueue(Pending(generation: generation, request: request))
     }
 
     /// The current request's range once it resolves; the churn is not awaited. Nil means
     /// the preview closed or the request changed.
-    func resolvedRange() async -> Outcome? {
+    func resolvedRange() async -> ComparisonOutcome? {
         guard !isClosed, request != nil else { return nil }
         if case let .resolved(range) = resolution { return .range(range) }
         resolveNow()
@@ -209,7 +222,7 @@ final class ComparisonPreview<Request: Sendable & Equatable> {
         churn = result
     }
 
-    private func resumeWaiters(for generation: Int, with outcome: Outcome) {
+    private func resumeWaiters(for generation: Int, with outcome: ComparisonOutcome) {
         let ready = waiters.filter { $0.generation == generation }
         waiters.removeAll { $0.generation == generation }
         for waiter in ready { waiter.continuation.resume(returning: outcome) }

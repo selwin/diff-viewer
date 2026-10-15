@@ -14,15 +14,10 @@ struct CompareRefColumn: View {
         VStack(spacing: 6) {
             searchField
             list
-            CompareWell(model: model, side: side)
+            CompareWell(side: side, content: model.wellContent(side), placeholder: model.wellPlaceholder(side))
         }
         .padding(8)
-        .background {
-            let card = RoundedRectangle(cornerRadius: 20, style: .continuous)
-            card.fill(Color(nsColor: .controlBackgroundColor))
-                .overlay { card.strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5) }
-                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
-        }
+        .compareCard()
         .accessibilityElement(children: .contain)
         .accessibilityLabel(side == .base ? "Base" : "Compare")
     }
