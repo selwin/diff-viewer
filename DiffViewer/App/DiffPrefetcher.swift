@@ -32,10 +32,11 @@ final class DiffPrefetcher: Prefetching {
         let fileID: ChangedFile.ID
         let fingerprint: DiffInputFingerprint?
 
-        /// Same rule as `DiffEngine.inputKey`: a commit's content never changes, any other
-        /// file needs a known fingerprint. Nil means status cannot vouch for it, so read it.
+        /// Same rule as `DiffEngine.inputKey`: a commit's or range's content never changes,
+        /// any other file needs a known fingerprint. Nil means status cannot vouch for it,
+        /// so read it.
         static func key(for file: ChangedFile, repository: RepositoryRoot) -> WarmKey? {
-            if !file.area.isCommit {
+            if !file.area.hasFixedRevisions {
                 guard let fingerprint = file.fingerprint, fingerprint.isKnown else { return nil }
             }
             return WarmKey(repository: repository, fileID: file.id, fingerprint: file.fingerprint)

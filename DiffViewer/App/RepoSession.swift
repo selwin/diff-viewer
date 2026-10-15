@@ -1,8 +1,13 @@
 import Foundation
 
-/// Identifies one window for the lifetime of the app.
-struct WindowID: Hashable, Sendable {
-    private let uuid = UUID()
+/// Identifies one window for the lifetime of the app. Codable only so a scene can be
+/// opened for a window by id; it is never saved.
+struct WindowID: Hashable, Codable, Sendable {
+    private let uuid: UUID
+
+    init() {
+        uuid = UUID()
+    }
 }
 
 /// An opened repository: its root, client, and watcher. Refreshes are bound to the

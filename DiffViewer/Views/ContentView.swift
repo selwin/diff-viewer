@@ -32,8 +32,11 @@ struct ContentView: View {
                 // On the sidebar, not the split view, so it sits in the sidebar's part of
                 // the title bar beside the sidebar toggle.
                 .toolbar {
-                    ToolbarItem {
-                        StashesCapsuleView()
+                    // A comparison is read-only and shows no stashes.
+                    if !windowState.isComparisonTab {
+                        ToolbarItem {
+                            StashesCapsuleView()
+                        }
                     }
                 }
         } detail: {
@@ -72,16 +75,18 @@ struct ContentView: View {
             .sharedBackgroundVisibility(.hidden)
             // One item, so the pickers sit 8pt apart: as separate items the toolbar would
             // share one glass capsule between them, and a splitter item leaves a wide gap.
-            // Each picker draws its own glass instead.
-            ToolbarItem(placement: .navigation) {
-                GlassEffectContainer(spacing: 8) {
-                    HStack(spacing: 8) {
-                        BranchPickerView()
-                        ScopePickerView()
+            // Each picker draws its own glass instead. A comparison's range is fixed, so it has none.
+            if !windowState.isComparisonTab {
+                ToolbarItem(placement: .navigation) {
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 8) {
+                            BranchPickerView()
+                            ScopePickerView()
+                        }
                     }
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
-            .sharedBackgroundVisibility(.hidden)
             // The toolbar's title carried the flexible space that kept the buttons on the
             // trailing edge; without it they close up behind the pickers. `ToolbarSpacer`
             // is ignored here, a `Spacer` item is not.

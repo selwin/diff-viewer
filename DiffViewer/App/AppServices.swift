@@ -12,6 +12,10 @@ import SwiftUI
 final class AppServices {
     /// The repository window scene, so an empty window can be opened by id.
     static let repositorySceneID = "repository"
+    /// The comparison tab scene, opened with a `ComparisonToken`.
+    static let comparisonSceneID = "comparison"
+    /// The Compare window scene, opened with a `CompareWindowTarget`.
+    static let compareSceneID = "compare"
 
     let preferences: Preferences
     let cache: DifftCache
@@ -45,13 +49,16 @@ final class AppServices {
                     let interval = Double(seconds) + Double(attoseconds) * 1e-18
                     DispatchQueue.main.asyncAfter(deadline: .now() + interval) { action() }
                 },
-                windowIDsInTabOrder: { windows.windowIDsInTabOrder($0) }
+                windowIDsInTabOrder: { windows.windowIDsInTabOrder($0) },
+                createComparisonWindow: { token in opener.action?(id: AppServices.comparisonSceneID, value: token) },
+                tabWindow: { windows.addTab($0, to: $1) }
             )
         )
         self.opener = opener
     }
 
-    private let opener: WindowOpener
+    /// Also used by the debug hooks, which have no view to take `openWindow` from.
+    let opener: WindowOpener
     private var hooksInstalled = false
 
     /// Connects the app delegate and SwiftUI's window opener to the coordinator. Runs
@@ -140,6 +147,17 @@ final class NativeWindowRegistry {
         }
         selectedWindow.makeKeyAndOrderFront(nil)
         return selectedID
+    }
+
+    /// Puts `id`'s window in `origin`'s tab group, unless automatic tabbing already did,
+    /// and makes it the selected tab. Returns false, doing nothing, while either is missing.
+    func addTab(_ id: WindowID, to origin: WindowID) -> Bool {
+        guard let window = windows[id], let originWindow = windows[origin] else { return false }
+        if originWindow.tabGroup?.windows.contains(where: { $0 === window }) != true {
+            originWindow.addTabbedWindow(window, ordered: .above)
+        }
+        window.makeKeyAndOrderFront(nil)
+        return true
     }
 
     /// The supplied IDs with each tab group's windows in tab-strip order.

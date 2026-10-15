@@ -75,7 +75,7 @@ enum FileAction: CaseIterable, Sendable {
             }
         case .staged:
             [.unstage]
-        case .commit:
+        case .commit, .range:
             []
         }
     }

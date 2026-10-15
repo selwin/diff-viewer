@@ -60,6 +60,13 @@ import Foundation
 ///   (`scripts/screenshot.sh`).
 /// - `DIFFVIEWER_OPEN=<JSON array of paths>` opens those repositories, in order, as if
 ///   from Finder, once the saved session has finished restoring.
+/// - `DIFFVIEWER_COMPARE=<base>...<target>` opens a comparison tab of those two branches
+///   (or any names `git rev-parse` resolves) beside the target window after the opens and
+///   before the dump and tab steps; `DIFFVIEWER_SELECT`, `DIFFVIEWER_SNAPSHOT` and the rest
+///   then act on the tab.
+/// - `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>` opens the target window's Compare window
+///   with those refs chosen (an empty value or a missing side chooses nothing), and
+///   `DIFFVIEWER_SNAPSHOT` then renders it instead of the repository window.
 /// - `DIFFVIEWER_DUMP_WINDOWS=1` prints each window's title, tab-group size, key and
 ///   occlusion state, plus the coordinator's routing table, phase, the saved session,
 ///   and the prefetch-worker and difft-process peaks, to stdout after the opens, and
@@ -124,7 +131,8 @@ enum DebugLaunchOptions {
                 || newBranchSheet || stashSheet
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
-                || env["DIFFVIEWER_MERGE_SHEET"] != nil
+                || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_COMPARE"] != nil
+                || env["DIFFVIEWER_COMPARE_WINDOW"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -140,36 +148,20 @@ enum DebugLaunchOptions {
                     await coordinator.open(request)
                     try? await Task.sleep(for: .seconds(1))
                 }
+                // Before the dump and the tab steps, so both see the comparison tab.
+                let comparison = await applyComparison(env: env, services: services)
+                if env["DIFFVIEWER_COMPARE"] != nil, comparison == nil { return }
                 if dump {
                     try? await Task.sleep(for: .seconds(2))
                     dumpWindows(services)
                     dumpOnSignal(services)
                 }
-                let steps = decodeStringArray(env["DIFFVIEWER_TAB_STEPS"])
-                if !steps.isEmpty {
-                    // Activation must come from outside (`osascript -e 'tell application
-                    // "DiffViewer" to activate'`); a script-launched process cannot make
-                    // itself active on current macOS.
-                    for step in steps {
-                        let needsKeyWindow = step != "quit" && !step.hasPrefix("sleep:")
-                        let hasKeyWindow = needsKeyWindow ? await eventually({ NSApp.keyWindow != nil }) : true
-                        guard hasKeyWindow else {
-                            fail(step, "no key window; activate the app first")
-                            break
-                        }
-                        if let failure = await runTabStep(step, services: services) {
-                            fail(step, failure)
-                            break
-                        }
-                        try? await Task.sleep(for: .seconds(2))
-                        print("### \(step)")
-                        dumpWindows(services)
-                    }
-                }
+                await runTabSteps(decodeStringArray(env["DIFFVIEWER_TAB_STEPS"]), services: services)
                 guard needsWindow else { return }
                 _ = await eventually { targetState(coordinator) != nil }
                 try? await Task.sleep(for: .seconds(0.5))
-                guard let windowState = targetState(coordinator), let window = services.windows[windowState.id]
+                guard let windowState = comparison ?? targetState(coordinator),
+                    let window = services.windows[windowState.id]
                 else { return }
                 // The snapshot renders offscreen, so lift the visibility gate for this window.
                 windowState.isVisible = true
@@ -200,6 +192,7 @@ enum DebugLaunchOptions {
                     try? await Task.sleep(for: .seconds(2))
                     for _ in 0..<nextCount { windowState.nextChange() }
                 }
+                await applyCompareWindow(env: env, services: services, owner: windowState)
                 await finishSequence(
                     env: env, afterNext: nextCount > 0, windowState: windowState, window: window,
                     services: services)
@@ -210,7 +203,7 @@ enum DebugLaunchOptions {
     /// The window the debug hooks act on: the key one, or the first populated one when
     /// the app is not active.
     @MainActor
-    private static func targetState(_ coordinator: WindowCoordinator) -> WindowState? {
+    static func targetState(_ coordinator: WindowCoordinator) -> WindowState? {
         let key = coordinator.keyWindowState
         return key?.isEmpty == false ? key : coordinator.windows.values.first { !$0.isEmpty }
     }
@@ -223,6 +216,29 @@ enum DebugLaunchOptions {
     private static func fail(_ step: String, _ reason: String) {
         print("### \(step) FAILED: \(reason)")
         fflush(stdout)
+    }
+
+    /// Runs `DIFFVIEWER_TAB_STEPS` in order, dumping the windows after each, and stops at
+    /// the first step that cannot run. Activation must come from outside (`osascript -e
+    /// 'tell application "DiffViewer" to activate'`); a script-launched process cannot make
+    /// itself active on current macOS.
+    @MainActor
+    private static func runTabSteps(_ steps: [String], services: AppServices) async {
+        for step in steps {
+            let needsKeyWindow = step != "quit" && !step.hasPrefix("sleep:")
+            let hasKeyWindow = needsKeyWindow ? await eventually({ NSApp.keyWindow != nil }) : true
+            guard hasKeyWindow else {
+                fail(step, "no key window; activate the app first")
+                return
+            }
+            if let failure = await runTabStep(step, services: services) {
+                fail(step, failure)
+                return
+            }
+            try? await Task.sleep(for: .seconds(2))
+            print("### \(step)")
+            dumpWindows(services)
+        }
     }
 
     /// Runs one step and returns nil, or a reason it could not run.
@@ -417,7 +433,7 @@ enum DebugLaunchOptions {
     }
 
     @MainActor
-    private static func eventually(
+    static func eventually(
         attempts: Int = 50, every interval: Duration = .milliseconds(100), _ condition: @MainActor () -> Bool
     ) async -> Bool {
         for _ in 0..<attempts {
@@ -527,7 +543,10 @@ extension DebugLaunchOptions {
         }
         if let path = env["DIFFVIEWER_SNAPSHOT"], !path.isEmpty {
             try? await Task.sleep(for: .seconds(afterNext || !folds.isEmpty || scrolled ? 1 : 3))
-            snapshot(pickerWindow(of: window) ?? window.attachedSheet ?? window, to: path)
+            let target =
+                services.coordinator.compareWindow(for: windowState.id) ?? pickerWindow(of: window)
+                ?? window.attachedSheet ?? window
+            snapshot(target, to: path)
         }
     }
 

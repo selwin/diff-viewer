@@ -77,12 +77,19 @@ struct ChangesetDetailView: View {
             // The assembler publishes nothing for an empty list, so this is also what a
             // repository with no changes at all shows.
             ContentUnavailableView(
-                "No changes", systemImage: "checkmark.circle", description: Text(emptyDescription))
+                emptyTitle, systemImage: "checkmark.circle", description: Text(emptyDescription))
         }
     }
 
+    private var emptyTitle: String {
+        if case .range = windowState.scope { "No differences" } else { "No changes" }
+    }
+
     private var emptyDescription: String {
-        windowState.scope == .workingTree
-            ? "The working tree matches the last commit." : "This commit changed no files."
+        switch windowState.scope {
+        case .workingTree: "The working tree matches the last commit."
+        case .commit: "This commit changed no files."
+        case let .range(range): "\(range.targetName) has no changes since its merge base with \(range.baseName)."
+        }
     }
 }

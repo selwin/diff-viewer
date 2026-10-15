@@ -39,10 +39,10 @@ enum DiffEngine {
         case .staged:
             old = file.kind == .added ? nil : try await client.headContents(of: file.originalPath ?? file.path)
             new = file.kind == .deleted ? nil : try await client.indexContents(of: file.path)
-        case .commit:
-            // Which sides exist comes from the change kind and whether the commit has a
-            // parent — never inferred from a read that came back empty.
-            let sides = file.commitSides
+        case .commit, .range:
+            // Which sides exist comes from the change kind and whether there is a base
+            // revision — never inferred from a read that came back empty.
+            let sides = file.revisionSides
             if let side = sides?.old {
                 old = try await client.contents(of: side.path, at: side.revision)
             } else {
@@ -110,11 +110,12 @@ enum DiffEngine {
 
     /// The key a file's result is reused under, or nil when status cannot vouch for its
     /// content: an unmerged file, or a working-tree file without a known fingerprint. A
-    /// commit's content never changes, so its `id`, which holds the SHA, is enough.
+    /// commit's or range's content never changes, so its `id`, which holds the SHAs, is
+    /// enough.
     private static func inputKey(
         for file: ChangedFile, repository: RepositoryRoot, hideWhitespace: Bool
     ) -> DiffResultCache.InputKey? {
-        if !file.area.isCommit {
+        if !file.area.hasFixedRevisions {
             guard let fingerprint = file.fingerprint, fingerprint.isKnown else { return nil }
         }
         return DiffResultCache.InputKey(
@@ -142,8 +143,8 @@ enum DiffEngine {
     private static func verifiedSources(
         for file: ChangedFile, client: any RepoClient
     ) async throws -> (sources: Sources, matchesFingerprint: Bool) {
-        guard let fingerprint = file.fingerprint, !file.area.isCommit, file.kind != .unmerged else {
-            return (try await sources(for: file, client: client), file.area.isCommit)
+        guard let fingerprint = file.fingerprint, !file.area.hasFixedRevisions, file.kind != .unmerged else {
+            return (try await sources(for: file, client: client), file.area.hasFixedRevisions)
         }
         let old: Side
         let new: Side

@@ -81,7 +81,7 @@ extension BranchPickerContainerView {
         onNewBranch(newBranchProposal)
     }
 
-    /// ⌘R fetches, ⌘N opens New Branch, ⌘1 and ⌘2 pick a tab, ⌘C copies the highlighted
+    /// ⌘R fetches, ⌘N opens New Branch, ⇧⌘D opens Compare, ⌘1 and ⌘2 pick a tab, ⌘C copies the highlighted
     /// branch's name, and ⌘P and ⇧⌘P push and pull. They are taken whichever view has
     /// focus, so the main menu only gets them once the popover closes.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -90,6 +90,10 @@ extension BranchPickerContainerView {
         if hasSyncShortcutModifiers, event.charactersIgnoringModifiers?.lowercased() == "p" {
             pressSyncShortcut(modifiers.contains(.shift) ? .pull : .push)
             // Consume unavailable shortcuts too, so the main menu cannot act on another branch.
+            return true
+        }
+        if modifiers == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "d" {
+            onCompare()
             return true
         }
         guard modifiers == .command else { return super.performKeyEquivalent(with: event) }

@@ -1,17 +1,17 @@
 import AppKit
 
-/// The branch picker's New Branch… button: a Liquid Glass capsule floating over the
-/// list's last rows, with a plus and the title centred in the accent colour and a faint
-/// ⌘N at its trailing end. Only the capsule takes the pointer; the margin around it passes
-/// clicks on to the list. Outside the table, so the list's own selection never reaches
-/// it; it is styled from the picker's highlight state.
-final class BranchPickerNewBranchRow: NSView {
+/// One of the branch picker's footer buttons (New Branch…, Compare…): a Liquid Glass
+/// capsule floating over the list's last rows, with an icon and the title centred in the
+/// accent colour and a faint shortcut at its trailing end. Only the capsule takes the
+/// pointer; the margin around it passes clicks on to the list. Outside the table, so the
+/// list's own selection never reaches it; it is styled from the picker's highlight state.
+final class BranchPickerFooterButton: NSView {
     /// Room around the capsule so the clip doesn't cut the glass's shadow.
     static let glassMargin: CGFloat = 8
     private static let iconGap: CGFloat = 6
-    /// Between the capsule's ends and its content: the hint sits here, and the title
-    /// truncates before reaching the hint's mirror on the leading side.
-    private static let padding: CGFloat = 16
+    /// Between the capsule's ends and its content. The footer shares the picker's width
+    /// between two capsules, so this stays small.
+    private static let padding: CGFloat = 12
     private static let hintGap: CGFloat = 8
     /// The size and weight of the sync buttons' shortcut glyphs.
     private static let hintFont = NSFont.systemFont(ofSize: 11, weight: .medium)
@@ -21,6 +21,8 @@ final class BranchPickerNewBranchRow: NSView {
     var onHighlightRequested: () -> Void = {}
     /// A scroll over the capsule, which belongs to the list beneath it.
     var onScroll: (NSEvent) -> Void = { _ in }
+    /// The pointer left the capsule's area, for a row that only tints on hover.
+    var onPointerExit: () -> Void = {}
 
     /// Set by the container from the picker state; tints the glass.
     var isHighlighted = false {
@@ -36,8 +38,8 @@ final class BranchPickerNewBranchRow: NSView {
         }
     }
 
-    /// The name the search proposes, which the title offers to create; nil for plain New
-    /// Branch….
+    /// The name the search proposes, which the title offers to create; nil for the plain
+    /// title. Only the New Branch… row uses it.
     var proposal: String? {
         didSet {
             guard proposal != oldValue else { return }
@@ -53,13 +55,18 @@ final class BranchPickerNewBranchRow: NSView {
         didSet { if isPressed != oldValue { applyTint() } }
     }
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    private let plainTitle: String
+
+    /// `hintText` is the shortcut glyphs; `help` names what the button does, for the
+    /// tooltip and VoiceOver.
+    init(symbol: String, title plainTitle: String, hintText: String, help: String) {
+        self.plainTitle = plainTitle
+        super.init(frame: .zero)
         clipsToBounds = true
-        icon.image = NSImage(systemSymbolName: "plus", accessibilityDescription: nil)?
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
         icon.imageScaling = .scaleNone
-        hint.stringValue = "⌘N"
+        hint.stringValue = hintText
         // The help already names the shortcut.
         hint.setAccessibilityElement(false)
         let content = NSView()
@@ -71,11 +78,11 @@ final class BranchPickerNewBranchRow: NSView {
             NSTrackingArea(
                 rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self,
                 userInfo: nil))
-        toolTip = "Create a branch from HEAD (⌘N)"
+        toolTip = "\(help) (\(hintText))"
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         applyTitle()
-        setAccessibilityHelp("Create a branch from HEAD and switch to it (⌘N)")
+        setAccessibilityHelp("\(help) (\(hintText))")
         applyColors()
     }
 
@@ -107,6 +114,7 @@ final class BranchPickerNewBranchRow: NSView {
     override func mouseEntered(with event: NSEvent) { requestHighlight(for: event) }
     /// A real pointer move takes the highlight back from the keyboard, as in the list.
     override func mouseMoved(with event: NSEvent) { requestHighlight(for: event) }
+    override func mouseExited(with event: NSEvent) { onPointerExit() }
 
     private func requestHighlight(for event: NSEvent) {
         if capsuleRect.contains(convert(event.locationInWindow, from: nil)) { onHighlightRequested() }
@@ -144,8 +152,8 @@ final class BranchPickerNewBranchRow: NSView {
 
     private func applyTitle() {
         guard let proposal else {
-            title.stringValue = "New Branch…"
-            setAccessibilityLabel("New Branch")
+            title.stringValue = plainTitle
+            setAccessibilityLabel(plainTitle.trimmingCharacters(in: CharacterSet(charactersIn: "…")))
             needsLayout = true
             return
         }
@@ -181,8 +189,9 @@ final class BranchPickerNewBranchRow: NSView {
         applyTint()
     }
 
-    /// The plus and the title, centred together on the capsule clear of the hint on either
-    /// side; a long proposal truncates.
+    /// The icon and the title, centred together in the room the hint leaves. The capsules are
+    /// narrow, so a title that would truncate beside the hint takes the room instead and the
+    /// hint is hidden; the tooltip still names the shortcut.
     override func layout() {
         super.layout()
         let rect = capsuleRect
@@ -191,15 +200,19 @@ final class BranchPickerNewBranchRow: NSView {
         // The content view fills the glass; its labels are placed in the glass's bounds.
         let size = rect.size
         let hintSize = PickerViewGeometry.naturalSize(of: hint)
+        let iconSize = icon.image?.size ?? .zero
+        let titleSize = PickerViewGeometry.naturalSize(of: title)
+        let naturalWidth = iconSize.width + Self.iconGap + titleSize.width
+        let roomBesideHint = size.width - Self.padding * 2 - hintSize.width - Self.hintGap
+        let showsHint = naturalWidth <= roomBesideHint
+        hint.isHidden = !showsHint
         hint.frame = NSRect(
             x: size.width - Self.padding - hintSize.width, y: ((size.height - hintSize.height) / 2).rounded(),
             width: hintSize.width, height: hintSize.height)
-        let iconSize = icon.image?.size ?? .zero
-        let titleSize = PickerViewGeometry.naturalSize(of: title)
-        let sideRoom = Self.padding + hintSize.width + Self.hintGap
-        let maxTitleWidth = max(size.width - sideRoom * 2 - iconSize.width - Self.iconGap, 0)
-        let titleWidth = min(titleSize.width, maxTitleWidth)
-        let x = (size.width / 2 - (iconSize.width + Self.iconGap + titleWidth) / 2).rounded()
+        let room = showsHint ? roomBesideHint : size.width - Self.padding * 2
+        let titleWidth = min(titleSize.width, max(room - iconSize.width - Self.iconGap, 0))
+        let contentWidth = iconSize.width + Self.iconGap + titleWidth
+        let x = (Self.padding + (room - contentWidth) / 2).rounded()
         icon.frame = NSRect(
             x: x, y: ((size.height - iconSize.height) / 2).rounded(), width: iconSize.width, height: iconSize.height)
         title.frame = NSRect(

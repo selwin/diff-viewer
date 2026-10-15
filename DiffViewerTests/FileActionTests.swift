@@ -6,6 +6,8 @@ import Testing
 struct FileActionTests {
     private static let commit = ChangedFile.Area.commit(
         CommitRef(sha: objectID("c"), shortSha: "c000000", firstParentSHA: objectID("p")))
+    private static let range = ChangedFile.Area.range(
+        CommitRange(baseName: "main", targetName: "feature", mergeBaseSHA: objectID("b"), targetSHA: objectID("t")))
 
     // MARK: The menu
 
@@ -44,13 +46,15 @@ struct FileActionTests {
         }
     }
 
-    /// History is read-only: nothing offered on a commit row may touch the repository.
+    /// History is read-only: nothing offered on a commit or range row may touch the repository.
     @Test func commitScopeOffersNoWrites() {
-        for kind in allKinds {
-            let file = changedFile("a.txt", area: Self.commit, kind: kind)
-            let menu = FileAction.menu(for: file, existsOnDisk: true)
-            #expect(menu.allSatisfy { !$0.isRepositoryWrite }, "\(kind)")
-            #expect(menu.allSatisfy { $0.gitAction == nil }, "\(kind)")
+        for area in [Self.commit, Self.range] {
+            for kind in allKinds {
+                let file = changedFile("a.txt", area: area, kind: kind)
+                let menu = FileAction.menu(for: file, existsOnDisk: true)
+                #expect(menu.allSatisfy { !$0.isRepositoryWrite }, "\(area) \(kind)")
+                #expect(menu.allSatisfy { $0.gitAction == nil }, "\(area) \(kind)")
+            }
         }
     }
 

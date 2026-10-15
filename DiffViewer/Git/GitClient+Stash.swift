@@ -34,9 +34,11 @@ extension GitClient {
 
     /// Lists first-parent changes and any files saved in a stash's third parent.
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] {
-        guard let untracked = commit.untrackedCommit else { return try await firstParentChanges(in: commit) }
-        async let tracked = firstParentChanges(in: commit)
-        async let added = firstParentChanges(in: untracked)
+        guard let untracked = commit.untrackedCommit else {
+            return try await treeChanges(commit.revisions, area: .commit(commit))
+        }
+        async let tracked = treeChanges(commit.revisions, area: .commit(commit))
+        async let added = treeChanges(untracked.revisions, area: .commit(untracked))
         return try await tracked + added
     }
 

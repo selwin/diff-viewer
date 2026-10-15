@@ -80,6 +80,16 @@ final class PresentationLog {
     /// The tab-strip order the app reports; nil leaves the supplied order.
     var tabOrder: [WindowID]?
     var tabOrderRequests = 0
+
+    struct Tab: Equatable {
+        let window: WindowID
+        let origin: WindowID
+    }
+
+    var createdComparisons: [ComparisonToken] = []
+    var tabbed: [Tab] = []
+    /// Windows whose `NSWindow` has not attached, so they cannot be tabbed yet.
+    var unattached: Set<WindowID> = []
 }
 
 @MainActor
@@ -145,6 +155,12 @@ final class CoordinatorHarness {
                     guard let order = log.tabOrder else { return ids }
                     let eligibleIDs = Set(ids)
                     return order.filter { eligibleIDs.contains($0) }
+                },
+                createComparisonWindow: { log.createdComparisons.append($0) },
+                tabWindow: { window, origin in
+                    guard !log.unattached.contains(window), !log.unattached.contains(origin) else { return false }
+                    log.tabbed.append(PresentationLog.Tab(window: window, origin: origin))
+                    return true
                 }
             )
         )

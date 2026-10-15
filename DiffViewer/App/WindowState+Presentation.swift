@@ -66,12 +66,13 @@ extension WindowState {
         return nil
     }
 
-    /// The scope picker's face: the working tree, or the selected commit's subject. Never
-    /// the hash; a commit scope always holds its summary.
+    /// The scope picker's face: the working tree, the selected commit's subject, or the
+    /// range's two names. Never the hash; a commit scope always holds its summary.
     var scopeDisplayTitle: String {
         switch scope {
         case .workingTree: "Working Tree"
         case .commit: selectedCommit?.subject ?? ""
+        case let .range(range): range.title
         }
     }
 

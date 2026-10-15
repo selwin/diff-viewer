@@ -211,8 +211,8 @@ struct LineStatsJoinerTests {
         #expect(LineStatsJoiner.sizeSources(for: deleted) == (.spec(objectID("index-a.png")), .absent))
     }
 
-    /// A commit's sides follow the change kind and the parent; the old side reads the
-    /// original path; a path `cat-file` cannot take on one line is never sized.
+    /// A commit's or range's sides follow the change kind and the base revision; the old
+    /// side reads the original path; a path `cat-file` cannot take on one line is never sized.
     @Test(arguments: [
         (commitFile("a.png", in: ref), Source.spec("\(objectID("p")):a.png"), Source.spec("\(objectID("c")):a.png")),
         (commitFile("a.png", kind: .added, in: ref), .absent, .spec("\(objectID("c")):a.png")),
@@ -223,8 +223,13 @@ struct LineStatsJoinerTests {
             .spec("\(objectID("p")):old.png"), .spec("\(objectID("c")):new.png")
         ),
         (commitFile("bad\nname.png", in: ref), .unknown, .unknown),
+        (rangeFile("a.png"), .spec("\(objectID("m")):a.png"), .spec("\(objectID("t")):a.png")),
+        (
+            rangeFile("new.png", originalPath: "old.png", kind: .renamed),
+            .spec("\(objectID("m")):old.png"), .spec("\(objectID("t")):new.png")
+        ),
     ])
-    func sizeSourcesForACommit(file: ChangedFile, old: Source, new: Source) {
+    func sizeSourcesForFixedRevisions(file: ChangedFile, old: Source, new: Source) {
         #expect(LineStatsJoiner.sizeSources(for: file) == (old, new))
     }
 
@@ -417,4 +422,12 @@ private func commitFile(
     _ path: String, originalPath: String? = nil, kind: ChangedFile.Kind = .modified, in ref: CommitRef
 ) -> ChangedFile {
     ChangedFile(path: path, originalPath: originalPath, kind: kind, area: .commit(ref), fingerprint: nil)
+}
+
+private func rangeFile(
+    _ path: String, originalPath: String? = nil, kind: ChangedFile.Kind = .modified
+) -> ChangedFile {
+    let range = CommitRange(
+        baseName: "main", targetName: "feature", mergeBaseSHA: objectID("m"), targetSHA: objectID("t"))
+    return ChangedFile(path: path, originalPath: originalPath, kind: kind, area: .range(range), fingerprint: nil)
 }

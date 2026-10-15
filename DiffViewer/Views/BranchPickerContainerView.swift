@@ -13,6 +13,8 @@ final class BranchPickerContainerView: NSView {
     private static let listTopGap: CGFloat = 8
     /// Above and below the footer's capsule.
     private static let footerTopGap: CGFloat = 4
+    /// Between the New Branch… and Compare… capsules.
+    private static let footerGap: CGFloat = 8
     private static let footerBottomGap: CGFloat = 14
     /// The list runs under the footer; this much of its foot is covered.
     private static let footerInset = footerTopGap + PickerStyle.footerHeight + footerBottomGap
@@ -32,6 +34,8 @@ final class BranchPickerContainerView: NSView {
     var onFetch: () -> Void = {}
     /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
     var onNewBranch: (String?) -> Void = { _ in }
+    /// The Compare… row and ⇧⌘D.
+    var onCompare: () -> Void = {}
     /// The clock the header's fetch time is read against.
     var now: @MainActor () -> Date = Date.init
 
@@ -46,7 +50,13 @@ final class BranchPickerContainerView: NSView {
     let scrollView = NSScrollView()
     let tableView = PickerTableView()
     let emptyState = PickerEmptyStateView(frame: .zero)
-    let newBranchRow = BranchPickerNewBranchRow(frame: .zero)
+    let newBranchRow = BranchPickerFooterButton(
+        symbol: "plus", title: "New Branch…", hintText: "⌘N", help: "Create a branch from HEAD and switch to it")
+    /// Beside New Branch…; it only tints under the pointer, since the picker's highlight
+    /// is the list's.
+    let compareRow = BranchPickerFooterButton(
+        symbol: "arrow.left.arrow.right", title: "Compare…", hintText: "⇧⌘D",
+        help: "Compare two branches or tags in a new tab")
 
     /// Set while the container itself moves the table's selection, which the delegate
     /// must not read back as the reader's choice.
@@ -80,6 +90,7 @@ final class BranchPickerContainerView: NSView {
             addSubview(view)
         }
         addSubview(newBranchRow)
+        addSubview(compareRow)
         configureHeader()
         observeDisplayOptions()
         newBranchRow.onActivate = { [weak self] in self?.createBranch() }
@@ -88,6 +99,10 @@ final class BranchPickerContainerView: NSView {
             guard let self, newBranchRow.isEnabled else { return }
             if self.state.highlightNewBranch() { syncSelection() }
         }
+        compareRow.onActivate = { [weak self] in self?.onCompare() }
+        compareRow.onScroll = { [weak self] event in self?.scrollView.scrollWheel(with: event) }
+        compareRow.onHighlightRequested = { [weak self] in self?.compareRow.isHighlighted = true }
+        compareRow.onPointerExit = { [weak self] in self?.compareRow.isHighlighted = false }
         fetchTimeTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.renderFetchTime() }
         }
@@ -152,8 +167,9 @@ final class BranchPickerContainerView: NSView {
         // Hover is the highlight, as in a menu. Rows moving under a still pointer (a
         // keyboard move that scrolled) must not take it back from the keyboard.
         tableView.onHoverChange = { [weak self] _, current, pointerMoved in
-            // The rows under the New Branch… capsule are hidden; it takes the hover there.
-            guard let self, pointerMoved, let current, !newBranchRow.isUnderPointer else { return }
+            // The rows under the footer capsules are hidden; they take the hover there.
+            guard let self, pointerMoved, let current, !newBranchRow.isUnderPointer, !compareRow.isUnderPointer
+            else { return }
             // Also sent for a move within the hovered row; only an actual change redraws.
             if state.highlight(tableRow: current) { syncSelection() }
         }
@@ -386,10 +402,12 @@ final class BranchPickerContainerView: NSView {
         emptyState.frame = NSRect(
             x: 0, y: tableTop, width: width, height: max(footerTop - Self.footerTopGap - tableTop, 0))
         // The footer's frame carries room for its glass's shadow.
-        let margin = BranchPickerNewBranchRow.glassMargin
-        newBranchRow.frame = NSRect(
-            x: inset - margin, y: footerTop - margin, width: width - (inset - margin) * 2,
-            height: PickerStyle.footerHeight + margin * 2)
+        let margin = BranchPickerFooterButton.glassMargin
+        let capsuleWidth = ((width - inset * 2 - Self.footerGap) / 2).rounded(.down)
+        let rowSize = NSSize(width: capsuleWidth + margin * 2, height: PickerStyle.footerHeight + margin * 2)
+        newBranchRow.frame = NSRect(origin: NSPoint(x: inset - margin, y: footerTop - margin), size: rowSize)
+        compareRow.frame = NSRect(
+            origin: NSPoint(x: width - inset - capsuleWidth - margin, y: footerTop - margin), size: rowSize)
         tableView.sizeLastColumnToFit()
         // The first layout is when the visible rows are first known.
         requestVisibleMergePreviews()

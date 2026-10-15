@@ -86,6 +86,22 @@ final class Harness {
         return repo
     }
 
+    /// Adopts a comparison of `range` whose read returns `files`, and waits for the first
+    /// refresh and its diff load. Not for a publish: a failed read publishes nothing.
+    @discardableResult
+    func adoptComparison(
+        _ state: WindowState, range: CommitRange, files: [ChangedFile],
+        configure: (StubRepoClient) async -> Void = { _ in }
+    ) async -> (root: RepositoryRoot, client: StubRepoClient) {
+        let repo = repo("A", files: [])
+        await repo.client.set(rangeFiles: files)
+        await configure(repo.client)
+        #expect(state.adopt(root: repo.root, client: repo.client, comparing: range))
+        #expect(await eventually { await !state.isLoading })
+        #expect(await eventually { await !state.diffLoader.hasActiveWork })
+        return repo
+    }
+
     /// Adopts a repository whose HEAD is the first of `commits`, which changed
     /// `commitFiles`, and waits for the file list to publish. The caller waits for the
     /// history itself, as each needs something different from it.

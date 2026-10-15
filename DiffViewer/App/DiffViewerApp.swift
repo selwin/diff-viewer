@@ -73,6 +73,25 @@ struct DiffViewerApp: App {
             RepositoryCommands(services: services)
             ChangesCommands(services: services)
         }
+        // Only the coordinator opens these: never at launch, never restored, and never
+        // for a folder opened from Finder.
+        WindowGroup(id: AppServices.comparisonSceneID, for: ComparisonToken.self) { $token in
+            ComparisonTabWindow(token: token, services: services)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: [])
+        // One per repository window, opened from its menu or branch picker: never at launch
+        // and never restored.
+        WindowGroup(id: AppServices.compareSceneID, for: CompareWindowTarget.self) { $target in
+            CompareWindowRoot(target: target, services: services)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .handlesExternalEvents(matching: [])
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 820, height: 540)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -121,6 +140,41 @@ struct RepositoryWindow: View {
                 #if DEBUG
                     DebugBenchmark.start(services: services)
                 #endif
+            }
+    }
+}
+
+/// The root view of a comparison tab: owns that tab's state and registers it for the
+/// request its token names. Unlike `RepositoryWindow` it installs no app hooks and shows
+/// no working-tree churn on its tab.
+struct ComparisonTabWindow: View {
+    let token: ComparisonToken?
+    let services: AppServices
+    @Environment(\.dismissWindow) private var dismissWindow
+    @State private var state: WindowState
+
+    init(token: ComparisonToken?, services: AppServices) {
+        self.token = token
+        self.services = services
+        _state = State(initialValue: services.makeWindowState())
+    }
+
+    var body: some View {
+        ContentView()
+            .environment(services)
+            .environment(services.preferences)
+            .environment(state)
+            .background(WindowAccessor(windowID: state.id, sceneRoot: nil, services: services, churn: nil))
+            .focusedSceneValue(\.windowState, state)
+            // As in `RepositoryWindow`: an existing window takes Finder's event, so SwiftUI
+            // presents no extra window for it.
+            .handlesExternalEvents(preferring: [], allowing: ["*"])
+            .task {
+                // A tab with no request, or one the coordinator refused, has nothing to show.
+                guard let token, services.coordinator.registerComparison(state, token: token) else {
+                    dismissWindow()
+                    return
+                }
             }
     }
 }
@@ -187,6 +241,13 @@ struct RepositoryCommands: Commands {
             Button("Choose Branch…") { windowState?.isBranchPickerPresented = true }
                 .keyboardShortcut("b")
                 .disabled(!(windowState?.canOpenBranchPicker ?? false))
+            // No Compare window publishes a `windowState`, so this disables itself while one is key.
+            Button("Compare…") {
+                guard let id = windowState?.id else { return }
+                openWindow(id: AppServices.compareSceneID, value: CompareWindowTarget(owner: id))
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .disabled(!(windowState?.canOpenCompareWindow ?? false))
             syncItems
         }
         // Replaced rather than extended: this group holds the default Find submenu, which

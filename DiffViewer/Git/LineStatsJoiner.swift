@@ -133,8 +133,8 @@ enum LineStatsJoiner {
 
     /// Where each side's byte count of a binary file comes from. Working-tree areas read
     /// the status fingerprint: `.absent` is the zero hash or a missing file, exactly "this
-    /// side does not exist". A commit sizes `<parent>:<originalPath ?? path>` and
-    /// `<sha>:<path>`, skipping the side an added, deleted, or root commit's file lacks.
+    /// side does not exist". A commit or range sizes `<base>:<originalPath ?? path>` and
+    /// `<target>:<path>`, skipping the side an added, deleted, or root commit's file lacks.
     static func sizeSources(for file: ChangedFile) -> (old: BinarySizeSource, new: BinarySizeSource) {
         switch file.area {
         case .staged:
@@ -143,8 +143,8 @@ enum LineStatsJoiner {
         case .unstaged:
             guard let fingerprint = file.fingerprint else { return (.unknown, .unknown) }
             return (source(of: fingerprint.old), source(of: fingerprint.worktree))
-        case .commit:
-            let sides = file.commitSides
+        case .commit, .range:
+            let sides = file.revisionSides
             return (
                 sides?.old.map { spec($0.revision, $0.path) } ?? .absent,
                 sides?.new.map { spec($0.revision, $0.path) } ?? .absent

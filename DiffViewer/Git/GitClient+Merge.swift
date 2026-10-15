@@ -47,20 +47,11 @@ extension GitClient {
         try Self.rejectOption(sourceTipSha, kind: "object id", command: "git diff")
         let result = try await ProcessRunner.check(
             Self.executable,
-            arguments: ["diff", "--numstat", "-z", "--find-renames", "\(headSha)...\(sourceTipSha)"],
+            arguments: ["diff", "--shortstat", "--find-renames", "\(headSha)...\(sourceTipSha)"],
             currentDirectory: repoRoot,
             environment: callEnvironment
         )
-        var added = 0
-        var deleted = 0
-        let entries = GitNumstatParser.parse(result.stdout)
-        for entry in entries {
-            if case let .counted(entryAdded, entryDeleted) = entry.stats {
-                added += entryAdded
-                deleted += entryDeleted
-            }
-        }
-        return IncomingChangeSummary(fileCount: entries.count, addedLineCount: added, deletedLineCount: deleted)
+        return try ShortstatParser.parse(result.stdoutString)
     }
 
     /// Merges exactly `sourceTipSha`, the commit the reader confirmed, so a ref that a

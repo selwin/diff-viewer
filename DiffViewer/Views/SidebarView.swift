@@ -98,39 +98,47 @@ struct SidebarView: View {
         .alignmentGuide(.stagingCapsule) { showsTray ? $0[VerticalAlignment.center] : $0[.bottom] + 14 }
     }
 
+    private var emptyListText: String {
+        switch windowState.scope {
+        case .workingTree: "No changes"
+        case .commit: "No changes in this commit"
+        case .range: "No differences"
+        }
+    }
+
     private var changesList: some View {
         @Bindable var windowState = windowState
         let unstagedFiles = windowState.unstagedFiles
-        let commitFiles = windowState.commitFiles
+        let revisionFiles = windowState.revisionFiles
         let unstagedGroups = DirectoryGrouping.groups(fromSortedFiles: unstagedFiles)
-        let commitGroups = DirectoryGrouping.groups(fromSortedFiles: commitFiles)
+        let revisionGroups = DirectoryGrouping.groups(fromSortedFiles: revisionFiles)
         // Both lists bind the one selection, and the model's setter keeps it to one list:
         // a click, ⌘-click or ⇧-click in either clears the other's rows, so a selection
         // always has one staging action. The arrow keys stay within one list. The setter
         // also drops All changes from a multi-selection, so ⌘A and a ⇧-click range from
         // the top select only files.
         return List(selection: $windowState.selection) {
+            // Above any rows a failed re-read left, which are from before it: a comparison
+            // has no watcher to read again, so Retry is the only way back.
+            if windowState.listReadFailed, !windowState.isLoadingScope {
+                HStack(spacing: 6) {
+                    Text("Couldn't load changes").foregroundStyle(.secondary)
+                    Button("Retry") { Task { await windowState.refresh() } }
+                        .buttonStyle(.link)
+                        .controlSize(.small)
+                }
+            }
             if !windowState.isEmpty, windowState.files.isEmpty {
-                // A scope change empties the list before the read that refills it
-                // returns; on a slow repository, saying "no changes" in that gap would
-                // report a result nobody has yet.
+                // Adoption and a scope change start from an empty list; on a slow
+                // repository, saying "no changes" before the read returns would report a
+                // result nobody has yet. Nor does a failed read mean "no changes".
                 if windowState.isLoadingScope {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Loading…").foregroundStyle(.secondary)
                     }
-                } else if windowState.listReadFailed {
-                    // The list was emptied for a re-read that then threw: "no changes"
-                    // would describe a working tree nobody has read.
-                    HStack(spacing: 6) {
-                        Text("Couldn't load changes").foregroundStyle(.secondary)
-                        Button("Retry") { Task { await windowState.refresh() } }
-                            .buttonStyle(.link)
-                            .controlSize(.small)
-                    }
-                } else {
-                    Text(windowState.scope == .workingTree ? "No changes" : "No changes in this commit")
-                        .foregroundStyle(.secondary)
+                } else if !windowState.listReadFailed {
+                    Text(emptyListText).foregroundStyle(.secondary)
                 }
             }
             // Outside every section, so the whole-list row sits above the headings
@@ -156,13 +164,13 @@ struct SidebarView: View {
                 }
                 ForEach(unstagedGroups) { DirectoryFileSection(group: $0) }
             }
-            // A commit has one list: its own staging is long settled.
-            if !commitGroups.isEmpty {
+            // A commit or range has one list: its own staging is long settled.
+            if !revisionGroups.isEmpty {
                 Section {
                 } header: {
-                    Text("Changed (\(commitFiles.count))")
+                    Text("Changed (\(revisionFiles.count))")
                 }
-                ForEach(commitGroups) { DirectoryFileSection(group: $0) }
+                ForEach(revisionGroups) { DirectoryFileSection(group: $0) }
             }
         }
         .listStyle(.sidebar)

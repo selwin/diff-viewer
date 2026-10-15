@@ -1778,7 +1778,7 @@ import Testing
         for file in files where file.area != .commit(ref) {
             let parent = try #require(entry.untrackedParentSHA)
             #expect(file.area == .commit(try #require(ref.untrackedCommit)))
-            let sides = try #require(file.commitSides)
+            let sides = try #require(file.revisionSides)
             #expect(sides.old == nil)
             #expect(sides.new?.revision == parent && sides.new?.path == file.path)
             let saved = try await repo.client.contents(of: file.path, at: parent)

@@ -3,12 +3,13 @@ import SwiftUI
 
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
-/// popover; so does New Branch…, which opens its sheet, and a Merge row, which opens the
-/// Merge sheet. A click outside closes it too.
+/// popover; so does New Branch…, which opens its sheet, Compare…, which opens the Compare
+/// window, and a Merge row, which opens the Merge sheet. A click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
     /// For the window the delete confirmation hangs on.
     @Environment(AppServices.self) private var services
+    @Environment(\.openWindow) private var openWindow
     /// Read once per presentation so "Today" does not shift while the popover is up.
     @State private var grouping = CommitDayGrouping()
 
@@ -44,6 +45,10 @@ struct BranchPickerPopover: View {
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
             onNewBranch: { windowState.openNewBranchSheet(initialName: $0) },
+            onCompare: {
+                windowState.isBranchPickerPresented = false
+                openWindow(id: AppServices.compareSceneID, value: CompareWindowTarget(owner: windowState.id))
+            },
             now: windowState.now
         )
         // The height follows the list, through the representable's `sizeThatFits`.
@@ -67,6 +72,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
     let onNewBranch: (String?) -> Void
+    let onCompare: () -> Void
     let now: @MainActor () -> Date
 
     func makeNSView(context: Context) -> BranchPickerContainerView {
@@ -98,6 +104,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onDelete = onDelete
         view.onFetch = onFetch
         view.onNewBranch = onNewBranch
+        view.onCompare = onCompare
         view.now = now
     }
 }

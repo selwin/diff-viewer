@@ -29,6 +29,13 @@ enum StubCall {
     case stashes
     /// `stash`, `pop` and `drop`.
     case stashActions
+    /// `contents(of:at:)`, a commit or range side.
+    case revisionReads
+    /// `changedFiles(in:)` for a range.
+    case rangeFiles
+    case refs
+    case mergeBase
+    case churn
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -132,6 +139,18 @@ actor StubRepoClient: RepoClient {
     private var failsIncomingChanges = false
     /// Every `incomingChanges` call, in order.
     private(set) var incomingChangesCalls: [MergePreviewKey] = []
+    private var stubbedRefs: [GitRef] = []
+    private var failsRefs = false
+    /// Merge bases keyed by the two SHAs asked about, in the order asked; unlisted pairs have none.
+    private var mergeBases: [RevisionPair: String] = [:]
+    private var failsMergeBase = false
+    /// Every `mergeBase` and `churn` call's arguments, in order.
+    private(set) var mergeBaseRequests: [RevisionPair] = []
+    var mergeBaseCalls: Int { mergeBaseRequests.count }
+    private var stubbedChurn = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    private var failsChurn = false
+    private(set) var churnRequests: [RevisionPair] = []
+    var churnCalls: Int { churnRequests.count }
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     struct MergeCall: Equatable {
@@ -162,6 +181,8 @@ actor StubRepoClient: RepoClient {
     private var commitFiles: [String: [ChangedFile]] = [:]
     private var failsHistory = false
     private var failsCommitFiles = false
+    private var rangeFiles: [ChangedFile] = []
+    private var failsRangeFiles = false
     private(set) var headCalls = 0
     private(set) var historyCalls = 0
     private(set) var lastHistoryRevision: String?
@@ -317,6 +338,8 @@ actor StubRepoClient: RepoClient {
     func set(files list: [ChangedFile], forCommit sha: String) { commitFiles[sha] = list }
     func fail(history on: Bool) { failsHistory = on }
     func fail(commitFiles on: Bool) { failsCommitFiles = on }
+    func set(rangeFiles list: [ChangedFile]) { rangeFiles = list }
+    func fail(rangeFiles on: Bool) { failsRangeFiles = on }
 
     func headSha() async throws -> String? {
         headCalls += 1
@@ -449,6 +472,16 @@ actor StubRepoClient: RepoClient {
     /// Read once a held call is released, so a test can change it meanwhile.
     func fail(incomingChanges on: Bool) { failsIncomingChanges = on }
     func fail(merge on: Bool) { failsMerge = on }
+    func set(refs list: [GitRef]) { stubbedRefs = list }
+    func fail(refs on: Bool) { failsRefs = on }
+    func set(mergeBase sha: String?, for first: String, _ second: String) {
+        mergeBases[RevisionPair(baseSHA: first, targetSHA: second)] = sha
+    }
+    /// The merge base, churn and their failures are read once a held call is released,
+    /// so a test can change them meanwhile.
+    func fail(mergeBase on: Bool) { failsMergeBase = on }
+    func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
+    func fail(churn on: Bool) { failsChurn = on }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
 
@@ -523,6 +556,28 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git diff", status: 128, stderr: "no merge base")
         }
         return stubbedIncomingChanges
+    }
+
+    func refs() async throws -> [GitRef] {
+        if isHeld(.refs) { await park(.refs) }
+        if failsRefs { throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone") }
+        return stubbedRefs
+    }
+
+    func mergeBase(_ first: String, _ second: String) async throws -> String? {
+        mergeBaseRequests.append(RevisionPair(baseSHA: first, targetSHA: second))
+        if isHeld(.mergeBase) { await park(.mergeBase) }
+        if failsMergeBase {
+            throw ProcessError.failed(command: "git merge-base", status: 128, stderr: "bad object")
+        }
+        return mergeBases[RevisionPair(baseSHA: first, targetSHA: second)]
+    }
+
+    func churn(base: String, target: String) async throws -> IncomingChangeSummary {
+        churnRequests.append(RevisionPair(baseSHA: base, targetSHA: target))
+        if isHeld(.churn) { await park(.churn) }
+        if failsChurn { throw ProcessError.failed(command: "git diff", status: 128, stderr: "gone") }
+        return stubbedChurn
     }
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {
@@ -645,9 +700,16 @@ actor StubRepoClient: RepoClient {
         return (commitFiles[commit.sha] ?? []) + untracked
     }
 
+    func changedFiles(in range: CommitRange) async throws -> [ChangedFile] {
+        if isHeld(.rangeFiles) { await park(.rangeFiles) }
+        if failsRangeFiles { throw ProcessError.failed(command: "git diff-tree", status: 128, stderr: "bad object") }
+        return rangeFiles
+    }
+
     func contents(of path: String, at revision: String) async throws -> Data {
         beginRead(path)
         defer { endRead() }
+        if isHeld(.revisionReads) { await park(.revisionReads) }
         contentRevisions.append((path, revision))
         return Data("\(revision):\(path)".utf8)
     }

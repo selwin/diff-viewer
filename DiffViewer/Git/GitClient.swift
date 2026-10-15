@@ -215,66 +215,6 @@ struct GitClient: RepoClient {
         return try GitLogParser.parse(result.stdout)
     }
 
-    /// The files `commit` changed against its first parent, or the empty tree at a root
-    /// commit. `changedFiles(in:)` adds a stash's untracked files.
-    func firstParentChanges(in commit: CommitRef) async throws -> [ChangedFile] {
-        let result = try await ProcessRunner.check(
-            Self.executable,
-            arguments: ["diff-tree"] + Self.commitComparisonFlags(commit)
-                + ["-r", "-z", "--name-status", "--find-renames=100%"] + Self.commitOperands(commit),
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
-        return GitNameStatusParser.parse(result.stdout, area: .commit(commit))
-    }
-
-    /// Per-file added/deleted line counts for `area`: HEAD → index for `.staged`,
-    /// index → worktree for `.unstaged`, first parent → commit for `.commit`. Untracked
-    /// files never appear.
-    func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
-        // Flags first, operands last: a commit's operands end in `--`, after which git
-        // reads every argument as a pathspec, so a trailing `-w` would be silently taken
-        // as a file name and the command would report no changes at all.
-        // Rename detection matches `status()` and `changedFiles(in:)`, so a rename's
-        // counts are keyed by its new path, the path its row carries.
-        var flags: [String]
-        var operands: [String] = []
-        switch area {
-        case .unstaged:
-            flags = ["diff", "--numstat", "-z", "--find-renames=100%"]
-        case .staged:
-            flags = ["diff", "--cached", "--numstat", "-z", "--find-renames=100%"]
-        case let .commit(ref):
-            flags = ["diff-tree"] + Self.commitComparisonFlags(ref) + ["-r", "--numstat", "-z", "--find-renames=100%"]
-            operands = Self.commitOperands(ref)
-        }
-        if ignoreWhitespace { flags.append("-w") }
-        let arguments = flags + operands
-        let result = try await ProcessRunner.check(
-            Self.executable,
-            arguments: arguments,
-            currentDirectory: repoRoot,
-            environment: callEnvironment
-        )
-        return GitNumstatParser.parse(result.stdout)
-    }
-
-    /// Flags that select what a commit is compared against. A root commit needs `--root`
-    /// to be diffed against the empty tree, and `--no-commit-id` to suppress the header
-    /// line that form prints.
-    private static func commitComparisonFlags(_ commit: CommitRef) -> [String] {
-        commit.firstParentSHA == nil ? ["--no-commit-id", "--root"] : []
-    }
-
-    /// The revisions to compare. Naming both trees explicitly is required, not
-    /// stylistic: given only a commit, `diff-tree` prints nothing at all for a merge
-    /// unless `-m`/`-c`/`--cc` is passed, which would show every merge as an empty
-    /// changeset. The pair also states the first-parent promise literally.
-    private static func commitOperands(_ commit: CommitRef) -> [String] {
-        guard let parent = commit.firstParentSHA else { return [commit.sha] }
-        return [parent, commit.sha, "--"]
-    }
-
     /// Contents of `path` in the index, or nil if the path is not in the index.
     func indexContents(of path: String) async throws -> Data? {
         try await show(":\(path)")

@@ -35,7 +35,7 @@ struct WindowStateScopeTests {
         #expect(state.scope == .commit(commit.ref))
         #expect(state.selectedCommit == commit)
         #expect(state.unstagedFiles.isEmpty)
-        #expect(state.commitFiles.count == 1)
+        #expect(state.revisionFiles.count == 1)
 
         state.selectWorkingTree()
         #expect(await eventually { await state.files.map(\.path) == inPublishedFileOrder(workingFiles).map(\.path) })
