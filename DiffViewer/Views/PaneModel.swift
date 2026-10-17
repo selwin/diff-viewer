@@ -108,9 +108,14 @@ struct PaneModel {
     /// The number to show for `cell` in `row`: file-local inside a changeset section,
     /// the global line number when there are no sections.
     func lineNumber(of cell: DiffSide, inRow row: Int) -> Int {
-        guard let section = section(containingRow: row) else { return cell.lineNumber }
+        lineNumber(ofLine: cell.lineIndex, inRow: row)
+    }
+
+    /// The same number for a 0-based line index.
+    func lineNumber(ofLine lineIndex: Int, inRow row: Int) -> Int {
+        guard let section = section(containingRow: row) else { return lineIndex + 1 }
         let offset = side == .old ? section.oldLineOffset : section.newLineOffset
-        return cell.lineIndex - offset + 1
+        return lineIndex - offset + 1
     }
 
     /// Digits the gutter must fit. A changeset keeps a little slack (4) because later

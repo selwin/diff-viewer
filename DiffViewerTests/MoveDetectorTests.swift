@@ -179,6 +179,54 @@ struct MoveDetectorTests {
         #expect(found.map(\.newLineRange) == [5..<8])
     }
 
+    // MARK: Change block share
+
+    @Test func linesSurvivingARewriteAreNotAMove() {
+        let survivor = "val metadata = jsonObject.optJSONObject(\"metadata\")"
+        let old = [
+            "fun parse(json: String): Event {", "val jsonObject = JSONObject(json)", survivor,
+            "return Event(jsonObject.getString(\"id\"))", "}",
+        ]
+        let new = [
+            "fun parse(source: Reader): Event? {", "val root = JsonParser.parse(source) ?: return null",
+            "val id = root.string(\"identifier\")", survivor, "return Event(id, metadata)", "}",
+        ]
+        // The survivor changed place but is a fifth of its block on each side.
+        let rows = (0..<old.count).map(deletedRow) + (0..<new.count).map(addedRow)
+        #expect(detect(old, new, rows).isEmpty)
+    }
+
+    @Test func wholeFunctionMovedIntoNewCodeIsAMove() {
+        let newCode = (0..<5).map { "let unrelated\($0) = makeUnrelated(\($0))" }
+        // Source block is all the move; destination block is mostly new code.
+        let cut = detect(
+            block + ["anchor"], ["anchor"] + newCode + block,
+            (0..<3).map(deletedRow) + [DiffRow.equal(old: 3, new: 0)] + (1..<9).map(addedRow))
+        #expect(cut.map(\.oldLineRange) == [0..<3])
+        #expect(cut.map(\.newLineRange) == [6..<9])
+        // And the reverse: the source was mostly other code, now removed.
+        let pasted = detect(
+            ["anchor"] + newCode + block, block + ["anchor"],
+            (0..<3).map(addedRow) + [DiffRow.equal(old: 0, new: 3)] + (1..<9).map(deletedRow))
+        #expect(pasted.map(\.oldLineRange) == [6..<9])
+        #expect(pasted.map(\.newLineRange) == [0..<3])
+    }
+
+    @Test func blockOfTwoMovedFunctionsKeepsBoth() {
+        let discount = ["func discount(for total: Int) -> Int {", "    total > 10_000 ? total / 10 : 0", "}"]
+        let old = block + discount + ["let leftover = legacyComputation()", "anchor one", "anchor two"]
+        let firstCode = (0..<4).map { "let first\($0) = makeFirst(\($0))" }
+        let secondCode = (0..<4).map { "let second\($0) = makeSecond(\($0))" }
+        let new = ["anchor one"] + firstCode + block + ["anchor two"] + secondCode + discount
+        let rows =
+            (0..<7).map(deletedRow) + [DiffRow.equal(old: 7, new: 0)] + (1...7).map(addedRow)
+            + [DiffRow.equal(old: 8, new: 8)] + (9...15).map(addedRow)
+        // Each move is 3 of 7 lines on both sides; together they are 6 of the old block's 7.
+        let found = detect(old, new, rows)
+        #expect(found.map(\.oldLineRange) == [0..<3, 3..<6])
+        #expect(found.map(\.newLineRange) == [5..<8, 13..<16])
+    }
+
     // MARK: Common lines
 
     /// One removed line pasted `copies` times after an equal anchor.
