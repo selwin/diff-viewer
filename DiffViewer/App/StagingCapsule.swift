@@ -43,14 +43,41 @@ struct StagingCapsule: Equatable {
         action == .unstage ? "arrow.up" : "arrow.down"
     }
 
-    /// The title and the shortcut in words, since VoiceOver reads the glyphs poorly.
+    /// The line counts the capsule shows, so the visible text and the VoiceOver label agree.
+    enum Churn: Equatable {
+        /// Every target is known and some lines changed.
+        case counted(added: Int, deleted: Int)
+        /// Every target is known: zero counts, binaries only, or both.
+        case noLineChanges
+        /// Some target has no counts yet (or never will), so a total would understate.
+        case unknown
+    }
+
+    var churn: Churn {
+        guard files.allSatisfy({ $0.lineStats != nil }) else { return .unknown }
+        guard case let .counted(added, deleted)? = LineStats.total(of: files), added > 0 || deleted > 0 else {
+            return .noLineChanges
+        }
+        return .counted(added: added, deleted: deleted)
+    }
+
+    /// The title and churn in words; the shortcut is the hint.
     var accessibilityLabel: String {
-        let keys =
-            switch action {
-            case .stageAll, .stage: "Command S"
-            case .unstage: "Shift Command S"
-            }
-        return "\(title), \(keys)"
+        switch churn {
+        case let .counted(added, deleted):
+            let counts = LineStats.counted(added: added, deleted: deleted).spokenCounts ?? ""
+            return "\(title), \(counts)"
+        case .noLineChanges: return "\(title), no line changes"
+        case .unknown: return title
+        }
+    }
+
+    /// The shortcut in words, since VoiceOver reads the glyphs poorly.
+    var spokenShortcut: String {
+        switch action {
+        case .stageAll, .stage: "Command S"
+        case .unstage: "Shift Command S"
+        }
     }
 
     private var fileCount: String {

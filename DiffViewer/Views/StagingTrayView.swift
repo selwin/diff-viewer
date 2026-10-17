@@ -11,7 +11,7 @@ struct StagingTrayView: View {
     /// Whether the list scrolls, which the fade at its foot says.
     let overflows: Bool
     let isExpanded: Bool
-    /// Whether the staging capsule sits on the tray's top edge, reaching 15pt into it.
+    /// Whether the staging capsule sits on the tray's top edge, reaching into it.
     let hasCapsule: Bool
     var focusedList: FocusState<SidebarList?>.Binding
     @Environment(WindowState.self) private var windowState

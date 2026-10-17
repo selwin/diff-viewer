@@ -95,7 +95,9 @@ struct SidebarView: View {
                             : .opacity.combined(with: .offset(y: 12)).combined(with: .scale(scale: 0.94)))
             }
         }
-        .alignmentGuide(.stagingCapsule) { showsTray ? $0[VerticalAlignment.center] : $0[.bottom] + 14 }
+        .alignmentGuide(.stagingCapsule) {
+            showsTray ? $0[VerticalAlignment.center] : $0[.bottom] + StagingTrayLayout.floatingCapsuleInset
+        }
     }
 
     private var emptyListText: String {

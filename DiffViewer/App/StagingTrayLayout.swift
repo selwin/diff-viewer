@@ -14,13 +14,20 @@ enum StagingTrayLayout {
     static let bottomPadding: CGFloat = 10
     /// The staged list's default cap when Changes needs the remaining space.
     static let defaultListHeightCap: CGFloat = 190
-    /// Room below the Changes list's last row so it can scroll clear of the staging capsule.
-    static let changesCapsulePadding: CGFloat = 64
+    /// The staging capsule's height; the tray header's top padding is sized against it.
+    static let capsuleHeight: CGFloat = 48
+    /// The gap below the capsule when it floats, with no tray under it.
+    static let floatingCapsuleInset: CGFloat = 14
+    /// Room below the Changes list's last row so it can scroll clear of a floating capsule,
+    /// the binding case: on the tray the capsule reaches less far into Changes. The 20 is
+    /// the gap left between the last row and the capsule.
+    static let changesCapsulePadding: CGFloat = floatingCapsuleInset + capsuleHeight + 20
     /// The tray's header, commit button and padding.
     static let trayChrome: CGFloat = 80
     /// Extra top padding while the staging capsule sits on the tray's edge, so the capsule's
-    /// lower half does not cover the header.
-    static let capsuleClearance: CGFloat = 12
+    /// lower half does not cover the header. With the tray's 6pt top padding this leaves a
+    /// 3pt gap between the capsule's foot and the header.
+    static let capsuleClearance: CGFloat = capsuleHeight / 2 - 3
     static let changesFloor: CGFloat = 120
 
     /// The staged list's full height: a caption per directory and `rowHeight` per file,

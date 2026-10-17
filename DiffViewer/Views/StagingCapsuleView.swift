@@ -12,32 +12,15 @@ struct StagingCapsuleView: View {
         Button {
             FileActionRunner.runStagingAction(capsule.action, in: windowState, services: services)
         } label: {
-            // One baseline: symbols are drawn to sit on it, so the arrow, title and keycap
-            // line up optically, which centring their differently sized frames does not.
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                // Neutral like the title: blue is the Commit button's.
-                Image(systemName: capsule.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .contentTransition(.symbolEffect(.replace))
-                Text(capsule.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .contentTransition(.opacity)
-                Text(capsule.shortcut)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 1)
-                    .padding(.horizontal, 5)
-                    .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: 5))
-                    .contentTransition(.opacity)
-                    .accessibilityHidden(true)
+            // The keycap gives way first in a narrow sidebar; the counts stay exact, and the
+            // shortcut stays in the hint.
+            ViewThatFits(in: .horizontal) {
+                content(showsKeycap: true)
+                content(showsKeycap: false)
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 6)
-            .frame(height: 30)
+            .padding(.leading, 16)
+            .padding(.trailing, 10)
+            .frame(height: StagingTrayLayout.capsuleHeight)
             // A new title reshapes the capsule in place; appearing is the sidebar's transition.
             .animation(reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.2), value: capsule.title)
         }
@@ -47,6 +30,61 @@ struct StagingCapsuleView: View {
         .focusEffectDisabled()
         .disabled(!windowState.canStartStagingAction)
         .accessibilityLabel(capsule.accessibilityLabel)
+        .accessibilityHint(capsule.spokenShortcut)
+    }
+
+    private func content(showsKeycap: Bool) -> some View {
+        HStack(spacing: 10) {
+            // Neutral like the title: blue is the Commit button's.
+            Image(systemName: capsule.symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+                .contentTransition(.symbolEffect(.replace))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(capsule.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .contentTransition(.opacity)
+                churnLine
+            }
+            if showsKeycap {
+                Text(capsule.shortcut)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 6)
+                    .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: 6))
+                    .padding(.leading, 8)
+                    .contentTransition(.opacity)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private static let churnFont = Font.system(size: 11, weight: .semibold).monospacedDigit()
+
+    /// One font and one line in every state, so the title never moves when the counts arrive.
+    /// Hidden text reserves the second line while counts are unknown.
+    @ViewBuilder
+    private var churnLine: some View {
+        switch capsule.churn {
+        case let .counted(added, deleted):
+            ChurnLabel(stats: .counted(added: added, deleted: deleted), font: Self.churnFont)
+                .contentTransition(.numericText())
+                .animation(reduceMotion ? nil : .default, value: capsule.churn)
+        case .noLineChanges:
+            Text("No line changes")
+                .font(Self.churnFont)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        case .unknown:
+            Text("No line changes")
+                .font(Self.churnFont)
+                .lineLimit(1)
+                .hidden()
+        }
     }
 }
 
