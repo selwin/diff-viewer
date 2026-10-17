@@ -221,12 +221,13 @@ struct ChurnLabel: View {
         case .counted(let added, let deleted):
             // A side that did not change is left out, so a pure addition reads "+12"
             // rather than "+12 −0"; a file with no churn at all shows nothing.
+            let text = ChurnText.lineCounts(added: added, deleted: deleted, locale: locale)
             HStack(spacing: 4) {
-                if added > 0 {
-                    Text("+\(added)").foregroundStyle(addedStyle)
+                if let addedText = text.added {
+                    Text(addedText).foregroundStyle(addedStyle)
                 }
-                if deleted > 0 {
-                    Text("−\(deleted)").foregroundStyle(deletedStyle)
+                if let deletedText = text.deleted {
+                    Text(deletedText).foregroundStyle(deletedStyle)
                 }
             }
             .font(resolvedFont)

@@ -162,8 +162,9 @@ extension DiffPaneView {
             if text.length > 0 { text.append(NSAttributedString(string: " ", attributes: [.font: font])) }
             text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
-        if section.added > 0 { append("+\(section.added)", color: DiffTheme.addedCount) }
-        if section.deleted > 0 { append("−\(section.deleted)", color: DiffTheme.deletedCount) }
+        let counts = ChurnText.lineCounts(added: section.added, deleted: section.deleted, locale: .current)
+        if let added = counts.added { append(added, color: DiffTheme.addedCount) }
+        if let deleted = counts.deleted { append(deleted, color: DiffTheme.deletedCount) }
         return text.length > 0 ? text : nil
     }
 
