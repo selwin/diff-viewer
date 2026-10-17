@@ -196,6 +196,18 @@ struct StagingCapsuleTests {
         #expect(state.stagingCapsule?.churn == .counted(added: 3, deleted: 1))
     }
 
+    /// A conflict's churn is its working file against HEAD: what Mark Resolved stages.
+    @Test func aConflictsChurnIsItsWorkingFileAgainstHead() async {
+        let h = Harness()
+        let state = h.makeState()
+        let conflict = changedFile("x.swift", kind: .unmerged)
+        await h.adopt(state, "A", files: [conflict]) { await $0.set(headNumstat: [counted("x.swift", 4, 0)]) }
+        await h.settleStats(state)
+        state.selection = [.file(conflict.id)]
+
+        #expect(state.stagingCapsule?.churn == .counted(added: 4, deleted: 0))
+    }
+
     @Test func aFailedNumstatLeavesTheChurnUnknown() async {
         let h = Harness()
         let state = h.makeState()

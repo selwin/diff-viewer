@@ -1343,6 +1343,59 @@ import Testing
         #expect(message.split(separator: "\n").first == "Merge branch 'side'")
     }
 
+    /// A conflict counts its working file against HEAD: the markers and the other side's
+    /// line are added.
+    @Test func numstatAgainstHeadCountsAConflictsWorkingFile() async throws {
+        let (repo, _, _) = try await divergedRepo(conflicting: true)
+        _ = try? await repo.git(["merge", "side"])
+
+        let entries = try await repo.client.numstatAgainstHead(paths: ["a.txt"], ignoreWhitespace: false)
+        #expect(entries == [NumstatEntry(path: "a.txt", stats: .counted(added: 4, deleted: 0))])
+    }
+
+    /// A whitespace-only edit counts as a changed line unless `-w` hides it.
+    @Test(
+        arguments: [
+            (false, [NumstatEntry(path: "a.txt", stats: .counted(added: 1, deleted: 1))]),
+            (true, []),
+        ] as [(Bool, [NumstatEntry])])
+    func numstatAgainstHeadHonoursWhitespace(ignoreWhitespace: Bool, expected: [NumstatEntry]) async throws {
+        let repo = try await committedRepo()
+        try repo.write("a.txt", "one  \n")
+        let entries = try await repo.client.numstatAgainstHead(paths: ["a.txt"], ignoreWhitespace: ignoreWhitespace)
+        #expect(entries == expected)
+    }
+
+    /// An empty path list returns no entries.
+    @Test func numstatAgainstHeadWithNoPathsReturnsNothing() async throws {
+        let repo = try await committedRepo()
+        try repo.write("a.txt", "changed\n")
+        #expect(try await repo.client.numstatAgainstHead(paths: [], ignoreWhitespace: false).isEmpty)
+    }
+
+    /// In a rename/rename conflict each destination is counted on its own: git's rename
+    /// detection would fold the deleted and the kept one into a single zero-churn row.
+    @Test func numstatAgainstHeadCountsEachPathOfARenameConflict() async throws {
+        let lines = (1...20).map { "line \($0)\n" }.joined()
+        let repo = try await committedRepo(["orig.txt": lines])
+        try await repo.git(["checkout", "-b", "side"])
+        try await repo.git(["mv", "orig.txt", "a.txt"])
+        _ = try await repo.commit("Rename to a")
+        try await repo.git(["checkout", "main"])
+        try await repo.git(["mv", "orig.txt", "b.txt"])
+        _ = try await repo.commit("Rename to b")
+        _ = try? await repo.git(["merge", "side"])
+        // HEAD holds b.txt; delete it and keep a.txt, which only the worktree has.
+        try repo.delete("b.txt")
+
+        let entries = try await repo.client.numstatAgainstHead(paths: ["a.txt", "b.txt"], ignoreWhitespace: false)
+        #expect(
+            Set(entries) == [
+                NumstatEntry(path: "a.txt", stats: .counted(added: 20, deleted: 0)),
+                NumstatEntry(path: "b.txt", stats: .counted(added: 0, deleted: 20)),
+            ])
+    }
+
     // MARK: Remote branches
 
     /// `origin/HEAD` is a symbolic ref to another branch, not a branch of its own.

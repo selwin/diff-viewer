@@ -47,6 +47,25 @@ extension GitClient {
         return GitNumstatParser.parse(result.stdout)
     }
 
+    /// Added/deleted line counts of `paths` from HEAD to the working tree. A conflicted
+    /// path has no single index entry to diff against, and this is what staging it adds
+    /// to HEAD. An empty list never launches git, which would otherwise count every file.
+    func numstatAgainstHead(paths: [String], ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
+        guard !paths.isEmpty else { return [] }
+        // Literal, as in `GitFileAction`: a real `a[1].txt` must not be read as a glob.
+        var flags = ["--literal-pathspecs", "diff", "--numstat", "-z"]
+        // Each conflicted path is counted on its own: a rename pair would be one row.
+        flags.append("--no-renames")
+        if ignoreWhitespace { flags.append("-w") }
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: flags + ["HEAD", "--"] + paths,
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        return GitNumstatParser.parse(result.stdout)
+    }
+
     /// Flags that select what the target is compared against. A root commit needs `--root`
     /// to be diffed against the empty tree, and `--no-commit-id` to suppress the header
     /// line that form prints.

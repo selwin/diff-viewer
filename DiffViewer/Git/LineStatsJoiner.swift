@@ -1,8 +1,9 @@
 import Foundation
 
 /// Joins numstat rows onto a status list. Untracked files have no numstat row, so their
-/// lines are counted from the worktree instead, and binary files get their byte counts
-/// from the fingerprint, the worktree, or one `objectSizes` batch.
+/// lines are counted from the worktree instead; conflicted files take their row from a
+/// separate HEAD → worktree read. Binary files get their byte counts from the
+/// fingerprint, the worktree, or one `objectSizes` batch.
 enum LineStatsJoiner {
     /// At most this many worktree reads run at once.
     private static let readLimit = 8
@@ -25,32 +26,40 @@ enum LineStatsJoiner {
     }
 
     /// Attaches numstat rows to `files` by (area, path); untracked files are counted from
-    /// the worktree. The result has the same order and count as `files`.
+    /// the worktree, and conflicted files take their row from `conflictNumstat`, the
+    /// HEAD → worktree rows. The result has the same order and count as `files`.
     ///
-    /// An area missing from `numstat` means its rows are unknown (git failed), so its files
-    /// get nil. An area that is present but has no row for a file means git saw no
-    /// difference (a whitespace-only edit under `-w`), which is zero churn.
+    /// An area missing from `numstat`, or a nil `conflictNumstat`, means those rows are unknown
+    /// (git failed), so their files get nil. Rows that were read but have none for a file
+    /// mean git saw no difference (a whitespace-only edit under `-w`), which is zero churn.
     ///
     /// Cancelling the surrounding task stops scheduling new worktree reads: the files
     /// already counted keep their stats, the remaining untracked files stay nil, and
     /// binary files keep `.binary(nil)`.
     static func attach(
         numstat: [ChangedFile.Area: [NumstatEntry]],
+        conflictNumstat: [NumstatEntry]? = nil,
         to files: [ChangedFile],
         client: any RepoClient
     ) async -> [ChangedFile] {
         var rows: [Key: LineStats] = [:]
         for (area, entries) in numstat {
             for entry in entries {
-                // Unmerged paths appear twice; the first row is the real one.
+                // Unmerged paths appear twice here, but their counts come from `conflictNumstat`.
                 let key = Key(area: area, path: entry.path)
                 if rows[key] == nil { rows[key] = entry.stats }
             }
         }
 
+        let conflictRows = conflictNumstat.map { entries in
+            Dictionary(entries.map { ($0.path, $0.stats) }, uniquingKeysWith: { first, _ in first })
+        }
         var result = files.map { file in
             switch file.kind {
-            case .unmerged, .untracked:
+            case .unmerged:
+                guard let conflictRows else { return file.with(lineStats: nil) }
+                return file.with(lineStats: conflictRows[file.path] ?? .counted(added: 0, deleted: 0))
+            case .untracked:
                 return file.with(lineStats: nil)
             default:
                 guard numstat[file.area] != nil else { return file.with(lineStats: nil) }

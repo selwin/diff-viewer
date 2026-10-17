@@ -68,6 +68,7 @@ struct TaggedClient: RepoClient {
     func changedFiles(in commit: CommitRef) async throws -> [ChangedFile] { [] }
     func changedFiles(in range: CommitRange) async throws -> [ChangedFile] { [] }
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
+    func numstatAgainstHead(paths: [String], ignoreWhitespace: Bool) async throws -> [NumstatEntry] { [] }
     func objectSizes(of specs: [String]) async throws -> [Int64?] { specs.map { _ in nil } }
     func indexContents(of path: String) async throws -> Data? { nil }
     func headContents(of path: String) async throws -> Data? { nil }

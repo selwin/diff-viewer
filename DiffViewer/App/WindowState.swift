@@ -745,10 +745,10 @@ extension WindowState {
 
 /// Reading the per-file line counts the sidebar shows beside each file.
 extension WindowState {
-    /// Runs numstat for the request's areas and counts untracked files, then stamps the
-    /// counts onto the current `files` by id. Accepted only from the active read: a
-    /// superseded token records nothing, whatever refresh is newest by then. Not a
-    /// publish: the list itself did not change.
+    /// Runs numstat for the request's areas and counts untracked and conflicted files,
+    /// then stamps the counts onto the current `files` by id. Accepted only from the
+    /// active read: a superseded token records nothing, whatever refresh is newest by
+    /// then. Not a publish: the list itself did not change.
     private func attachLineStats(
         to newFiles: [ChangedFile], request: LineStatsRequest, token: Int, session: RepoSession
     ) async {
@@ -759,8 +759,7 @@ extension WindowState {
         for file in joined {
             results[file.id] =
                 switch file.kind {
-                case .unmerged: .unavailable
-                case .untracked: file.lineStats.map { .available($0) } ?? .failed
+                case .unmerged, .untracked: file.lineStats.map { .available($0) } ?? .failed
                 default:
                     numstat[file.area] == nil
                         ? .failed : .available(file.lineStats ?? .counted(added: 0, deleted: 0))
@@ -777,11 +776,16 @@ extension WindowState {
         }
     }
 
-    /// Numstat for each of `areas`, joined onto `files` with untracked files counted.
-    /// Returns the rows too, so a caller can tell a failed area from one without churn.
+    /// Numstat for each of `areas`, joined onto `files` with untracked and conflicted files
+    /// counted. Returns the rows too, so a caller can tell a failed area from one without churn.
     private static func joinLineStats(
         to files: [ChangedFile], areas: [ChangedFile.Area], ignoreWhitespace: Bool, client: any RepoClient
     ) async -> (joined: [ChangedFile], numstat: [ChangedFile.Area: [NumstatEntry]]) {
+        // A conflict is counted from HEAD to the working file: what Mark Resolved stages.
+        let conflictedPaths = files.filter { $0.kind == .unmerged }.map(\.path)
+        async let conflictNumstat: [NumstatEntry]? =
+            conflictedPaths.isEmpty
+            ? nil : try? await client.numstatAgainstHead(paths: conflictedPaths, ignoreWhitespace: ignoreWhitespace)
         // Each area is an independent process, so they run concurrently: the working
         // tree's two, or a stash's tracked changes and its untracked files.
         let numstat = await withTaskGroup(of: (ChangedFile.Area, [NumstatEntry]?).self) { group in
@@ -798,8 +802,11 @@ extension WindowState {
             }
             return rows
         }
+        let conflictRows = await conflictNumstat
         guard !Task.isCancelled else { return (files, numstat) }
-        return (await LineStatsJoiner.attach(numstat: numstat, to: files, client: client), numstat)
+        let joined = await LineStatsJoiner.attach(
+            numstat: numstat, conflictNumstat: conflictRows, to: files, client: client)
+        return (joined, numstat)
     }
 
     /// Stops the active line-stats read, for a window or a scope that no longer wants it.

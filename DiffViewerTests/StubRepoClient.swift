@@ -7,6 +7,8 @@ import Foundation
 enum StubCall {
     case status
     case numstat
+    /// `numstatAgainstHead`, a conflict's counts.
+    case headNumstat
     /// `perform`, `trash` and `commit`, so a write can be queued behind one still running.
     case actions
     /// Worktree reads; per-path holds are separate.
@@ -85,6 +87,11 @@ actor StubRepoClient: RepoClient {
     /// The `ignoreWhitespace` argument of the most recent numstat call.
     private(set) var lastIgnoreWhitespace: Bool?
     private(set) var numstatCalls = 0
+    /// Rows for `numstatAgainstHead`, filtered to the paths asked for. Nil, the default,
+    /// makes it throw, for the same reason an unconfigured numstat area does.
+    private var headNumstatEntries: [NumstatEntry]?
+    /// The paths of every `numstatAgainstHead` call, in order.
+    private(set) var headNumstatCalls: [[String]] = []
     /// Worktree contents by path, overriding the default "new \(path)" body.
     private var worktree: [String: Data?] = [:]
     /// Index bytes by path; an unlisted path gets the stub's fixed text.
@@ -257,6 +264,8 @@ actor StubRepoClient: RepoClient {
 
     func set(numstat entries: [NumstatEntry], area: ChangedFile.Area) { numstatEntries[area] = entries }
     func fail(numstat on: Bool) { failsNumstat = on }
+    /// Nil makes `numstatAgainstHead` throw.
+    func set(headNumstat entries: [NumstatEntry]?) { headNumstatEntries = entries }
     /// Makes both `perform` and `trash` throw, after recording the call.
     func fail(actions on: Bool) { failsActions = on }
     func set(worktree data: Data?, for path: String) { worktree[path] = .some(data) }
@@ -289,6 +298,15 @@ actor StubRepoClient: RepoClient {
             throw ProcessError.failed(command: "git diff --numstat", status: 128, stderr: "gone")
         }
         return entries
+    }
+
+    func numstatAgainstHead(paths: [String], ignoreWhitespace: Bool) async throws -> [NumstatEntry] {
+        headNumstatCalls.append(paths)
+        if isHeld(.headNumstat) { await park(.headNumstat) }
+        guard let entries = headNumstatEntries else {
+            throw ProcessError.failed(command: "git diff HEAD --numstat", status: 128, stderr: "gone")
+        }
+        return entries.filter { paths.contains($0.path) }
     }
 
     func status() async throws -> [ChangedFile] {

@@ -10,6 +10,9 @@ DERIVED   := build
 CONFIG    ?= Debug
 APP       := $(DERIVED)/Build/Products/$(CONFIG)/DiffViewer.app
 XCB       := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) -configuration $(CONFIG)
+# prek if installed, else pre-commit; both read .pre-commit-config.yaml. Override with
+# `make hooks HOOKS=pre-commit`.
+HOOKS     ?= $(shell command -v prek >/dev/null 2>&1 && echo prek || echo pre-commit)
 
 .PHONY: all gen difft build run test lint format format-check hooks hooks-all clean open
 
@@ -52,18 +55,19 @@ format:
 format-check:
 	swift format lint --strict --parallel --recursive --configuration .swift-format $(SOURCES)
 
-# Git hooks: pre-commit formats and lints the staged files (`brew install pre-commit`);
-# a plain post-commit hook reports on the unstaged ones, which pre-commit stashes. An
-# existing post-commit hook of another tool is kept, never overwritten.
+# Git hooks: $(HOOKS) formats and lints the staged files; a plain post-commit hook reports
+# on the unstaged ones, which $(HOOKS) stashes. `-f` replaces the other tool's pre-commit
+# hook instead of keeping it as a legacy hook that runs too. An existing post-commit hook
+# of another tool is kept, never overwritten.
 hooks:
-	pre-commit install
+	$(HOOKS) install -f
 	@hook="$$(git rev-parse --git-path hooks)/post-commit"; target="$(CURDIR)/scripts/check-unstaged.sh"; \
 	if { [ -e "$$hook" ] || [ -L "$$hook" ]; } && [ "$$(readlink "$$hook")" != "$$target" ]; then \
 		echo "Kept the existing $$hook; link it to $$target by hand to use it." >&2; \
 	else ln -sf "$$target" "$$hook"; fi
 
 hooks-all:
-	pre-commit run --all-files
+	$(HOOKS) run --all-files
 
 clean:
 	rm -rf $(DERIVED) $(PROJECT)

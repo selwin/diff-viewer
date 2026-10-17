@@ -1,9 +1,9 @@
 import Foundation
 
-/// How many lines a file gained and lost. `nil` on a `ChangedFile` means unknown
-/// (no numstat row, an unmerged path, or a file we could not read), which is not
-/// the same as `.binary`, which is git saying the file has no line counts; a binary
-/// file carries its byte counts instead, when they could be read.
+/// How many lines a file gained and lost; a conflicted file counts HEAD to the working
+/// file. `nil` on a `ChangedFile` means unknown (git failed, or a file we could not
+/// read), which is not the same as `.binary`, which is git saying the file has no line
+/// counts; a binary file carries its byte counts instead, when they could be read.
 enum LineStats: Hashable, Sendable {
     case counted(added: Int, deleted: Int)
     case binary(BinarySizes?)

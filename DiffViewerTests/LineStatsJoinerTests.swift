@@ -69,14 +69,23 @@ struct LineStatsJoinerTests {
         #expect(joined.first?.lineStats == .counted(added: 0, deleted: 0))
     }
 
-    @Test func unmergedStaysUnknownEvenWithRows() async {
+    /// Conflicts use HEAD-to-worktree counts instead of area counts. A successful read with
+    /// no matching row means zero churn; a failed read stays unknown.
+    @Test(
+        arguments: [
+            ([counted("conflict.txt", 4, 0)], LineStats.counted(added: 4, deleted: 0)),
+            ([], .counted(added: 0, deleted: 0)),
+            (nil, nil),
+        ] as [([NumstatEntry]?, LineStats?)])
+    func conflictTakesItsHeadRow(conflictNumstat: [NumstatEntry]?, expected: LineStats?) async {
         let client = StubRepoClient(files: [])
         let joined = await LineStatsJoiner.attach(
-            numstat: [.unstaged: [NumstatEntry(path: "conflict.txt", stats: .counted(added: 7, deleted: 7))]],
+            numstat: [.unstaged: [counted("conflict.txt", 7, 7)]],
+            conflictNumstat: conflictNumstat,
             to: [changedFile("conflict.txt", kind: .unmerged)],
             client: client
         )
-        #expect(joined.first?.lineStats == nil)
+        #expect(joined.first?.lineStats == expected)
     }
 
     // MARK: untracked
