@@ -1,13 +1,18 @@
 import AppKit
 
-/// The gutter between the panes. Each move with an end on screen gets a band from its
-/// old rows to its new rows, so the reader sees where a block went without scrolling. A
-/// click on a band jumps to its off-screen end, or to its new end when both are visible.
-final class MoveConnectorView: NSView {
+/// The gutter between the panes. A move whose ends are both on screen gets a band from its
+/// old rows to its new rows, so the reader sees where a block went. A move with an
+/// off-screen end gets only a pill beside its visible rows, showing that end's line number.
+/// A click on a band or pill jumps to the off-screen end, or to the new end when both are
+/// visible.
+final class MoveConnectorView: NSView, NSViewToolTipOwner {
     static let width: CGFloat = 24
 
-    /// Called with the document row to scroll to when a band is clicked.
+    /// Called with the destination document row when a band or pill is clicked.
     var onJumpToDocumentRow: ((Int) -> Void)?
+
+    /// The line number the given pane's gutter shows for the move's first line on that side.
+    var lineNumberOfMoveEnd: ((DiffMove, DocumentSide) -> Int?)?
 
     /// Read at draw time for their clip origins. The right one also takes scroll-wheel
     /// events over the connector, which would otherwise scroll nothing.
@@ -34,6 +39,8 @@ final class MoveConnectorView: NSView {
     /// draw time, so a band that scrolls away from under a still pointer loses its hover.
     private var pointer: NSPoint?
     private var drawnHover: Int?
+    /// The pills at the last draw, which the tool tips are registered for.
+    private var drawnPills: [MoveConnectorPill] = []
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { true }
@@ -72,8 +79,8 @@ final class MoveConnectorView: NSView {
 
     // MARK: - Geometry
 
-    /// The bands to draw, in move order. Only moves with an end near either clip's visible
-    /// rows get geometry.
+    /// The bands in move order, clamped ones included since they place the pills. Only moves
+    /// with an end near either clip's visible rows get geometry.
     private func visibleBands() -> [(index: Int, band: MoveConnectorBand)] {
         guard let leftClip = leftScroll?.contentView.bounds, let rightClip = rightScroll?.contentView.bounds
         else { return [] }
@@ -93,8 +100,8 @@ final class MoveConnectorView: NSView {
         return bands
     }
 
-    /// The band's outline, both drawn and hit tested: cubic curves along its top and bottom
-    /// edges, with control points at the gutter's mid x so each end leaves its pane level.
+    /// The outline of a drawn band, both drawn and hit tested: cubic curves along its top and
+    /// bottom edges, with control points at the gutter's mid x so each end leaves its pane level.
     private func outline(of band: MoveConnectorBand) -> CGPath {
         let path = CGMutablePath()
         let midX = bounds.width / 2
@@ -110,11 +117,24 @@ final class MoveConnectorView: NSView {
         return path
     }
 
-    /// The topmost band under `point`; later bands are drawn over earlier ones.
-    private func band(at point: NSPoint, in bands: [(index: Int, band: MoveConnectorBand)]) -> (
-        index: Int, band: MoveConnectorBand
-    )? {
-        bands.last { outline(of: $0.band).contains(point) }
+    /// The move under `point`: a pill wins over any band beneath it, and later bands are
+    /// drawn over earlier ones. A clamped band is not drawn, so only its pill is a target.
+    private func hitTarget(
+        at point: NSPoint, bands: [(index: Int, band: MoveConnectorBand)], pills: [MoveConnectorPill]
+    ) -> (index: Int, band: MoveConnectorBand)? {
+        if let pill = pills.first(where: { $0.rect.contains(point) }) {
+            return (pill.index, pill.band)
+        }
+        return bands.last { $0.band.clampedSide == nil && outline(of: $0.band).contains(point) }
+    }
+
+    private func hitTarget(at point: NSPoint) -> (index: Int, band: MoveConnectorBand)? {
+        let bands = visibleBands()
+        return hitTarget(at: point, bands: bands, pills: pillRects(for: bands))
+    }
+
+    private func pillRects(for bands: [(index: Int, band: MoveConnectorBand)]) -> [MoveConnectorPill] {
+        MoveConnectorGeometry.pills(for: bands, width: bounds.width, viewportHeight: bounds.height)
     }
 
     // MARK: - Drawing
@@ -131,19 +151,109 @@ final class MoveConnectorView: NSView {
         context.fill(NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height))
 
         let bands = visibleBands()
-        drawnHover = pointer.flatMap { band(at: $0, in: bands)?.index }
+        let pills = pillRects(for: bands)
+        drawnHover = pointer.flatMap { hitTarget(at: $0, bands: bands, pills: pills)?.index }
+        // Only bands with both ends on screen are drawn; the others are just pills.
+        let drawn = bands.filter { $0.band.clampedSide == nil }
         // Every band's base goes down before any band, so the hairlines stop where a band
         // meets its rows while crossing bands still show through each other.
-        for (_, band) in bands {
-            drawFading(band, context: context) {
-                context.addPath(outline(of: band))
-                context.setFillColor(DiffTheme.background.cgColor)
-                context.fillPath()
-            }
+        for (_, band) in drawn {
+            context.addPath(outline(of: band))
+            context.setFillColor(DiffTheme.background.cgColor)
+            context.fillPath()
         }
-        for (index, band) in bands {
-            drawFading(band, context: context) { draw(band, isHovered: index == drawnHover, context: context) }
+        for (index, band) in drawn {
+            draw(band, isHovered: index == drawnHover, context: context)
         }
+        for pill in pills {
+            drawPill(
+                of: moves[pill.index].move, band: pill.band, in: pill.rect, isHovered: pill.index == drawnHover,
+                context: context)
+        }
+        updateToolTips(for: pills)
+    }
+
+    /// Re-registers the tool tip rects only when the pills moved, since every scroll redraws.
+    private func updateToolTips(for pills: [MoveConnectorPill]) {
+        guard pills != drawnPills else { return }
+        drawnPills = pills
+        removeAllToolTips()
+        for pill in pills { addToolTip(pill.rect, owner: self, userData: nil) }
+    }
+
+    func view(
+        _ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?
+    ) -> String {
+        guard let pill = drawnPills.first(where: { $0.rect.contains(point) }), moves.indices.contains(pill.index),
+            let side = pill.band.clampedSide, let number = lineNumberOfMoveEnd?(moves[pill.index].move, side)
+        else { return "" }
+        return "Go to line \(number)"
+    }
+
+    /// A capsule beside the block's visible end: the off-screen end's line number, and an
+    /// arrow toward it. The background goes down first so bands do not show through.
+    private func drawPill(
+        of move: DiffMove, band: MoveConnectorBand, in rect: CGRect, isHovered: Bool, context: CGContext
+    ) {
+        guard let side = band.clampedSide else { return }
+        let capsule = NSBezierPath(roundedRect: rect, xRadius: rect.width / 2, yRadius: rect.width / 2)
+        DiffTheme.background.setFill()
+        capsule.fill()
+        (isHovered ? DiffTheme.movedBandMiddleHover : DiffTheme.movedGutterOnRow).setFill()
+        capsule.fill()
+
+        let clamped = side == .old ? band.left : band.right
+        let pointsUp = clamped.bottom <= 0
+        let number = lineNumberOfMoveEnd?(move, side)
+        // Without a number the chevron is centered; otherwise it sits at the edge side.
+        let chevronY =
+            number == nil ? rect.midY : (pointsUp ? rect.minY + Self.chevronInset : rect.maxY - Self.chevronInset)
+        strokeChevron(pointingUp: pointsUp, at: CGPoint(x: rect.midX, y: chevronY), context: context)
+        if let number {
+            let numberY = pointsUp ? rect.maxY - Self.numberInset : rect.minY + Self.numberInset
+            drawNumber(number, centeredAt: CGPoint(x: rect.midX, y: numberY), maxWidth: rect.width - 4)
+        }
+    }
+
+    /// Distance from the pill's end to the chevron's center and to the number's center.
+    private static let chevronInset: CGFloat = 8
+    private static let numberInset: CGFloat = 9
+
+    /// Shrinks the font to 7pt to fit `maxWidth`. Numbers from 10,000 are abbreviated so they
+    /// fit; the tooltip and accessibility label carry the full number.
+    private func drawNumber(_ number: Int, centeredAt center: CGPoint, maxWidth: CGFloat) {
+        let label = MoveConnectorGeometry.pillLabel(forLineNumber: number)
+        var size: CGFloat = 9
+        var string: NSAttributedString
+        repeat {
+            string = NSAttributedString(
+                string: label,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: size, weight: .semibold, width: .condensed),
+                    .foregroundColor: DiffTheme.movedAccent,
+                ])
+            size -= 0.5
+        } while string.size().width > maxWidth && size >= 7
+        let textSize = string.size()
+        string.draw(at: NSPoint(x: center.x - textSize.width / 2, y: center.y - textSize.height / 2))
+    }
+
+    /// The view is flipped, so a chevron pointing up has its apex at the smaller y.
+    private func strokeChevron(pointingUp: Bool, at center: CGPoint, context: CGContext) {
+        let halfWidth: CGFloat = 3
+        let height: CGFloat = 3
+        let apexY = pointingUp ? center.y - height / 2 : center.y + height / 2
+        let baseY = pointingUp ? center.y + height / 2 : center.y - height / 2
+        context.saveGState()
+        context.setStrokeColor(DiffTheme.movedAccent.cgColor)
+        context.setLineWidth(1.5)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.move(to: CGPoint(x: center.x - halfWidth, y: baseY))
+        context.addLine(to: CGPoint(x: center.x, y: apexY))
+        context.addLine(to: CGPoint(x: center.x + halfWidth, y: baseY))
+        context.strokePath()
+        context.restoreGState()
     }
 
     /// The band's fill runs from the left pane's moved rows (text area) to the right pane's
@@ -166,39 +276,6 @@ final class MoveConnectorView: NSView {
         else { return }
         context.drawLinearGradient(
             gradient, start: CGPoint(x: 0, y: 0), end: CGPoint(x: bounds.width, y: 0), options: [])
-    }
-
-    /// Runs `body` so that, when one end is clamped, what it draws fades out toward the
-    /// viewport edge that end leaves through.
-    private func drawFading(_ band: MoveConnectorBand, context: CGContext, _ body: () -> Void) {
-        guard let fadeEdge = fadeEdgeY(of: band) else { return body() }
-        context.saveGState()
-        context.clip(to: outline(of: band).boundingBoxOfPath.insetBy(dx: -1, dy: -1))
-        context.beginTransparencyLayer(auxiliaryInfo: nil)
-        body()
-        fadeOut(towardY: fadeEdge, context: context)
-        context.endTransparencyLayer()
-        context.restoreGState()
-    }
-
-    /// The viewport edge a clamped end leaves through, or nil when both ends are visible.
-    private func fadeEdgeY(of band: MoveConnectorBand) -> CGFloat? {
-        guard let side = band.clampedSide else { return nil }
-        let end = side == .old ? band.left : band.right
-        return end.bottom <= 0 ? 0 : bounds.height
-    }
-
-    /// Erases the band progressively over the last two rows before `edgeY`, so it reads as
-    /// continuing off screen rather than stopping at the edge.
-    private func fadeOut(towardY edgeY: CGFloat, context: CGContext) {
-        let length = 2 * rowHeight
-        let inner = edgeY == 0 ? length : edgeY - length
-        let colors = [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1)] as CFArray
-        guard let gradient = CGGradient(colorsSpace: nil, colors: colors, locations: [0, 1]) else { return }
-        context.setBlendMode(.destinationOut)
-        context.drawLinearGradient(
-            gradient, start: CGPoint(x: 0, y: inner), end: CGPoint(x: 0, y: edgeY),
-            options: [.drawsAfterEndLocation])
     }
 
     // MARK: - Input
@@ -225,10 +302,10 @@ final class MoveConnectorView: NSView {
         updateHover(at: nil)
     }
 
-    /// Redraws only when the hovered band changes. The pointing hand says a band is clickable.
+    /// Redraws only when the hovered band or pill changes. The pointing hand says it is clickable.
     private func updateHover(at point: NSPoint?) {
         pointer = point
-        let hovered = point.flatMap { band(at: $0, in: visibleBands())?.index }
+        let hovered = point.flatMap { hitTarget(at: $0)?.index }
         if point != nil { (hovered == nil ? NSCursor.arrow : NSCursor.pointingHand).set() }
         if hovered != drawnHover { needsDisplay = true }
     }
@@ -239,7 +316,7 @@ final class MoveConnectorView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        guard let onJumpToDocumentRow, let hit = band(at: point, in: visibleBands()) else { return }
+        guard let onJumpToDocumentRow, let hit = hitTarget(at: point) else { return }
         onJumpToDocumentRow(jumpTarget(of: hit.index, band: hit.band))
     }
 
@@ -251,16 +328,29 @@ final class MoveConnectorView: NSView {
 
     // MARK: - Accessibility
 
-    /// One button per visible band, so VoiceOver can jump even when the band's gutter
-    /// markers are off screen.
+    /// One button per drawn band and per pill, so VoiceOver can jump even when the move's
+    /// gutter markers are off screen.
     override func accessibilityChildren() -> [Any]? {
         guard let onJumpToDocumentRow else { return [] }
-        return visibleBands().map { index, band in
+        let bands = visibleBands()
+        let pillsByIndex = Dictionary(uniqueKeysWithValues: pillRects(for: bands).map { ($0.index, $0) })
+        return bands.compactMap { index, band in
             let target = jumpTarget(of: index, band: band)
-            let label = band.clampedSide == .old ? "Go to where these lines came from" : "Go to where these lines moved"
+            let frame: CGRect
+            if band.clampedSide == nil {
+                frame = outline(of: band).boundingBoxOfPath.intersection(bounds)
+            } else if let pill = pillsByIndex[index] {
+                frame = pill.rect
+            } else {
+                return nil
+            }
+            let jumpsToOldSide = band.clampedSide == .old
+            var destination = jumpsToOldSide ? "where these lines came from" : "where these lines moved"
+            if let side = band.clampedSide, let number = lineNumberOfMoveEnd?(moves[index].move, side) {
+                destination = "line \(number), " + destination
+            }
             return ButtonElement(
-                parent: self, frame: outline(of: band).boundingBoxOfPath.intersection(bounds), label: label,
-                onPress: { onJumpToDocumentRow(target) })
+                parent: self, frame: frame, label: "Go to " + destination, onPress: { onJumpToDocumentRow(target) })
         }
     }
 }

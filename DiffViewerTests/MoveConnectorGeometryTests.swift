@@ -82,4 +82,48 @@ struct MoveConnectorGeometryTests {
             clipMinY: 210, viewportHeight: Self.viewport, rowHeight: Self.row)
         #expect(rows == 8..<23)
     }
+
+    private func pills(_ rows: [(Range<Int>, Range<Int>)]) -> [MoveConnectorPill] {
+        let bands = rows.enumerated().compactMap { index, rows in
+            band(rows.0, rows.1, leftClipMinY: 200, rightClipMinY: 200).map { (index: index, band: $0) }
+        }
+        return MoveConnectorGeometry.pills(for: bands, width: 24, viewportHeight: Self.viewport)
+    }
+
+    @Test func clampedBandsGetAPillTopAlignedWithTheirVisibleEnd() {
+        // Band 0 is clamped on the new side, band 1 on the old side, band 2 is fully visible.
+        let result = pills([(12..<13, 30..<32), (2..<5, 14..<15), (16..<17, 18..<19)])
+        #expect(result.map(\.index) == [0, 1])
+        let height = MoveConnectorGeometry.pillHeight
+        #expect(result[0].rect == CGRect(x: 2, y: 40, width: 20, height: height))
+        #expect(result[1].rect == CGRect(x: 2, y: 80, width: 20, height: height))
+    }
+
+    @Test func pillStaysAtTheTopInsetThenRidesUpWithTheBlock() {
+        let height = MoveConnectorGeometry.pillHeight
+        // The block's top is above the viewport and its bottom is at 80.
+        #expect(pills([(2..<5, 8..<14)]).first?.rect.minY == MoveConnectorGeometry.pillInset)
+        // Only 20pt of the block is left on screen, shorter than the pill.
+        #expect(pills([(2..<5, 9..<11)]).first?.rect.minY == 20 - height)
+    }
+
+    @Test func overlappingPillsAreSeparatedByTheGap() {
+        // Adjacent blocks at 80 and 100: the second moves below the first.
+        let result = pills([(2..<3, 14..<15), (3..<4, 15..<16)])
+        let first = result[0].rect
+        #expect(first.minY == 80)
+        #expect(result[1].rect.minY == first.maxY + MoveConnectorGeometry.pillGap)
+    }
+
+    @Test func pillsPushedPastTheBottomAreDropped() {
+        // Blocks at 140, 160 and 180: the third is pushed to 196 and would end past the inset.
+        let result = pills([(2..<3, 17..<18), (3..<4, 18..<19), (4..<5, 19..<20)])
+        #expect(result.map(\.index) == [0, 1])
+        #expect(result[1].rect.minY == 168)
+    }
+
+    @Test func pillLabelsAbbreviateLargeNumbersRoundingDown() {
+        let labels = [9999, 10000, 24410, 123_456, 1_234_567].map(MoveConnectorGeometry.pillLabel(forLineNumber:))
+        #expect(labels == ["9999", "10k", "24k", "123k", "1M"])
+    }
 }

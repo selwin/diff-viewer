@@ -14,19 +14,24 @@ struct DiffMove: Sendable, Equatable {
 /// Finds moved blocks among a diff's changed lines, in the spirit of `git diff
 /// --color-moved`: runs of consecutive lines removed in one place and added in another.
 /// Lines match after trimming ASCII whitespace at both ends, or after removing all ASCII
-/// whitespace when Hide Whitespace is on.
+/// whitespace when Hide Whitespace is on. A move is kept only where moved lines make up at
+/// least `minBlockShare` of its change block on one side.
 enum MoveDetector {
     /// A line this common among added lines (`}`, `return`) never starts a run, which keeps
     /// the search from pairing every brace with every other; it can still extend one.
     static let maxStartOccurrences = 64
     /// git's bar for --color-moved: smaller blocks are too likely to match by accident.
     static let minAlphanumerics = 20
+    /// A real move is most of its block on one side; a few lines that survive a rewrite
+    /// in a new spot are not, and painting them as moved would read as relocation.
+    static let minBlockShare = 0.5
 
     static func detect(
         oldLines: [String], newLines: [String], rows: [DiffRow], hideWhitespace: Bool
     ) -> [DiffMove] {
-        let old = Side(lines: oldLines, rows: rows, cell: \.old, hideWhitespace: hideWhitespace)
-        let new = Side(lines: newLines, rows: rows, cell: \.new, hideWhitespace: hideWhitespace)
+        let blockOfRow = changeBlockOfRow(rows)
+        let old = Side(lines: oldLines, rows: rows, blockOfRow: blockOfRow, cell: \.old, hideWhitespace: hideWhitespace)
+        let new = Side(lines: newLines, rows: rows, blockOfRow: blockOfRow, cell: \.new, hideWhitespace: hideWhitespace)
 
         func makeRun(old i: Int, new j: Int, length: Int) -> Run {
             Run(old: i, new: j, length: length, alphanumerics: old.alphanumerics[i..<(i + length)].reduce(0, +))
@@ -71,7 +76,29 @@ enum MoveDetector {
                 if qualifies(piece) { heap.push(piece) }
             }
         }
-        return moves.sorted { $0.oldLineRange.lowerBound < $1.oldLineRange.lowerBound }
+        let oldShare = old.movedShareOfBlock(moves.map(\.oldLineRange))
+        let newShare = new.movedShareOfBlock(moves.map(\.newLineRange))
+        let kept = moves.filter { move in
+            oldShare[move.oldLineRange.lowerBound] >= minBlockShare
+                || newShare[move.newLineRange.lowerBound] >= minBlockShare
+        }
+        return kept.sorted { $0.oldLineRange.lowerBound < $1.oldLineRange.lowerBound }
+    }
+
+    /// The change block (a maximal run of non-equal rows) each row belongs to; nil for
+    /// equal rows. A move never crosses an equal row, so each end lies in one block.
+    private static func changeBlockOfRow(_ rows: [DiffRow]) -> [Int?] {
+        var blocks: [Int?] = []
+        var count = 0
+        for (index, row) in rows.enumerated() {
+            guard row.kind != .equal else {
+                blocks.append(nil)
+                continue
+            }
+            if index == 0 || rows[index - 1].kind == .equal { count += 1 }
+            blocks.append(count - 1)
+        }
+        return blocks
     }
 
     /// Every maximal run of equal keys along a diagonal, started from lines that may start
@@ -114,18 +141,41 @@ enum MoveDetector {
         var rowOf: [Int]
         /// Letters and digits per line, the measure of a run's size.
         var alphanumerics: [Int]
+        /// The change block holding each line in a non-equal row; nil for every other line.
+        var block: [Int?]
 
-        init(lines: [String], rows: [DiffRow], cell: KeyPath<DiffRow, DiffSide?>, hideWhitespace: Bool) {
+        init(
+            lines: [String], rows: [DiffRow], blockOfRow: [Int?], cell: KeyPath<DiffRow, DiffSide?>,
+            hideWhitespace: Bool
+        ) {
             keys = [String?](repeating: nil, count: lines.count)
             rowOf = [Int](repeating: -1, count: lines.count)
             alphanumerics = [Int](repeating: 0, count: lines.count)
+            block = [Int?](repeating: nil, count: lines.count)
             for (index, row) in rows.enumerated() {
                 guard let side = row[keyPath: cell] else { continue }
                 let line = side.lineIndex
                 rowOf[line] = index
                 guard row.kind != .equal else { continue }
+                block[line] = blockOfRow[index]
                 keys[line] = MoveDetector.key(lines[line], hideWhitespace: hideWhitespace)
                 alphanumerics[line] = lines[line].count(where: { $0.isLetter || $0.isNumber })
+            }
+        }
+
+        /// For each line, the share of its change block's lines on this side that the moves
+        /// cover; 0 outside a block. All moves count, so a block made of several moved
+        /// pieces counts as moved.
+        func movedShareOfBlock(_ moved: [Range<Int>]) -> [Double] {
+            var lineCount: [Int: Int] = [:]
+            for case let id? in block { lineCount[id, default: 0] += 1 }
+            var movedCount: [Int: Int] = [:]
+            for line in moved.joined() {
+                if let id = block[line] { movedCount[id, default: 0] += 1 }
+            }
+            return block.map { id in
+                guard let id, let total = lineCount[id] else { return 0 }
+                return Double(movedCount[id, default: 0]) / Double(total)
             }
         }
     }

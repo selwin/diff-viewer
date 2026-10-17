@@ -108,6 +108,7 @@ final class SideBySideContainerView: NSView {
         connector.leftScroll = leftScroll
         connector.rightScroll = rightScroll
         connector.onJumpToDocumentRow = { [weak self] row in self?.scroll(toRow: row) }
+        connector.lineNumberOfMoveEnd = { [weak self] move, side in self?.lineNumber(ofMoveEnd: move, side: side) }
         addSubview(connector)
         divider.wantsLayer = true
         divider.layer?.backgroundColor = DiffTheme.divider.cgColor
@@ -525,6 +526,14 @@ final class SideBySideContainerView: NSView {
 }
 
 extension SideBySideContainerView {
+    /// The number `side`'s gutter shows for the move's first line there.
+    private func lineNumber(ofMoveEnd move: DiffMove, side: DocumentSide) -> Int? {
+        if side == .old {
+            return leftPane.model?.lineNumber(ofLine: move.oldLineRange.lowerBound, inRow: move.oldRowRange.lowerBound)
+        }
+        return rightPane.model?.lineNumber(ofLine: move.newLineRange.lowerBound, inRow: move.newRowRange.lowerBound)
+    }
+
     /// Hands both panes the current document, with the changeset's sections and section
     /// index when there is one, so the gutter can number lines per file. Both install and
     /// append come through here, so the panes' moved-line maps always cover every move.
