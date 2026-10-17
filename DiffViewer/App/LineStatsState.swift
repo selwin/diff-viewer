@@ -31,12 +31,11 @@ struct LineStatsRequest: Equatable {
 }
 
 /// One file's share of a finished read. `.available(.binary)` is a successful result
-/// (the sidebar labels it); `.unavailable` means no counts apply; `.failed` may be retried.
+/// (the sidebar labels it); `.failed` may be retried.
 /// A binary whose size lookup failed is still `.available(.binary(nil))`, so it is only
 /// retried when its inputs change or the user refreshes.
 enum LineStatsResult: Equatable {
     case available(LineStats)
-    case unavailable
     case failed
 }
 
@@ -116,8 +115,7 @@ struct LineStatsState {
 // MARK: - Carry-over
 
 extension LineStatsResult {
-    /// What the sidebar shows: counts for a success, nothing for the other two. Only
-    /// this projection collapses `.unavailable` and `.failed`.
+    /// What the sidebar shows: counts for a success, nothing for a failure.
     var lineStats: LineStats? {
         if case let .available(stats) = self { return stats }
         return nil

@@ -58,6 +58,9 @@ protocol RepoClient: Sendable {
     /// index → worktree for `.unstaged`, first parent → commit for `.commit`, merge base
     /// → target for `.range`. Untracked files never appear.
     func numstat(area: ChangedFile.Area, ignoreWhitespace: Bool) async throws -> [NumstatEntry]
+    /// Per-file added/deleted line counts of `paths` from HEAD to the working tree, for
+    /// conflicted files. An empty list never launches git.
+    func numstatAgainstHead(paths: [String], ignoreWhitespace: Bool) async throws -> [NumstatEntry]
     /// The stored size of each object, one entry per spec in order: a blob id or a
     /// `<rev>:<path>`. Nil where git has no such object. An empty list never launches git.
     func objectSizes(of specs: [String]) async throws -> [Int64?]

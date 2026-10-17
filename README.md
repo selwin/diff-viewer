@@ -156,9 +156,12 @@ make hooks    # install the git hooks; `make hooks-all` runs them over every fil
 After cloning, install the development tools and the git hooks once:
 
 ```bash
-brew install pre-commit swiftlint
+brew install prek swiftlint   # or pre-commit in place of prek
 make hooks
 ```
+
+`make hooks` uses prek when it is installed and pre-commit otherwise; both read
+`.pre-commit-config.yaml`.
 
 - The Xcode project is generated from `project.yml` and is git-ignored; adding a source
   file needs no project edit.
