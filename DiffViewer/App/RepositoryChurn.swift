@@ -68,6 +68,7 @@ struct RepositoryChurn: Equatable, Sendable {
     }
 
     private var lineParts: [String] {
-        [added > 0 ? "+\(added)" : nil, deleted > 0 ? "−\(deleted)" : nil].compactMap { $0 }
+        let counts = ChurnText.lineCounts(added: added, deleted: deleted, locale: .current)
+        return [counts.added, counts.deleted].compactMap { $0 }
     }
 }
