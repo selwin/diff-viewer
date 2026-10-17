@@ -86,6 +86,58 @@ struct HighlighterTests {
             #expect(config != nil, "\(name) failed to load")
             #expect(config?.queries[.highlights] != nil, "\(name) has no highlights query")
         }
+        let inline = LanguageRegistry.spec(forInjectionLanguage: "markdown_inline")
+            .flatMap(LanguageRegistry.configuration(for:))
+        #expect(inline?.queries[.highlights] != nil)
+    }
+
+    /// The block grammar hands each paragraph to the inline grammar; its delimiters paint
+    /// as punctuation over the edges of the span they open and close.
+    @Test func markdownInlineInjectionIsStyled() {
+        let line = "Run `make` and **then** see [docs](a.md)"
+        let runs = Highlighter.highlight(lines: [line], fileName: "a.md")?.runs
+        #expect(runs?[0].contains { $0.style == .punctuation && $0.range == 4..<5 } == true)
+        #expect(runs?[0].contains { $0.style == .string && $0.range == 5..<9 } == true)
+        #expect(runs?[0].contains { $0.style == .keyword && $0.range == 17..<21 } == true)
+        #expect(runs?[0].contains { $0.style == .type && $0.range == 29..<33 } == true)
+        #expect(runs?[0].contains { $0.style == .type && $0.range == 35..<39 } == true)
+    }
+
+    @Test func markdownFencedCodeUsesItsInfoStringLanguage() throws {
+        let lines = ["```swift", "func f() {", "    return 1", "}", "```"]
+        let runs = try #require(Highlighter.highlight(lines: lines, fileName: "a.md")?.runs)
+        #expect(runs[1].contains { $0.style == .keyword && $0.range == 0..<4 })
+        #expect(runs[2].contains { $0.style == .keyword && $0.range == 4..<10 })
+    }
+
+    @Test func markdownFencedCodeWithUnknownLanguageStaysUnstyled() throws {
+        let lines = ["```nosuchlang", "func g() {}", "```"]
+        let runs = try #require(Highlighter.highlight(lines: lines, fileName: "a.md")?.runs)
+        #expect(runs[1].isEmpty)
+    }
+
+    /// Adjacent punctuation runs merge, so on the first line the marker's run also covers `*`.
+    @Test func markdownEmphasisAcrossQuoteLinesKeepsTheMarkers() throws {
+        let runs = try #require(Highlighter.highlight(lines: ["> *quote", "> runs on*"], fileName: "a.md")?.runs)
+        for line in runs {
+            #expect(
+                line.contains {
+                    $0.style == .punctuation && $0.range.lowerBound == 0 && $0.range.upperBound >= 2
+                })
+        }
+        #expect(runs[0].contains { $0.style == .keyword && $0.range == 3..<8 })
+        #expect(runs[1].contains { $0.style == .keyword && $0.range == 2..<9 })
+    }
+
+    @Test func markdownInjectionOffsetsCountUTF16Units() throws {
+        let runs = try #require(Highlighter.highlight(lines: ["é and 😀 `code`"], fileName: "a.md")?.runs)
+        #expect(runs[0].contains { $0.style == .string && $0.range == 10..<14 })
+    }
+
+    @Test func markdownEmphasisDoesNotPairAcrossParagraphs() throws {
+        let runs = try #require(Highlighter.highlight(lines: ["*a", "", "b*"], fileName: "a.md")?.runs)
+        #expect(!runs[0].contains { $0.style == .keyword })
+        #expect(!runs[2].contains { $0.style == .keyword })
     }
 
     private let cart = [

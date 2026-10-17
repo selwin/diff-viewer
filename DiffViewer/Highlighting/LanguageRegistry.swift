@@ -11,6 +11,7 @@ import TreeSitterJava
 import TreeSitterJavaScript
 import TreeSitterKotlin
 import TreeSitterMarkdown
+import TreeSitterMarkdownInline
 import TreeSitterPHP
 import TreeSitterPython
 import TreeSitterRuby
@@ -37,17 +38,22 @@ enum LanguageRegistry {
         let precedence: Precedence
         /// Node kinds that are functions, methods or types, and where each finds its name.
         let scopes: [String: ScopeRule]
+        /// Whether the highlighter runs the grammar's injection query (Markdown's inline
+        /// syntax and fenced code). Other grammars ship injection queries too; enabling them
+        /// is a separate decision.
+        let highlightsInjections: Bool
         let language: @Sendable () -> OpaquePointer?
 
         init(
             _ name: String, bundleName: String? = nil, precedence: Precedence = .laterPatternWins,
-            scopes: [String: ScopeRule] = [:],
+            scopes: [String: ScopeRule] = [:], highlightsInjections: Bool = false,
             _ language: @escaping @Sendable () -> OpaquePointer?
         ) {
             self.name = name
             self.bundleName = bundleName ?? "TreeSitter\(name)_TreeSitter\(name)"
             self.precedence = precedence
             self.scopes = scopes
+            self.highlightsInjections = highlightsInjections
             self.language = language
         }
     }
@@ -151,6 +157,9 @@ enum LanguageRegistry {
     private static let bashSpec = Spec("Bash", scopes: bashScopes, tree_sitter_bash)
     private static let rubySpec = Spec("Ruby", scopes: rubyScopes, tree_sitter_ruby)
     private static let jsonSpec = Spec("JSON", tree_sitter_json)
+    /// Markdown's inline grammar, reached only through the block grammar's injections.
+    private static let markdownInlineSpec = Spec(
+        "MarkdownInline", bundleName: "TreeSitterMarkdown_TreeSitterMarkdownInline", tree_sitter_markdown_inline)
 
     private static let byExtension: [String: Spec] = {
         var map: [String: Spec] = [:]
@@ -181,7 +190,7 @@ enum LanguageRegistry {
         add(Spec("TOML", tree_sitter_toml), "toml")
         add(Spec("Java", scopes: javaScopes, tree_sitter_java), "java")
         add(Spec("PHP", scopes: phpScopes, tree_sitter_php), "php", "phtml")
-        add(Spec("Markdown", tree_sitter_markdown), "md", "markdown", "mdx")
+        add(Spec("Markdown", highlightsInjections: true, tree_sitter_markdown), "md", "markdown", "mdx")
         add(Spec("Kotlin", scopes: kotlinScopes, tree_sitter_kotlin), "kt", "kts")
         return map
     }()
@@ -195,10 +204,21 @@ enum LanguageRegistry {
         "Package.resolved": jsonSpec,
     ]
 
+    private static let byName: [String: Spec] = Dictionary(
+        byExtension.values.map { ($0.name.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+
     static func spec(forFileNamed fileName: String) -> Spec? {
         if let spec = byFileName[fileName] { return spec }
         let ext = (fileName as NSString).pathExtension.lowercased()
         return byExtension[ext]
+    }
+
+    /// Injection queries name a grammar (`markdown_inline`, `html`) or pass on a fenced
+    /// code block's info string, which is a language name or an extension (`swift`, `js`).
+    static func spec(forInjectionLanguage language: String) -> Spec? {
+        let key = language.lowercased()
+        if key == "markdown_inline" { return markdownInlineSpec }
+        return byName[key] ?? byExtension[key]
     }
 
     /// SPM resource bundles are copied into the app's Resources directory; the
@@ -224,7 +244,10 @@ enum LanguageRegistry {
     /// The parser and highlight queries for a file, or nil if the language is not bundled
     /// or its queries fail to load. Configurations are cached per language.
     static func configuration(forFileNamed fileName: String) -> LanguageConfiguration? {
-        guard let spec = spec(forFileNamed: fileName) else { return nil }
+        spec(forFileNamed: fileName).flatMap(configuration(for:))
+    }
+
+    static func configuration(for spec: Spec) -> LanguageConfiguration? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached = cache[spec.name] { return cached }
