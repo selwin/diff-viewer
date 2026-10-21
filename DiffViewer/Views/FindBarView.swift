@@ -54,8 +54,9 @@ struct FindBarView: View {
         .padding(.horizontal, 12)
         .frame(height: 28)
         .background(.bar)
-        .onAppear { isFieldFocused = true }
-        .onChange(of: find.focusRequest) { isFieldFocused = true }
+        .onChange(of: find.focusRequest, initial: true) {
+            if find.claimFocusRequest() { isFieldFocused = true }
+        }
     }
 
     private static let segmentWidths: [CGFloat] = [180, 110, 72]

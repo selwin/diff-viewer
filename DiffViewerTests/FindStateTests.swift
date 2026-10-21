@@ -388,6 +388,19 @@ struct FindStateTests {
 
     // MARK: Availability and focus
 
+    @Test func focusRequestsCanBeClaimedOnce() {
+        let find = FindState()
+        #expect(!find.claimFocusRequest())
+
+        find.present(side: .new)
+        #expect(find.claimFocusRequest())
+        #expect(!find.claimFocusRequest())
+
+        find.present(side: .new)
+        #expect(find.claimFocusRequest())
+        #expect(!find.claimFocusRequest())
+    }
+
     @Test func contentUnavailableDropsPendingWork() async {
         let (find, gate, _) = open(fooAt: [1])
         find.query = "foo"

@@ -71,6 +71,7 @@ final class FindState {
     /// Kept across dismiss, so reopening with an unchanged query searches without the
     /// typing debounce.
     @ObservationIgnored private var lastScheduledQuery: String?
+    @ObservationIgnored private var lastClaimedFocusRequest = 0
     @ObservationIgnored private let search: Search
 
     init(search: @escaping Search = FindState.searchInBackground) {
@@ -141,6 +142,14 @@ final class FindState {
     }
 
     // MARK: Inputs
+
+    /// Claims the latest unhandled focus request so rebuilding the bar
+    /// does not take focus from the sidebar.
+    func claimFocusRequest() -> Bool {
+        guard focusRequest != lastClaimedFocusRequest else { return false }
+        lastClaimedFocusRequest = focusRequest
+        return true
+    }
 
     func present(side newSide: DocumentSide) {
         focusRequest += 1
