@@ -1,7 +1,7 @@
 import Foundation
 
 /// The header's face: where HEAD is, how far it is from its upstream, and the current
-/// branch's Pull and Push.
+/// branch's Pull, Push and Create PR.
 struct BranchPickerHeaderText: Equatable {
     let title: String
     /// What the detail line says about HEAD's upstream; the fetch news follows.
@@ -14,6 +14,7 @@ struct BranchPickerHeaderText: Equatable {
     /// HEAD's branch, which `buttons` act on; nil when HEAD is on no listed branch.
     var branch: String?
     var buttons = RowSyncButtons.hidden
+    var pullRequest = PullRequestAvailability.hidden
     /// What the title's copy button copies: HEAD's branch name, listed or not yet. Nil
     /// when HEAD is detached or unread.
     var copyableName: String?
@@ -24,6 +25,7 @@ struct BranchPickerHeaderText: Equatable {
         case fetch
         case pull
         case push
+        case pullRequest
     }
 
     /// The header buttons Tab visits after the search field, in order: only those shown
@@ -34,6 +36,7 @@ struct BranchPickerHeaderText: Equatable {
         guard branch != nil else { return order }
         if buttons.pull == .enabled { order.append(.pull) }
         if buttons.push == .enabled { order.append(.push) }
+        if pullRequest == .enabled { order.append(.pullRequest) }
         return order
     }
 
@@ -66,6 +69,8 @@ struct BranchPickerHeaderText: Equatable {
                 title: name, detailParts: [words.prefix(1).uppercased() + words.dropFirst()], showsSpinner: spinner,
                 canFetch: canFetch, branch: name,
                 buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
+                // The picker only opens in a window that can offer it.
+                pullRequest: PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true),
                 copyableName: name)
         }
     }

@@ -155,6 +155,9 @@ protocol RepoClient: Sendable {
     func configuredUpstreamRemotes() async throws -> [String: String]
     /// The configured remotes with their effective fetch URLs, in git's order.
     func remotes() async throws -> [GitRemote]
+    /// Every remote's fetch URL and push URLs by name, after `insteadOf` and
+    /// `pushInsteadOf` rewrites, from one `git remote -v`.
+    func remoteURLs() async throws -> [String: RemoteURLs]
     /// What `remote` advertises for pull request `number` and for its default branch,
     /// without touching local refs. Throws `PullRequestError.notFound` or `.noDefaultBranch`.
     func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest

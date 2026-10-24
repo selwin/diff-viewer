@@ -39,6 +39,7 @@ enum StubCall {
     case mergeBase
     case churn
     case remotes
+    case remoteURLs
     case advertisedPullRequest
     case fetchPullRequest
     case pinPullRequest
@@ -169,6 +170,9 @@ actor StubRepoClient: RepoClient {
     /// The error each pull request call throws, after recording itself and any hold.
     private var pullRequestErrors: [StubCall: any Error] = [:]
     private(set) var remotesCalls = 0
+    private var stubbedRemoteURLs: [String: RemoteURLs] = [:]
+    private var failsRemoteURLs = false
+    private(set) var remoteURLsCalls = 0
     private(set) var advertisedPullRequestCalls: [(number: Int, remote: String)] = []
     private(set) var fetchPullRequestCalls: [AdvertisedPullRequest] = []
     private(set) var pinPullRequestCalls: [AdvertisedPullRequest] = []
@@ -516,6 +520,9 @@ actor StubRepoClient: RepoClient {
     func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
     func fail(churn on: Bool) { failsChurn = on }
     func set(remotes list: [GitRemote]) { stubbedRemotes = list }
+    func set(remoteURLs urls: [String: RemoteURLs]) { stubbedRemoteURLs = urls }
+    /// Makes `remoteURLs` throw, after recording the call and any hold.
+    func fail(remoteURLs on: Bool) { failsRemoteURLs = on }
     /// What `advertisedPullRequest` answers; unset, it answers a default branch `main` and
     /// fixed SHAs for whatever number and remote it is asked about.
     func set(advertised: AdvertisedPullRequest?) { stubbedAdvertised = advertised }
@@ -620,6 +627,14 @@ actor StubRepoClient: RepoClient {
         if isHeld(.churn) { await park(.churn) }
         if failsChurn { throw ProcessError.failed(command: "git diff", status: 128, stderr: "gone") }
         return stubbedChurn
+    }
+
+    func remoteURLs() async throws -> [String: RemoteURLs] {
+        remoteURLsCalls += 1
+        let snapshot = stubbedRemoteURLs
+        if isHeld(.remoteURLs) { await park(.remoteURLs) }
+        if failsRemoteURLs { throw ProcessError.failed(command: "git remote", status: 128, stderr: "gone") }
+        return snapshot
     }
 
     func remotes() async throws -> [GitRemote] {

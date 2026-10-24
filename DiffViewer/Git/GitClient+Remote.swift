@@ -27,6 +27,17 @@ extension GitClient {
         return result.stdoutString.split(separator: "\n").map(String.init)
     }
 
+    /// Every remote's URLs by name. `git remote -v` applies `insteadOf` and `pushInsteadOf`.
+    func remoteURLs() async throws -> [String: RemoteURLs] {
+        let result = try await ProcessRunner.check(
+            Self.executable,
+            arguments: ["remote", "-v"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        return RemoteURLListParser.parse(result.stdoutString)
+    }
+
     /// Updates the remote-tracking refs of `remote`, so the counts a branch reports are
     /// current, and prunes the ones whose remote branch is gone when that can touch
     /// nothing else.

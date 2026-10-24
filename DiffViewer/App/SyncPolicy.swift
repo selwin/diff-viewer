@@ -174,6 +174,24 @@ enum SyncPolicy {
         return fetchingRemotes.contains(remote)
     }
 
+    /// What holds the repository, as a disabled button's tooltip, or nil when nothing does.
+    static func busyReason(active: ActiveSync?, isSwitching: Bool, isCommitting: Bool) -> String? {
+        if let active {
+            switch active.operation {
+            case .pull: "Pulling \(active.branch)…"
+            case .push: "Pushing \(active.branch)…"
+            case .publish: "Publishing \(active.branch)…"
+            case .delete: "Deleting \(active.branch)…"
+            }
+        } else if isSwitching {
+            "Switching branch…"
+        } else if isCommitting {
+            "Committing…"
+        } else {
+            nil
+        }
+    }
+
     // swiftlint:disable function_parameter_count
     /// One row's buttons. The operation in flight on this row decides first, so the
     /// button the reader clicked keeps its spinner even while the refresh behind it moves
@@ -201,21 +219,7 @@ enum SyncPolicy {
         }
         // Whatever else is running holds the repository, so a visible button waits it out
         // rather than disappearing.
-        let busy: String? =
-            if let active {
-                switch active.operation {
-                case .pull: "Pulling \(active.branch)…"
-                case .push: "Pushing \(active.branch)…"
-                case .publish: "Publishing \(active.branch)…"
-                case .delete: "Deleting \(active.branch)…"
-                }
-            } else if isSwitching {
-                "Switching branch…"
-            } else if isCommitting {
-                "Committing…"
-            } else {
-                nil
-            }
+        let busy = busyReason(active: active, isSwitching: isSwitching, isCommitting: isCommitting)
         if readStatus == .loaded, branch.upstream == nil {
             return publishButtons(
                 hiddenRemote: hiddenUpstreamRemote(of: branch, configuredRemote: configuredRemote),

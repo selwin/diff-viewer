@@ -4,7 +4,8 @@ import SwiftUI
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
 /// popover; so does New Branch…, which opens its sheet, Compare…, which opens the Compare
-/// window, and a Merge row, which opens the Merge sheet. A click outside closes it too.
+/// window, a Merge row, which opens the Merge sheet, and Create PR, which opens GitHub. A
+/// click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState
     /// For the window the delete confirmation hangs on.
@@ -44,6 +45,10 @@ struct BranchPickerPopover: View {
                 }
             },
             onFetch: { Task { await windowState.fetchAllRemotes() } },
+            onPullRequest: {
+                windowState.isBranchPickerPresented = false
+                Task { await windowState.openPullRequest() }
+            },
             onNewBranch: { windowState.openNewBranchSheet(initialName: $0) },
             onCompare: {
                 windowState.isBranchPickerPresented = false
@@ -71,6 +76,7 @@ struct BranchPickerListView: NSViewRepresentable {
     let onPublish: (String, String) -> Void
     let onDelete: (LocalBranch, NSWindow?) -> Void
     let onFetch: () -> Void
+    let onPullRequest: () -> Void
     let onNewBranch: (String?) -> Void
     let onCompare: () -> Void
     let now: @MainActor () -> Date
@@ -103,6 +109,7 @@ struct BranchPickerListView: NSViewRepresentable {
         view.onPublish = onPublish
         view.onDelete = onDelete
         view.onFetch = onFetch
+        view.onPullRequest = onPullRequest
         view.onNewBranch = onNewBranch
         view.onCompare = onCompare
         view.now = now

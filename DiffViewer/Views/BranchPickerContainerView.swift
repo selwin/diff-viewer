@@ -32,6 +32,8 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch, NSWindow?) -> Void = { _, _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
+    /// The header's Create PR.
+    var onPullRequest: () -> Void = {}
     /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
     var onNewBranch: (String?) -> Void = { _ in }
     /// The Compare… row and ⇧⌘D.
@@ -135,6 +137,8 @@ final class BranchPickerContainerView: NSView {
             self?.onPublish(name, remote)
             self?.returnFocusToSearchField()
         }
+        // Closes the popover, so focus has nowhere to return.
+        header.onPullRequest = { [weak self] in self?.onPullRequest() }
     }
 
     private func configureSearchField() {
@@ -483,9 +487,9 @@ final class BranchPickerContainerView: NSView {
         searchField.currentEditor()?.selectedRange = NSRange(location: end, length: 0)
     }
 
-    /// Search field → Copy → Fetch → Pull → Push → search field, over the header buttons
-    /// that can act; AppKit skips buttons unless Full Keyboard Access is on. Set explicitly
-    /// rather than recalculated, so the order doesn't depend on the popover window.
+    /// Search field → Copy → Fetch → Pull → Push → Create PR → search field, over the header
+    /// buttons that can act; AppKit skips buttons unless Full Keyboard Access is on. Set
+    /// explicitly rather than recalculated, so the order doesn't depend on the popover window.
     private func wireKeyViewLoop() {
         let loop = [searchField] + header.keyViews(for: state.headerText.focusOrder)
         for (view, next) in zip(loop, loop.dropFirst() + [searchField]) { view.nextKeyView = next }
