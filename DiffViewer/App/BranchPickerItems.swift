@@ -39,6 +39,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var remoteBranches: [RemoteBranch] = []
     /// The remote-tracking refs fetch rounds brought in, by full ref.
     var newRemoteBranches: Set<String> = []
+    /// The remotes that are one GitHub repository for fetch and push, as last read.
+    var gitHubRemoteNames: Set<String> = []
 }
 
 /// Which branch a row stands for. The highlight, reloads and actions all go by it, never

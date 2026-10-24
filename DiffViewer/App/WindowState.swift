@@ -234,6 +234,9 @@ final class WindowState {
     private(set) var fetchingRemotes: Set<String> = []
     /// The repository's last successfully read remote names.
     private(set) var remotes: [String] = []
+    /// The remotes that are one GitHub repository for fetch and push, as last read. Only
+    /// decides whether Create Pull Request shows; the action reads the URLs again.
+    private(set) var gitHubRemoteNames: Set<String> = []
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
     /// branches whose upstream the fetch mapping doesn't cover.
     private(set) var configuredUpstreamRemotes: [String: String] = [:]
@@ -261,6 +264,9 @@ final class WindowState {
     /// `inputsChanged` is whether the id set or any file's fingerprint moved since the
     /// previous list.
     @ObservationIgnored var onRefreshPublished: (@MainActor (WindowState, RefreshCause, _ inputsChanged: Bool) -> Void)?
+    /// Opens a pull request page in the browser; false when nothing could open it. Tests
+    /// replace it, so none reaches the real browser.
+    @ObservationIgnored var openURL: @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }
 
     /// Index into the current document's change blocks, for next/previous navigation, and
     /// the row the panes should bring into view. Written by `applySelection`, which resets
@@ -311,6 +317,7 @@ final class WindowState {
         startWatcher(session: session)
         refreshHistory(session: session)
         Task { [weak self] in await self?.refreshHeadState(session: session) }
+        Task { [weak self] in await self?.refreshGitHubRemoteNames(session: session) }
         scheduleStashRefresh(session: session)
         return true
     }
@@ -1776,6 +1783,8 @@ extension WindowState {
             await awaitBranchRead(session: session, finishing: pending)
             return
         }
+        // Off the round: it only decides whether Create Pull Request shows.
+        Task { [weak self] in await self?.refreshGitHubRemoteNames(session: session) }
         // A failed read keeps the previous value; the fetch doesn't depend on it.
         let configured = try? await session.client.configuredUpstreamRemotes()
         guard isWanted() else { return abandonFetchRound(session: session) }
@@ -2179,6 +2188,95 @@ extension WindowState {
         }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
+    }
+}
+
+// MARK: - Pull requests
+
+/// Opening GitHub's pull request page for HEAD's branch. Same file as the class so
+/// `gitHubRemoteNames` stays `private(set)`.
+extension WindowState {
+    static let pullRequestChangedMessage = "Branch or upstream changed before the pull request could open. Try again."
+
+    /// Reads which remotes are GitHub repositories. Supplemental to `remoteNames`: a failure
+    /// keeps the last value, and a read finishing after a newer one started publishes nothing.
+    private func refreshGitHubRemoteNames(session: RepoSession) async {
+        guard isLive(session) else { return }
+        session.gitHubRemoteNamesSerial += 1
+        let ticket = session.gitHubRemoteNamesSerial
+        guard let urls = try? await session.client.remoteURLs(), isLive(session),
+            ticket == session.gitHubRemoteNamesSerial
+        else { return }
+        gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: urls)
+    }
+
+    /// Opens GitHub's pull request page after rechecking HEAD, the upstream and unpushed
+    /// commits. The repository can still change after the last read.
+    func openPullRequest() async {
+        guard let session, pullRequestAvailability == .enabled, case let .named(branch) = headState,
+            let intended = branches.first(where: { $0.name == branch })?.upstream
+        else { return }
+        session.gitHubRemoteNamesSerial += 1
+        let ticket = session.gitHubRemoteNamesSerial
+        let remotes: [String: RemoteURLs]
+        do {
+            remotes = try await session.client.remoteURLs()
+        } catch {
+            guard isLive(session) else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard isLive(session) else { return }
+        // Publish only if no newer discovery started.
+        if ticket == session.gitHubRemoteNamesSerial {
+            gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: remotes)
+        }
+        guard let read = await readHeadAndBranches(session: session) else { return }
+        // HEAD can move while the branches were read; the branch list alone can't tell.
+        let headNow: HeadState
+        do {
+            headNow = try await session.client.headState()
+        } catch {
+            guard isLive(session) else { return }
+            errorMessage = error.localizedDescription
+            return
+        }
+        guard isLive(session) else { return }
+        let busy = SyncPolicy.busyReason(active: activeSync, isSwitching: isSwitchingBranch, isCommitting: isCommitting)
+        // Tracking counts may change; the remote and its ref may not.
+        guard read.state == .named(branch), headNow == .named(branch),
+            let fresh = read.branches.first(where: { $0.name == branch }),
+            fresh.upstream?.remote == intended.remote, fresh.upstream?.remoteRef == intended.remoteRef,
+            busy == nil
+        else {
+            await reportPullRequestFailure(Self.pullRequestChangedMessage, session: session)
+            return
+        }
+        switch GitHubPullRequestLink.make(for: fresh, remotes: remotes) {
+        case let .success(url):
+            if !openURL(url) { errorMessage = "Couldn't open the browser" }
+        case let .failure(failure):
+            await reportPullRequestFailure(Self.pullRequestMessage(for: failure, branch: branch), session: session)
+        }
+    }
+
+    /// Re-reads the branches first, so the pill and the menu catch up with what the
+    /// fresh read found, then reports. After the read, so the news survives it.
+    private func reportPullRequestFailure(_ message: String, session: RepoSession) async {
+        await awaitBranchRead(session: session)
+        guard isLive(session) else { return }
+        errorMessage = message
+    }
+
+    static func pullRequestMessage(for failure: GitHubPullRequestLink.Failure, branch: String) -> String {
+        switch failure {
+        case .branchChanged: pullRequestChangedMessage
+        case .notABranch: "\(branch)'s upstream isn't a branch on its remote"
+        case let .remoteMissing(remote): "The remote \(remote) no longer exists"
+        case let .notOnGitHub(remote): "\(remote) isn't a GitHub repository"
+        case let .pushesElsewhere(remote): "\(remote) pushes somewhere other than its GitHub repository"
+        case .unpushed: "\(branch) has commits that aren't pushed. Push first."
+        }
     }
 }
 

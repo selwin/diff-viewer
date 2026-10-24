@@ -318,7 +318,8 @@ struct RepositoryCommands: Commands {
     }
 
     /// The title bar pill's Pull and Push for the current branch, available whenever its
-    /// segments are. Each action keeps the window and branch it was built with.
+    /// segments are, then Create Pull Request on GitHub. Each action keeps the window and
+    /// branch it was built with.
     @ViewBuilder private var syncItems: some View {
         let state = windowState
         let sync = state?.canOpenBranchPicker == true ? state?.currentBranchSync : nil
@@ -355,11 +356,15 @@ struct RepositoryCommands: Commands {
                 .keyboardShortcut("p")
                 .disabled(true)
         }
+        Button("Create Pull Request on GitHub") {
+            Self.startSync(in: state) { await $0.openPullRequest() }
+        }
+        .disabled(state?.canOpenBranchPicker != true || state?.pullRequestAvailability != .enabled)
     }
 
     /// The guard repeats `.disabled`, which only reflects the state at the last render: a
-    /// pull, push or publish doesn't itself check for a sheet or picker in the way. It is
-    /// checked again inside the Task, since a sheet may open before the Task runs.
+    /// pull, push, publish or pull request doesn't itself check for a sheet or picker in the
+    /// way. It is checked again inside the Task, since a sheet may open before the Task runs.
     private static func startSync(
         in state: WindowState?, _ operation: @escaping @MainActor (WindowState) async -> Void
     ) {

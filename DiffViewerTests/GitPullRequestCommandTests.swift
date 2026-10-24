@@ -131,6 +131,31 @@ import Testing
             ])
     }
 
+    @Test func remoteURLsApplyRewritesAndListEveryPushURL() async throws {
+        let repo = try await committedRepo()
+        try await repo.git(["config", "url.https://github.com/.insteadOf", "gh:"])
+        try await repo.git(["config", "url.git@github.com:.pushInsteadOf", "gh:"])
+        try await repo.git(["remote", "add", "origin", "gh:me/widgets"])
+        try await repo.git(["remote", "add", "fork", "https://example.com/a.git"])
+        try await repo.git(["remote", "set-url", "--add", "--push", "fork", "https://example.com/b.git"])
+        try await repo.git(["remote", "set-url", "--add", "--push", "fork", "https://example.com/c.git"])
+        // A promisor prints its filter after `(fetch)`.
+        try await repo.git(["remote", "add", "partial", "https://github.com/acme/widgets"])
+        try await repo.git(["config", "remote.partial.promisor", "true"])
+        try await repo.git(["config", "remote.partial.partialclonefilter", "blob:none"])
+
+        #expect(
+            try await repo.client.remoteURLs() == [
+                "origin": RemoteURLs(
+                    fetchURL: "https://github.com/me/widgets", pushURLs: ["git@github.com:me/widgets"]),
+                "partial": RemoteURLs(
+                    fetchURL: "https://github.com/acme/widgets", pushURLs: ["https://github.com/acme/widgets"]),
+                "fork": RemoteURLs(
+                    fetchURL: "https://example.com/a.git",
+                    pushURLs: ["https://example.com/b.git", "https://example.com/c.git"]),
+            ])
+    }
+
     // MARK: advertisement
 
     @Test func advertisementReportsTheRemoteNotTheStaleTrackingHead() async throws {

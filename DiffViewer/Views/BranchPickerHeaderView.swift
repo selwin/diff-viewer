@@ -2,14 +2,15 @@ import AppKit
 
 /// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
 /// subtitle for how far that branch is from its upstream and how the fetch went, a raised
-/// round Fetch button that spins while a round runs, and the current branch's Pull and
-/// Push after it. The panel's glass runs on under it.
+/// round Fetch button that spins while a round runs, and the current branch's Pull, Push
+/// and Create PR after it. The panel's glass runs on under it.
 final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
     private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: PickerPillButton.focusRingMargin)
     private let controls = BranchHeaderControls()
     private var syncButtons: BranchRowSyncButtons { controls.syncButtons }
     private var fetchButton: FetchButton { controls.fetchButton }
+    private var pullRequestButton: PickerPillButton { controls.pullRequestButton }
 
     /// After a copy; the picker returns focus to its search field.
     var onCopy: () -> Void {
@@ -21,12 +22,15 @@ final class BranchPickerHeaderView: PickerHeaderView {
     var onPush: (String) -> Void = { _ in }
     /// Takes the branch, then the remote to publish it to.
     var onPublish: (String, String) -> Void = { _, _ in }
+    var onPullRequest: () -> Void = {}
     private var text = BranchPickerHeaderText(title: "")
 
     init() {
         super.init(wrapsTitle: false)
         fetchButton.target = self
         fetchButton.action = #selector(fetchClicked)
+        pullRequestButton.target = self
+        pullRequestButton.action = #selector(pullRequestClicked)
         titleAccessory = copyButton
         trailingAccessory = controls
     }
@@ -52,8 +56,19 @@ final class BranchPickerHeaderView: PickerHeaderView {
         } else {
             syncButtons.isHidden = true
         }
+        configurePullRequest(text.pullRequest)
         controls.needsLayout = true
         needsLayout = true
+    }
+
+    private func configurePullRequest(_ availability: PullRequestAvailability) {
+        switch availability {
+        case .hidden: pullRequestButton.apply(.hidden, title: "Create PR")
+        case let .disabled(help): pullRequestButton.apply(.disabled(reason: help), title: "Create PR")
+        case .enabled:
+            pullRequestButton.apply(.enabled, title: "Create PR")
+            pullRequestButton.toolTip = "Create a pull request on GitHub"
+        }
     }
 
     /// Updates only the subtitle, as the fetch time ages.
@@ -64,6 +79,10 @@ final class BranchPickerHeaderView: PickerHeaderView {
 
     @objc private func fetchClicked() {
         onFetch()
+    }
+
+    @objc private func pullRequestClicked() {
+        onPullRequest()
     }
 
     /// ⇧⌘P on the current branch's Pull, through its click. Returns whether it ran.
@@ -84,6 +103,7 @@ final class BranchPickerHeaderView: PickerHeaderView {
     func refreshRendering() {
         fetchButton.needsDisplay = true
         syncButtons.refreshRendering()
+        pullRequestButton.refreshRendering()
     }
 
     /// The header's controls for `order`, which the container chains after the search field.
@@ -94,27 +114,34 @@ final class BranchPickerHeaderView: PickerHeaderView {
             case .fetch: fetchButton
             case .pull: syncButtons.pullButton
             case .push: syncButtons.pushButton
+            case .pullRequest: pullRequestButton
             }
         }
     }
 }
 
-/// The round Fetch button and, when the current branch has them, its Pull and Push, side by
-/// side as the header's one trailing accessory. Its frame carries the focus ring margin
-/// of the buttons at its ends.
+/// The round Fetch button and, when the current branch has them, its Pull and Push and
+/// Create PR, side by side as the header's one trailing accessory. Its frame carries the
+/// focus ring margin of the buttons at its ends.
 private final class BranchHeaderControls: NSView {
     private static let controlGap: CGFloat = 8
     private static let margin = PickerPillButton.focusRingMargin
 
     let fetchButton = FetchButton(frame: .zero)
     let syncButtons = BranchRowSyncButtons(style: .header)
+    /// Sized like the header's Pull and Push, and focusable like them.
+    let pullRequestButton = PickerPillButton(
+        title: "Create PR", height: 34, focusMargin: PickerPillButton.focusRingMargin, surface: .raised)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        // Fetch comes first, left of Pull and Push, in the order Tab visits them.
+        // Fetch comes first, left of Pull, Push and Create PR, in the order Tab visits them.
         addSubview(fetchButton)
         addSubview(syncButtons)
+        pullRequestButton.focusRingType = .default
+        pullRequestButton.isHidden = true
+        addSubview(pullRequestButton)
     }
 
     @available(*, unavailable)
@@ -129,15 +156,19 @@ private final class BranchHeaderControls: NSView {
     override var intrinsicContentSize: NSSize {
         var width = fetchButton.visibleSize.width
         if !syncButtons.isHidden { width += Self.controlGap + syncButtons.visibleSize.width }
+        if !pullRequestButton.isHidden { width += Self.controlGap + pullRequestButton.visibleSize.width }
         return NSSize(width: width + Self.margin * 2, height: fetchButton.intrinsicContentSize.height)
     }
 
     override func layout() {
         super.layout()
         let centerY = bounds.height / 2
-        let fetchMaxX = fetchButton.placeVisible(x: Self.margin, centerY: centerY)
+        var maxX = fetchButton.placeVisible(x: Self.margin, centerY: centerY)
         if !syncButtons.isHidden {
-            syncButtons.placeVisible(x: fetchMaxX + Self.controlGap, centerY: centerY)
+            maxX = syncButtons.placeVisible(x: maxX + Self.controlGap, centerY: centerY)
+        }
+        if !pullRequestButton.isHidden {
+            pullRequestButton.placeVisible(x: maxX + Self.controlGap, centerY: centerY)
         }
     }
 }

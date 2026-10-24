@@ -46,6 +46,8 @@ final class RepoSession {
     /// finish in. Separate from `headCheckSerial` because the two run independently: a
     /// HEAD-state read must not cancel a HEAD check, nor a HEAD check a HEAD-state read.
     var headStateCheckSerial = 0
+    /// Incremented per GitHub remote read, so only the newest read publishes.
+    var gitHubRemoteNamesSerial = 0
     /// Incremented per stash-list read, so only the newest read publishes.
     var stashSerial = 0
     /// The newest stash-list read. Older ones run on; their tickets keep them from publishing.

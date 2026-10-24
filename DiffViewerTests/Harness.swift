@@ -35,7 +35,11 @@ final class Harness {
     /// What `WindowState` reads as the current time; tests move it to expire cooldowns.
     var clock = Date(timeIntervalSince1970: 1_789_300_000)
 
-    func makeState(commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator()) -> WindowState {
+    /// `openURL` defaults to opening nothing, so no test reaches the real browser.
+    func makeState(
+        commitMessageGenerator: any CommitMessageGenerator = StubCommitMessageGenerator(),
+        openURL: @escaping @MainActor (URL) -> Bool = { _ in true }
+    ) -> WindowState {
         let state = WindowState(
             preferences: preferences, cache: probeCache(runner), commitMessageGenerator: commitMessageGenerator,
             now: { [weak self] in self?.clock ?? Date() },
@@ -47,6 +51,7 @@ final class Harness {
                 self?.watcherCallbacks[root] = { onChange([.worktree, .index]) }
                 return watcher
             })
+        state.openURL = openURL
         state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
             self?.published.append((state.files, cause, inputsChanged))
         }

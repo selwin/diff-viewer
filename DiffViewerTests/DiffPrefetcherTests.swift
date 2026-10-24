@@ -104,6 +104,7 @@ struct TaggedClient: RepoClient {
         IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
     }
     func remotes() async throws -> [GitRemote] { [] }
+    func remoteURLs() async throws -> [String: RemoteURLs] { [:] }
     func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest {
         throw PullRequestError.notFound
     }
