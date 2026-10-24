@@ -5,12 +5,13 @@ import Foundation
 enum RepositoryDiscovery {
     typealias Result = (root: RepositoryRoot, client: any RepoClient)
 
-    static func discover(_ url: URL) async throws -> Result {
-        // Every open funnels through here, which is the earliest point the login shell can
-        // start resolving PATH for the hooks a later commit may run.
-        LoginShellPath.warmUp()
+    static func discover(_ url: URL, cache: RepositoryShellEnvironmentCache) async throws -> Result {
         let toplevel = try await GitClient.discoverRoot(from: url)
-        return (RepositoryRoot(toplevel), GitClient(repoRoot: toplevel))
+        // The cache key must be the canonical URL the coordinator refreshes and forgets by.
+        let root = RepositoryRoot(toplevel)
+        let client = GitClient(
+            repoRoot: toplevel, resolveCommandEnvironment: { try await cache.environment(for: root.url) })
+        return (root, client)
     }
 
     /// Runs the standard folder chooser; nil when cancelled.

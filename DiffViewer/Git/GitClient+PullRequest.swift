@@ -35,7 +35,7 @@ extension GitClient {
             Self.executable,
             arguments: ["ls-remote", "--symref", remote, "HEAD", "refs/pull/\(number)/head"],
             currentDirectory: repoRoot,
-            environment: await remoteEnvironment()
+            environment: try await remoteEnvironment()
         )
         guard result.status == 0 else {
             throw ProcessError.failed(
@@ -91,7 +91,7 @@ extension GitClient {
                 "+refs/pull/\(advertised.number)/head:\(prefix)/head",
                 "+refs/heads/\(advertised.defaultBranch):\(prefix)/base",
             ],
-            command: "git fetch", environment: await remoteEnvironment())
+            command: "git fetch", environment: try await remoteEnvironment())
     }
 
     /// Checks that the advertised commits arrived, then pins each exact SHA under its own

@@ -57,7 +57,7 @@ extension GitClient {
     /// Merges exactly `sourceTipSha`, the commit the reader confirmed, so a ref that a
     /// fetch has moved since can't bring in commits the sheet never showed. `sourceRef`, a
     /// full ref such as `refs/heads/x` or `refs/remotes/origin/x`, only names the branch
-    /// in the message. Runs hooks, so it takes the hook environment.
+    /// in the message. Runs hooks, so it takes the command environment.
     func merge(sourceTipSha: String, sourceRef: String) async throws {
         try Self.rejectOption(sourceTipSha, kind: "object id", command: "git merge")
         try Self.rejectOption(sourceRef, kind: "branch", command: "git merge")
@@ -68,7 +68,7 @@ extension GitClient {
         // labelled with the sha, since git labels them with the argument it was given.
         try await runReportingDiagnostics(
             ["merge", "--no-edit", "--no-log", "-m", message, sourceTipSha],
-            command: "git merge", environment: await hookEnvironment())
+            command: "git merge", environment: try await commandEnvironment())
     }
 
     /// The message `git merge <branch>` would write, from the same `git fmt-merge-msg`

@@ -3,11 +3,11 @@ import Foundation
 /// Remote commands: listing, fetch, pull, push, publish, fast-forward, and reading which
 /// remote each branch tracks. Split from `GitClient.swift` to keep it under the length lint.
 extension GitClient {
-    /// Uses the hook environment and disables git's terminal credential prompts. Final:
+    /// Uses the command environment and disables git's terminal credential prompts. Final:
     /// no override may turn prompting back on, since nobody is there to answer.
-    func remoteEnvironment() async -> [String: String] {
-        var environment = await hookEnvironment()
-        environment["GIT_TERMINAL_PROMPT"] = "0"
+    func remoteEnvironment() async throws -> ProcessEnvironment {
+        var environment = try await commandEnvironment()
+        environment.variables["GIT_TERMINAL_PROMPT"] = "0"
         return environment
     }
 
@@ -40,7 +40,7 @@ extension GitClient {
         let prune = FetchRefspecs.prunesOnlyTrackingRefs(try await fetchRefspecs(of: remote))
         try await runReportingDiagnostics(
             ["fetch", prune ? "--prune" : "--no-prune", "--no-prune-tags", remote], command: "git fetch",
-            environment: await remoteEnvironment())
+            environment: try await remoteEnvironment())
     }
 
     /// The remote's `remote.<name>.fetch` mappings, in config order.
@@ -55,8 +55,8 @@ extension GitClient {
         // Config decides merge versus rebase; `--no-edit` keeps a merge from opening
         // `$EDITOR`, and the rebase path ignores it. An interactive rebase would still
         // open the sequence editor, so that editor is one that refuses.
-        var environment = await remoteEnvironment()
-        environment["GIT_SEQUENCE_EDITOR"] = Self.interactiveRebaseRefusal
+        var environment = try await remoteEnvironment()
+        environment.variables["GIT_SEQUENCE_EDITOR"] = Self.interactiveRebaseRefusal
         try await runReportingDiagnostics(["pull", "--no-edit"], command: "git pull", environment: environment)
     }
 
@@ -70,7 +70,7 @@ extension GitClient {
         // tags out of a branch push.
         try await runReportingDiagnostics(
             ["push", "--no-follow-tags", remote, "refs/heads/\(branch):\(remoteRef)"], command: "git push",
-            environment: await remoteEnvironment())
+            environment: try await remoteEnvironment())
     }
 
     /// Pushes `branch` to `remote` under the same name and sets it as the upstream.
@@ -83,7 +83,7 @@ extension GitClient {
         // does not cover the new branch.
         try await runReportingDiagnostics(
             ["push", "--set-upstream", "--no-follow-tags", remote, "refs/heads/\(branch):refs/heads/\(branch)"],
-            command: "git push", environment: await remoteEnvironment())
+            command: "git push", environment: try await remoteEnvironment())
     }
 
     /// Moves `branch`, which must not be checked out, to the tip of `remoteRef` on
@@ -114,7 +114,7 @@ extension GitClient {
             throw ProcessError.failed(
                 command: "git symbolic-ref", status: symbolic.status, stderr: Self.commandDiagnostics(symbolic))
         }
-        let environment = await remoteEnvironment()
+        let environment = try await remoteEnvironment()
         // One explicit refspec, so the upstream ref becomes the remote tip whatever the
         // remote's configured mappings cover.
         try await runReportingDiagnostics(

@@ -92,6 +92,29 @@ final class PresentationLog {
     var unattached: Set<WindowID> = []
 }
 
+/// Records the hook-environment calls the coordinator makes.
+@MainActor
+final class EnvironmentRecorder {
+    enum Action { case refresh, forget }
+
+    struct Event: Equatable {
+        let action: Action
+        let root: RepositoryRoot
+    }
+
+    private(set) var events: [Event] = []
+
+    var lifecycle: RepositoryEnvironmentLifecycle {
+        RepositoryEnvironmentLifecycle(
+            refresh: { [self] in events.append(Event(action: .refresh, root: $0)) },
+            forget: { [self] in events.append(Event(action: .forget, root: $0)) })
+    }
+
+    func count(_ action: Action, _ root: RepositoryRoot) -> Int {
+        events.filter { $0.action == action && $0.root == root }.count
+    }
+}
+
 @MainActor
 final class CoordinatorHarness {
     let defaults: UserDefaults
@@ -102,6 +125,7 @@ final class CoordinatorHarness {
     let preferences: Preferences
     let prefetcher = RecordingPrefetcher()
     let log = PresentationLog()
+    let environment = EnvironmentRecorder()
     let coordinator: WindowCoordinator
     private let cache: DifftCache
     /// Scene values written by the coordinator, by window.
@@ -128,6 +152,7 @@ final class CoordinatorHarness {
         let gate = gate
         let registry = registry
         let log = log
+        let lifecycle = environment.lifecycle
         coordinator = WindowCoordinator(
             preferences: preferences,
             prefetcher: prefetcher,
@@ -162,7 +187,8 @@ final class CoordinatorHarness {
                     log.tabbed.append(PresentationLog.Tab(window: window, origin: origin))
                     return true
                 }
-            )
+            ),
+            environmentLifecycle: lifecycle
         )
         if launchFinished { coordinator.applicationDidFinishLaunching() }
     }
@@ -310,6 +336,19 @@ struct WindowCoordinatorTests {
         #expect(h.coordinator.openOrder == [h.root(a), h.root(b)])
     }
 
+    @Test func environmentRefreshesOnRegistrationAndFocusAndForgetsOnClose() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A")
+        let w = h.makeWindow()
+        await h.openAndSettle(a, into: w)
+        #expect(h.environment.count(.refresh, h.root(a)) == 1)
+        h.coordinator.windowDidBecomeKey(w.id)
+        #expect(h.environment.count(.refresh, h.root(a)) == 2)
+        #expect(h.environment.count(.forget, h.root(a)) == 0)
+        h.coordinator.remove(w.id)
+        #expect(h.environment.count(.forget, h.root(a)) == 1)
+    }
+
     @Test func titlesDisambiguateSameNamedRepositoriesAndRelaxOnClose() async {
         let h = CoordinatorHarness()
         let work = h.repo("work/app")
@@ -389,6 +428,18 @@ struct WindowCoordinatorTests {
         #expect(w2.repositoryRoot == h.root(a))
         #expect(w1.isEmpty)
         #expect(h.log.created.isEmpty)
+    }
+
+    @Test func openingIntoAnExistingKeyEmptyWindowRefreshesTheEnvironment() async {
+        let h = CoordinatorHarness()
+        let a = h.repo("A", files: filesA)
+        let w = h.makeWindow()
+        h.coordinator.windowDidBecomeKey(w.id)
+        #expect(h.environment.count(.refresh, h.root(a)) == 0)
+
+        await h.open(a, from: nil)
+        #expect(w.repositoryRoot == h.root(a))
+        #expect(h.environment.count(.refresh, h.root(a)) > 0)
     }
 
     @Test func discoveryFailureShowsOneAlertAndChangesNothing() async {
@@ -1419,11 +1470,12 @@ struct WindowCoordinatorTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: repo)
         try await git(["worktree", "add", "-q", worktree.path], in: repo)
 
-        let root = try await RepositoryDiscovery.discover(repo).root
+        let cache = RepositoryShellEnvironmentCache()
+        let root = try await RepositoryDiscovery.discover(repo, cache: cache).root
         #expect(root == RepositoryRoot(repo))
-        #expect(try await RepositoryDiscovery.discover(sub).root == root)
-        #expect(try await RepositoryDiscovery.discover(link).root == root)
-        let other = try await RepositoryDiscovery.discover(worktree).root
+        #expect(try await RepositoryDiscovery.discover(sub, cache: cache).root == root)
+        #expect(try await RepositoryDiscovery.discover(link, cache: cache).root == root)
+        let other = try await RepositoryDiscovery.discover(worktree, cache: cache).root
         #expect(other != root)
         #expect(other == RepositoryRoot(worktree))
     }

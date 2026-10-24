@@ -32,7 +32,11 @@ import Testing
             url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("DiffViewerGitTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-            client = GitClient(repoRoot: url, environment: Self.environment, resolveHookEnvironment: { [:] })
+            client = GitClient(
+                repoRoot: url, environment: Self.environment,
+                resolveCommandEnvironment: {
+                    ProcessEnvironment(variables: [:], inheritance: .inherit)
+                })
         }
 
         deinit {
@@ -1153,7 +1157,10 @@ import Testing
             environment: Repo.environment.merging(
                 ["DIFFVIEWER_HOOK": "override", "DIFFVIEWER_HOOK_FILE": probe.path]
             ) { $1 },
-            resolveHookEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_HOOK": "resolved"] }
+            resolveCommandEnvironment: {
+                ProcessEnvironment(
+                    variables: ["PATH": resolvedPath, "DIFFVIEWER_HOOK": "resolved"], inheritance: .inherit)
+            }
         )
 
         try await client.switchBranch(to: "side")
