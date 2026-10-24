@@ -45,13 +45,14 @@ extension GitClient {
     // MARK: Push
 
     /// Saves the staged and unstaged changes, and untracked files when asked, as a new
-    /// stash and cleans them from the working tree. Hook environment, as for pop's apply:
+    /// stash and cleans them from the working tree. Command environment, as for pop's apply:
     /// clean filters such as LFS need the login PATH.
     func stash(message: String?, includeUntracked: Bool) async throws {
         var arguments = ["stash", "push"]
         if includeUntracked { arguments.append("--include-untracked") }
         if let message { arguments += ["-m", message] }
-        try await runReportingDiagnostics(arguments, command: "git stash push", environment: await hookEnvironment())
+        try await runReportingDiagnostics(
+            arguments, command: "git stash push", environment: try await commandEnvironment())
     }
 
     // MARK: Pop and drop
@@ -63,7 +64,7 @@ extension GitClient {
     func drop(_ entry: StashEntry) async throws {
         let selector = try await validatedStashSelector(for: entry)
         try await runReportingDiagnostics(
-            ["stash", "drop", selector], command: "git stash drop", environment: callEnvironment)
+            ["stash", "drop", selector], command: "git stash drop", environment: callProcessEnvironment)
     }
 
     /// Applies the confirmed commit, then drops its entry. Applying by sha means a stash
@@ -77,7 +78,7 @@ extension GitClient {
         _ = try await validatedStashSelector(for: entry)
         do {
             try await runReportingDiagnostics(
-                ["stash", "apply", entry.sha], command: "git stash apply", environment: await hookEnvironment())
+                ["stash", "apply", entry.sha], command: "git stash apply", environment: try await commandEnvironment())
         } catch {
             if (try? await hasUnmergedPaths()) == true { throw StashError.conflicts }
             throw error

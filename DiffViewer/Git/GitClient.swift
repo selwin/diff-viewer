@@ -6,18 +6,21 @@ struct GitClient: RepoClient {
     /// Merged over `baseEnvironment` on every call, so tests can hand git a neutral identity
     /// and keep the developer's own config out.
     private let environmentOverrides: [String: String]
-    /// Awaited by the calls that run the user's hooks — `commit`, `switchBranch` — and by
-    /// the remote commands, whose credential helpers resolve on the login PATH too.
-    private let resolveHookEnvironment: @Sendable () async -> [String: String]
+    /// The command environment: awaited by the calls that run the user's hooks — `commit`,
+    /// `switchBranch` — and by the remote commands, whose credential helpers resolve on the
+    /// login PATH too. Throws only `CancellationError`.
+    private let resolveCommandEnvironment: @Sendable () async throws -> ProcessEnvironment
 
     init(
         repoRoot: URL,
         environment: [String: String] = [:],
-        resolveHookEnvironment: @escaping @Sendable () async -> [String: String] = LoginShellPath.environment
+        resolveCommandEnvironment: @escaping @Sendable () async throws -> ProcessEnvironment = {
+            ProcessEnvironment(variables: await LoginShellPath.environment(), inheritance: .inherit)
+        }
     ) {
         self.repoRoot = repoRoot
         self.environmentOverrides = environment
-        self.resolveHookEnvironment = resolveHookEnvironment
+        self.resolveCommandEnvironment = resolveCommandEnvironment
     }
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")
@@ -35,13 +38,21 @@ struct GitClient: RepoClient {
         Self.baseEnvironment.merging(environmentOverrides) { _, instance in instance }
     }
 
-    /// What a call that runs hooks or talks to a remote passes to git. Later wins: hooks
-    /// and credential helpers need the login shell's PATH, and a caller's own overrides
-    /// still beat both. Internal, with `callEnvironment` and `commandDiagnostics`, for
-    /// the remote commands in `GitClient+Remote.swift`.
-    func hookEnvironment() async -> [String: String] {
-        var environment = Self.baseEnvironment.merging(await resolveHookEnvironment()) { _, resolved in resolved }
-        environment.merge(environmentOverrides) { _, instance in instance }
+    /// `callEnvironment` for a call that needs no resolved environment.
+    var callProcessEnvironment: ProcessEnvironment {
+        ProcessEnvironment(variables: callEnvironment, inheritance: .inherit)
+    }
+
+    /// The command environment: what a call that runs hooks or talks to a remote passes to
+    /// git. Later wins: the resolved environment is what hooks and credential helpers expect,
+    /// git's own settings (locale, no pager) must still hold so its output stays parseable,
+    /// and a caller's overrides beat both. Inheritance is the resolver's call. Internal, with
+    /// `callEnvironment` and `commandDiagnostics`, for the remote commands in
+    /// `GitClient+Remote.swift`.
+    func commandEnvironment() async throws -> ProcessEnvironment {
+        var environment = try await resolveCommandEnvironment()
+        environment.variables.merge(Self.baseEnvironment) { _, base in base }
+        environment.variables.merge(environmentOverrides) { _, instance in instance }
         return environment
     }
 
@@ -424,17 +435,18 @@ struct GitClient: RepoClient {
 
         // The label is fixed so the alert never shows the temp file's path.
         try await runReportingDiagnostics(
-            ["commit", "--cleanup=strip", "-F", file.path], command: "git commit", environment: await hookEnvironment())
+            ["commit", "--cleanup=strip", "-F", file.path], command: "git commit",
+            environment: try await commandEnvironment())
     }
 
     /// Switches to an existing local branch. Runs the user's post-checkout hook, so it
-    /// takes the hook environment.
+    /// takes the command environment.
     func switchBranch(to branch: String) async throws {
         try Self.rejectOption(branch, kind: "branch name", command: "git switch")
         // `--no-guess`: a stale menu entry whose local branch was deleted must not create
         // a tracking branch from a matching remote.
         try await runReportingDiagnostics(
-            ["switch", "--no-guess", branch], command: "git switch", environment: await hookEnvironment())
+            ["switch", "--no-guess", branch], command: "git switch", environment: try await commandEnvironment())
     }
 
     /// Deletes a local branch. `-D`, because a squash-merged branch never reads as merged
@@ -442,7 +454,7 @@ struct GitClient: RepoClient {
     func deleteBranch(_ name: String) async throws {
         try Self.rejectOption(name, kind: "branch name", command: "git branch -D")
         try await runReportingDiagnostics(
-            ["branch", "-D", name], command: "git branch -D", environment: callEnvironment)
+            ["branch", "-D", name], command: "git branch -D", environment: callProcessEnvironment)
     }
 
     /// Combines stderr and stdout, because git and hooks may report failures on either.
@@ -454,7 +466,7 @@ struct GitClient: RepoClient {
 
     /// Runs a command that changes the repository. Not `check`: its label echoes every
     /// argument, such as a temporary file's path, and it drops stdout, where hooks often report.
-    func runReportingDiagnostics(_ arguments: [String], command: String, environment: [String: String]) async throws {
+    func runReportingDiagnostics(_ arguments: [String], command: String, environment: ProcessEnvironment) async throws {
         let result = try await ProcessRunner.run(
             Self.executable,
             arguments: arguments,

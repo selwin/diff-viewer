@@ -33,6 +33,7 @@ final class WindowCoordinator {
     private let prefetcher: any Prefetching
     private let discover: Discoverer
     private let hooks: Hooks
+    private let environmentLifecycle: RepositoryEnvironmentLifecycle
     private let defaults: UserDefaults
 
     private(set) var phase: Phase = .restoring
@@ -97,14 +98,16 @@ final class WindowCoordinator {
         preferences: Preferences,
         prefetcher: any Prefetching,
         defaults: UserDefaults = .standard,
-        discover: @escaping Discoverer = RepositoryDiscovery.discover,
-        hooks: Hooks
+        discover: @escaping Discoverer,
+        hooks: Hooks,
+        environmentLifecycle: RepositoryEnvironmentLifecycle
     ) {
         self.preferences = preferences
         self.prefetcher = prefetcher
         self.defaults = defaults
         self.discover = discover
         self.hooks = hooks
+        self.environmentLifecycle = environmentLifecycle
         for path in defaults.stringArray(forKey: SessionKeys.openRoots) ?? [] {
             let root = RepositoryRoot(path: path)
             restoreList.append(root)
@@ -261,6 +264,7 @@ final class WindowCoordinator {
     /// window adopted directly or on registration of a pending create.
     private func attach(_ id: WindowID, root: RepositoryRoot, purpose: OpenPurpose) {
         rootIndex[root] = id
+        environmentLifecycle.refresh(root)
         sceneRootSetters[id]?(root)
         if purpose == .user { preferences.noteOpened(root) }
         updateTitles()
@@ -375,6 +379,7 @@ final class WindowCoordinator {
         // owner's entries alone.
         if let root = state.repositoryRoot, rootIndex[root] == id {
             rootIndex[root] = nil
+            environmentLifecycle.forget(root)
             openOrder.removeAll { $0 == root }
             if phase == .restoring, restoreList.contains(root) { restoreClosed.insert(root) }
         }
@@ -396,6 +401,8 @@ final class WindowCoordinator {
         keyWindowID = id
         guard let window = windows[id] else { return }
         window.isKey = true
+        // Refocusing is when the user may have changed their shell setup.
+        if let root = window.repositoryRoot { environmentLifecycle.refresh(root) }
         // Defer active-window bookkeeping while this window is held.
         guard !isHeld(id), let root = window.repositoryRoot else { return }
         prefetch(for: id)

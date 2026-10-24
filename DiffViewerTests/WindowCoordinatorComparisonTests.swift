@@ -75,6 +75,16 @@ struct WindowCoordinatorComparisonTests {
         #expect(h.log.focused.last == owner.id, "the owner still holds its repository")
     }
 
+    @Test func theOwnerForgetsItsEnvironmentButItsTabDoesNot() async {
+        let (h, a, owner, tab) = await openTab()
+        h.coordinator.windowDidBecomeKey(tab.id)
+        #expect(h.environment.count(.refresh, h.root(a)) >= 2, "registration and the tab's focus")
+        h.coordinator.remove(tab.id)
+        #expect(h.environment.count(.forget, h.root(a)) == 0)
+        h.coordinator.remove(owner.id)
+        #expect(h.environment.count(.forget, h.root(a)) == 1)
+    }
+
     @Test func unknownSpentAndRefusedTokensRegisterNothing() async {
         let (h, _, owner, tab) = await openTab()
         let strangers = [h.makeState(), h.makeState()]

@@ -22,6 +22,19 @@ enum ProcessError: Error, LocalizedError {
     }
 }
 
+/// The environment a subprocess starts with.
+struct ProcessEnvironment: Sendable {
+    enum Inheritance: Sendable {
+        /// Overlays `variables` on the app's own environment.
+        case inherit
+        /// Hands the child exactly `variables`, so a variable the source unset stays unset.
+        case replace
+    }
+
+    var variables: [String: String]
+    var inheritance: Inheritance
+}
+
 /// Counts subprocesses between a successful launch and their exit, and remembers
 /// the most that were alive at once. An observation for measurement, not a limit.
 final class ProcessGauge: Sendable {
@@ -35,7 +48,7 @@ final class ProcessGauge: Sendable {
 
     var reading: Reading { state.withLock { $0 } }
 
-    fileprivate func launched() {
+    func launched() {
         state.withLock {
             $0.running += 1
             $0.launches += 1
@@ -43,7 +56,7 @@ final class ProcessGauge: Sendable {
         }
     }
 
-    fileprivate func exited() {
+    func exited() {
         state.withLock { $0.running -= 1 }
     }
 }
@@ -55,11 +68,27 @@ enum ProcessRunner {
     /// Every subprocess the app launches, for the Debug benchmark.
     static let allProcesses = ProcessGauge()
 
+    /// Overlays `environment` on the app's own.
     static func run(
         _ executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
         environment: [String: String] = [:],
+        standardInput: URL? = nil,
+        qualityOfService: QualityOfService = .userInitiated,
+        gauge: ProcessGauge? = nil
+    ) async throws -> ProcessResult {
+        try await run(
+            executable, arguments: arguments, currentDirectory: currentDirectory,
+            environment: ProcessEnvironment(variables: environment, inheritance: .inherit),
+            standardInput: standardInput, qualityOfService: qualityOfService, gauge: gauge)
+    }
+
+    static func run(
+        _ executable: URL,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        environment: ProcessEnvironment,
         standardInput: URL? = nil,
         qualityOfService: QualityOfService = .userInitiated,
         gauge: ProcessGauge? = nil
@@ -73,9 +102,14 @@ enum ProcessRunner {
                     process.arguments = arguments
                     process.currentDirectoryURL = currentDirectory
                     process.qualityOfService = qualityOfService
-                    var env = ProcessInfo.processInfo.environment
-                    for (key, value) in environment { env[key] = value }
-                    process.environment = env
+                    switch environment.inheritance {
+                    case .inherit:
+                        process.environment = ProcessInfo.processInfo.environment.merging(environment.variables) {
+                            _, given in given
+                        }
+                    case .replace:
+                        process.environment = environment.variables
+                    }
 
                     let stdoutPipe = Pipe()
                     let stderrPipe = Pipe()
@@ -121,6 +155,19 @@ enum ProcessRunner {
         arguments: [String],
         currentDirectory: URL? = nil,
         environment: [String: String] = [:],
+        standardInput: URL? = nil
+    ) async throws -> ProcessResult {
+        try await check(
+            executable, arguments: arguments, currentDirectory: currentDirectory,
+            environment: ProcessEnvironment(variables: environment, inheritance: .inherit),
+            standardInput: standardInput)
+    }
+
+    static func check(
+        _ executable: URL,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        environment: ProcessEnvironment,
         standardInput: URL? = nil
     ) async throws -> ProcessResult {
         let result = try await run(

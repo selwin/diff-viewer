@@ -289,7 +289,10 @@ import Testing
             environment: Repo.environment.merging(
                 ["DIFFVIEWER_PROBE": "override", "DIFFVIEWER_PROBE_FILE": probe.path]
             ) { $1 },
-            resolveHookEnvironment: { ["PATH": resolvedPath, "DIFFVIEWER_PROBE": "resolved"] }
+            resolveCommandEnvironment: {
+                ProcessEnvironment(
+                    variables: ["PATH": resolvedPath, "DIFFVIEWER_PROBE": "resolved"], inheritance: .inherit)
+            }
         )
 
         try await client.commit(message: "Change a")

@@ -88,7 +88,7 @@ extension GitClient {
     /// Creates `branch` from the remote-tracking ref `trackingRef` and switches to it. Git
     /// derives the upstream from the fetch mappings, and refuses a name that already exists
     /// locally rather than overwriting it. Runs the post-checkout hook, so it takes the
-    /// hook environment.
+    /// command environment.
     func checkoutTracking(branch: String, trackingRef: String) async throws {
         try Self.rejectOption(branch, kind: "branch name", command: "git switch")
         // Anything else could start a local branch that tracks nothing, or read as an option.
@@ -99,7 +99,7 @@ extension GitClient {
         // `-c`, never `-C`: the lowercase form refuses an existing branch instead of resetting it.
         try await runReportingDiagnostics(
             ["switch", "-c", branch, "--track", trackingRef], command: "git switch",
-            environment: await hookEnvironment())
+            environment: try await commandEnvironment())
     }
 }
 
@@ -129,13 +129,13 @@ extension GitClient {
     }
 
     /// Creates `name` at HEAD and switches to it. Runs the post-checkout hook, so it takes
-    /// the hook environment.
+    /// the command environment.
     func createBranch(_ name: String) async throws {
         try Self.rejectOption(name, kind: "branch name", command: "git switch")
         // `-c`, never `-C`: an existing branch is refused, not reset. `--no-track`: with
         // `branch.autoSetupMerge=inherit` or `always` the new branch would otherwise track
         // the branch it started from, and a push would go there.
         try await runReportingDiagnostics(
-            ["switch", "--no-track", "-c", name], command: "git switch", environment: await hookEnvironment())
+            ["switch", "--no-track", "-c", name], command: "git switch", environment: try await commandEnvironment())
     }
 }

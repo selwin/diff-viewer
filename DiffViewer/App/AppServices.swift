@@ -24,6 +24,8 @@ final class AppServices {
     let coordinator: WindowCoordinator
     let windows = NativeWindowRegistry()
     let windowFrameStore: WindowFrameStore
+    /// Held for the app's lifetime so its stream and consumer stay alive.
+    private let environmentEvents: OrderedEnvironmentLifecycle
 
     init(defaults: UserDefaults = .standard, cache: DifftCache = .bundled()) {
         preferences = Preferences(defaults: defaults)
@@ -33,10 +35,19 @@ final class AppServices {
         windowFrameStore = frameStore
         let windows = windows
         let opener = WindowOpener()
+        let shellEnvironments = RepositoryShellEnvironmentCache()
+        let environmentEvents = OrderedEnvironmentLifecycle { event in
+            switch event {
+            case .refresh(let url): await shellEnvironments.refresh(url)
+            case .forget(let url): await shellEnvironments.forget(url)
+            }
+        }
+        self.environmentEvents = environmentEvents
         coordinator = WindowCoordinator(
             preferences: preferences,
             prefetcher: prefetcher,
             defaults: defaults,
+            discover: { try await RepositoryDiscovery.discover($0, cache: shellEnvironments) },
             hooks: WindowCoordinator.Hooks(
                 createWindow: { root in opener.action?(value: root) },
                 focusWindow: { id in windows[id]?.makeKeyAndOrderFront(nil) },
@@ -52,7 +63,8 @@ final class AppServices {
                 windowIDsInTabOrder: { windows.windowIDsInTabOrder($0) },
                 createComparisonWindow: { token in opener.action?(id: AppServices.comparisonSceneID, value: token) },
                 tabWindow: { windows.addTab($0, to: $1) }
-            )
+            ),
+            environmentLifecycle: environmentEvents.lifecycle
         )
         self.opener = opener
     }
