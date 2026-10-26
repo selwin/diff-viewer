@@ -9,6 +9,15 @@ enum PullRequestAvailability: Equatable {
 
     static let unpushedHelp = "Push first"
 
+    /// The state of a Create PR button for this availability.
+    var pickerButtonState: PickerButtonState {
+        switch self {
+        case .hidden: .hidden
+        case let .disabled(help): .disabled(reason: help)
+        case .enabled: .enabled
+        }
+    }
+
     /// Hidden unless HEAD's listed branch tracks a branch of a GitHub remote in
     /// `snapshot.gitHubRemoteNames`. Disabled while it has unpushed commits, or while a
     /// switch, commit or sync holds the repository.

@@ -237,6 +237,8 @@ final class WindowState {
     /// The remotes that are one GitHub repository for fetch and push, as last read. Only
     /// decides whether Create Pull Request shows; the action reads the URLs again.
     private(set) var gitHubRemoteNames: Set<String> = []
+    /// Branch offered Create PR after publishing; cleared on branch change or browser open.
+    private(set) var pullRequestOfferedBranchName: String?
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
     /// branches whose upstream the fetch mapping doesn't cover.
     private(set) var configuredUpstreamRemotes: [String: String] = [:]
@@ -1135,6 +1137,7 @@ extension WindowState {
         guard let unpushed = await readUnpushedCommits(session: session, ticket: ticket, head: state, branches: list)
         else { return false }
         headState = state
+        if let offered = pullRequestOfferedBranchName, state != .named(offered) { pullRequestOfferedBranchName = nil }
         branches = list
         remoteBranches = remoteList
         if let remoteNames { remotes = remoteNames }
@@ -2121,6 +2124,7 @@ extension WindowState {
             // reads back as tracking nothing, and without it the row would offer Publish again.
             configuredUpstreamRemotes[request.branch] = request.remote
         }
+        if failure == nil, headState == .named(request.branch) { pullRequestOfferedBranchName = request.branch }
         guard let failure else { return }
         // After the refresh, so the news survives it.
         errorMessage = failure.localizedDescription
@@ -2254,7 +2258,11 @@ extension WindowState {
         }
         switch GitHubPullRequestLink.make(for: fresh, remotes: remotes) {
         case let .success(url):
-            if !openURL(url) { errorMessage = "Couldn't open the browser" }
+            if openURL(url) {
+                pullRequestOfferedBranchName = nil
+            } else {
+                errorMessage = "Couldn't open the browser"
+            }
         case let .failure(failure):
             await reportPullRequestFailure(Self.pullRequestMessage(for: failure, branch: branch), session: session)
         }

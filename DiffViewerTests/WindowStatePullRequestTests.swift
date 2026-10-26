@@ -21,19 +21,42 @@ struct WindowStatePullRequestTests {
     ]
     private static let changedMessage = "Branch or upstream changed before the pull request could open. Try again."
 
+    private static let unpublished = localBranch("feature")
+    private static let main = localBranch("main", upstream: upstream("origin/main"))
+
     /// Adopts a repository on `feature` and waits until Create Pull Request is enabled.
-    private func adopt(_ h: Harness, browser: Browser) async throws -> (state: WindowState, client: StubRepoClient) {
+    /// With `publishFirst`, `feature` starts unpublished and a publish then sets the offer.
+    private func adopt(
+        _ h: Harness, browser: Browser, publishFirst: Bool = false
+    ) async throws -> (state: WindowState, client: StubRepoClient) {
         let state = h.makeState(openURL: { url in
             browser.opened.append(url)
             return browser.opens
         })
         let repo = await h.adopt(state, "A", files: []) { client in
             await client.set(headState: .named("feature"))
-            await client.set(localBranches: [Self.tracked])
+            await client.set(localBranches: publishFirst ? [Self.main, Self.unpublished] : [Self.tracked])
             await client.set(remoteURLs: Self.origin)
         }
+        if publishFirst { try await publish(state, repo.client, branchesAfterPublish: [Self.main, Self.tracked]) }
         try #require(await eventually { @MainActor in state.pullRequestAvailability == .enabled })
         return (state, repo.client)
+    }
+
+    /// Publishes `feature`, which the repository reports as `branchesAfterPublish` once the push lands.
+    private func publish(
+        _ state: WindowState, _ client: StubRepoClient, branchesAfterPublish: [LocalBranch]
+    ) async throws {
+        state.isBranchPickerPresented = true
+        await state.fetchForBranchPicker()
+        await client.hold(.publish)
+        let publishing = Task { await state.publish(branch: "feature", to: "origin") }
+        try #require(await eventually { await client.heldCount(.publish) == 1 })
+        await client.set(localBranches: branchesAfterPublish)
+        await client.hold(.publish, false)
+        await client.release(.publish)
+        await publishing.value
+        state.isBranchPickerPresented = false
     }
 
     @Test func opensTheUpstreamsRemoteBranchNotTheLocalName() async throws {
@@ -47,6 +70,15 @@ struct WindowStatePullRequestTests {
                 "https://github.com/me/widgets/compare/remote-feature?quick_pull=1"
             ])
         #expect(state.errorMessage == nil)
+    }
+
+    @Test func openingTheBrowserClearsTheOffer() async throws {
+        let h = Harness()
+        let (state, _) = try await adopt(h, browser: Browser(), publishFirst: true)
+        try #require(state.pullRequestOfferedBranchName == "feature")
+
+        await state.openPullRequest()
+        #expect(state.pullRequestOfferedBranchName == nil)
     }
 
     enum Race: CaseIterable {
@@ -125,11 +157,74 @@ struct WindowStatePullRequestTests {
         let h = Harness()
         let browser = Browser()
         browser.opens = false
-        let (state, _) = try await adopt(h, browser: browser)
+        let (state, _) = try await adopt(h, browser: browser, publishFirst: true)
+        try #require(state.pullRequestOfferedBranchName == "feature")
 
         await state.openPullRequest()
         #expect(browser.opened.count == 1)
         #expect(state.errorMessage == "Couldn't open the browser")
+        #expect(state.pullRequestOfferedBranchName == "feature", "the offer stays for a retry")
+    }
+
+    // MARK: Offer after publishing
+
+    @Test(
+        arguments: [("feature", false, "feature"), ("feature", true, nil), ("main", false, nil)]
+            as [(String, Bool, String?)])
+    func onlyASuccessfulPublishOfTheCurrentBranchSetsTheOffer(head: String, fails: Bool, offered: String?) async throws
+    {
+        let h = Harness()
+        let state = h.makeState()
+        let repo = await h.adopt(state, "A", files: []) { client in
+            await client.set(headState: .named(head))
+            await client.set(localBranches: [Self.main, Self.unpublished])
+            await client.set(remoteURLs: Self.origin)
+        }
+        try #require(await eventually { @MainActor in state.branchReadStatus == .loaded })
+        await repo.client.fail(publish: fails)
+
+        try await publish(state, repo.client, branchesAfterPublish: [Self.main, Self.tracked])
+        #expect(state.pullRequestOfferedBranchName == offered)
+    }
+
+    /// Push shows while the branch is ahead, so Create PR waits for it rather than being lost.
+    @Test func theOfferSurvivesPushTemporarilyShowing() async throws {
+        let h = Harness()
+        let (state, client) = try await adopt(h, browser: Browser(), publishFirst: true)
+        let ahead = localBranch(
+            "feature",
+            upstream: upstream(
+                "origin/remote-feature", remoteRef: "refs/heads/remote-feature", tracking: .counts(ahead: 1, behind: 0))
+        )
+        await client.set(localBranches: [Self.main, ahead])
+        await state.refresh()
+        try #require(await eventually { @MainActor in state.currentBranchSync?.pullRequest == .hidden })
+        try #require(state.pullRequestOfferedBranchName == "feature")
+
+        await client.hold(.push)
+        let pushing = Task { await state.push(branch: "feature") }
+        try #require(await eventually { await client.heldCount(.push) == 1 })
+        await client.set(localBranches: [Self.main, Self.tracked])
+        await client.hold(.push, false)
+        await client.release(.push)
+        await pushing.value
+        #expect(await eventually { @MainActor in state.currentBranchSync?.pullRequest == .enabled })
+    }
+
+    @Test(arguments: [HeadState.named("main"), .detached(sha: objectID("d"))])
+    func movingOffTheBranchEndsTheOfferForGood(away: HeadState) async throws {
+        let h = Harness()
+        let (state, client) = try await adopt(h, browser: Browser(), publishFirst: true)
+        try #require(state.pullRequestOfferedBranchName == "feature")
+
+        await client.set(headStateAfterSwitch: away)
+        await state.switchBranch(to: "main")
+        #expect(state.pullRequestOfferedBranchName == nil)
+
+        await client.set(headStateAfterSwitch: .named("feature"))
+        await state.switchBranch(to: "feature")
+        #expect(state.headState == .named("feature"))
+        #expect(state.pullRequestOfferedBranchName == nil)
     }
 
     /// The failures the tests above don't reach.
