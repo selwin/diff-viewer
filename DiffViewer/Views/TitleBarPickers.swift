@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The title bar's branch pill: the current branch, which opens the branch picker, then
-/// Pull and Push segments when there is something to sync. ⌘B opens the same popover by
-/// setting the same flag.
+/// Pull and Push segments when there is something to sync, or Create PR after a publish.
+/// ⌘B opens the same popover by setting the same flag.
 struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -125,7 +125,7 @@ struct BranchPickerView: View {
         return PillFace(title: new.title, sync: new.title == old.title ? old.sync : nil)
     }
 
-    /// The divider, then Pull and Push or Publish.
+    /// The divider and the branch's action segments.
     private func segments(
         sync: CurrentBranchSyncPresentation, remaining: Double, departsPull: Bool, departsPush: Bool
     ) -> some View {
@@ -189,7 +189,8 @@ private struct PillFace: Equatable {
     let sync: CurrentBranchSyncPresentation?
 }
 
-/// The pill's Pull, then Push or Publish, each shown only when the sync rules say so.
+/// The pill's Pull, then Push, Publish or Create PR, each shown only when the sync rules
+/// say so.
 private struct BranchSyncSegments: View {
     @Environment(WindowState.self) private var windowState
     let sync: CurrentBranchSyncPresentation
@@ -201,11 +202,13 @@ private struct BranchSyncSegments: View {
     var body: some View {
         let showsPull = sync.buttons.pull != .hidden
         let showsPush = sync.buttons.push != .hidden
+        let showsPullRequest = sync.pullRequest != .hidden
         HStack(spacing: 0) {
             if showsPull {
                 segment(
-                    arrow: "arrow.down", count: sync.pullCount, title: "Pull", shortcut: "⇧⌘P",
-                    state: sync.buttons.pull, label: sync.pullAccessibilityLabel, isLast: !showsPush,
+                    icon: .symbol("arrow.down"), count: sync.pullCount, title: "Pull", shortcut: "⇧⌘P",
+                    state: sync.buttons.pull, label: sync.pullAccessibilityLabel,
+                    isLast: !showsPush && !showsPullRequest,
                     onTintChange: onLeadingTintChange
                 ) {
                     let branch = sync.branch
@@ -218,6 +221,15 @@ private struct BranchSyncSegments: View {
                 pushSegment(onTintChange: showsPull ? nil : onLeadingTintChange)
                     .modifier(Collapsing(width: pushWidth))
                     .id(SegmentID(branch: sync.branch, operation: sync.buttons.pushOperation))
+            }
+            if showsPullRequest {
+                segment(
+                    icon: .asset(.gitPullRequest), count: nil, title: "Open PR", shortcut: nil,
+                    state: sync.pullRequest.pickerButtonState, label: sync.pullRequestAccessibilityLabel,
+                    isLast: true, onTintChange: showsPull ? nil : onLeadingTintChange
+                ) {
+                    Task { await windowState.openPullRequest() }
+                }
             }
         }
     }
@@ -236,7 +248,7 @@ private struct BranchSyncSegments: View {
             } label: {
                 // No glyph: ⌘P has no one remote to publish to, so the menu has no shortcut.
                 SyncSegmentLabel(
-                    arrow: "arrow.up", count: nil, title: sync.buttons.pushTitle, shortcut: nil,
+                    icon: .symbol("arrow.up"), count: nil, title: sync.buttons.pushTitle, shortcut: nil,
                     state: sync.buttons.push, isLast: true, onTintChange: onTintChange)
             }
             // `.button` lets `.plain` strip the menu's own bezel, so it looks like the Push segment.
@@ -246,7 +258,7 @@ private struct BranchSyncSegments: View {
             .modifier(SegmentAvailability(state: sync.buttons.push, label: sync.pushAccessibilityLabel))
         } else {
             segment(
-                arrow: "arrow.up", count: sync.pushCount, title: sync.buttons.pushTitle, shortcut: "⌘P",
+                icon: .symbol("arrow.up"), count: sync.pushCount, title: sync.buttons.pushTitle, shortcut: "⌘P",
                 state: sync.buttons.push, label: sync.pushAccessibilityLabel, isLast: true,
                 onTintChange: onTintChange
             ) {
@@ -261,12 +273,12 @@ private struct BranchSyncSegments: View {
 
     // swiftlint:disable:next function_parameter_count
     private func segment(
-        arrow: String, count: Int?, title: String, shortcut: String, state: PickerButtonState, label: String,
+        icon: SegmentIcon, count: Int?, title: String, shortcut: String?, state: PickerButtonState, label: String,
         isLast: Bool, onTintChange: ((Bool) -> Void)?, action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             SyncSegmentLabel(
-                arrow: arrow, count: count, title: title, shortcut: shortcut, state: state, isLast: isLast,
+                icon: icon, count: count, title: title, shortcut: shortcut, state: state, isLast: isLast,
                 onTintChange: onTintChange)
         }
         .buttonStyle(.plain)
@@ -281,11 +293,17 @@ private struct SegmentID: Hashable {
     let operation: SyncOperation
 }
 
-/// One segment's face: the arrow, action and count, when there is one, in the accent
+/// A segment's glyph: an SF Symbol arrow, or an asset such as GitHub's pull request icon.
+private enum SegmentIcon {
+    case symbol(String)
+    case asset(ImageResource)
+}
+
+/// One segment's face: the icon, action and count, when there is one, in the accent
 /// colour, then the menu shortcut. A running segment hides them under a centred spinner,
 /// as the picker's own buttons do; hidden, not removed, so the pill keeps its width.
 private struct SyncSegmentLabel: View {
-    let arrow: String
+    let icon: SegmentIcon
     let count: Int?
     let title: String
     let shortcut: String?
@@ -302,8 +320,7 @@ private struct SyncSegmentLabel: View {
     var body: some View {
         let isRunning = state == .running
         HStack(spacing: 2) {
-            Image(systemName: arrow)
-                .font(.system(size: 10, weight: .bold))
+            iconImage
             Text(title)
                 .font(.system(size: 13, weight: .medium))
             if let shown = count ?? (isRunning ? lastCount : nil) {
@@ -336,6 +353,20 @@ private struct SyncSegmentLabel: View {
         .padding(.trailing, isLast ? 14 : 10)
         .frame(height: 36)
         .modifier(PillPartHover(onTintChange: onTintChange))
+    }
+
+    @ViewBuilder private var iconImage: some View {
+        switch icon {
+        case let .symbol(name):
+            Image(systemName: name)
+                .font(.system(size: 10, weight: .bold))
+        case let .asset(resource):
+            // A template image takes no font, so it gets a fixed frame, as the pill's branch icon does.
+            Image(resource)
+                .resizable()
+                .frame(width: 13, height: 13)
+                .padding(.trailing, 2)
+        }
     }
 }
 
@@ -510,63 +541,6 @@ private struct CrossfadeLayout: Layout {
         }
     }
 
-    private func idealSize(of subview: LayoutSubview, height: CGFloat?) -> CGSize {
-        subview.sizeThatFits(ProposedViewSize(width: nil, height: height))
-    }
-}
-
-/// Caps the picker's reported ideal width so long labels can truncate instead of forcing
-/// the toolbar item into overflow. Lays out exactly one child.
-private struct CappedWidth: Layout {
-    let maximumWidth: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        assert(subviews.count == 1)
-        // The ideal width, not the proposed one: the toolbar proposes the width it measured
-        // last time, so honouring it would freeze the item at the size of its old label.
-        let ideal = subviews[0].sizeThatFits(ProposedViewSize(width: nil, height: proposal.height))
-        // Caps the ideal width, never the minimum: a picker squeezed below it would overlap its neighbour.
-        let minimum = subviews[0].sizeThatFits(.zero).width
-        return CGSize(width: max(min(ideal.width, maximumWidth), minimum), height: ideal.height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        assert(subviews.count == 1)
-        subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
-    }
-}
-
-/// Draws a part of the pill at a fraction of its width, cut from the trailing edge, and
-/// takes no clicks while it collapses.
-private struct Collapsing: ViewModifier {
-    let width: Double
-
-    func body(content: Content) -> some View {
-        WidthFractionLayout(fraction: width) { content }
-            .clipped()
-            .opacity(width)
-            .allowsHitTesting(width == 1)
-    }
-}
-
-/// Reports a fraction of the child's ideal width without compressing its content, so the
-/// label keeps its shape as the part narrows. Lays out exactly one child.
-private struct WidthFractionLayout: Layout {
-    let fraction: Double
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        assert(subviews.count == 1)
-        let ideal = idealSize(of: subviews[0], height: proposal.height)
-        return CGSize(width: ideal.width * fraction, height: ideal.height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        assert(subviews.count == 1)
-        let ideal = idealSize(of: subviews[0], height: proposal.height)
-        subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(ideal))
-    }
-
-    /// Measured at an unspecified width, never the narrowed one, so the label can't truncate.
     private func idealSize(of subview: LayoutSubview, height: CGFloat?) -> CGSize {
         subview.sizeThatFits(ProposedViewSize(width: nil, height: height))
     }

@@ -62,13 +62,8 @@ final class BranchPickerHeaderView: PickerHeaderView {
     }
 
     private func configurePullRequest(_ availability: PullRequestAvailability) {
-        switch availability {
-        case .hidden: pullRequestButton.apply(.hidden, title: "Create PR")
-        case let .disabled(help): pullRequestButton.apply(.disabled(reason: help), title: "Create PR")
-        case .enabled:
-            pullRequestButton.apply(.enabled, title: "Create PR")
-            pullRequestButton.toolTip = "Create a pull request on GitHub"
-        }
+        pullRequestButton.apply(availability.pickerButtonState, title: "Open PR")
+        if availability == .enabled { pullRequestButton.toolTip = "Create a pull request on GitHub" }
     }
 
     /// Updates only the subtitle, as the fetch time ages.
@@ -131,7 +126,7 @@ private final class BranchHeaderControls: NSView {
     let syncButtons = BranchRowSyncButtons(style: .header)
     /// Sized like the header's Pull and Push, and focusable like them.
     let pullRequestButton = PickerPillButton(
-        title: "Create PR", height: 34, focusMargin: PickerPillButton.focusRingMargin, surface: .raised)
+        title: "Open PR", height: 34, focusMargin: PickerPillButton.focusRingMargin, surface: .raised)
 
     override init(frame: NSRect) {
         super.init(frame: frame)

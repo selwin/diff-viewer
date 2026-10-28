@@ -2,17 +2,17 @@ import Testing
 
 @testable import DiffViewer
 
-/// What the title bar pill's Pull and Push segments show for the current branch.
+/// What the title bar pill's Pull, Push and Create PR segments show for the current branch.
 struct CurrentBranchSyncPresentationTests {
     private static func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = ["origin"],
-        configuredUpstreamRemotes: [String: String] = [:]
+        configuredUpstreamRemotes: [String: String] = [:], gitHubRemoteNames: Set<String> = []
     ) -> BranchPickerSnapshot {
         BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: false,
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
-            configuredUpstreamRemotes: configuredUpstreamRemotes)
+            configuredUpstreamRemotes: configuredUpstreamRemotes, gitHubRemoteNames: gitHubRemoteNames)
     }
 
     private static func tracking(ahead: Int, behind: Int) -> LocalBranch {
@@ -121,9 +121,10 @@ struct CurrentBranchSyncPresentationTests {
 
     @Test func departureKeepsDrawingASegmentThatWentHidden() {
         let pulling = CurrentBranchSyncPresentation(
-            branch: "main", buttons: RowSyncButtons(pull: .running, push: .disabled(reason: "Pulling…")), target: nil)
+            branch: "main", buttons: RowSyncButtons(pull: .running, push: .disabled(reason: "Pulling…")), target: nil,
+            pullRequest: .hidden)
         let pulled = CurrentBranchSyncPresentation(
-            branch: "main", buttons: RowSyncButtons(pull: .hidden, push: .enabled), target: nil)
+            branch: "main", buttons: RowSyncButtons(pull: .hidden, push: .enabled), target: nil, pullRequest: .hidden)
         let departure = SegmentDeparture.between(pulling, pulled)
         #expect(departure == SegmentDeparture(previous: pulling, pull: true, push: false))
         // The departing Pull keeps its spinner; the Push that stayed shows its live state.
@@ -131,12 +132,59 @@ struct CurrentBranchSyncPresentationTests {
 
         // Back in the live presentation, the segment is drawn live again.
         let behindAgain = CurrentBranchSyncPresentation(
-            branch: "main", buttons: RowSyncButtons(pull: .enabled, push: .enabled), target: nil)
+            branch: "main", buttons: RowSyncButtons(pull: .enabled, push: .enabled), target: nil, pullRequest: .hidden)
         #expect(departure?.applied(to: behindAgain).buttons == behindAgain.buttons)
 
         // Nothing went hidden, or the branch changed: nothing departs.
         #expect(SegmentDeparture.between(pulled, pulled) == nil)
-        let other = CurrentBranchSyncPresentation(branch: "other", buttons: .hidden, target: nil)
+        let other = CurrentBranchSyncPresentation(
+            branch: "other", buttons: .hidden, target: nil, pullRequest: .hidden)
         #expect(SegmentDeparture.between(pulling, other) == nil)
+    }
+
+    @Test(
+        arguments: [(BranchPickerSnapshot, Bool, PullRequestAvailability, Bool)]([
+            // Not offered: nothing shows, even on a pushed GitHub branch.
+            (snapshot(branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"]), false, .hidden, false),
+            // Push still has work, so it comes first.
+            (snapshot(branches: [tracking(ahead: 1, behind: 0)], gitHubRemoteNames: ["origin"]), true, .hidden, true),
+            // The branch read landed before the Publish reservation was released: Push still shows running.
+            (
+                snapshot(
+                    branches: [tracking(ahead: 0, behind: 0)],
+                    activeSync: ActiveSync(branch: "main", operation: .publish),
+                    gitHubRemoteNames: ["origin"]),
+                true, .hidden, true
+            ),
+            // Offered, and nothing left to push: Create PR alone makes the segments show.
+            (snapshot(branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"]), true, .enabled, true),
+        ]))
+    func createPRShowsOnlyWhenOfferedAndPushIsDone(
+        taken: BranchPickerSnapshot, offered: Bool, expected: PullRequestAvailability, showsSegments: Bool
+    ) throws {
+        let sync = try #require(CurrentBranchSyncPresentation.make(snapshot: taken, offersPullRequestCreation: offered))
+        #expect(sync.pullRequest == expected)
+        #expect(sync.showsSegments == showsSegments)
+    }
+
+    private static let publishing = CurrentBranchSyncPresentation(
+        branch: "main", buttons: RowSyncButtons(pull: .hidden, push: .running), target: nil, pullRequest: .hidden)
+    private static let offered = CurrentBranchSyncPresentation(
+        branch: "main", buttons: .hidden, target: nil, pullRequest: .enabled)
+
+    @Test func createPRReplacingPushIsNotADeparture() {
+        #expect(SegmentDeparture.between(Self.publishing, Self.offered) == nil)
+    }
+
+    @Test func createPRSuppressesAPushDepartureAlreadyUnderWay() {
+        let departure = SegmentDeparture(previous: Self.publishing, pull: false, push: true)
+        #expect(departure.applied(to: Self.offered) == Self.offered)
+    }
+
+    @Test func aDepartingPullIsRestoredBesideCreatePR() {
+        let pulling = CurrentBranchSyncPresentation(
+            branch: "main", buttons: RowSyncButtons(pull: .running, push: .hidden), target: nil, pullRequest: .hidden)
+        let departure = SegmentDeparture(previous: pulling, pull: true, push: false)
+        #expect(departure.applied(to: Self.offered).pullRequest == .enabled)
     }
 }
