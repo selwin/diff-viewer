@@ -41,6 +41,8 @@ enum StubCall {
     case remotes
     case remoteURLs
     case advertisedPullRequest
+    /// `preferredPullRequestNumberByHeadSha`.
+    case pullRequestHeads
     case fetchPullRequest
     case pinPullRequest
     case pullRequestBase
@@ -174,6 +176,11 @@ actor StubRepoClient: RepoClient {
     private var failsRemoteURLs = false
     private(set) var remoteURLsCalls = 0
     private(set) var advertisedPullRequestCalls: [(number: Int, remote: String)] = []
+    /// Head SHA to pull request number, by remote; an unlisted remote advertises none.
+    private var stubbedPullRequestHeads: [String: [String: Int]] = [:]
+    private var pullRequestHeadErrors: [String: any Error] = [:]
+    /// The remote of every `preferredPullRequestNumberByHeadSha` call, in order.
+    private(set) var pullRequestHeadsCalls: [String] = []
     private(set) var fetchPullRequestCalls: [AdvertisedPullRequest] = []
     private(set) var pinPullRequestCalls: [AdvertisedPullRequest] = []
     private(set) var pullRequestBaseRequests: [(headSHA: String, baseTipSHA: String)] = []
@@ -527,6 +534,10 @@ actor StubRepoClient: RepoClient {
     /// fixed SHAs for whatever number and remote it is asked about.
     func set(advertised: AdvertisedPullRequest?) { stubbedAdvertised = advertised }
     func set(pullRequestBase base: PullRequestComparisonBase) { stubbedPullRequestBase = base }
+    /// What `remote` advertises as pull request heads; read once a held call is released.
+    func set(pullRequestHeads heads: [String: Int], remote: String) { stubbedPullRequestHeads[remote] = heads }
+    /// Makes the heads read of `remote` throw `error`, or stop throwing with nil.
+    func fail(pullRequestHeads error: (any Error)?, remote: String) { pullRequestHeadErrors[remote] = error }
     /// Makes `call` throw `error`, or stop throwing with nil. Covers `.remotes`,
     /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest` and `.pullRequestBase`;
     /// read once a held call is released, so a test can change it meanwhile.
@@ -655,6 +666,13 @@ actor StubRepoClient: RepoClient {
         if isHeld(.advertisedPullRequest) { await park(.advertisedPullRequest) }
         if let error = pullRequestErrors[.advertisedPullRequest] { throw error }
         return snapshot
+    }
+
+    func preferredPullRequestNumberByHeadSha(remote: String) async throws -> [String: Int] {
+        pullRequestHeadsCalls.append(remote)
+        if isHeld(.pullRequestHeads) { await park(.pullRequestHeads) }
+        if let error = pullRequestHeadErrors[remote] { throw error }
+        return stubbedPullRequestHeads[remote] ?? [:]
     }
 
     func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws {

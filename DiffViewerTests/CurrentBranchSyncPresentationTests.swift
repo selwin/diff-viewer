@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import DiffViewer
@@ -7,12 +8,15 @@ struct CurrentBranchSyncPresentationTests {
     private static func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = ["origin"],
-        configuredUpstreamRemotes: [String: String] = [:], gitHubRemoteNames: Set<String> = []
+        configuredUpstreamRemotes: [String: String] = [:], gitHubRemoteNames: Set<String> = [],
+        existingPullRequest: PullRequestLookupResult? = nil
     ) -> BranchPickerSnapshot {
-        BranchPickerSnapshot(
+        var snapshot = BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: false,
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredUpstreamRemotes: configuredUpstreamRemotes, gitHubRemoteNames: gitHubRemoteNames)
+        snapshot.existingPullRequest = existingPullRequest
+        return snapshot
     }
 
     private static func tracking(ahead: Int, behind: Int) -> LocalBranch {
@@ -158,6 +162,14 @@ struct CurrentBranchSyncPresentationTests {
             ),
             // Offered, and nothing left to push: Create PR alone makes the segments show.
             (snapshot(branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"]), true, .enabled, true),
+            // The branch already has a pull request: there is nothing to create.
+            (
+                snapshot(
+                    branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"],
+                    existingPullRequest: PullRequestLookupResult(
+                        number: 88, url: URL(string: "https://github.com/me/widgets/pull/88")!)),
+                true, .hidden, false
+            ),
         ]))
     func createPRShowsOnlyWhenOfferedAndPushIsDone(
         taken: BranchPickerSnapshot, offered: Bool, expected: PullRequestAvailability, showsSegments: Bool

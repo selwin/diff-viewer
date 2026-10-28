@@ -161,6 +161,9 @@ protocol RepoClient: Sendable {
     /// What `remote` advertises for pull request `number` and for its default branch,
     /// without touching local refs. Throws `PullRequestError.notFound` or `.noDefaultBranch`.
     func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest
+    /// The number of each pull request head `remote` advertises, by head SHA; the highest
+    /// number where several share one. Throws git's diagnostics.
+    func preferredPullRequestNumberByHeadSha(remote: String) async throws -> [String: Int]
     /// Fetches the pull request's head and the default branch into `refs/diffviewer/`,
     /// without pruning or writing anything else. Throws git's diagnostics.
     func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws

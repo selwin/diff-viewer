@@ -1,7 +1,7 @@
 import Foundation
 
 /// The header's face: where HEAD is, how far it is from its upstream, and the current
-/// branch's Pull, Push and Create PR.
+/// branch's Pull, Push and pull request button.
 struct BranchPickerHeaderText: Equatable {
     let title: String
     /// What the detail line says about HEAD's upstream; the fetch news follows.
@@ -36,7 +36,7 @@ struct BranchPickerHeaderText: Equatable {
         guard branch != nil else { return order }
         if buttons.pull == .enabled { order.append(.pull) }
         if buttons.push == .enabled { order.append(.push) }
-        if pullRequest == .enabled { order.append(.pullRequest) }
+        if pullRequest.pickerButtonState == .enabled { order.append(.pullRequest) }
         return order
     }
 

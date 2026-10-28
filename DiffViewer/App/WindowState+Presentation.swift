@@ -46,8 +46,11 @@ extension WindowState {
     var currentBranchSync: CurrentBranchSyncPresentation? {
         var snapshot = branchPickerSnapshot
         // A checkout's branch is usually listed already, so its segments arrive with its
-        // name rather than partway through the pill's switch.
-        if let pendingBranchName { snapshot.headState = .named(pendingBranchName) }
+        // name rather than partway through the pill's switch. HEAD's pull request isn't its.
+        if let pendingBranchName {
+            snapshot.headState = .named(pendingBranchName)
+            if pendingBranchName != currentBranchName { snapshot.existingPullRequest = nil }
+        }
         return CurrentBranchSyncPresentation.make(
             snapshot: snapshot, offersPullRequestCreation: pullRequestOfferedBranchName == displayedBranchName)
     }
@@ -101,7 +104,8 @@ struct CurrentBranchSyncPresentation: Equatable {
     let buttons: RowSyncButtons
     /// Nil unless the branch tracks a remote upstream with counts, so no count reads as 0.
     let target: SyncTarget?
-    /// Hidden unless Create PR is offered and Push has nothing left to do.
+    /// Hidden unless Create PR is offered, Push has nothing left to do, and the branch has
+    /// no pull request yet.
     let pullRequest: PullRequestAvailability
 
     /// Nil unless the read landed and HEAD's branch is listed: a failed read keeps a stale
@@ -115,9 +119,12 @@ struct CurrentBranchSyncPresentation: Equatable {
         let buttons = BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot)
         // Push and Publish take priority; the offer returns when they finish.
         let offered = offersPullRequestCreation && buttons.push == .hidden
+        var pullRequest = offered ? PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true) : .hidden
+        // The offer is to create one; a pull request found for the branch ends it.
+        if case .existing = pullRequest { pullRequest = .hidden }
         return CurrentBranchSyncPresentation(
             branch: name, buttons: buttons, target: SyncPolicy.target(for: branch, readStatus: snapshot.readStatus),
-            pullRequest: offered ? PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true) : .hidden)
+            pullRequest: pullRequest)
     }
 
     var isPublish: Bool { buttons.pushOperation == .publish }

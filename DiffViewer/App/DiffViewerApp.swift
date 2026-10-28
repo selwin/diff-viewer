@@ -318,7 +318,7 @@ struct RepositoryCommands: Commands {
     }
 
     /// The title bar pill's Pull and Push for the current branch, available whenever its
-    /// segments are, then Create Pull Request on GitHub. Each action keeps the window and
+    /// segments are, then creating or viewing its pull request on GitHub. Each action keeps the window and
     /// branch it was built with.
     @ViewBuilder private var syncItems: some View {
         let state = windowState
@@ -356,10 +356,11 @@ struct RepositoryCommands: Commands {
                 .keyboardShortcut("p")
                 .disabled(true)
         }
-        Button("Create Pull Request on GitHub") {
+        let pullRequest = state?.pullRequestAvailability ?? .hidden
+        Button(pullRequest.menuTitle) {
             Self.startSync(in: state) { await $0.openPullRequest() }
         }
-        .disabled(state?.canOpenBranchPicker != true || state?.pullRequestAvailability != .enabled)
+        .disabled(state?.canOpenBranchPicker != true || pullRequest.pickerButtonState != .enabled)
     }
 
     /// The guard repeats `.disabled`, which only reflects the state at the last render: a
