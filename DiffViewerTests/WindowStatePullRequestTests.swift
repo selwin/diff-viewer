@@ -3,8 +3,8 @@ import Testing
 
 @testable import DiffViewer
 
-/// Create Pull Request: what it opens, and what it reports when the repository moved
-/// while its fresh reads ran.
+/// The pull request button: finding a branch's existing pull request, what it opens, and
+/// what it reports when the repository moved while its fresh reads ran.
 @MainActor
 struct WindowStatePullRequestTests {
     /// The URLs the window asked the browser to open.
@@ -273,5 +273,385 @@ struct WindowStatePullRequestTests {
         #expect(await eventually { @MainActor in state.fetchStatus == .idle && state.lastFetchRound != nil })
         #expect(await client.remoteURLsCalls > readsBefore)
         #expect(state.pullRequestAvailability == .enabled)
+    }
+
+    // MARK: Existing pull request
+
+    /// `feature` tracks `origin/feature`, whose remote-tracking tip `origin` advertises as
+    /// pull request 88.
+    private static let pushedTip = objectID("pushed")
+    private static let feature = localBranch("feature", upstream: upstream("origin/feature"))
+    private static let featureTip = remoteBranch("feature", tipSha: pushedTip)
+    private static let sharedTip = [featureTip, remoteBranch("other", tipSha: pushedTip)]
+    private static let pullURL = "https://github.com/me/widgets/pull/88"
+    private static let acmePullURL = "https://github.com/acme/widgets/pull/88"
+    private static let acme = RemoteURLs(
+        fetchURL: "https://github.com/acme/widgets", pushURLs: ["https://github.com/acme/widgets"])
+    private static let withUpstream = origin.merging(["upstream": acme]) { $1 }
+    private static let offline = ProcessError.failed(command: "git ls-remote", status: 128, stderr: "offline")
+
+    private static func existing(at url: String = pullURL) -> PullRequestAvailability {
+        .existing(number: 88, url: URL(string: url)!)
+    }
+
+    /// Adopts a repository on a pushed `feature`. `configure` runs after the defaults.
+    private func adoptPushed(
+        _ h: Harness, browser: Browser = Browser(), configure: (StubRepoClient) async -> Void = { _ in }
+    ) async -> (state: WindowState, client: StubRepoClient) {
+        let state = h.makeState(openURL: { url in
+            browser.opened.append(url)
+            return browser.opens
+        })
+        let repo = await h.adopt(state, "A", files: []) { client in
+            await client.set(headState: .named("feature"))
+            await client.set(localBranches: [Self.feature])
+            await client.set(remoteBranches: [Self.featureTip])
+            await client.set(remoteURLs: Self.origin)
+            await client.set(pullRequestHeads: [Self.pushedTip: 88], remote: "origin")
+            await configure(client)
+        }
+        return (state, repo.client)
+    }
+
+    /// Waits for the newest lookup, and any that replaced it meanwhile.
+    private func settle(_ state: WindowState) async {
+        while let task = state.session?.pullRequestLookupTask {
+            await task.value
+            if state.session?.pullRequestLookupTask == task { return }
+        }
+    }
+
+    private func releaseHeads(_ client: StubRepoClient) async {
+        await client.hold(.pullRequestHeads, false)
+        await client.release(.pullRequestHeads)
+    }
+
+    @Test func adoptionFindsThePullRequestOfTheFullyPublishedBranch() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h)
+
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(await client.pullRequestHeadsCalls == ["origin"])
+    }
+
+    @Test func discoveryFinishingAfterTheBranchReadReplacesTheUnqueriedLookup() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.remoteURLs) }
+        // Discovery's read, then the lookup's.
+        try #require(await eventually { await client.heldCount(.remoteURLs) == 2 })
+        await client.releaseFirst(.remoteURLs)
+        try #require(await eventually { await client.heldCount(.remoteURLs) == 2 })
+
+        await client.hold(.remoteURLs, false)
+        await client.release(.remoteURLs)
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(await client.pullRequestHeadsCalls == ["origin"])
+    }
+
+    @Test func anUnchangedKeyIsCheckedAgainOnlyAfterTheCooldown() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h)
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await state.refresh()
+        #expect(state.session?.inFlightPullRequestLookup == nil)
+        h.clock += WindowState.fetchCooldown + 1
+        await state.refresh()
+        #expect(await eventually { await client.pullRequestHeadsCalls.count == 2 })
+    }
+
+    @Test func aFailedLookupRetriesOnTheNextPublishedRead() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) {
+            await $0.fail(pullRequestHeads: Self.offline, remote: "origin")
+        }
+        try #require(await eventually { await client.pullRequestHeadsCalls.count == 1 })
+        await settle(state)
+        #expect(state.pullRequestLookupCache == nil)
+
+        await client.fail(pullRequestHeads: nil, remote: "origin")
+        await state.refresh()
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+    }
+
+    @Test func aMatchOnTheOwnRemoteNeedsNoAnswerFromUpstream() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(remoteURLs: Self.withUpstream)
+            await client.fail(pullRequestHeads: Self.offline, remote: "upstream")
+        }
+
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(await client.pullRequestHeadsCalls == ["origin"])
+    }
+
+    @Test func anUpstreamMatchAfterAnOwnRemoteFailureIsInconclusive() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(remoteURLs: Self.withUpstream)
+            await client.fail(pullRequestHeads: Self.offline, remote: "origin")
+            await client.set(pullRequestHeads: [Self.pushedTip: 5], remote: "upstream")
+        }
+        try #require(await eventually { await !client.pullRequestHeadsCalls.isEmpty })
+        await settle(state)
+
+        #expect(state.pullRequestLookupCache == nil)
+        #expect(state.pullRequestAvailability == .enabled)
+    }
+
+    @Test func returningToABranchShowsItsPullRequestAgain() async throws {
+        let h = Harness()
+        let main = localBranch("main", upstream: upstream("origin/main"))
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(localBranches: [Self.feature, main])
+            await client.set(remoteBranches: [Self.featureTip, remoteBranch("main", tipSha: objectID("main"))])
+        }
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await client.set(headStateAfterSwitch: .named("main"))
+        await state.switchBranch(to: "main")
+        try #require(await eventually { @MainActor in state.pullRequestLookupCache?.key.branchName == "main" })
+        #expect(state.pullRequestAvailability == .enabled)
+
+        await client.set(headStateAfterSwitch: .named("feature"))
+        await state.switchBranch(to: "feature")
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+    }
+
+    @Test func aCachedMatchHidesWhileItsTipIsSharedAndReturnsWithoutALookup() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h)
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await client.set(remoteBranches: Self.sharedTip)
+        await state.refresh()
+        #expect(state.pullRequestAvailability == .enabled)
+
+        await client.set(remoteBranches: [Self.featureTip])
+        await state.refresh()
+        #expect(state.pullRequestAvailability == Self.existing())
+        #expect(await client.pullRequestHeadsCalls.count == 1)
+    }
+
+    @Test func aTipThatStopsBeingSharedIsLookedUpAtOnce() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.set(remoteBranches: Self.sharedTip) }
+        try #require(await eventually { @MainActor in state.session?.observedLookupConfiguration != nil })
+        await settle(state)
+        let reads = await client.remoteURLsCalls
+
+        // The last URL read already shows the tip is shared.
+        await state.refresh()
+        #expect(state.session?.inFlightPullRequestLookup == nil)
+        #expect(await client.remoteURLsCalls == reads)
+
+        await client.set(remoteBranches: [Self.featureTip])
+        await state.refresh()
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(await client.pullRequestHeadsCalls.count == 1)
+    }
+
+    @Test func aTipSharedWhileTheLookupRunsPublishesNothing() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.pullRequestHeads) }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+
+        await client.set(remoteBranches: Self.sharedTip)
+        await state.refresh()
+        await releaseHeads(client)
+        await settle(state)
+        #expect(state.pullRequestLookupCache == nil)
+        #expect(state.pullRequestAvailability == .enabled)
+    }
+
+    @Test func aTipSharedWhileANoMatchLookupRunsIsNotCachedAndLooksUpAgainOnceUnshared() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(pullRequestHeads: [:], remote: "origin")
+            await client.hold(.pullRequestHeads)
+        }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+
+        await client.set(remoteBranches: Self.sharedTip)
+        await state.refresh()
+        await releaseHeads(client)
+        await settle(state)
+        #expect(state.pullRequestLookupCache == nil)
+
+        await client.set(remoteBranches: [Self.featureTip])
+        await state.refresh()
+        await settle(state)
+        #expect(await client.pullRequestHeadsCalls.count == 2)
+        #expect(state.pullRequestLookupCache?.result == nil)
+        #expect(state.pullRequestLookupCache?.key.branchName == "feature")
+    }
+
+    @Test func aRemoteURLChangeDuringTheFirstLookupPublishesTheReplacementsRepository() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.pullRequestHeads) }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        let first = state.session?.pullRequestLookupTask
+
+        await client.set(remoteURLs: ["origin": Self.acme])
+        await state.fetchAllRemotes()
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 2 })
+        await client.releaseFirst(.pullRequestHeads)
+        await first?.value
+        #expect(state.existingPullRequest == nil)
+
+        await releaseHeads(client)
+        #expect(
+            await eventually { @MainActor in state.pullRequestAvailability == Self.existing(at: Self.acmePullURL) })
+    }
+
+    @Test func aRemoteURLChangeUnderTheSameKeyDropsTheMatchAndStartsOneReplacement() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h)
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await client.hold(.pullRequestHeads)
+        await client.set(remoteURLs: ["origin": Self.acme])
+        await state.fetchAllRemotes()
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        #expect(state.pullRequestAvailability == .enabled)
+
+        await releaseHeads(client)
+        #expect(
+            await eventually { @MainActor in state.pullRequestAvailability == Self.existing(at: Self.acmePullURL) })
+        #expect(await client.pullRequestHeadsCalls.count == 2)
+    }
+
+    enum KeyChange: CaseIterable {
+        case switchesBranch
+        case losesUpstream
+    }
+
+    @Test(arguments: KeyChange.allCases)
+    func aKeyChangeWhileTheLookupIsHeldRunsNothingFurther(change: KeyChange) async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(remoteURLs: Self.withUpstream)
+            await client.hold(.pullRequestHeads)
+        }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        let held = state.session?.pullRequestLookupTask
+
+        switch change {
+        case .switchesBranch:
+            await client.set(headState: .named("main"))
+            await client.set(localBranches: [Self.feature, localBranch("main")])
+        case .losesUpstream:
+            await client.set(localBranches: [
+                localBranch("feature", upstream: upstream("origin/feature", tracking: .gone))
+            ])
+        }
+        await state.refresh()
+        let reads = await client.remoteURLsCalls
+        await releaseHeads(client)
+        await held?.value
+
+        #expect(await client.pullRequestHeadsCalls == ["origin"])
+        #expect(await client.remoteURLsCalls == reads)
+        #expect(state.pullRequestLookupCache == nil)
+    }
+
+    @Test func anOlderLookupLeavesItsReplacementsSlot() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.pullRequestHeads) }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        let older = state.session?.pullRequestLookupTask
+
+        await client.set(remoteURLs: ["origin": Self.acme])
+        await state.fetchAllRemotes()
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 2 })
+        let replacement = try #require(state.session?.inFlightPullRequestLookup)
+        await client.releaseFirst(.pullRequestHeads)
+        await older?.value
+
+        #expect(state.session?.inFlightPullRequestLookup == replacement)
+        await releaseHeads(client)
+    }
+
+    @Test func sameKeyRequestsShareOneLookup() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.pullRequestHeads) }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        let reads = await client.remoteURLsCalls
+
+        await state.refresh()
+        await state.refresh()
+        #expect(await client.remoteURLsCalls == reads)
+
+        await releaseHeads(client)
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(await client.pullRequestHeadsCalls.count == 1)
+    }
+
+    @Test func aManualRoundLooksUpAgainOnlyAfterItsBranchRead() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h)
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await client.hold(.fetch)
+        let round = Task { await state.fetchAllRemotes() }
+        try #require(await eventually { await client.heldCount(.fetch) == 1 })
+        // Published mid-round, so still from before the fetch.
+        await state.refresh()
+        #expect(state.session?.inFlightPullRequestLookup == nil)
+
+        await client.hold(.fetch, false)
+        await client.release(.fetch)
+        await round.value
+        #expect(await eventually { await client.pullRequestHeadsCalls.count == 2 })
+    }
+
+    @Test func aPushLooksUpTheNewTipWithoutThePicker() async throws {
+        let h = Harness()
+        let newTip = objectID("new")
+        let ahead = localBranch(
+            "feature", upstream: upstream("origin/feature", tracking: .counts(ahead: 1, behind: 0)), tipSha: newTip)
+        let (state, client) = await adoptPushed(h) { client in
+            await client.set(localBranches: [ahead])
+            await client.set(pullRequestHeads: [newTip: 88], remote: "origin")
+        }
+        try #require(await eventually { @MainActor in state.pullRequestLookupCache != nil })
+        #expect(state.pullRequestAvailability == .disabled(help: "Push first"))
+
+        await client.hold(.push)
+        let pushing = Task { await state.push(branch: "feature") }
+        try #require(await eventually { await client.heldCount(.push) == 1 })
+        await client.set(localBranches: [localBranch("feature", upstream: upstream("origin/feature"), tipSha: newTip)])
+        await client.set(remoteBranches: [remoteBranch("feature", tipSha: newTip)])
+        await client.hold(.push, false)
+        await client.release(.push)
+        await pushing.value
+
+        #expect(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+        #expect(!state.isBranchPickerPresented)
+    }
+
+    @Test func aClosedWindowDiscardsTheLookup() async throws {
+        let h = Harness()
+        let (state, client) = await adoptPushed(h) { await $0.hold(.pullRequestHeads) }
+        try #require(await eventually { await client.heldCount(.pullRequestHeads) == 1 })
+        let held = state.session?.pullRequestLookupTask
+
+        state.close()
+        await releaseHeads(client)
+        await held?.value
+        #expect(state.pullRequestLookupCache == nil)
+    }
+
+    @Test(arguments: [(true, nil), (false, "Couldn't open the browser")] as [(Bool, String?)])
+    func viewingOpensThePullRequestPage(opens: Bool, error: String?) async throws {
+        let h = Harness()
+        let browser = Browser()
+        browser.opens = opens
+        let (state, _) = await adoptPushed(h, browser: browser)
+        try #require(await eventually { @MainActor in state.pullRequestAvailability == Self.existing() })
+
+        await state.openPullRequest()
+        #expect(browser.opened.map(\.absoluteString) == [Self.pullURL])
+        #expect(state.errorMessage == error)
     }
 }

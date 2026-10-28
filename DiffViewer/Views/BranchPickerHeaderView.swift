@@ -3,7 +3,7 @@ import AppKit
 /// The branch picker's header: where HEAD is, with a copy button after a branch's name, a
 /// subtitle for how far that branch is from its upstream and how the fetch went, a raised
 /// round Fetch button that spins while a round runs, and the current branch's Pull, Push
-/// and Create PR after it. The panel's glass runs on under it.
+/// and pull request button after it. The panel's glass runs on under it.
 final class BranchPickerHeaderView: PickerHeaderView {
     // Focusable like the header's other controls, so it carries room for its ring.
     private let copyButton = PickerCopyButton(label: "Copy Branch Name", focusMargin: PickerPillButton.focusRingMargin)
@@ -61,9 +61,11 @@ final class BranchPickerHeaderView: PickerHeaderView {
         needsLayout = true
     }
 
+    /// The title sets the button's width and accessibility label, so the controls re-measure.
     private func configurePullRequest(_ availability: PullRequestAvailability) {
-        pullRequestButton.apply(availability.pickerButtonState, title: "Open PR")
-        if availability == .enabled { pullRequestButton.toolTip = "Create a pull request on GitHub" }
+        pullRequestButton.apply(availability.pickerButtonState, title: availability.buttonTitle)
+        if availability.pickerButtonState == .enabled { pullRequestButton.toolTip = availability.help }
+        controls.invalidateIntrinsicContentSize()
     }
 
     /// Updates only the subtitle, as the fetch time ages.
@@ -116,7 +118,7 @@ final class BranchPickerHeaderView: PickerHeaderView {
 }
 
 /// The round Fetch button and, when the current branch has them, its Pull and Push and
-/// Create PR, side by side as the header's one trailing accessory. Its frame carries the
+/// pull request button, side by side as the header's one trailing accessory. Its frame carries the
 /// focus ring margin of the buttons at its ends.
 private final class BranchHeaderControls: NSView {
     private static let controlGap: CGFloat = 8
@@ -131,7 +133,7 @@ private final class BranchHeaderControls: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        // Fetch comes first, left of Pull, Push and Create PR, in the order Tab visits them.
+        // Fetch comes first, left of Pull, Push and the pull request button, in the order Tab visits them.
         addSubview(fetchButton)
         addSubview(syncButtons)
         pullRequestButton.focusRingType = .default

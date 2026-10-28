@@ -71,6 +71,45 @@ extension GitClient {
             baseTipSHA: baseTip, headSHA: head)
     }
 
+    /// Every pull request head `remote` advertises, by head SHA, with the remote's own auth.
+    func preferredPullRequestNumberByHeadSha(remote: String) async throws -> [String: Int] {
+        try Self.rejectOption(remote, kind: "remote name", command: "git ls-remote")
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["ls-remote", remote, "refs/pull/*/head"],
+            currentDirectory: repoRoot,
+            environment: try await remoteEnvironment()
+        )
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git ls-remote", status: result.status, stderr: Self.commandDiagnostics(result))
+        }
+        return Self.parsePullRequestHeads(result.stdoutString)
+    }
+
+    /// Parses `<sha><TAB>refs/pull/<n>/head` lines, keeping only exact names: the pattern
+    /// also matches refs that merely end the same way. For duplicate head SHAs, keep the
+    /// highest PR number.
+    static func parsePullRequestHeads(_ output: String) -> [String: Int] {
+        let prefix = "refs/pull/"
+        let suffix = "/head"
+        var numbers: [String: Int] = [:]
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: "\t", maxSplits: 1)
+            guard fields.count == 2, fields[1].hasPrefix(prefix), fields[1].hasSuffix(suffix),
+                fields[1].count > prefix.count + suffix.count
+            else { continue }
+            let digits = fields[1].dropFirst(prefix.count).dropLast(suffix.count)
+            guard digits.utf8.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
+                let number = Int(digits), number > 0
+            else { continue }
+            let sha = String(fields[0])
+            guard isObjectID(sha) else { continue }
+            numbers[sha] = max(numbers[sha] ?? 0, number)
+        }
+        return numbers
+    }
+
     private static func isObjectID(_ text: String) -> Bool {
         (text.count == 40 || text.count == 64) && text.allSatisfy(\.isHexDigit)
     }
