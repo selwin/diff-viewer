@@ -66,7 +66,8 @@ import Foundation
 ///   then act on the tab.
 /// - `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>` opens the target window's Compare window
 ///   with those refs chosen (an empty value or a missing side chooses nothing), and
-///   `DIFFVIEWER_SNAPSHOT` then renders it instead of the repository window.
+///   `DIFFVIEWER_SNAPSHOT` then renders it instead of the repository window. The value
+///   `auto` chooses what a user's window does: the current branch against the default branch.
 /// - `DIFFVIEWER_COMPARE_WINDOW_PR=<link or #n>` opens the Compare window in Pull Request
 ///   mode with that input, applied before the remotes load; `DIFFVIEWER_COMPARE_WINDOW_WAIT=
 ///   <seconds>` (default 1) sets how long it waits before the snapshot, so a short wait

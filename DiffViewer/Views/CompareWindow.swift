@@ -45,9 +45,12 @@ struct CompareWindowRoot: View {
         #endif
         self.model = model
         #if DEBUG
-            if let names = DebugLaunchOptions.compareWindowSelection {
-                await model.load(selecting: names.base, names.target)
+            switch DebugLaunchOptions.compareWindowSelection {
+            case let .explicit(base, target):
+                await model.load(selecting: base, target)
                 return
+            case .automatic, nil:
+                break
             }
         #endif
         await model.load()

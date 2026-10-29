@@ -559,6 +559,117 @@ struct CompareWindowModelTests {
         #expect(model.base == main && model.target == feature)
     }
 
+    // MARK: Prefill
+
+    @Test(
+        arguments: [
+            // origin/HEAD names a branch that also exists locally.
+            (
+                [ref("trunk"), ref("origin/trunk", .remote), ref("main")], "refs/remotes/origin/trunk",
+                "refs/heads/trunk"
+            ),
+            // No local copy, so the remote branch itself; `main` would be the wrong answer.
+            ([ref("origin/trunk", .remote), ref("main")], "refs/remotes/origin/trunk", "refs/remotes/origin/trunk"),
+            // A `/` in the name stays part of the name.
+            (
+                [ref("release/2026"), ref("origin/release/2026", .remote), ref("main")],
+                "refs/remotes/origin/release/2026", "refs/heads/release/2026"
+            ),
+            // A tag named like the remote branch is not the branch.
+            ([ref("origin/trunk", .tag), ref("trunk"), ref("main")], "refs/remotes/origin/trunk", "refs/heads/trunk"),
+            ([ref("master"), ref("main")], nil, "refs/heads/main"),
+            ([ref("master"), ref("feature")], nil, "refs/heads/master"),
+            // A hint that names nothing present falls back the same way.
+            ([ref("main"), ref("feature")], "refs/remotes/origin/gone", "refs/heads/main"),
+            ([ref("feature")], nil, nil),
+        ] as [([GitRef], String?, String?)])
+    func defaultBaseFollowsOriginHeadThenTheUsualNames(refs: [GitRef], hint: String?, expected: String?) {
+        let base = CompareWindowModel.defaultBase(in: refs, originDefaultBranchRef: hint, currentBranch: "feature")
+        #expect(base?.fullName == expected)
+    }
+
+    @Test func defaultBaseIsNilWhenItIsTheCurrentBranch() {
+        let refs = [ref("main"), ref("origin/main", .remote)]
+        let base = CompareWindowModel.defaultBase(
+            in: refs, originDefaultBranchRef: "refs/remotes/origin/main", currentBranch: "main")
+        #expect(base == nil)
+    }
+
+    @Test func loadingPrefillsTheCurrentBranchAgainstTheDefaultBranch() async {
+        let client = StubRepoClient(files: [])
+        await client.set(refs: [main, feature, ref("trunk", hoursAgo: 3), ref("origin/trunk", .remote)])
+        await client.set(originDefaultBranchRef: "refs/remotes/origin/trunk")
+        let model = model(client, currentBranch: "feature")
+
+        await model.load()
+        #expect(model.refList == .loaded)
+        #expect(model.target == feature)
+        #expect(model.base?.fullName == "refs/heads/trunk")
+    }
+
+    @Test func aFailingDefaultBranchReadStillPrefillsFromMain() async {
+        let client = StubRepoClient(files: [])
+        await client.set(refs: [main, feature])
+        await client.fail(originDefaultBranchRef: true)
+        let model = model(client, currentBranch: "feature")
+
+        await model.load()
+        #expect(model.target == feature && model.base == main)
+    }
+
+    @Test func closingWhileTheRefsLoadPrefillsNothing() async {
+        let client = await client()
+        await client.set(refs: [main, feature])
+        await client.hold(.refs)
+        let model = model(client, currentBranch: "feature")
+
+        let loading = Task { await model.load() }
+        #expect(await held(client, .refs))
+        model.close()
+        await client.release(.refs)
+        await loading.value
+        #expect(model.base == nil && model.target == nil)
+        #expect(model.churn == .hidden)
+    }
+
+    @Test func aDetachedHeadPrefillsNothing() async {
+        let client = StubRepoClient(files: [])
+        await client.set(refs: [main, feature])
+        let model = model(client, currentBranch: nil)
+
+        await model.load()
+        #expect(model.refList == .loaded)
+        #expect(model.base == nil && model.target == nil)
+    }
+
+    @Test func prefillDoesNotWaitForTheRemotesAndTheUsersChoiceSurvivesThem() async throws {
+        let client = StubRepoClient(files: [])
+        await client.set(refs: [main, feature, other])
+        await client.hold(.remotes)
+        let model = model(client, currentBranch: "feature")
+
+        let loading = Task { await model.load() }
+        #expect(await held(client, .remotes))
+        #expect(await eventually { await model.refList == .loaded })
+        #expect(model.base == main && model.target == feature)
+
+        model.select(other, for: .target)
+        await client.release(.remotes)
+        await loading.value
+        #expect(model.base == main && model.target == other)
+    }
+
+    @Test func loadingByNameLeavesTheUnnamedSidesEmptyDespiteAPrefillableBranch() async {
+        let client = StubRepoClient(files: [])
+        await client.set(refs: [main, feature])
+        let model = model(client, currentBranch: "feature")
+
+        await model.load(selecting: nil, nil)
+        #expect(model.base == nil && model.target == nil)
+        await model.load(selecting: "main", nil)
+        #expect(model.base == main && model.target == nil)
+    }
+
     // MARK: Wording
 
     @Test func rowsNameTheCheckedOutBranchAndCountsReadAloud() {

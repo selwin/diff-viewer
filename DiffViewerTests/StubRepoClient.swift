@@ -154,6 +154,8 @@ actor StubRepoClient: RepoClient {
     private(set) var incomingChangesCalls: [MergePreviewKey] = []
     private var stubbedRefs: [GitRef] = []
     private var failsRefs = false
+    private var stubbedOriginDefaultBranchRef: String?
+    private var failsOriginDefaultBranchRef = false
     /// Merge bases keyed by the two SHAs asked about, in the order asked; unlisted pairs have none.
     private var mergeBases: [RevisionPair: String] = [:]
     private var failsMergeBase = false
@@ -511,6 +513,8 @@ actor StubRepoClient: RepoClient {
     func fail(merge on: Bool) { failsMerge = on }
     func set(refs list: [GitRef]) { stubbedRefs = list }
     func fail(refs on: Bool) { failsRefs = on }
+    func set(originDefaultBranchRef ref: String?) { stubbedOriginDefaultBranchRef = ref }
+    func fail(originDefaultBranchRef on: Bool) { failsOriginDefaultBranchRef = on }
     func set(mergeBase sha: String?, for first: String, _ second: String) {
         mergeBases[RevisionPair(baseSHA: first, targetSHA: second)] = sha
     }
@@ -611,6 +615,13 @@ actor StubRepoClient: RepoClient {
         if isHeld(.refs) { await park(.refs) }
         if failsRefs { throw ProcessError.failed(command: "git for-each-ref", status: 128, stderr: "gone") }
         return stubbedRefs
+    }
+
+    func originDefaultBranchRef() async throws -> String? {
+        if failsOriginDefaultBranchRef {
+            throw ProcessError.failed(command: "git symbolic-ref", status: 128, stderr: "gone")
+        }
+        return stubbedOriginDefaultBranchRef
     }
 
     func mergeBase(_ first: String, _ second: String) async throws -> String? {

@@ -25,6 +25,34 @@ import Testing
         #expect(refs.allSatisfy { $0.committedAt.timeIntervalSince1970 == TimeInterval(commitDate) })
     }
 
+    @Test func originDefaultBranchRefIsTheFullRefAndNilWhenUnset() async throws {
+        let repo = try await committedRepo()
+        #expect(try await repo.client.originDefaultBranchRef() == nil)
+
+        try await repo.git(["update-ref", "refs/remotes/origin/main", "HEAD"])
+        try await repo.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"])
+        #expect(try await repo.client.originDefaultBranchRef() == "refs/remotes/origin/main")
+
+        // A tag named `origin/main` would make the short form ambiguous.
+        try await repo.git(["tag", "origin/main"])
+        #expect(try await repo.client.originDefaultBranchRef() == "refs/remotes/origin/main")
+
+        // Pointing anywhere but origin's branches is no hint.
+        try await repo.git(["symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/main"])
+        #expect(try await repo.client.originDefaultBranchRef() == nil)
+    }
+
+    @Test func originDefaultBranchRefThrowsOutsideARepository() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("DiffViewerNotARepo-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        await #expect(throws: ProcessError.self) {
+            try await GitClient(repoRoot: directory).originDefaultBranchRef()
+        }
+    }
+
     @Test func mergeBaseIsTheForkPointAndNilWithoutOne() async throws {
         let repo = try await committedRepo()
         let fork = try await repo.git(["rev-parse", "HEAD"])

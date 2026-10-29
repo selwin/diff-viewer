@@ -50,15 +50,23 @@ extension DebugLaunchOptions {
 }
 
 extension DebugLaunchOptions {
-    /// `DIFFVIEWER_COMPARE_WINDOW=<base>...<target>`: the names a Compare window starts with.
-    /// An empty value chooses nothing, and a missing side stays unchosen. Nil when unset.
-    static var compareWindowSelection: (base: String?, target: String?)? {
+    /// What a Compare window starts with: the prefill a user gets, or exactly the named refs.
+    enum CompareWindowSelection {
+        case automatic
+        case explicit(base: String?, target: String?)
+    }
+
+    /// `DIFFVIEWER_COMPARE_WINDOW=auto` starts with the current branch against the default
+    /// branch, as a user's window does. Otherwise `<base>...<target>` names the refs to choose;
+    /// an empty value chooses nothing, and a missing side stays unchosen. Nil when unset.
+    static var compareWindowSelection: CompareWindowSelection? {
         guard let spec = ProcessInfo.processInfo.environment["DIFFVIEWER_COMPARE_WINDOW"] else { return nil }
+        if spec == "auto" { return .automatic }
         let names = spec.components(separatedBy: "...")
         func name(_ index: Int) -> String? {
             index < names.count && !names[index].isEmpty ? names[index] : nil
         }
-        return (name(0), name(1))
+        return .explicit(base: name(0), target: name(1))
     }
 
     /// `DIFFVIEWER_COMPARE_WINDOW_PR=<link or #n>`: starts the Compare window in Pull Request

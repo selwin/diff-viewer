@@ -99,6 +99,7 @@ struct TaggedClient: RepoClient {
     }
     func merge(sourceTipSha: String, sourceRef: String) async throws {}
     func refs() async throws -> [GitRef] { [] }
+    func originDefaultBranchRef() async throws -> String? { nil }
     func mergeBase(_ first: String, _ second: String) async throws -> String? { nil }
     func churn(base: String, target: String) async throws -> IncomingChangeSummary {
         IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)

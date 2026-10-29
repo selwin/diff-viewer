@@ -122,19 +122,56 @@ final class CompareWindowModel {
 
     // MARK: Loading
 
-    /// Reads the refs and the remotes together.
+    /// Reads the refs and the remotes together, then prefills the current branch against the
+    /// default branch.
     func load() async {
+        await load(initial: .automatic)
+    }
+
+    /// Matches short names. The sort puts local branches before remote branches and tags,
+    /// so a name both have picks the local branch. A side with no name, or none found, stays
+    /// empty, with no prefill.
+    func load(selecting baseName: String?, _ targetName: String?) async {
+        await load(initial: .explicit(base: baseName, target: targetName))
+    }
+
+    /// What `loadRefs` selects once the refs arrive.
+    private enum InitialSelection {
+        case automatic
+        case explicit(base: String?, target: String?)
+    }
+
+    private func load(initial: InitialSelection) async {
         async let remotes: Void = pullRequest.loadRemotes()
-        await loadRefs()
+        await loadRefs(initial: initial)
         await remotes
     }
 
-    private func loadRefs() async {
+    private func loadRefs(initial: InitialSelection) async {
         refList = .loading
+        let client = client
+        async let loadedRefs = client.refs()
+        // Only the prefill uses the hint. A failed read is no hint: the local `main` or
+        // `master` still applies.
+        let wantsHint = if case .automatic = initial { true } else { false }
+        async let originDefault = wantsHint ? try? await client.originDefaultBranchRef() : nil
         do {
-            let loaded = try await client.refs()
+            let loaded = try await loadedRefs
+            let hint = await originDefault
             guard !isClosed else { return }
+            // Refs, selection and `.loaded` land together, so the lists are never usable
+            // before the prefill.
             refs = CompareRefOrdering.sorted(loaded, currentBranch: currentBranch)
+            switch initial {
+            case .automatic:
+                let target = refs.first(where: isCurrentBranch)
+                let base =
+                    target == nil
+                    ? nil : Self.defaultBase(in: refs, originDefaultBranchRef: hint, currentBranch: currentBranch)
+                apply(base: base, target: target)
+            case let .explicit(baseName, targetName):
+                apply(base: refs.first { $0.name == baseName }, target: refs.first { $0.name == targetName })
+            }
             refList = .loaded
         } catch {
             guard !isClosed else { return }
@@ -142,12 +179,24 @@ final class CompareWindowModel {
         }
     }
 
-    /// Matches short names. The sort puts local branches before remote branches and tags,
-    /// so a name both have picks the local branch.
-    func load(selecting baseName: String?, _ targetName: String?) async {
-        await load()
-        if let ref = refs.first(where: { $0.name == baseName }) { select(ref, for: .base) }
-        if let ref = refs.first(where: { $0.name == targetName }) { select(ref, for: .target) }
+    /// The branch a comparison against the current one starts from: origin's default branch
+    /// (its local copy when there is one), else `main`, else `master`. Nil when that is the
+    /// current branch, which would only compare it with itself.
+    static func defaultBase(in refs: [GitRef], originDefaultBranchRef: String?, currentBranch: String?) -> GitRef? {
+        func ref(_ fullName: String) -> GitRef? { refs.first { $0.fullName == fullName } }
+        let originPrefix = "refs/remotes/origin/"
+        var base: GitRef?
+        if let hint = originDefaultBranchRef, hint.hasPrefix(originPrefix) {
+            base = ref("refs/heads/" + hint.dropFirst(originPrefix.count)) ?? ref(hint)
+        }
+        guard let base = base ?? ref("refs/heads/main") ?? ref("refs/heads/master") else { return nil }
+        return base.kind == .local && base.name == currentBranch ? nil : base
+    }
+
+    private func apply(base: GitRef?, target: GitRef?) {
+        self.base = base
+        self.target = target
+        selectionChanged()
     }
 
     // MARK: Selection
