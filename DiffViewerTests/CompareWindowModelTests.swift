@@ -40,12 +40,13 @@ struct CompareWindowModelTests {
     private let summary = IncomingChangeSummary(fileCount: 15, addedLineCount: 411, deletedLineCount: 110)
     private let mergeBase = objectID("base")
 
-    /// Every pair from main has a merge base unless a test says otherwise.
+    /// Every pair with main has a merge base, asked either way round, unless a test says otherwise.
     private func client(mergeBases: Bool = true) async -> StubRepoClient {
         let client = StubRepoClient(files: [])
         if mergeBases {
             for target in [feature, other, topic] {
                 await client.set(mergeBase: mergeBase, for: main.commitSHA, target.commitSHA)
+                await client.set(mergeBase: mergeBase, for: target.commitSHA, main.commitSHA)
             }
         }
         await client.set(churn: summary)
@@ -66,13 +67,14 @@ struct CompareWindowModelTests {
             open: opener.open)
     }
 
-    /// Fires the debounce and waits until its request is queued or running. The debounce
-    /// and spinner must both be asleep first, or the advance would land before them.
+    /// Fires both directions' debounces and waits until their requests are queued or running.
+    /// Each direction's debounce and spinner must be asleep first, or the advance would land
+    /// before them.
     private func passDebounce(_ model: CompareWindowModel, _ clock: ManualClock) async throws {
-        #expect(await eventually { clock.sleeperCount == 2 })
-        let debounce = try #require(model.debounceTask)
+        #expect(await eventually { clock.sleeperCount == 4 })
+        let debounces = [try #require(model.debounceTask), try #require(model.reverseDebounceTask)]
         clock.advance(by: CompareWindowModel.debounceDelay)
-        await debounce.value
+        for debounce in debounces { await debounce.value }
     }
 
     /// In Pull Request mode with `#61` entered on an `origin` remote on GitHub.
@@ -85,15 +87,16 @@ struct CompareWindowModelTests {
         return model
     }
 
-    private func held(_ client: StubRepoClient, _ call: StubCall) async -> Bool {
-        await eventually { await client.heldCount(call) == 1 }
+    private func held(_ client: StubRepoClient, _ call: StubCall, waiting: Int = 1) async -> Bool {
+        await eventually { await client.heldCount(call) == waiting }
     }
 
-    private func held(_ client: StubRepoClient, _ call: StubCall, calls: Int) async -> Bool {
+    /// `calls` counts every `churn` or `mergeBase` call made, held or finished.
+    private func held(_ client: StubRepoClient, _ call: StubCall, waiting: Int = 1, calls: Int) async -> Bool {
         await eventually {
             let count = call == .churn ? await client.churnCalls : await client.mergeBaseCalls
-            let waiting = await client.heldCount(call)
-            return waiting == 1 && count == calls
+            let parked = await client.heldCount(call)
+            return parked == waiting && count == calls
         }
     }
 
@@ -106,22 +109,22 @@ struct CompareWindowModelTests {
         let model = model(client, clock: clock)
 
         model.select(main, for: .base)
-        #expect(model.churn == .hidden)
+        #expect(model.churn(.forward) == .hidden)
         model.select(feature, for: .target)
-        #expect(model.churn == .pending)
-        #expect(await eventually { clock.sleeperCount == 2 })
+        #expect(model.churn(.forward) == .pending)
+        #expect(await eventually { clock.sleeperCount == 4 })
         clock.advance(by: .milliseconds(149))
-        #expect(clock.sleeperCount == 2)
+        #expect(clock.sleeperCount == 4)
         clock.advance(by: .milliseconds(1))
-        #expect(await held(client, .mergeBase, calls: 1))
+        #expect(await held(client, .mergeBase, waiting: 2, calls: 2))
         clock.advance(by: .milliseconds(149))
-        #expect(model.churn == .pending)
+        #expect(model.churn(.forward) == .pending)
         clock.advance(by: .milliseconds(1))
-        #expect(await eventually { await model.churn == .comparing })
+        #expect(await eventually { await model.churn(.forward) == .comparing })
 
         await client.release(.mergeBase)
-        #expect(await eventually { await model.churn == .ready(summary) })
-        #expect(model.churnCounts == .init(files: "15 files", added: "+411", deleted: "\u{2212}110"))
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
+        #expect(model.churnCounts(.forward) == .init(files: "15 files", added: "+411", deleted: "\u{2212}110"))
     }
 
     @Test func aReadEndsInNoDifferencesOrAFailure() async throws {
@@ -133,36 +136,17 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await eventually { await model.churn == .noDifferences })
+        #expect(await eventually { await model.churn(.forward) == .noDifferences })
 
         await client.fail(churn: true)
         model.select(other, for: .target)
         try await passDebounce(model, clock)
-        #expect(await eventually { await model.churn == .failed("git diff exited with status 128: gone") })
+        #expect(await eventually { await model.churn(.forward) == .failed("git diff exited with status 128: gone") })
 
-        model.select(alias, for: .target)
-        model.select(feature, for: .base)
+        model.select(topic, for: .target)
+        model.select(other, for: .base)
         try await passDebounce(model, clock)
-        #expect(await eventually { await model.churn == .failed("feature and alias share no history") })
-    }
-
-    @Test func theSameRefOrCommitReadsNothing() async {
-        let client = await client()
-        let clock = ManualClock()
-        let model = model(client, clock: clock)
-
-        model.select(main, for: .base)
-        model.select(main, for: .target)
-        #expect(model.churn == .noDifferences)
-        #expect(model.isTargetSameAsBase)
-        #expect(model.wellSubtitle(.target) == "Same as base")
-        model.select(alias, for: .target)
-        #expect(model.churn == .noDifferences)
-        #expect(!model.isTargetSameAsBase)
-        #expect(model.wellSubtitle(.target) == "Today 07:00")
-
-        #expect(clock.sleeperCount == 0)
-        #expect(await client.mergeBaseCalls == 0)
+        #expect(await eventually { await model.churn(.forward) == .failed("other and topic share no history") })
     }
 
     @Test func aSupersededReadPublishesNeitherItsCountsNorItsFailure() async throws {
@@ -174,29 +158,30 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await held(client, .churn, calls: 1))
+        #expect(await held(client, .churn, waiting: 2, calls: 2))
         model.select(other, for: .target)
         try await passDebounce(model, clock)
-        await client.releaseFirst(.churn)
-        #expect(await held(client, .churn, calls: 2))
-        #expect(model.churn == .pending)
+        await client.release(.churn)
+        #expect(await held(client, .churn, waiting: 2, calls: 4))
+        #expect(model.churn(.forward) == .pending)
 
         await client.fail(churn: true)
         model.select(topic, for: .target)
         try await passDebounce(model, clock)
-        await client.releaseFirst(.churn)
-        #expect(await held(client, .churn, calls: 3))
-        #expect(model.churn == .pending)
+        await client.release(.churn)
+        #expect(await held(client, .churn, waiting: 2, calls: 6))
+        #expect(model.churn(.forward) == .pending)
 
         await client.fail(churn: false)
         await client.release(.churn)
-        #expect(await eventually { await model.churn == .ready(summary) })
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
     }
 
     @Test func onlyTheLatestQueuedRequestRunsAfterTheOneInFlight() async throws {
         let client = await client()
         let topicBase = objectID("topic-base")
         await client.set(mergeBase: topicBase, for: main.commitSHA, topic.commitSHA)
+        await client.set(mergeBase: topicBase, for: topic.commitSHA, main.commitSHA)
         await client.hold(.mergeBase)
         let clock = ManualClock()
         let model = model(client, clock: clock)
@@ -204,20 +189,24 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await held(client, .mergeBase, calls: 1))
+        #expect(await held(client, .mergeBase, waiting: 2, calls: 2))
         model.select(other, for: .target)
         try await passDebounce(model, clock)
         model.select(topic, for: .target)
         try await passDebounce(model, clock)
-        #expect(await client.heldCount(.mergeBase) == 1)
+        #expect(await client.heldCount(.mergeBase) == 2)
 
         await client.hold(.mergeBase, false)
         await client.release(.mergeBase)
-        #expect(await eventually { await model.churn == .ready(summary) })
-        let topicRead = RevisionPair(baseSHA: main.commitSHA, targetSHA: topic.commitSHA)
-        #expect(await client.mergeBaseRequests.last == topicRead)
-        #expect(await client.mergeBaseCalls == 2)
-        #expect(await client.churnRequests == [RevisionPair(baseSHA: topicBase, targetSHA: topic.commitSHA)])
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
+        #expect(await eventually { await model.churn(.reverse) == .ready(summary) })
+        let pairs = [(main, feature), (feature, main), (main, topic), (topic, main)]
+        let mergeBaseReads = pairs.map { RevisionPair(baseSHA: $0.commitSHA, targetSHA: $1.commitSHA) }
+        #expect(await Set(client.mergeBaseRequests) == Set(mergeBaseReads))
+        #expect(await client.mergeBaseCalls == 4)
+        let churnReads = [topic, main].map { RevisionPair(baseSHA: topicBase, targetSHA: $0.commitSHA) }
+        #expect(await Set(client.churnRequests) == Set(churnReads))
+        #expect(await client.churnCalls == 2)
     }
 
     @Test(arguments: [false, true])
@@ -230,39 +219,19 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await held(client, .mergeBase, calls: 1))
+        #expect(await held(client, .mergeBase, waiting: 2, calls: 2))
         model.select(other, for: .target)
         try await passDebounce(model, clock)
-        let read = try #require(model.readTask)
+        let reads = [try #require(model.readTask), try #require(model.reverseReadTask)]
         if closes { model.close() } else { model.clear(.target) }
 
         await client.release(.mergeBase)
-        await read.value
-        #expect(await client.mergeBaseCalls == 1)
+        for read in reads { await read.value }
+        #expect(await client.mergeBaseCalls == 2)
         #expect(await client.churnCalls == 0)
     }
 
     // MARK: Submitting
-
-    @Test func closingWhileTheMergeBaseResolvesOpensNothingAndReadsNoCounts() async throws {
-        let client = await client()
-        await client.hold(.mergeBase)
-        let opener = Opener()
-        let model = model(client, opener: opener)
-
-        model.select(main, for: .base)
-        model.select(feature, for: .target)
-        let submission = Task { await model.submit() }
-        #expect(await held(client, .mergeBase, calls: 1))
-        let read = try #require(model.readTask)
-        model.close()
-        #expect(await submission.value == false)
-
-        await client.release(.mergeBase)
-        await read.value
-        #expect(await client.churnCalls == 0)
-        #expect(opener.opened.isEmpty)
-    }
 
     @Test func whileOpeningASecondSubmissionAndSelectionChangesAreIgnored() async {
         let client = await client()
@@ -296,7 +265,7 @@ struct CompareWindowModelTests {
 
         #expect(await model.submit() == false)
         #expect(model.openError == "main and feature share no history")
-        #expect(!model.isOpening && model.canCompare)
+        #expect(!model.isOpening && model.canCompare(.forward))
         model.select(other, for: .target)
         #expect(model.openError == nil)
         model.select(feature, for: .target)
@@ -329,9 +298,10 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await held(client, .churn, calls: 1))
+        #expect(await held(client, .churn, waiting: 2, calls: 2))
         #expect(await model.submit())
-        #expect(await client.mergeBaseCalls == 1)
+        // One merge base per direction, none read again to open.
+        #expect(await client.mergeBaseCalls == 2)
 
         await client.fail(churn: true)
         let failing = self.model(client, opener: opener)
@@ -343,6 +313,200 @@ struct CompareWindowModelTests {
         await client.release(.churn)
     }
 
+    // MARK: Directions
+
+    @Test func bothDirectionsReadAndTheReverseMirrorsTheForwardRequest() async throws {
+        let client = await client()
+        let reverseSummary = IncomingChangeSummary(fileCount: 2, addedLineCount: 3, deletedLineCount: 4)
+        await client.set(churn: reverseSummary, for: RevisionPair(baseSHA: mergeBase, targetSHA: main.commitSHA))
+        let clock = ManualClock()
+        let model = model(client, clock: clock)
+
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        #expect(model.previewDirections == [.forward, .reverse])
+        #expect(model.rowTitle(.forward) == "main → feature" && model.rowTitle(.reverse) == "feature → main")
+        try await passDebounce(model, clock)
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
+        #expect(await eventually { await model.churn(.reverse) == .ready(reverseSummary) })
+        let mergeBaseReads = [(main, feature), (feature, main)].map {
+            RevisionPair(baseSHA: $0.commitSHA, targetSHA: $1.commitSHA)
+        }
+        #expect(await Set(client.mergeBaseRequests) == Set(mergeBaseReads))
+        let churnReads = [feature, main].map { RevisionPair(baseSHA: mergeBase, targetSHA: $0.commitSHA) }
+        #expect(await Set(client.churnRequests) == Set(churnReads))
+    }
+
+    @Test func submittingTheReverseOpensTheBaseFromItsMergeBase() async throws {
+        let client = await client()
+        let opener = Opener()
+        let model = model(client, opener: opener)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+
+        #expect(await model.submit(.reverse))
+        let range = try #require(opener.opened.first)
+        #expect(range.mergeBaseSHA == mergeBase && range.targetSHA == main.commitSHA)
+        #expect(range.baseName == "feature" && range.targetName == "main")
+    }
+
+    @Test func aDirectionKnownToBeEmptyCannotBeSubmitted() async throws {
+        let client = await client()
+        let empty = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+        await client.set(churn: empty, for: RevisionPair(baseSHA: mergeBase, targetSHA: main.commitSHA))
+        let clock = ManualClock()
+        let opener = Opener()
+        let model = model(client, clock: clock, opener: opener)
+
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await eventually { await model.churn(.reverse) == .noDifferences })
+        #expect(!model.canCompare(.reverse))
+        #expect(model.canCompare(.forward))
+        #expect(await model.submit(.reverse) == false)
+        #expect(opener.opened.isEmpty)
+    }
+
+    @Test func theSameRefOrCommitReadsNothing() async {
+        let client = await client()
+        let clock = ManualClock()
+        let model = model(client, clock: clock)
+
+        model.select(main, for: .base)
+        model.select(main, for: .target)
+        #expect(model.churn(.forward) == .noDifferences && model.churn(.reverse) == .noDifferences)
+        #expect(model.previewDirections == [.forward])
+        #expect(model.isTargetSameAsBase)
+        #expect(model.wellSubtitle(.target) == "Same as base")
+        model.select(alias, for: .target)
+        #expect(model.churn(.forward) == .noDifferences && model.churn(.reverse) == .noDifferences)
+        #expect(!model.isTargetSameAsBase)
+        #expect(model.wellSubtitle(.target) == "Today 07:00")
+
+        #expect(clock.sleeperCount == 0)
+        #expect(await client.mergeBaseCalls == 0)
+    }
+
+    @Test func theReverseCountsArriveWhileTheForwardIsStillPending() async throws {
+        let client = await client()
+        await client.holdChurn(true, for: RevisionPair(baseSHA: mergeBase, targetSHA: feature.commitSHA))
+        let clock = ManualClock()
+        let model = model(client, clock: clock)
+
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await eventually { await model.churn(.reverse) == .ready(summary) })
+        #expect(model.churn(.forward) == .pending)
+        #expect(model.churnAccessibilityLabel(.forward) == nil)
+        #expect(model.churnCounts(.reverse) == .init(files: "15 files", added: "+411", deleted: "\u{2212}110"))
+        #expect(model.churnAccessibilityLabel(.reverse) == "15 files changed, 411 additions, 110 deletions")
+        #expect(model.canCompare(.reverse))
+        await client.release(.churn)
+    }
+
+    @Test func aSubmissionWhileTheCountsAreHeldStaysOpenedWhenTheyComeBackEmpty() async throws {
+        let client = await client()
+        let reverse = RevisionPair(baseSHA: mergeBase, targetSHA: main.commitSHA)
+        let empty = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+        await client.set(churn: empty, for: reverse)
+        await client.holdChurn(true, for: reverse)
+        let clock = ManualClock()
+        let opener = Opener()
+        let model = model(client, clock: clock, opener: opener)
+
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await held(client, .churn))
+        #expect(await model.submit(.reverse))
+
+        await client.release(.churn)
+        #expect(await eventually { await model.churn(.reverse) == .noDifferences })
+        #expect(opener.opened.map(\.targetSHA) == [main.commitSHA])
+    }
+
+    @Test func aPullRequestHasNoReverse() async {
+        let client = await client()
+        let opener = Opener()
+        let model = await pullRequestModel(client, opener: opener)
+
+        #expect(model.churn(.reverse) == .hidden)
+        #expect(model.canCompare(.forward) && !model.canCompare(.reverse))
+        #expect(await model.submit(.reverse) == false)
+        #expect(opener.opened.isEmpty)
+    }
+
+    // MARK: Swap
+
+    @Test func swappingAfterTheCountsArriveExchangesThemWithoutReadingAgain() async throws {
+        let client = await client()
+        let reverseSummary = IncomingChangeSummary(fileCount: 2, addedLineCount: 3, deletedLineCount: 4)
+        await client.set(churn: reverseSummary, for: RevisionPair(baseSHA: mergeBase, targetSHA: main.commitSHA))
+        let clock = ManualClock()
+        let model = model(client, clock: clock)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
+        #expect(await eventually { await model.churn(.reverse) == .ready(reverseSummary) })
+
+        model.swap()
+        #expect(model.churn(.forward) == .ready(reverseSummary) && model.churn(.reverse) == .ready(summary))
+        #expect(clock.sleeperCount == 0)
+        #expect(await client.mergeBaseCalls == 2)
+        #expect(await client.churnCalls == 2)
+    }
+
+    @Test func swappingWhileBothArePendingPutsEachCountOnItsRow() async throws {
+        let client = await client()
+        let reverseSummary = IncomingChangeSummary(fileCount: 2, addedLineCount: 3, deletedLineCount: 4)
+        await client.set(churn: reverseSummary, for: RevisionPair(baseSHA: mergeBase, targetSHA: main.commitSHA))
+        await client.hold(.mergeBase)
+        let clock = ManualClock()
+        let opener = Opener()
+        let model = model(client, clock: clock, opener: opener)
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        try await passDebounce(model, clock)
+        #expect(await held(client, .mergeBase, waiting: 2, calls: 2))
+
+        model.swap()
+        await client.release(.mergeBase)
+        #expect(await eventually { await model.churn(.forward) == .ready(reverseSummary) })
+        #expect(await eventually { await model.churn(.reverse) == .ready(summary) })
+        #expect(await model.submit(.forward))
+        let range = try #require(opener.opened.first)
+        #expect(range.targetSHA == main.commitSHA)
+        #expect(range.baseName == "feature" && range.targetName == "main")
+    }
+
+    // MARK: Lifecycle
+
+    @Test(arguments: [CompareWindowModel.Direction.forward, .reverse])
+    func closingWhileTheMergeBaseResolvesOpensNothingAndReadsNoCounts(direction: CompareWindowModel.Direction)
+        async throws
+    {
+        let client = await client()
+        await client.hold(.mergeBase)
+        let opener = Opener()
+        let model = model(client, opener: opener)
+
+        model.select(main, for: .base)
+        model.select(feature, for: .target)
+        let submission = Task { await model.submit(direction) }
+        #expect(await held(client, .mergeBase, calls: 1))
+        let read = try #require(direction == .forward ? model.readTask : model.reverseReadTask)
+        model.close()
+        #expect(await submission.value == false)
+
+        await client.release(.mergeBase)
+        await read.value
+        #expect(await client.churnCalls == 0)
+        #expect(opener.opened.isEmpty)
+    }
+
     // MARK: Modes
 
     @Test func eachModeKeepsItsInputAndPreview() async throws {
@@ -352,26 +516,27 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.select(feature, for: .target)
         try await passDebounce(model, clock)
-        #expect(await eventually { await model.churn == .ready(summary) })
+        #expect(await eventually { await model.churn(.forward) == .ready(summary) })
+        #expect(await eventually { await model.churn(.reverse) == .ready(summary) })
 
         let pullRequestSummary = IncomingChangeSummary(fileCount: 2, addedLineCount: 5, deletedLineCount: 1)
         await client.set(churn: pullRequestSummary)
         await client.set(remotes: [GitRemote(name: "origin", fetchURL: "https://github.com/acme/widgets.git")])
         model.setMode(.pullRequest)
-        #expect(model.churn == .hidden)
-        #expect(!model.canCompare)
+        #expect(model.churn(.forward) == .hidden)
+        #expect(!model.canCompare(.forward))
         await model.pullRequest.loadRemotes()
         model.pullRequest.input = "#61"
         model.pullRequest.resolveNow()
-        #expect(await eventually { await model.churn == .ready(pullRequestSummary) })
+        #expect(await eventually { await model.churn(.forward) == .ready(pullRequestSummary) })
 
         model.setMode(.branches)
-        #expect(model.churn == .ready(summary))
+        #expect(model.churn(.forward) == .ready(summary))
         #expect(model.target == feature)
         model.setMode(.pullRequest)
-        #expect(model.churn == .ready(pullRequestSummary))
+        #expect(model.churn(.forward) == .ready(pullRequestSummary))
         #expect(model.pullRequest.input == "#61")
-        #expect(await client.mergeBaseCalls == 1)
+        #expect(await client.mergeBaseCalls == 2)
         #expect(await client.advertisedPullRequestCalls.count == 1)
     }
 
@@ -421,7 +586,7 @@ struct CompareWindowModelTests {
         model.pullRequest.input = "#62"
         #expect(await submission.value == false)
         #expect(!model.isOpening)
-        #expect(model.canCompare)
+        #expect(model.canCompare(.forward))
         #expect(model.openError == nil)
         await client.release(.fetchPullRequest)
         #expect(opener.opened.isEmpty)
@@ -476,8 +641,8 @@ struct CompareWindowModelTests {
         let model = await pullRequestModel(client, opener: opener)
 
         model.pullRequest.resolveNow()
-        #expect(await eventually { await model.churn == .failed("git diff exited with status 128: gone") })
-        #expect(model.canCompare)
+        #expect(await eventually { await model.churn(.forward) == .failed("git diff exited with status 128: gone") })
+        #expect(model.canCompare(.forward))
         #expect(await model.submit())
         let revisions = RevisionPair(baseSHA: objectID("pr-base"), targetSHA: objectID("pr-head"))
         #expect(opener.opened.map(\.revisions) == [revisions])
@@ -495,7 +660,7 @@ struct CompareWindowModelTests {
         let model = model(StubRepoClient(files: []))
         if let base, let ref = refs.first(where: { $0.name == base }) { model.select(ref, for: .base) }
         if let target, let ref = refs.first(where: { $0.name == target }) { model.select(ref, for: .target) }
-        #expect(model.canCompare == expected)
+        #expect(model.canCompare(.forward) == expected)
     }
 
     @Test func swapExchangesTheSides() {
@@ -505,12 +670,12 @@ struct CompareWindowModelTests {
         model.select(main, for: .base)
         model.swap()
         #expect(model.base == nil && model.target == main)
-        #expect(model.churn == .hidden)
+        #expect(model.churn(.forward) == .hidden)
 
         model.select(feature, for: .base)
         model.swap()
         #expect(model.base == main && model.target == feature)
-        #expect(model.churn == .pending)
+        #expect(model.churn(.forward) == .pending)
 
         model.select(main, for: .target)
         #expect(!model.canSwap)
@@ -629,7 +794,7 @@ struct CompareWindowModelTests {
         await client.release(.refs)
         await loading.value
         #expect(model.base == nil && model.target == nil)
-        #expect(model.churn == .hidden)
+        #expect(model.churn(.forward) == .hidden)
     }
 
     @Test func aDetachedHeadPrefillsNothing() async {

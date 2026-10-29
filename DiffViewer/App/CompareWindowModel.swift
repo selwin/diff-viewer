@@ -8,8 +8,8 @@ struct BranchComparisonRequest: Sendable, Equatable {
 }
 
 /// What the Compare window shows and does. Branches mode has two filtered ref lists, the
-/// chosen base and target, and a preview of how much the target changed since their merge
-/// base; Pull Request mode is `pullRequest`. Either opens its range as a comparison tab.
+/// chosen base and target, and a preview of each direction between them; Pull Request mode
+/// is `pullRequest`. Either opens its range as a comparison tab.
 @MainActor
 @Observable
 final class CompareWindowModel {
@@ -21,6 +21,13 @@ final class CompareWindowModel {
     enum Side {
         case base
         case target
+    }
+
+    /// Forward compares the base with the target. Reverse is not the forward counts negated:
+    /// it compares from its merge base to the base's tip, resolving that merge base itself.
+    enum Direction {
+        case forward
+        case reverse
     }
 
     enum RefList: Equatable {
@@ -53,7 +60,9 @@ final class CompareWindowModel {
     @ObservationIgnored let locale: Locale
     @ObservationIgnored private let client: any RepoClient
     @ObservationIgnored private let open: @MainActor (CommitRange) -> Bool
-    @ObservationIgnored private let branchPreview: ComparisonPreview<BranchComparisonRequest>
+    /// Observed, so `swap()` exchanging them redraws the rows.
+    private var forwardPreview: ComparisonPreview<BranchComparisonRequest>
+    private var reversePreview: ComparisonPreview<BranchComparisonRequest>
     /// Keeps its input and preview while Branches mode is shown.
     @ObservationIgnored let pullRequest: PullRequestCompareModel
 
@@ -71,13 +80,19 @@ final class CompareWindowModel {
         self.grouping = grouping
         self.locale = locale
         self.open = open
-        // The stored resolver captures only the client, so the preview never retains the model.
-        branchPreview = ComparisonPreview(
-            client: client, clock: clock, debounce: Self.debounceDelay, spinnerDelay: Self.spinnerDelay
-        ) { request, _ in
-            try await Self.range(for: request, client: client)
-        }
+        forwardPreview = Self.branchPreview(client: client, clock: clock)
+        reversePreview = Self.branchPreview(client: client, clock: clock)
         pullRequest = PullRequestCompareModel(client: client, clock: clock)
+    }
+
+    private static func branchPreview(client: any RepoClient, clock: any Clock<Duration>)
+        -> ComparisonPreview<BranchComparisonRequest>
+    {
+        // The stored resolver captures only the client, so the preview never retains the model.
+        ComparisonPreview(client: client, clock: clock, debounce: debounceDelay, spinnerDelay: spinnerDelay) {
+            request, _ in
+            try await range(for: request, client: client)
+        }
     }
 
     private static func range(for request: BranchComparisonRequest, client: any RepoClient) async throws
@@ -91,14 +106,22 @@ final class CompareWindowModel {
             targetSHA: request.target.commitSHA)
     }
 
-    /// The preview under the two wells. Two refs on one commit need no read.
-    var churn: ComparisonChurn {
+    private func preview(_ direction: Direction) -> ComparisonPreview<BranchComparisonRequest> {
+        switch direction {
+        case .forward: forwardPreview
+        case .reverse: reversePreview
+        }
+    }
+
+    /// One direction's preview under the two wells. Two refs on one commit need no read; a
+    /// pull request has no reverse.
+    func churn(_ direction: Direction) -> ComparisonChurn {
         switch mode {
         case .branches:
             if let base, let target, base.commitSHA == target.commitSHA { return .noDifferences }
-            return branchPreview.churn
+            return preview(direction).churn
         case .pullRequest:
-            return pullRequest.churn
+            return direction == .forward ? pullRequest.churn : .hidden
         }
     }
 
@@ -117,8 +140,10 @@ final class CompareWindowModel {
     }
 
     /// Exposed so tests can await them.
-    var debounceTask: Task<Void, Never>? { branchPreview.debounceTask }
-    var readTask: Task<Void, Never>? { branchPreview.readTask }
+    var debounceTask: Task<Void, Never>? { forwardPreview.debounceTask }
+    var readTask: Task<Void, Never>? { forwardPreview.readTask }
+    var reverseDebounceTask: Task<Void, Never>? { reversePreview.debounceTask }
+    var reverseReadTask: Task<Void, Never>? { reversePreview.readTask }
 
     // MARK: Loading
 
@@ -226,9 +251,12 @@ final class CompareWindowModel {
         selectionChanged()
     }
 
+    /// The previews swap with the sides, so each keeps its request and its finished or
+    /// running read, and nothing is read again.
     func swap() {
         guard canSwap else { return }
         (base, target) = (target, base)
+        (forwardPreview, reversePreview) = (reversePreview, forwardPreview)
         selectionChanged()
     }
 
@@ -245,14 +273,16 @@ final class CompareWindowModel {
         select(rows[index], for: side)
     }
 
-    var canCompare: Bool {
-        guard !isOpening else { return false }
+    /// Only a direction already known to be empty is refused. Submitting doesn't wait for
+    /// the counts, so one submitted while they are pending can still open an empty tab.
+    func canCompare(_ direction: Direction) -> Bool {
+        guard !isOpening, churn(direction) != .noDifferences else { return false }
         switch mode {
         case .branches:
             guard let base, let target else { return false }
             return base.commitSHA != target.commitSHA
         case .pullRequest:
-            return pullRequest.canCompare
+            return direction == .forward && pullRequest.canCompare
         }
     }
 
@@ -269,24 +299,26 @@ final class CompareWindowModel {
     private func selectionChanged() {
         openFailure = nil
         guard let base, let target, base.commitSHA != target.commitSHA else {
-            branchPreview.setRequest(nil)
+            forwardPreview.setRequest(nil)
+            reversePreview.setRequest(nil)
             return
         }
-        branchPreview.setRequest(BranchComparisonRequest(base: base, target: target))
+        forwardPreview.setRequest(BranchComparisonRequest(base: base, target: target))
+        reversePreview.setRequest(BranchComparisonRequest(base: target, target: base))
     }
 
     // MARK: Submitting
 
-    /// Opens the comparison tab once the merge base resolves; the preview counts are not
-    /// awaited. True means the tab opened and the window should close.
-    func submit() async -> Bool {
-        guard canCompare, !isClosed else { return false }
+    /// Opens the direction's comparison tab once its merge base resolves; the preview counts
+    /// are not awaited. True means the tab opened and the window should close.
+    func submit(_ direction: Direction = .forward) async -> Bool {
+        guard canCompare(direction), !isClosed else { return false }
         // Set before any suspension, so a second submit and selection changes are refused.
         isOpening = true
         openFailure = nil
         switch mode {
         case .branches:
-            return finish(await branchPreview.resolvedRange(), generation: nil)
+            return finish(await preview(direction).resolvedRange(), generation: nil)
         case .pullRequest:
             // Taken before awaiting, so a failure is kept with the request it was for.
             let generation = pullRequest.requestGeneration
@@ -321,7 +353,8 @@ final class CompareWindowModel {
     /// already running are ignored (running git reads are not killed).
     func close() {
         isClosed = true
-        branchPreview.close()
+        forwardPreview.close()
+        reversePreview.close()
         pullRequest.close()
     }
 }

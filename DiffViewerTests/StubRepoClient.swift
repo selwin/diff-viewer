@@ -163,6 +163,10 @@ actor StubRepoClient: RepoClient {
     private(set) var mergeBaseRequests: [RevisionPair] = []
     var mergeBaseCalls: Int { mergeBaseRequests.count }
     private var stubbedChurn = IncomingChangeSummary(fileCount: 0, addedLineCount: 0, deletedLineCount: 0)
+    /// Keyed by the (merge base, target) asked about; unlisted pairs get `stubbedChurn`.
+    private var churnsByPair: [RevisionPair: IncomingChangeSummary] = [:]
+    /// Per-pair holds, on top of the `.churn` gate's switch.
+    private var heldChurnPairs: Set<RevisionPair> = []
     private var failsChurn = false
     private(set) var churnRequests: [RevisionPair] = []
     var churnCalls: Int { churnRequests.count }
@@ -522,6 +526,11 @@ actor StubRepoClient: RepoClient {
     /// so a test can change them meanwhile.
     func fail(mergeBase on: Bool) { failsMergeBase = on }
     func set(churn summary: IncomingChangeSummary) { stubbedChurn = summary }
+    func set(churn summary: IncomingChangeSummary, for pair: RevisionPair) { churnsByPair[pair] = summary }
+    /// Suspends `churn` of one pair on the churn gate; `release(.churn)` lets it go.
+    func holdChurn(_ on: Bool, for pair: RevisionPair) {
+        if on { heldChurnPairs.insert(pair) } else { heldChurnPairs.remove(pair) }
+    }
     func fail(churn on: Bool) { failsChurn = on }
     func set(remotes list: [GitRemote]) { stubbedRemotes = list }
     func set(remoteURLs urls: [String: RemoteURLs]) { stubbedRemoteURLs = urls }
@@ -634,10 +643,11 @@ actor StubRepoClient: RepoClient {
     }
 
     func churn(base: String, target: String) async throws -> IncomingChangeSummary {
-        churnRequests.append(RevisionPair(baseSHA: base, targetSHA: target))
-        if isHeld(.churn) { await park(.churn) }
+        let pair = RevisionPair(baseSHA: base, targetSHA: target)
+        churnRequests.append(pair)
+        if isHeld(.churn) || heldChurnPairs.contains(pair) { await park(.churn) }
         if failsChurn { throw ProcessError.failed(command: "git diff", status: 128, stderr: "gone") }
-        return stubbedChurn
+        return churnsByPair[pair] ?? stubbedChurn
     }
 
     func remoteURLs() async throws -> [String: RemoteURLs] {

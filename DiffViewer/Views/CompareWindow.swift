@@ -57,8 +57,8 @@ struct CompareWindowRoot: View {
     }
 }
 
-/// Two cards, base and compare, with the preview and the swap button overlaid where they
-/// meet, and the Cancel and Compare buttons below.
+/// Two cards, base and compare, with the swap button where they meet, the preview over
+/// their bottom edge, and the Cancel and Compare buttons below.
 struct CompareWindow: View {
     @Bindable var model: CompareWindowModel
     let dismiss: () -> Void
@@ -80,13 +80,18 @@ struct CompareWindow: View {
                 }
             }
             .padding(.horizontal, 12)
-            // Overlays, not part of the row, so neither moves with the names' lengths.
+            // An overlay, not part of the row, so it doesn't move with the names' lengths.
             .overlay(alignment: .bottom) {
                 CompareSwapButton(model: model).padding(.bottom, 19)
             }
-            .overlay(alignment: .bottom) {
-                CompareChurnPill(model: model).offset(y: 14)
+            // Room for both directions' rows, kept while there are none, so the cards and footer
+            // stay put. The first row straddles the cards' edge, which reads as cut out of them.
+            ZStack(alignment: .top) {
+                Color.clear
+                ComparePreviewRows(model: model, onCompare: compare)
             }
+            .frame(height: ComparePreviewRows.tallestHeight)
+            .padding(.top, -ComparePreviewRows.rowHeight / 2)
             footer
         }
         // The hidden title bar still reserves its safe area; the title area is ours.
@@ -119,7 +124,9 @@ struct CompareWindow: View {
             }
             .buttonStyle(SheetCapsuleButtonStyle(appearance: .neutral))
             .keyboardShortcut(.cancelAction)
-            Button(action: compare) {
+            Button {
+                compare(.forward)
+            } label: {
                 HStack(spacing: 6) {
                     if model.isOpening {
                         ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
@@ -133,7 +140,7 @@ struct CompareWindow: View {
             }
             .buttonStyle(SheetCapsuleButtonStyle(appearance: .prominent))
             .keyboardShortcut(.return, modifiers: .command)
-            .disabled(!model.canCompare)
+            .disabled(!model.canCompare(.forward))
             .help("Compare (⌘↩)")
         }
         .padding(.horizontal, 12)
@@ -141,8 +148,8 @@ struct CompareWindow: View {
         .frame(height: 64)
     }
 
-    private func compare() {
-        Task { if await model.submit() { dismiss() } }
+    private func compare(_ direction: CompareWindowModel.Direction) {
+        Task { if await model.submit(direction) { dismiss() } }
     }
 }
 
