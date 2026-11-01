@@ -1,17 +1,17 @@
 import SwiftUI
 
 /// The preview overlapping the cards' bottom edge. With two different commits chosen in
-/// Branches mode it has a row per direction, each opening that comparison; otherwise one row
+/// Branches mode it is a pill per direction, each opening that comparison; otherwise one pill
 /// says how much the target changed. Draws nothing until there is something to say.
 struct ComparePreviewRows: View {
     let model: CompareWindowModel
     let onCompare: (CompareWindowModel.Direction) -> Void
 
     static let rowHeight: CGFloat = 28
-    private static let directionRowHeight: CGFloat = 24
-    private static let directionPadding: CGFloat = 2
-    /// Both direction rows, so the window can reserve room for the tallest preview.
-    static let tallestHeight = 2 * directionRowHeight + 2 * directionPadding
+    /// Leaves a hairline between the pills' rings.
+    private static let pillSpacing: CGFloat = 10
+    /// Both direction pills, so the window can reserve room for the tallest preview.
+    static let tallestHeight = 2 * rowHeight + pillSpacing
 
     var body: some View {
         let directions = model.previewDirections
@@ -19,35 +19,36 @@ struct ComparePreviewRows: View {
         if !shown.isEmpty {
             Group {
                 if directions.count == 1, let label = model.churnAccessibilityLabel(.forward) {
-                    churn(.forward)
-                        .frame(height: Self.rowHeight)
+                    pill(churn(.forward))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(label)
                 } else {
-                    VStack(spacing: 0) {
-                        ForEach(shown, id: \.self, content: row)
+                    VStack(spacing: Self.pillSpacing) {
+                        ForEach(shown, id: \.self) { direction in
+                            // As wide as the widest, so the two pills line up.
+                            pill(row(direction).frame(maxWidth: .infinity))
+                        }
                     }
-                    .padding(.vertical, Self.directionPadding)
                     // Room for the counts beside long names, which truncate instead.
-                    .frame(maxWidth: 460)
+                    .frame(maxWidth: 488)
                     .fixedSize(horizontal: true, vertical: false)
                     .accessibilityElement(children: .contain)
                 }
             }
             .font(.system(size: 12))
-            .padding(.horizontal, 14)
-            .background(shape.fill(Color(nsColor: .controlBackgroundColor)))
-            .background {
-                // The ring makes the preview look cut out of the cards behind it.
-                shape.fill(Color(nsColor: .windowBackgroundColor)).padding(-4)
-                    .shadow(color: .black.opacity(0.08), radius: 6, y: 1)
-            }
         }
     }
 
-    /// A capsule while there is one row; two keep its rounded ends.
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Self.rowHeight / 2, style: .continuous)
+    private func pill(_ content: some View) -> some View {
+        content
+            .frame(height: Self.rowHeight)
+            .padding(.horizontal, 14)
+            .background(Capsule().fill(Color(nsColor: .controlBackgroundColor)))
+            .background {
+                // The ring makes the pill look cut out of the cards behind it.
+                Capsule().fill(Color(nsColor: .windowBackgroundColor)).padding(-4)
+                    .shadow(color: .black.opacity(0.08), radius: 6, y: 1)
+            }
     }
 
     private func row(_ direction: CompareWindowModel.Direction) -> some View {
@@ -68,7 +69,6 @@ struct ComparePreviewRows: View {
                 Spacer(minLength: 0)
                 churn(direction).fixedSize()
             }
-            .frame(height: Self.directionRowHeight)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
