@@ -6,8 +6,7 @@ import Foundation
 extension GitClient {
     static let defaultGitHubCLITimeout: Duration = .seconds(10)
 
-    /// The lookup's output is cut down to two fields per pull request by `--jq`, so this is
-    /// far above any real answer.
+    /// Bounds the captured CLI output.
     private static let gitHubCLIOutputLimit = 64 << 10
 
     /// No prompts, no update check and no colour codes: nobody is there to answer, and the
@@ -32,19 +31,41 @@ extension GitClient {
         return try Self.decodeGitHubCLIOutput { try Self.parseAuthStatus(output) }
     }
 
-    /// The oldest open pull request from `identity`'s head into its base repository, or nil
-    /// when GitHub reports none. Throws `GitHubCLIError`.
+    /// The oldest open pull request from `identity`'s head branch, or nil when GitHub reports
+    /// none. The base repository is searched first, then the head repository when it is a
+    /// different one: the base heuristic picks where a new pull request would go, not where an
+    /// existing one targets. The first repository with a pull request wins. A repository whose
+    /// query fails (an `upstream` remote can name one that is gone or private) doesn't stop the
+    /// search, but if nothing is found the first failure is thrown: nil means every repository
+    /// answered with none. Throws `GitHubCLIError`.
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? {
-        let base = identity.baseRepository
-        // `head` filters by owner and branch on the server, so a branch of the same name in
-        // another fork never matches, and `--paginate` reads every page. A pull request
-        // whose head repository was deleted has no head to compare, so it is skipped.
+        var repositories = [identity.baseRepository]
+        if !identity.headRepository.matches(identity.baseRepository) { repositories.append(identity.headRepository) }
+        var firstFailure: (any Error)?
+        for repository in repositories {
+            do {
+                if let pullRequest = try await findOpenPullRequest(in: repository, identity) { return pullRequest }
+            } catch {
+                firstFailure = firstFailure ?? error
+            }
+        }
+        if let firstFailure { throw firstFailure }
+        return nil
+    }
+
+    private func findOpenPullRequest(
+        in repository: GitHubRepository, _ identity: PullRequestIdentity
+    ) async throws -> GitHubPullRequest? {
+        // The server filters by head owner and branch name, and `--paginate` reads every page.
+        // A pull request whose head repository was deleted has no head to compare, so it is
+        // skipped. `@json` keeps each object on one line even when `GH_FORCE_TTY` makes gh
+        // pretty-print.
         let output = try await runGitHubCLI([
             "api", "--hostname", "github.com", "-X", "GET", "--paginate",
-            "repos/\(Self.pathComponent(base.owner))/\(Self.pathComponent(base.name))/pulls",
+            "repos/\(Self.pathComponent(repository.owner))/\(Self.pathComponent(repository.name))/pulls",
             "-f", "head=\(identity.headRepository.owner):\(identity.remoteBranchName)",
             "-f", "state=open", "-f", "per_page=100",
-            "--jq", ".[] | select(.head.repo != null) | {number, html_url}",
+            "--jq", ".[] | select(.head.repo != null) | {number, html_url} | @json",
         ])
         return try Self.decodeGitHubCLIOutput { try Self.parseOpenPullRequests(output) }
     }

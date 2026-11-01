@@ -72,9 +72,9 @@ struct WindowStatePullRequestTests {
         #expect(state.errorMessage == nil)
     }
 
-    @Test func anExistingPullRequestOpensItsPageOrReportsTheBrowser() async throws {
-        let h = Harness()
-        let browser = Browser()
+    /// Adopts a repository whose `feature` branch has open pull request #7, and waits for the
+    /// button to offer it.
+    private func adoptWithOpenPullRequest(_ h: Harness, browser: Browser) async throws -> (WindowState, URL) {
         let state = h.makeState(openURL: { url in
             browser.opened.append(url)
             return browser.opens
@@ -88,12 +88,23 @@ struct WindowStatePullRequestTests {
             await client.set(openPullRequest: GitHubPullRequest(number: 7, url: url))
         }
         try #require(await eventually { @MainActor in state.pullRequestAvailability.title == "PR #7" })
+        return (state, url)
+    }
+
+    @Test func anExistingPullRequestOpensItsPage() async throws {
+        let browser = Browser()
+        let (state, url) = try await adoptWithOpenPullRequest(Harness(), browser: browser)
 
         await state.openPullRequest()
         #expect(browser.opened == [url])
         #expect(state.errorMessage == nil)
+    }
 
+    @Test func aBrowserThatWontOpenReportsAnError() async throws {
+        let browser = Browser()
         browser.opens = false
+        let (state, _) = try await adoptWithOpenPullRequest(Harness(), browser: browser)
+
         await state.openPullRequest()
         #expect(state.errorMessage == "Couldn't open the browser")
     }

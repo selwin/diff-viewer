@@ -25,7 +25,7 @@ struct PullRequestIdentity: Sendable {
     let remoteBranchName: String
     /// The upstream remote's repository.
     let headRepository: GitHubRepository
-    /// Where the pull request is opened, per the `upstream` remote convention.
+    /// Where a new pull request is opened, per the `upstream` remote convention.
     let baseRepository: GitHubRepository
 
     /// Nil unless `branch` tracks a branch under `refs/heads/` that still exists, on a remote

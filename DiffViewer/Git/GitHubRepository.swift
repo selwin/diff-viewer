@@ -40,7 +40,8 @@ struct GitHubRepository: Equatable, Sendable {
     /// another GitHub repository, by the convention that a fork's `upstream` is the
     /// repository it was forked from; otherwise this one. Nothing proves the fork
     /// relationship, so this is a heuristic. Only the fetch URL counts: nothing is pushed to
-    /// the base, and a disabled push URL is a common guard on `upstream`.
+    /// the base, and a disabled push URL is a common guard on `upstream`. It decides where a
+    /// new pull request goes.
     func pullRequestBase(in remotes: [String: RemoteURLs]) -> GitHubRepository {
         guard let fetchURL = remotes["upstream"]?.fetchURL,
             let upstream = GitHubRepository.parse(remoteURL: fetchURL), !upstream.matches(self)

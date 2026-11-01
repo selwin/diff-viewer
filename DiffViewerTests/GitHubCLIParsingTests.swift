@@ -70,25 +70,30 @@ struct PullRequestIdentityTests {
 
     private func urls(_ url: String) -> RemoteURLs { RemoteURLs(fetchURL: url, pushURLs: [url]) }
 
-    @Test func identityNamesTheRemoteBranchAndTheUpstreamRemotesBase() throws {
-        let branch = localBranch("feature", upstream: upstream("origin/remote-feature"))
-        let own = try #require(
-            PullRequestIdentity.make(branch: branch, remotes: ["origin": urls("git@github.com:me/widgets.git")]))
-        #expect(own.remoteName == "origin")
-        #expect(own.remoteBranchName == "remote-feature")
-        #expect(own.headRepository == widgets)
-        #expect(own.baseRepository == widgets)
+    private let branch = localBranch("feature", upstream: upstream("origin/remote-feature"))
 
-        let fork = try #require(
+    @Test func identityNamesTheUpstreamsRemoteBranch() throws {
+        let identity = try #require(
+            PullRequestIdentity.make(branch: branch, remotes: ["origin": urls("git@github.com:me/widgets.git")]))
+        #expect(identity.remoteName == "origin")
+        #expect(identity.remoteBranchName == "remote-feature")
+        #expect(identity.headRepository == widgets)
+        #expect(identity.baseRepository == widgets)
+    }
+
+    @Test func theBaseIsTheUpstreamRemotesRepositoryWhenItDiffers() throws {
+        let identity = try #require(
             PullRequestIdentity.make(
                 branch: branch,
                 remotes: [
                     "origin": urls("https://github.com/me/widgets"),
                     "upstream": urls("https://github.com/acme/widgets"),
                 ]))
-        #expect(fork.headRepository == widgets)
-        #expect(fork.baseRepository == GitHubRepository(owner: "acme", name: "widgets"))
+        #expect(identity.headRepository == widgets)
+        #expect(identity.baseRepository == GitHubRepository(owner: "acme", name: "widgets"))
+    }
 
+    @Test func aRemoteThatIsNotGitHubHasNoIdentity() {
         #expect(
             PullRequestIdentity.make(branch: branch, remotes: ["origin": urls("https://gitlab.com/me/widgets")]) == nil)
     }

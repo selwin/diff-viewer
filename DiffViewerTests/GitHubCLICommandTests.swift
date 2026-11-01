@@ -33,7 +33,7 @@ struct GitHubCLICommandTests {
     }
 
     @Test func lookupAsksForTheHeadBranchOnTheBaseRepository() async throws {
-        let directory = try makeDirectory(gh: #"printf '%s\n' "$@" > args.txt"#)
+        let directory = try makeDirectory(gh: #"printf '%s\n' "$@" >> args.txt"#)
         defer { try? FileManager.default.removeItem(at: directory) }
 
         _ = try await client(path: directory).findOpenPullRequest(identity)
@@ -45,7 +45,89 @@ struct GitHubCLICommandTests {
         #expect(arguments.contains("repos/acme/widgets/pulls"))
         #expect(arguments.contains("head=me:remote-feature"))
         #expect(arguments.contains("--paginate"))
-        #expect(arguments.contains("--jq"))
+        #expect(arguments.contains(".[] | select(.head.repo != null) | {number, html_url} | @json"))
+    }
+
+    /// A `gh` that logs each repository path it is asked about to `calls.txt`, and prints a
+    /// pull request only for `matching` ("owner/name"), if any, and exits 1 for `failing`.
+    private func makeSearchingDirectory(matching repository: String?, failing failingRepository: String? = nil) throws
+        -> URL
+    {
+        let pullRequest = #"{"number":4,"html_url":"https://github.com/\#(repository ?? "")/pull/4"}"#
+        return try makeDirectory(
+            gh: """
+                for argument in "$@"; do
+                  case "$argument" in
+                    repos/*) echo "$argument" >> calls.txt ;;
+                  esac
+                  if [ "$argument" = "repos/\(repository ?? "none")/pulls" ]; then echo '\(pullRequest)'; fi
+                  if [ "$argument" = "repos/\(failingRepository ?? "none")/pulls" ]; then exit 1; fi
+                done
+                """)
+    }
+
+    private func calls(in directory: URL) throws -> [String] {
+        try String(contentsOf: directory.appendingPathComponent("calls.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+    }
+
+    @Test func aPullRequestInTheHeadRepositoryIsFound() async throws {
+        let directory = try makeSearchingDirectory(matching: "me/widgets")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let found = try await client(path: directory).findOpenPullRequest(identity)
+
+        #expect(found?.number == 4)
+        #expect(try calls(in: directory) == ["repos/acme/widgets/pulls", "repos/me/widgets/pulls"])
+    }
+
+    @Test func noPullRequestInEitherRepositoryFindsNone() async throws {
+        let directory = try makeSearchingDirectory(matching: nil)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(try await client(path: directory).findOpenPullRequest(identity) == nil)
+        #expect(try calls(in: directory) == ["repos/acme/widgets/pulls", "repos/me/widgets/pulls"])
+    }
+
+    @Test func aRepositoryThatIsBothBaseAndHeadIsSearchedOnce() async throws {
+        let directory = try makeSearchingDirectory(matching: nil)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let own = GitHubRepository(owner: "me", name: "widgets")
+        let ownIdentity = PullRequestIdentity(
+            remoteName: "origin", remoteBranchName: "remote-feature", headRepository: own, baseRepository: own)
+
+        _ = try await client(path: directory).findOpenPullRequest(ownIdentity)
+
+        #expect(try calls(in: directory) == ["repos/me/widgets/pulls"])
+    }
+
+    @Test func aFailingBaseRepositoryDoesNotStopTheHeadRepositorySearch() async throws {
+        let directory = try makeSearchingDirectory(matching: "me/widgets", failing: "acme/widgets")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let found = try await client(path: directory).findOpenPullRequest(identity)
+
+        #expect(found?.number == 4)
+        #expect(try calls(in: directory) == ["repos/acme/widgets/pulls", "repos/me/widgets/pulls"])
+    }
+
+    @Test func aFailureWithNoPullRequestFoundIsThrownNotReportedAsNone() async throws {
+        let directory = try makeSearchingDirectory(matching: nil, failing: "acme/widgets")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        await #expect(throws: GitHubCLIError.exited(status: 1)) {
+            try await client(path: directory).findOpenPullRequest(identity)
+        }
+    }
+
+    @Test func aPullRequestInTheBaseRepositoryEndsTheSearch() async throws {
+        let directory = try makeSearchingDirectory(matching: "acme/widgets")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let found = try await client(path: directory).findOpenPullRequest(identity)
+
+        #expect(found?.number == 4)
+        #expect(try calls(in: directory) == ["repos/acme/widgets/pulls"])
     }
 
     @Test func aSuccessfulRunWithNoOutputFindsNoPullRequest() async throws {
