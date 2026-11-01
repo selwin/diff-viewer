@@ -20,10 +20,9 @@ final class PickerPillButton: NSButton {
     }
 
     private static let font = PickerStyle.pillFont
-    /// The shortcut glyph after the title: a size smaller and faded, as on the commit sheet.
+    /// The shortcut glyph after the title: a size smaller and grey, as menus show key equivalents.
     private static let shortcutFont = NSFont.systemFont(ofSize: 11, weight: .medium)
     private static let shortcutGap: CGFloat = 5
-    private static let shortcutOpacity: CGFloat = 0.6
     /// Room around a focusable button's capsule, so its focus ring isn't clipped.
     static let focusRingMargin: CGFloat = 4
 
@@ -200,7 +199,7 @@ final class PickerPillButton: NSButton {
             string.draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2))
             return
         }
-        let glyph = Self.shortcutString(shortcut, color: text.withAlphaComponent(Self.shortcutOpacity))
+        let glyph = Self.shortcutString(shortcut, color: isEnabled ? .secondaryLabelColor : .tertiaryLabelColor)
         let glyphSize = glyph.size()
         let x = (bounds.width - size.width - Self.shortcutGap - glyphSize.width) / 2
         string.draw(at: NSPoint(x: x, y: (bounds.height - size.height) / 2))

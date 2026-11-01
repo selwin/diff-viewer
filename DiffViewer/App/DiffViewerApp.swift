@@ -323,6 +323,9 @@ struct RepositoryCommands: Commands {
     @ViewBuilder private var syncItems: some View {
         let state = windowState
         let sync = state?.canOpenBranchPicker == true ? state?.currentBranchSync : nil
+        // Enabled only with nothing left to push, so ⌘P moves here from the idle Push.
+        let canOpenPullRequest = state?.canOpenBranchPicker == true && state?.pullRequestAvailability == .enabled
+        let pullRequestShortcut = KeyboardShortcut("p")
         Button("Pull") {
             guard let sync else { return }
             Self.startSync(in: state) { await $0.pull(branch: sync.branch) }
@@ -353,13 +356,14 @@ struct RepositoryCommands: Commands {
             }
         } else {
             Button(sync?.buttons.pushTitle ?? "Push") {}
-                .keyboardShortcut("p")
+                .keyboardShortcut(canOpenPullRequest ? nil : pullRequestShortcut)
                 .disabled(true)
         }
         Button("Create Pull Request on GitHub") {
             Self.startSync(in: state) { await $0.openPullRequest() }
         }
-        .disabled(state?.canOpenBranchPicker != true || state?.pullRequestAvailability != .enabled)
+        .keyboardShortcut(canOpenPullRequest ? pullRequestShortcut : nil)
+        .disabled(!canOpenPullRequest)
     }
 
     /// The guard repeats `.disabled`, which only reflects the state at the last render: a
