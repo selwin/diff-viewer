@@ -20,6 +20,26 @@ extension GitClient {
         return try GitRefParser.parse(result.stdoutString)
     }
 
+    /// Returns the locally recorded default branch for origin, if available. Does not contact
+    /// the remote.
+    func originDefaultBranchRef() async throws -> String? {
+        // No `--short`: a tag named `origin/trunk` makes the short form ambiguous.
+        let result = try await ProcessRunner.run(
+            Self.executable,
+            arguments: ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            currentDirectory: repoRoot,
+            environment: callEnvironment
+        )
+        // Exit 1 is "not set"; anything else non-zero is git failing to answer.
+        if result.status == 1 { return nil }
+        guard result.status == 0 else {
+            throw ProcessError.failed(
+                command: "git symbolic-ref", status: result.status, stderr: result.stderrString)
+        }
+        let ref = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ref.hasPrefix("refs/remotes/origin/") ? ref : nil
+    }
+
     /// The best common ancestor of `first` and `second`, or nil when their histories share
     /// none.
     func mergeBase(_ first: String, _ second: String) async throws -> String? {

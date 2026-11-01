@@ -144,6 +144,9 @@ protocol RepoClient: Sendable {
     func merge(sourceTipSha: String, sourceRef: String) async throws
     /// Every local branch, remote-tracking branch and tag that resolves to a commit, unsorted.
     func refs() async throws -> [GitRef]
+    /// Returns the locally recorded default branch for origin, if available, as a full ref
+    /// such as `refs/remotes/origin/main`. Does not contact the remote.
+    func originDefaultBranchRef() async throws -> String?
     /// The best common ancestor of two object ids, or nil when their histories share none.
     func mergeBase(_ first: String, _ second: String) async throws -> String?
     /// Files and lines that differ between the trees of two object ids. Only a rename with
