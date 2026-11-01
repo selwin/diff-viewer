@@ -224,7 +224,7 @@ private struct BranchSyncSegments: View {
             }
             if showsPullRequest {
                 segment(
-                    icon: .asset(.gitPullRequest), count: nil, title: "Open PR", shortcut: nil,
+                    icon: .asset(.gitPullRequest), count: nil, title: "Open PR", shortcut: "⌘P",
                     state: sync.pullRequest.pickerButtonState, label: sync.pullRequestAccessibilityLabel,
                     isLast: true, onTintChange: showsPull ? nil : onLeadingTintChange
                 ) {
@@ -328,11 +328,11 @@ private struct SyncSegmentLabel: View {
                     .font(.system(size: 13, weight: .medium))
                     .monospacedDigit()
             }
-            // Styled as on the commit sheet's Commit button.
+            // Grey rather than tinted, as menus show their key equivalents.
             if let shortcut {
                 Text(shortcut)
                     .font(.system(size: 11, weight: .medium))
-                    .opacity(0.6)
+                    .foregroundStyle(Color(nsColor: isEnabled ? .secondaryLabelColor : .tertiaryLabelColor))
                     .padding(.leading, 3)
                     .accessibilityHidden(true)
             }

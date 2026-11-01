@@ -79,17 +79,39 @@ extension CompareWindowModel {
         }
     }
 
-    var churnCounts: ChurnCounts? {
-        guard case let .ready(summary) = churn else { return nil }
+    /// The preview's rows: one per direction once two different commits are chosen in
+    /// Branches mode, otherwise the forward one alone.
+    var previewDirections: [Direction] {
+        guard mode == .branches, let base, let target, base.commitSHA != target.commitSHA else { return [.forward] }
+        return [.forward, .reverse]
+    }
+
+    /// A direction's two names, kept apart so each can truncate around a fixed arrow. Nil
+    /// until both sides are chosen.
+    func rowEnds(_ direction: Direction) -> (from: String, to: String)? {
+        guard let base, let target else { return nil }
+        return switch direction {
+        case .forward: (base.name, target.name)
+        case .reverse: (target.name, base.name)
+        }
+    }
+
+    /// A direction's row title, such as "main → feature". Nil until both sides are chosen.
+    func rowTitle(_ direction: Direction) -> String? {
+        rowEnds(direction).map { "\($0.from) → \($0.to)" }
+    }
+
+    func churnCounts(_ direction: Direction) -> ChurnCounts? {
+        guard case let .ready(summary) = churn(direction) else { return nil }
         return ChurnCounts(
             files: MergeSheetModel.filesText(summary.fileCount, locale: locale),
             added: MergeSheetModel.addedText(summary.addedLineCount, locale: locale),
             deleted: MergeSheetModel.deletedText(summary.deletedLineCount, locale: locale))
     }
 
-    /// Nil when the preview draws nothing.
-    var churnAccessibilityLabel: String? {
-        switch churn {
+    /// Nil when the direction's preview draws nothing.
+    func churnAccessibilityLabel(_ direction: Direction) -> String? {
+        switch churn(direction) {
         case .hidden, .pending: nil
         case .comparing: "Comparing"
         case .noDifferences: "No differences"
