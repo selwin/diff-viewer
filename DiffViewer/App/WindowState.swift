@@ -235,8 +235,16 @@ final class WindowState {
     /// The repository's last successfully read remote names.
     private(set) var remotes: [String] = []
     /// The remotes that are one GitHub repository for fetch and push, as last read. Only
-    /// decides whether Create Pull Request shows; the action reads the URLs again.
+    /// decides whether the pull request button shows; creating one reads the URLs again.
     private(set) var gitHubRemoteNames: Set<String> = []
+    /// Every remote's URLs as last read, which HEAD's pull request identity is built from.
+    private(set) var remoteURLsByName: [String: RemoteURLs] = [:]
+    /// What `gh` says about its github.com login. Nil before the first check, and while no
+    /// remote is on GitHub.
+    private(set) var gitHubCLIStatus: GitHubCLIStatus?
+    /// The last completed lookup of an open pull request. It counts only while its identity
+    /// is still HEAD's.
+    private(set) var pullRequestLookup: PullRequestLookup?
     /// Branch offered Create PR after publishing; cleared on branch change or browser open.
     private(set) var pullRequestOfferedBranchName: String?
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
@@ -318,8 +326,11 @@ final class WindowState {
         }
         startWatcher(session: session)
         refreshHistory(session: session)
-        Task { [weak self] in await self?.refreshHeadState(session: session) }
-        Task { [weak self] in await self?.refreshGitHubRemoteNames(session: session) }
+        Task { [weak self] in
+            await self?.refreshHeadState(session: session)
+            // After the head read, so the first lookup has HEAD's branch to go on.
+            await self?.refreshGitHub(session: session)
+        }
         scheduleStashRefresh(session: session)
         return true
     }
@@ -392,33 +403,6 @@ final class WindowState {
         session === self.session && !isClosed
     }
 
-    /// Starts a watcher for `session` and returns the generation its callbacks must match.
-    @discardableResult
-    private func startWatcher(session: RepoSession) -> Int {
-        session.watcherGeneration += 1
-        let watcherGeneration = session.watcherGeneration
-        let watcher = watchRepository(session.root) { [weak self, weak session] changes in
-            guard let self, let session else { return }
-            Task {
-                await self.repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: changes)
-            }
-        }
-        // A fresh watcher keeps the template the last defaults read found.
-        if case let .configured(path) = session.templateDependency {
-            watcher?.setDependencies([path])
-        }
-        session.watcher = watcher
-        return watcherGeneration
-    }
-
-    /// Invalidates callbacks, stops watching, and clears pending changes.
-    private func stopWatcher(session: RepoSession) {
-        session.watcherGeneration += 1
-        session.watcher?.stop()
-        session.watcher = nil
-        session.watcherRefreshPending = nil
-    }
-
     // MARK: - Refreshing
 
     func refresh() async {
@@ -489,6 +473,12 @@ final class WindowState {
                 await refreshWorkingTreeChurn(session: session)
             }
             return
+        }
+        // A remote's URL lives in the configuration, and a rescan stands in for events that
+        // can't be trusted, so both re-read the remotes. Not `gh`'s login: a rescan comes with
+        // every return to a tab, and the picker checks it when it opens.
+        if changes.contains(.configuration) || changes.contains(.rescan) {
+            Task { [weak self] in await self?.refreshGitHub(session: session, checksAuth: false) }
         }
         let work = RefreshRouting.work(for: changes, scope: scope, template: session.templateDependency)
         // Before the first suspension, so the read's generation is settled the moment
@@ -675,6 +665,33 @@ final class WindowState {
 
 /// The two halves of `isVisible`: watching the repository, and the diff work it owes.
 extension WindowState {
+    /// Starts a watcher for `session` and returns the generation its callbacks must match.
+    @discardableResult
+    private func startWatcher(session: RepoSession) -> Int {
+        session.watcherGeneration += 1
+        let watcherGeneration = session.watcherGeneration
+        let watcher = watchRepository(session.root) { [weak self, weak session] changes in
+            guard let self, let session else { return }
+            Task {
+                await self.repositoryChanged(session: session, watcherGeneration: watcherGeneration, changes: changes)
+            }
+        }
+        // A fresh watcher keeps the template the last defaults read found.
+        if case let .configured(path) = session.templateDependency {
+            watcher?.setDependencies([path])
+        }
+        session.watcher = watcher
+        return watcherGeneration
+    }
+
+    /// Invalidates callbacks, stops watching, and clears pending changes.
+    private func stopWatcher(session: RepoSession) {
+        session.watcherGeneration += 1
+        session.watcher?.stop()
+        session.watcher = nil
+        session.watcherRefreshPending = nil
+    }
+
     private func restartWatcherForVisibility() {
         // A comparison's revisions are fixed, so it has nothing to watch.
         guard let session, !isComparisonTab else { return }
@@ -1148,6 +1165,7 @@ extension WindowState {
         // settles its own name, and an older read must not clear it early.
         if !isSwitchingBranch { pendingBranchName = nil }
         publishPendingFetchRound(session: session)
+        refreshPullRequestIfNeeded(session: session, force: false)
         publishedBranchRead(session: session)
         return true
     }
@@ -1786,8 +1804,9 @@ extension WindowState {
             await awaitBranchRead(session: session, finishing: pending)
             return
         }
-        // Off the round: it only decides whether Create Pull Request shows.
-        Task { [weak self] in await self?.refreshGitHubRemoteNames(session: session) }
+        // Off the round: it only decides what the pull request button offers. The round is
+        // Fetch's retry, so a failed lookup is retried here too.
+        Task { [weak self] in await self?.refreshGitHub(session: session) }
         // A failed read keeps the previous value; the fetch doesn't depend on it.
         let configured = try? await session.client.configuredUpstreamRemotes()
         guard isWanted() else { return abandonFetchRound(session: session) }
@@ -2197,28 +2216,164 @@ extension WindowState {
 
 // MARK: - Pull requests
 
-/// Opening GitHub's pull request page for HEAD's branch. Same file as the class so
-/// `gitHubRemoteNames` stays `private(set)`.
+/// Finding HEAD's open pull request with the GitHub CLI, and opening it or GitHub's page for
+/// a new one. Same file as the class so the remote and lookup state stays `private(set)`.
 extension WindowState {
     static let pullRequestChangedMessage = "Branch or upstream changed before the pull request could open. Try again."
 
-    /// Reads which remotes are GitHub repositories. Supplemental to `remoteNames`: a failure
-    /// keeps the last value, and a read finishing after a newer one started publishes nothing.
-    private func refreshGitHubRemoteNames(session: RepoSession) async {
+    /// HEAD's branch's pull request identity, from the last branch and remote reads.
+    var currentPullRequestIdentity: PullRequestIdentity? {
+        pullRequestIdentity(forBranch: currentBranchName)
+    }
+
+    /// The identity of the listed branch `name`, so the title bar can ask about a checkout's
+    /// branch before HEAD reaches it.
+    func pullRequestIdentity(forBranch name: String?) -> PullRequestIdentity? {
+        guard let name, let branch = branches.first(where: { $0.name == name }) else { return nil }
+        return PullRequestIdentity.make(branch: branch, remotes: remoteURLsByName)
+    }
+
+    /// The only writer of `remoteURLsByName` and `gitHubRemoteNames`. A read finishing after
+    /// a newer one started publishes nothing. Without a GitHub remote, nothing about GitHub
+    /// is left on show. `refreshesPullRequest` is false when an auth check follows, since it
+    /// forces the lookup itself.
+    private func publishRemoteURLs(
+        _ urls: [String: RemoteURLs], session: RepoSession, ticket: Int, refreshesPullRequest: Bool = true
+    ) {
+        guard isLive(session), ticket == session.gitHubRemoteNamesSerial else { return }
+        remoteURLsByName = urls
+        gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: urls)
+        if gitHubRemoteNames.isEmpty {
+            gitHubCLIStatus = nil
+            clearPullRequestLookup(session: session)
+        }
+        if refreshesPullRequest { refreshPullRequestIfNeeded(session: session, force: false) }
+    }
+
+    /// Re-reads the remotes, then, when one is on GitHub and `checksAuth`, `gh`'s login, and
+    /// looks HEAD's pull request up again. Supplemental: a failed remote read keeps the last value.
+    private func refreshGitHub(session: RepoSession, checksAuth: Bool = true) async {
         guard isLive(session) else { return }
         session.gitHubRemoteNamesSerial += 1
         let ticket = session.gitHubRemoteNamesSerial
-        guard let urls = try? await session.client.remoteURLs(), isLive(session),
-            ticket == session.gitHubRemoteNamesSerial
-        else { return }
-        gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: urls)
+        if let urls = try? await session.client.remoteURLs() {
+            publishRemoteURLs(urls, session: session, ticket: ticket, refreshesPullRequest: !checksAuth)
+        }
+        guard checksAuth, isLive(session), !gitHubRemoteNames.isEmpty else { return }
+        if session.gitHubAuthInFlight {
+            session.gitHubAuthPending = true
+            return
+        }
+        session.gitHubAuthInFlight = true
+        defer { session.gitHubAuthInFlight = false }
+        repeat {
+            session.gitHubAuthPending = false
+            await checkGitHubAuth(session: session)
+        } while session.gitHubAuthPending && isLive(session) && !gitHubRemoteNames.isEmpty
     }
 
-    /// Opens GitHub's pull request page after rechecking HEAD, the upstream and unpushed
-    /// commits. The repository can still change after the last read.
+    /// Publishes `gh`'s login, then forces a lookup: a check is what adoption, Fetch and
+    /// opening the picker ask for, and each retries a failed lookup.
+    private func checkGitHubAuth(session: RepoSession) async {
+        let status: GitHubCLIStatus
+        do {
+            status = try await session.client.gitHubCLIStatus()
+        } catch {
+            status = .failed(error.localizedDescription)
+        }
+        // A remote read meanwhile may have found no GitHub remote, which clears the status.
+        guard isLive(session), !gitHubRemoteNames.isEmpty else { return }
+        gitHubCLIStatus = status
+        switch status {
+        case .signedOut, .notInstalled:
+            clearPullRequestLookup(session: session)
+        case .signedIn, .failed:
+            // A failed check keeps a known pull request usable through an outage.
+            break
+        }
+        refreshPullRequestIfNeeded(session: session, force: true)
+    }
+
+    /// Drops the lookup and whatever could bring it back: a lookup in flight, a queued
+    /// follow-up, and the failure a forced request would retry.
+    private func clearPullRequestLookup(session: RepoSession) {
+        pullRequestLookup = nil
+        session.failedPullRequestIdentity = nil
+        session.pullRequestPendingForce = false
+        session.pullRequestInFlight = nil
+        session.pullRequestGeneration += 1
+    }
+
+    /// Looks up HEAD's open pull request while `gh` is signed in. Called after every publish
+    /// of HEAD, the branches or the remotes. An automatic request skips an identity already
+    /// published, failed or being looked up; a forced one always runs, after the identical
+    /// lookup in flight if there is one.
+    private func refreshPullRequestIfNeeded(session: RepoSession, force: Bool) {
+        guard isLive(session), case .signedIn = gitHubCLIStatus, let identity = currentPullRequestIdentity else {
+            return
+        }
+        if session.pullRequestInFlight == identity {
+            if force { session.pullRequestPendingForce = true }
+            return
+        }
+        guard force || (identity != pullRequestLookup?.identity && identity != session.failedPullRequestIdentity)
+        else { return }
+        // A lookup for another identity may still run; the new generation discards its result.
+        session.pullRequestGeneration += 1
+        let generation = session.pullRequestGeneration
+        session.pullRequestInFlight = identity
+        // This lookup is the freshest answer, so it satisfies any queued force.
+        session.pullRequestPendingForce = false
+        Task { [weak self] in
+            await self?.lookUpPullRequest(identity, generation: generation, session: session)
+        }
+    }
+
+    /// Runs one lookup and publishes it if nothing moved meanwhile: the window, the
+    /// generation, the login and HEAD's identity. A discarded result records nothing.
+    private func lookUpPullRequest(_ identity: PullRequestIdentity, generation: Int, session: RepoSession) async {
+        let result: Result<GitHubPullRequest?, any Error>
+        do {
+            result = .success(try await session.client.findOpenPullRequest(identity))
+        } catch {
+            result = .failure(error)
+        }
+        defer { session.pullRequestLookupsFinished += 1 }
+        // A newer start or a clear owns `pullRequestInFlight` and any pending follow-up.
+        guard isLive(session), generation == session.pullRequestGeneration else { return }
+        session.pullRequestInFlight = nil
+        if case .signedIn = gitHubCLIStatus, identity == currentPullRequestIdentity {
+            switch result {
+            case let .success(pullRequest):
+                pullRequestLookup = PullRequestLookup(identity: identity, pullRequest: pullRequest)
+                if session.failedPullRequestIdentity == identity { session.failedPullRequestIdentity = nil }
+            case .failure:
+                session.failedPullRequestIdentity = identity
+                // A failure never says there is no pull request; only one for this identity stays.
+                if pullRequestLookup?.identity != identity { pullRequestLookup = nil }
+            }
+        }
+        guard session.pullRequestPendingForce else { return }
+        session.pullRequestPendingForce = false
+        refreshPullRequestIfNeeded(session: session, force: true)
+    }
+
+    /// Opens HEAD's existing pull request, or GitHub's page for a new one after rechecking
+    /// HEAD, the upstream and unpushed commits. The repository can still change after the
+    /// last read.
     func openPullRequest() async {
-        guard let session, pullRequestAvailability == .enabled, case let .named(branch) = headState,
-            let intended = branches.first(where: { $0.name == branch })?.upstream
+        guard let session else { return }
+        let availability = pullRequestAvailability
+        guard availability.isActionable else { return }
+        if case let .view(pullRequest) = availability {
+            if openURL(pullRequest.url) {
+                pullRequestOfferedBranchName = nil
+            } else {
+                errorMessage = "Couldn't open the browser"
+            }
+            return
+        }
+        guard case let .named(branch) = headState, let intended = branches.first(where: { $0.name == branch })?.upstream
         else { return }
         session.gitHubRemoteNamesSerial += 1
         let ticket = session.gitHubRemoteNamesSerial
@@ -2231,10 +2386,7 @@ extension WindowState {
             return
         }
         guard isLive(session) else { return }
-        // Publish only if no newer discovery started.
-        if ticket == session.gitHubRemoteNamesSerial {
-            gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: remotes)
-        }
+        publishRemoteURLs(remotes, session: session, ticket: ticket)
         guard let read = await readHeadAndBranches(session: session) else { return }
         // HEAD can move while the branches were read; the branch list alone can't tell.
         let headNow: HeadState

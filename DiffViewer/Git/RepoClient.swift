@@ -174,4 +174,10 @@ protocol RepoClient: Sendable {
     /// from before the head was merged. Throws `PullRequestError.alreadyInBase` or
     /// `.noCommonHistory`.
     func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase
+    /// Whether the GitHub CLI is installed and signed in to github.com. Throws
+    /// `GitHubCLIError` when `gh` can't be run or its answer can't be read.
+    func gitHubCLIStatus() async throws -> GitHubCLIStatus
+    /// The oldest open pull request from `identity`'s head into its base repository, asked of
+    /// the GitHub CLI; nil when GitHub reports none. Throws `GitHubCLIError`.
+    func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest?
 }

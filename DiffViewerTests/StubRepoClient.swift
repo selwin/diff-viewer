@@ -44,6 +44,8 @@ enum StubCall {
     case fetchPullRequest
     case pinPullRequest
     case pullRequestBase
+    case gitHubCLIStatus
+    case findOpenPullRequest
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -183,6 +185,11 @@ actor StubRepoClient: RepoClient {
     private(set) var fetchPullRequestCalls: [AdvertisedPullRequest] = []
     private(set) var pinPullRequestCalls: [AdvertisedPullRequest] = []
     private(set) var pullRequestBaseRequests: [(headSHA: String, baseTipSHA: String)] = []
+    private var stubbedGitHubCLIStatus = GitHubCLIStatus.notInstalled
+    private var stubbedOpenPullRequest: GitHubPullRequest?
+    private(set) var gitHubCLIStatusCalls = 0
+    /// Every lookup asked for, in order, whether or not it succeeded.
+    private(set) var findOpenPullRequestCalls: [PullRequestIdentity] = []
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     struct MergeCall: Equatable {
@@ -540,9 +547,15 @@ actor StubRepoClient: RepoClient {
     /// fixed SHAs for whatever number and remote it is asked about.
     func set(advertised: AdvertisedPullRequest?) { stubbedAdvertised = advertised }
     func set(pullRequestBase base: PullRequestComparisonBase) { stubbedPullRequestBase = base }
+    /// What `gitHubCLIStatus` answers; `.notInstalled` until set, so no lookup runs unasked.
+    func set(gitHubCLIStatus status: GitHubCLIStatus) { stubbedGitHubCLIStatus = status }
+    /// What `findOpenPullRequest` answers for any identity. Read when the call starts, so
+    /// held calls can each answer differently.
+    func set(openPullRequest pullRequest: GitHubPullRequest?) { stubbedOpenPullRequest = pullRequest }
     /// Makes `call` throw `error`, or stop throwing with nil. Covers `.remotes`,
-    /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest` and `.pullRequestBase`;
-    /// read once a held call is released, so a test can change it meanwhile.
+    /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest`, `.pullRequestBase`,
+    /// `.gitHubCLIStatus` and `.findOpenPullRequest`; read once a held call is released, so a
+    /// test can change it meanwhile.
     func fail(_ call: StubCall, with error: (any Error)?) { pullRequestErrors[call] = error }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
@@ -695,6 +708,22 @@ actor StubRepoClient: RepoClient {
         if isHeld(.pullRequestBase) { await park(.pullRequestBase) }
         if let error = pullRequestErrors[.pullRequestBase] { throw error }
         return stubbedPullRequestBase
+    }
+
+    func gitHubCLIStatus() async throws -> GitHubCLIStatus {
+        gitHubCLIStatusCalls += 1
+        let snapshot = stubbedGitHubCLIStatus
+        if isHeld(.gitHubCLIStatus) { await park(.gitHubCLIStatus) }
+        if let error = pullRequestErrors[.gitHubCLIStatus] { throw error }
+        return snapshot
+    }
+
+    func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? {
+        findOpenPullRequestCalls.append(identity)
+        let snapshot = stubbedOpenPullRequest
+        if isHeld(.findOpenPullRequest) { await park(.findOpenPullRequest) }
+        if let error = pullRequestErrors[.findOpenPullRequest] { throw error }
+        return snapshot
     }
 
     func merge(sourceTipSha: String, sourceRef: String) async throws {

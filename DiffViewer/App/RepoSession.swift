@@ -48,6 +48,23 @@ final class RepoSession {
     var headStateCheckSerial = 0
     /// Incremented per GitHub remote read, so only the newest read publishes.
     var gitHubRemoteNamesSerial = 0
+    /// One `gh auth status` at a time. A request during one sets `gitHubAuthPending`, and a
+    /// single follow-up check runs when it finishes, so a Fetch meanwhile is never dropped.
+    var gitHubAuthInFlight = false
+    var gitHubAuthPending = false
+    /// Bumped when a pull request lookup starts and when the lookup is cleared. Only the
+    /// lookup of the current generation publishes.
+    var pullRequestGeneration = 0
+    /// What the current lookup asks about, so an identical automatic request joins it.
+    var pullRequestInFlight: PullRequestIdentity?
+    /// A forced request arrived during an identical lookup: one follow-up runs after it.
+    var pullRequestPendingForce = false
+    /// Incremented once `lookUpPullRequest` has fully handled a result, whether it published
+    /// or discarded it. Lets tests wait for the handling rather than for the client's answer.
+    var pullRequestLookupsFinished = 0
+    /// The identity whose last lookup failed. Only a forced request retries it; a discarded
+    /// result never sets it.
+    var failedPullRequestIdentity: PullRequestIdentity?
     /// Incremented per stash-list read, so only the newest read publishes.
     var stashSerial = 0
     /// The newest stash-list read. Older ones run on; their tickets keep them from publishing.

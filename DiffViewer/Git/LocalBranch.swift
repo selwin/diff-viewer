@@ -12,6 +12,13 @@ struct BranchUpstream: Sendable, Equatable {
     /// fast-forward of a branch that is not checked out fetches into it by name.
     let localRef: String
     let tracking: UpstreamTracking
+
+    /// The branch's name on the remote, or nil when `remoteRef` isn't under `refs/heads/`.
+    var remoteBranchName: String? {
+        let prefix = "refs/heads/"
+        guard remoteRef.hasPrefix(prefix), remoteRef.count > prefix.count else { return nil }
+        return String(remoteRef.dropFirst(prefix.count))
+    }
 }
 
 /// A local branch and what git knows about the remote branch it tracks.

@@ -3,7 +3,7 @@ import Testing
 
 @testable import DiffViewer
 
-/// Create Pull Request: what it opens, and what it reports when the repository moved
+/// The pull request button: what it opens, and what it reports when the repository moved
 /// while its fresh reads ran.
 @MainActor
 struct WindowStatePullRequestTests {
@@ -70,6 +70,32 @@ struct WindowStatePullRequestTests {
                 "https://github.com/me/widgets/compare/remote-feature?quick_pull=1"
             ])
         #expect(state.errorMessage == nil)
+    }
+
+    @Test func anExistingPullRequestOpensItsPageOrReportsTheBrowser() async throws {
+        let h = Harness()
+        let browser = Browser()
+        let state = h.makeState(openURL: { url in
+            browser.opened.append(url)
+            return browser.opens
+        })
+        let url = try #require(URL(string: "https://github.com/me/widgets/pull/7"))
+        await h.adopt(state, "A", files: []) { client in
+            await client.set(headState: .named("feature"))
+            await client.set(localBranches: [Self.tracked])
+            await client.set(remoteURLs: Self.origin)
+            await client.set(gitHubCLIStatus: .signedIn(login: "me"))
+            await client.set(openPullRequest: GitHubPullRequest(number: 7, url: url))
+        }
+        try #require(await eventually { @MainActor in state.pullRequestAvailability.title == "PR #7" })
+
+        await state.openPullRequest()
+        #expect(browser.opened == [url])
+        #expect(state.errorMessage == nil)
+
+        browser.opens = false
+        await state.openPullRequest()
+        #expect(state.errorMessage == "Couldn't open the browser")
     }
 
     @Test func openingTheBrowserClearsTheOffer() async throws {

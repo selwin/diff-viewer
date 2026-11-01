@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The title bar's branch pill: the current branch, which opens the branch picker, then
-/// Pull and Push segments when there is something to sync, or Create PR after a publish.
+/// Pull and Push segments when there is something to sync, or the pull request after a publish.
 /// ⌘B opens the same popover by setting the same flag.
 struct BranchPickerView: View {
     @Environment(WindowState.self) private var windowState
@@ -189,7 +189,7 @@ private struct PillFace: Equatable {
     let sync: CurrentBranchSyncPresentation?
 }
 
-/// The pill's Pull, then Push, Publish or Create PR, each shown only when the sync rules
+/// The pill's Pull, then Push, Publish or the pull request, each shown only when the sync rules
 /// say so.
 private struct BranchSyncSegments: View {
     @Environment(WindowState.self) private var windowState
@@ -224,7 +224,7 @@ private struct BranchSyncSegments: View {
             }
             if showsPullRequest {
                 segment(
-                    icon: .asset(.gitPullRequest), count: nil, title: "Open PR", shortcut: "⌘P",
+                    icon: .asset(.gitPullRequest), count: nil, title: sync.pullRequest.title, shortcut: "⌘P",
                     state: sync.pullRequest.pickerButtonState, label: sync.pullRequestAccessibilityLabel,
                     isLast: true, onTintChange: showsPull ? nil : onLeadingTintChange
                 ) {

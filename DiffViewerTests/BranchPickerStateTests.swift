@@ -882,6 +882,42 @@ struct BranchPickerStateTests {
         #expect(detached.detail(fetch: BranchPickerFetchText(text: "Fetching…")) == "Fetching…")
     }
 
+    @Test func theHeaderNamesTheGitHubCLIAfterTheFetchOnlyWithAGitHubRemote() {
+        let fetch = BranchPickerFetchText(text: "Fetched just now", tooltip: "origin: fetched")
+        let synced = snapshot(branches: [localBranch("main", upstream: upstream("origin/main"))])
+        let cases: [(GitHubCLIStatus, String, String)] = [
+            (
+                .signedIn(login: "selwin"), "GitHub: selwin",
+                "Finding pull requests with the GitHub CLI, signed in as selwin"
+            ),
+            (
+                .signedOut, "GitHub CLI signed out",
+                "Sign in with `gh auth login --hostname github.com` to find existing pull requests"
+            ),
+            (.notInstalled, "GitHub CLI not installed", "Install the GitHub CLI (gh) to find existing pull requests"),
+            (.failed("Token expired"), "GitHub CLI unavailable", "Token expired"),
+        ]
+        for (status, text, tooltip) in cases {
+            var taken = synced
+            taken.gitHubCLIStatus = status
+            taken.gitHubRemoteNames = ["origin"]
+            let header = BranchPickerHeaderText.make(snapshot: taken)
+            #expect(header.detail(fetch: fetch) == "Up to date · Fetched just now · \(text)")
+            #expect(header.detailTooltip(fetch: fetch) == "origin: fetched\n\(tooltip)")
+        }
+
+        // Repository-level: a detached HEAD still says it; without a GitHub remote nothing does.
+        var detached = snapshot(headState: .detached(sha: objectID("x")), branches: [])
+        detached.gitHubCLIStatus = .signedOut
+        detached.gitHubRemoteNames = ["origin"]
+        #expect(BranchPickerHeaderText.make(snapshot: detached).detail(fetch: nil) == "GitHub CLI signed out")
+        var noGitHub = synced
+        noGitHub.gitHubCLIStatus = .signedOut
+        let header = BranchPickerHeaderText.make(snapshot: noGitHub)
+        #expect(header.detail(fetch: fetch) == "Up to date · Fetched just now")
+        #expect(header.detailTooltip(fetch: nil) == nil)
+    }
+
     @Test func theHeaderOffersTheCurrentBranchsPullAndPush() {
         let ahead = localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 2, behind: 0)))
         let header = state(snapshot(branches: [ahead, feature])).headerText
