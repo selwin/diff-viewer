@@ -193,6 +193,53 @@ import Testing
         await #expect(throws: PullRequestError.noDefaultBranch) { try await fixture.advertise() }
     }
 
+    // MARK: pull request heads
+
+    @Test func pullRequestHeadsComeFromTheNamedRemoteAndSkipMergeRefs() async throws {
+        let fixture = try await Fixture()
+        let head = try await fixture.publishHead()
+        try await fixture.push(fixture.root, to: "refs/pull/7/merge")
+        let other = try Repo()
+        try await other.git(["init", "--bare", "-b", "main"])
+        try await fixture.publisher.git(["push", other.url.path, "\(fixture.root):refs/pull/3/head"])
+        try await fixture.clone.git(["remote", "add", "other", other.url.path])
+
+        #expect(try await fixture.client.preferredPullRequestNumberByHeadSha(remote: "origin") == [head: 7])
+        #expect(try await fixture.client.preferredPullRequestNumberByHeadSha(remote: "other") == [fixture.root: 3])
+    }
+
+    @Test func pullRequestHeadsFailForAMissingRemote() async throws {
+        let fixture = try await Fixture()
+
+        await #expect(throws: ProcessError.self) {
+            try await fixture.client.preferredPullRequestNumberByHeadSha(remote: "missing")
+        }
+    }
+
+    @Test(
+        arguments: [
+            "\(objectID("a"))\trefs/pull/7/merge",
+            "\(objectID("a"))\trefs/heads/refs/pull/7/head",
+            "\(objectID("a"))\trefs/pull/7/x/head",
+            "\(objectID("a"))\trefs/pull/head",
+            "\(objectID("a"))\trefs/pull/0/head",
+            "\(objectID("a"))\trefs/pull/99999999999999999999/head",
+            "\(objectID("a"))\trefs/pull/+7/head",
+            "\(objectID("a"))\trefs/pull/٧/head",
+            "abc123\trefs/pull/7/head",
+            "\(String(repeating: "g", count: 40))\trefs/pull/7/head",
+        ])
+    func malformedPullRequestHeadLinesAreSkipped(line: String) {
+        #expect(GitClient.parsePullRequestHeads("\(line)\n").isEmpty)
+    }
+
+    @Test func aSharedHeadKeepsTheHighestNumber() {
+        let a = objectID("a")
+        let b = objectID("b")
+        let output = "\(a)\trefs/pull/3/head\n\(a)\trefs/pull/12/head\n\(a)\trefs/pull/5/head\n\(b)\trefs/pull/4/head\n"
+        #expect(GitClient.parsePullRequestHeads(output) == [a: 12, b: 4])
+    }
+
     // MARK: fetch
 
     @Test func fetchWritesOnlyItsOwnRefsWhateverTheConfigSays() async throws {

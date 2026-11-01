@@ -48,6 +48,17 @@ final class RepoSession {
     var headStateCheckSerial = 0
     /// Incremented per GitHub remote read, so only the newest read publishes.
     var gitHubRemoteNamesSerial = 0
+    /// What the current lookup key last resolved to, from every remote-URL read, whether
+    /// or not a lookup cached anything for it.
+    var observedLookupConfiguration: PullRequestLookupObservation?
+    /// The pull request lookup running, if any.
+    var inFlightPullRequestLookup: PullRequestLookupFlight?
+    /// The newest lookup's task. Older ones run on; their tickets keep them from writing.
+    var pullRequestLookupTask: Task<Void, Never>?
+    /// Bumped per lookup started and per invalidation; only the newest lookup may write.
+    var pullRequestLookupSerial = 0
+    /// Set by a manual fetch round, so the lookup after its branch read skips the cooldown.
+    var pendingManualLookup = false
     /// Incremented per stash-list read, so only the newest read publishes.
     var stashSerial = 0
     /// The newest stash-list read. Older ones run on; their tickets keep them from publishing.

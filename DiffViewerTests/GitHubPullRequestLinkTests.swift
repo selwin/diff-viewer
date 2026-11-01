@@ -62,6 +62,60 @@ struct GitHubPullRequestLinkTests {
         #expect(try GitHubPullRequestLink.make(for: branch, remotes: remotes).get().absoluteString == expected)
     }
 
+    private static let widgets = GitHubRepository(owner: "me", name: "widgets")
+    private static let acme = GitHubRepository(owner: "acme", name: "widgets")
+
+    @Test(
+        arguments: [
+            (
+                ["origin": urls("https://github.com/me/widgets")],
+                [PullRequestLookupTarget(remote: "origin", repository: widgets)]
+            ),
+            // `upstream` is searched by its fetch URL, even with its push disabled.
+            (
+                [
+                    "origin": urls("https://github.com/me/widgets"),
+                    "upstream": urls("https://github.com/acme/widgets", push: ["DISABLE"]),
+                ],
+                [
+                    PullRequestLookupTarget(remote: "origin", repository: widgets),
+                    PullRequestLookupTarget(remote: "upstream", repository: acme),
+                ]
+            ),
+            (
+                ["origin": urls("https://github.com/me/widgets"), "upstream": urls("git@github.com:ME/widgets.git")],
+                [PullRequestLookupTarget(remote: "origin", repository: widgets)]
+            ),
+            (
+                [
+                    "origin": urls("https://github.com/me/widgets", push: ["https://example.com/widgets.git"]),
+                    "upstream": urls("https://github.com/acme/widgets"),
+                ],
+                []
+            ),
+        ] as [([String: RemoteURLs], [PullRequestLookupTarget])])
+    func lookupTargetsAreTheOwnRemoteThenAnotherUpstream(
+        remotes: [String: RemoteURLs], expected: [PullRequestLookupTarget]
+    ) {
+        #expect(GitHubPullRequestLink.lookupTargets(for: "origin", remotes: remotes) == expected)
+    }
+
+    @Test func mirrorRemotesFetchTheSameRepository() {
+        let remotes = [
+            "origin": Self.urls("https://github.com/me/widgets"),
+            "mirror": Self.urls("git@github.com:ME/Widgets.git", push: ["DISABLE"]),
+            "fork": Self.urls("https://github.com/acme/widgets"),
+            "gitlab": Self.urls("https://gitlab.com/me/widgets"),
+        ]
+        #expect(GitHubPullRequestLink.mirrorRemotes(of: Self.widgets, remotes: remotes) == ["origin", "mirror"])
+    }
+
+    @Test func pullRequestURLsEscapeNames() {
+        let url = GitHubPullRequestLink.pullRequestURL(
+            repository: GitHubRepository(owner: "me", name: "a b#"), number: 88)
+        #expect(url?.absoluteString == "https://github.com/me/a%20b%23/pull/88")
+    }
+
     @Test(
         arguments: [
             (localBranch("local-name"), .branchChanged),

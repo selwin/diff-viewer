@@ -4,7 +4,7 @@ import SwiftUI
 /// The branch picker popover, anchored to the title bar's branch button. Activating a
 /// branch checks it out, or a remote one as a new tracking branch, and closes the
 /// popover; so does New Branch…, which opens its sheet, Compare…, which opens the Compare
-/// window, a Merge row, which opens the Merge sheet, and Create PR, which opens GitHub. A
+/// window, a Merge row, which opens the Merge sheet, and the pull request button, which opens GitHub. A
 /// click outside closes it too.
 struct BranchPickerPopover: View {
     @Environment(WindowState.self) private var windowState

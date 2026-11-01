@@ -1,5 +1,11 @@
 import Foundation
 
+/// A remote searched for an existing pull request, and the repository its fetch URL names.
+struct PullRequestLookupTarget: Equatable, Sendable {
+    let remote: String
+    let repository: GitHubRepository
+}
+
 /// GitHub's "Open a pull request" page for a pushed branch. It names no base branch, so
 /// GitHub compares against the base repository's default branch, and no title or body,
 /// so GitHub fills in its own defaults and the repository's template.
@@ -48,6 +54,33 @@ enum GitHubPullRequestLink {
             let upstream = GitHubRepository.parse(remoteURL: fetchURL), !upstream.matches(head)
         else { return head }
         return upstream
+    }
+
+    /// The remotes to search for a pull request from a branch tracking `upstreamRemote`: that
+    /// remote, then `upstream` when it is the base `make` would compare against. Empty when
+    /// `upstreamRemote` isn't one GitHub repository for fetch and push.
+    static func lookupTargets(
+        for upstreamRemote: String, remotes: [String: RemoteURLs]
+    ) -> [PullRequestLookupTarget] {
+        guard case let .repository(own) = GitHubRemoteValidation.validate(remotes[upstreamRemote]) else { return [] }
+        let targets = [PullRequestLookupTarget(remote: upstreamRemote, repository: own)]
+        let base = base(head: own, remotes: remotes)
+        guard upstreamRemote != "upstream", !base.matches(own) else { return targets }
+        return targets + [PullRequestLookupTarget(remote: "upstream", repository: base)]
+    }
+
+    /// The remotes whose fetch URL names `repository`, so their remote-tracking branches
+    /// are copies of its branches.
+    static func mirrorRemotes(of repository: GitHubRepository, remotes: [String: RemoteURLs]) -> Set<String> {
+        Set(
+            remotes.compactMap { name, urls in
+                GitHubRepository.parse(remoteURL: urls.fetchURL)?.matches(repository) == true ? name : nil
+            })
+    }
+
+    /// `/{owner}/{repo}/pull/{number}`.
+    static func pullRequestURL(repository: GitHubRepository, number: Int) -> URL? {
+        URL(string: "https://github.com/\(encoded(repository.owner))/\(encoded(repository.name))/pull/\(number)")
     }
 
     /// `/{base}/compare/{branch}` for one repository, or `/{base}/compare/{owner}:{repo}:{branch}`

@@ -93,10 +93,10 @@ extension WindowState {
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
             remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches,
-            gitHubRemoteNames: gitHubRemoteNames)
+            gitHubRemoteNames: gitHubRemoteNames, existingPullRequest: existingPullRequest)
     }
 
-    /// Create Pull Request's state for the menu, which reads the same snapshot the header does.
+    /// The pull request item's state for the menu, which reads the same snapshot the header does.
     var pullRequestAvailability: PullRequestAvailability {
         PullRequestAvailability.make(
             snapshot: branchPickerSnapshot, isWindowEligible: session != nil && !isClosed && !isComparisonTab)

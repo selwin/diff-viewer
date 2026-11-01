@@ -1,32 +1,61 @@
 import Foundation
 
-/// Whether Create Pull Request is offered for HEAD's branch. Pure, so the header pill and
-/// the menu item read the same rules.
+/// Whether HEAD's branch offers to create a pull request or to view the one it has. Pure,
+/// so the header pill and the menu item read the same rules.
 enum PullRequestAvailability: Equatable {
     case hidden
     case disabled(help: String)
     case enabled
+    /// The branch already has pull request `number`, at `url`.
+    case existing(number: Int, url: URL)
 
     static let unpushedHelp = "Push first"
 
-    /// The state of a Create PR button for this availability.
+    /// The state of the pull request button for this availability.
     var pickerButtonState: PickerButtonState {
         switch self {
         case .hidden: .hidden
         case let .disabled(help): .disabled(reason: help)
-        case .enabled: .enabled
+        case .enabled, .existing: .enabled
+        }
+    }
+
+    /// The header button's title.
+    var buttonTitle: String {
+        if case let .existing(number, _) = self { "View PR #\(number)" } else { "Open PR" }
+    }
+
+    /// The Repository menu item's title.
+    var menuTitle: String {
+        if case let .existing(number, _) = self {
+            "View Pull Request #\(number) on GitHub"
+        } else {
+            "Create Pull Request on GitHub"
+        }
+    }
+
+    /// The button's tooltip while it can act; a disabled button shows its reason.
+    var help: String {
+        switch self {
+        case let .existing(number, _): "View pull request #\(number) on GitHub"
+        case let .disabled(help): help
+        case .hidden, .enabled: "Create a pull request on GitHub"
         }
     }
 
     /// Hidden unless HEAD's listed branch tracks a branch of a GitHub remote in
-    /// `snapshot.gitHubRemoteNames`. Disabled while it has unpushed commits, or while a
-    /// switch, commit or sync holds the repository.
+    /// `snapshot.gitHubRemoteNames`. A pull request found for it is offered whatever else
+    /// holds; otherwise creating one is disabled while the branch has unpushed commits, or
+    /// while a switch, commit or sync holds the repository.
     static func make(snapshot: BranchPickerSnapshot, isWindowEligible: Bool) -> PullRequestAvailability {
         guard isWindowEligible, snapshot.readStatus == .loaded, case let .named(name)? = snapshot.headState,
             let branch = snapshot.branches.first(where: { $0.name == name })
         else { return .hidden }
         let availability = make(branch: branch, gitHubRemoteNames: snapshot.gitHubRemoteNames)
         guard availability != .hidden else { return .hidden }
+        if let existing = snapshot.existingPullRequest {
+            return .existing(number: existing.number, url: existing.url)
+        }
         if let busy = SyncPolicy.busyReason(
             active: snapshot.activeSync, isSwitching: snapshot.isSwitchingBranch, isCommitting: snapshot.isCommitting)
         {
