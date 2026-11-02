@@ -24,6 +24,7 @@ import Foundation
 ///   `DIFFVIEWER_BRANCH_PICKER_TAB=merge` opens it on the Merge tab.
 /// - `DIFFVIEWER_STASH_PICKER=1` opens the stash picker popover, rendered the same way.
 /// - `DIFFVIEWER_GITHUB_POPOVER=1` opens the title bar's GitHub popover, rendered the same way.
+/// - `DIFFVIEWER_REPOSITORY_PICKER=1` opens the title bar's repository picker, rendered the same way.
 /// - `DIFFVIEWER_GITHUB_STATE=<state>` forces the window's GitHub connection and stops its checks,
 ///   so the capsule and popover can be screenshotted in each state: `connected`,
 ///   `connected-no-login`, `checking`, `cli-missing`, `signed-out`, `env-rejected`, `no-access`,
@@ -132,6 +133,7 @@ enum DebugLaunchOptions {
             let branchPicker = env["DIFFVIEWER_BRANCH_PICKER"] == "1"
             let stashPicker = env["DIFFVIEWER_STASH_PICKER"] == "1"
             let gitHubPopover = env["DIFFVIEWER_GITHUB_POPOVER"] == "1"
+            let repositoryPicker = env["DIFFVIEWER_REPOSITORY_PICKER"] == "1"
             let gitHubState = env["DIFFVIEWER_GITHUB_STATE"] ?? ""
             let newBranchSheet = env["DIFFVIEWER_NEW_BRANCH_SHEET"] == "1"
             let stashSheet = env["DIFFVIEWER_STASH_SHEET"] == "1"
@@ -140,7 +142,7 @@ enum DebugLaunchOptions {
             let trayExpansion = ["expanded": true, "collapsed": false][env["DIFFVIEWER_STAGING_TRAY"] ?? ""]
             let needsWindow =
                 !selection.isEmpty || !scopeSha.isEmpty || commitSheet || commitPicker || branchPicker || stashPicker
-                || newBranchSheet || stashSheet || gitHubPopover || !gitHubState.isEmpty
+                || newBranchSheet || stashSheet || gitHubPopover || repositoryPicker || !gitHubState.isEmpty
                 || !findQuery.isEmpty || !(env["DIFFVIEWER_KEYS"] ?? "").isEmpty
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
                 || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_COMPARE"] != nil
@@ -193,6 +195,7 @@ enum DebugLaunchOptions {
                 windowState.isBranchPickerPresented = branchPicker
                 windowState.isStashPickerPresented = stashPicker
                 applyGitHub(state: gitHubState, popover: gitHubPopover, in: windowState)
+                windowState.isRepositoryPickerPresented = repositoryPicker
                 windowState.newBranchInitialName = env["DIFFVIEWER_NEW_BRANCH_NAME"]
                 windowState.isNewBranchSheetPresented = newBranchSheet
                 windowState.isStashSheetPresented = stashSheet

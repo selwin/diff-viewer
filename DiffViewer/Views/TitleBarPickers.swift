@@ -337,9 +337,9 @@ private struct SyncSegmentLabel: View {
                     .accessibilityHidden(true)
             }
         }
-        // Centred by its line box, the text reads low against the icons; lift it to the eye.
-        // The spinner below is centred on the unlifted frame.
-        .offset(y: -1)
+        // Lifted onto the icons' centre line, like the pickers' titles. The spinner below is
+        // centred on the unlifted frame.
+        .offset(y: -TitleBarMetrics.textLift)
         .opacity(isRunning ? 0 : 1)
         .overlay {
             if isRunning { ProgressView().controlSize(.small) }
@@ -461,6 +461,15 @@ struct ScopePickerView: View {
     }
 }
 
+/// Optical offsets that put the title bar's text and chevrons on the same centre line as their
+/// icons, as measured in a 2x capture: centred by their frames, both read low.
+enum TitleBarMetrics {
+    /// Centres the titles' x-height, not their cap height: lowercase names read by their
+    /// x-height, and centring the caps leaves them looking low.
+    static let textLift: CGFloat = 1.5
+    static let chevronLift: CGFloat = 0.5
+}
+
 /// What both title bar pickers show on their glass: an icon, the title and a chevron.
 private struct TitleBarPickerContent: View {
     let icon: ImageResource
@@ -494,6 +503,7 @@ private struct TitleBarPickerContent: View {
             Image(systemName: "chevron.down")
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(.secondary)
+                .offset(y: -TitleBarMetrics.chevronLift)
         }
     }
 
@@ -503,8 +513,7 @@ private struct TitleBarPickerContent: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-            // Centred by its line box, the text reads low against the icons; lift it to the eye.
-            .offset(y: -1)
+            .offset(y: -TitleBarMetrics.textLift)
     }
 }
 

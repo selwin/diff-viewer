@@ -8,6 +8,9 @@ struct RepositoryCapsuleView: View {
     @State private var isMarkTinted = false
     @State private var isNameTinted = false
 
+    /// The same on both sides of the divider, so the mark and the name sit evenly around it.
+    private static let dividerGap: CGFloat = 10
+
     var body: some View {
         @Bindable var windowState = windowState
         let model = windowState.gitHubConnectionModel
@@ -24,7 +27,7 @@ struct RepositoryCapsuleView: View {
             // Capped like the pickers beside it, so a long name can't push the toolbar's other
             // items into overflow.
             CappedWidth(maximumWidth: 300) {
-                nameSegment(leading: showsMark ? 12 : 14)
+                nameSegment(leading: showsMark ? Self.dividerGap : 14)
             }
         }
         .clipShape(Capsule())
@@ -41,7 +44,10 @@ struct RepositoryCapsuleView: View {
                 .resizable()
                 .frame(width: 16, height: 16)
                 .foregroundStyle(GitHubMarkColor.color(for: connection))
-                .frame(width: 44, height: 36)
+                // The round end needs more room than the divider side, where the gap matches the name's.
+                .padding(.leading, 14)
+                .padding(.trailing, Self.dividerGap)
+                .frame(height: 36)
                 .modifier(
                     PillPartHover(isPopoverPresented: windowState.isGitHubPopoverPresented) { isMarkTinted = $0 })
         }
@@ -63,12 +69,14 @@ struct RepositoryCapsuleView: View {
             HStack(spacing: 6) {
                 Text(windowState.title)
                     // Larger and heavier than the pickers' labels, so the name leads the row.
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .offset(y: -TitleBarMetrics.textLift)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(.secondary)
+                    .offset(y: -TitleBarMetrics.chevronLift)
             }
             .padding(.leading, leading)
             .padding(.trailing, 14)
@@ -81,8 +89,7 @@ struct RepositoryCapsuleView: View {
         .help(path)
         .accessibilityLabel("Repository, \(windowState.title), opens repository picker")
         .popover(isPresented: $windowState.isRepositoryPickerPresented, arrowEdge: .bottom) {
-            // Placeholder, so the button opens something until the repository picker lands.
-            Color.clear.frame(width: 160, height: 40)
+            RepositoryPickerPopover()
         }
     }
 }
