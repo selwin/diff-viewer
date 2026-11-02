@@ -3,7 +3,7 @@ import Testing
 
 @testable import DiffViewer
 
-/// Finding HEAD's open pull request with the GitHub CLI: when a lookup starts, joins,
+/// Finding HEAD's open pull request on GitHub: when a lookup starts, joins,
 /// retries or follows up, and which results the window keeps.
 @MainActor
 struct WindowStatePullRequestLookupTests {
@@ -13,8 +13,8 @@ struct WindowStatePullRequestLookupTests {
     /// `feature` after its upstream moved to `origin/other`, without a checkout.
     private static let featureTrackingOther = localBranch("feature", upstream: upstream("origin/other"))
     private static let main = localBranch("main", upstream: upstream("origin/main"))
-    private static let signedIn = GitHubCLIStatus.signedIn(login: "me")
-    private static let lookupFailure = GitHubCLIError.exited(status: 1)
+    private static let withToken = GitHubAuthenticationStatus.token(source: .gitHubCLI, login: "me")
+    private static let lookupFailure = GitHubAPIError.network
 
     private static func remotes(_ repository: String) -> [String: RemoteURLs] {
         let url = "git@github.com:me/\(repository).git"
@@ -25,10 +25,10 @@ struct WindowStatePullRequestLookupTests {
         GitHubPullRequest(number: number, url: URL(string: "https://github.com/me/widgets/pull/\(number)")!)
     }
 
-    /// Adopts a repository on `feature` whose `gh` reports `status`, and waits for the status
-    /// to publish. `configure` stubs the client further before adoption reads it.
+    /// Adopts a repository on `feature` whose account check reports `status`, and waits for
+    /// the status to publish. `configure` stubs the client further before adoption reads it.
     private func adopt(
-        _ h: Harness, status: GitHubCLIStatus = signedIn, pullRequest: GitHubPullRequest? = pullRequest(7),
+        _ h: Harness, status: GitHubAuthenticationStatus = withToken, pullRequest: GitHubPullRequest? = pullRequest(7),
         configure: (StubRepoClient) async -> Void = { _ in }
     ) async throws -> Window {
         let state = h.makeState()
@@ -36,11 +36,11 @@ struct WindowStatePullRequestLookupTests {
             await client.set(headState: .named("feature"))
             await client.set(localBranches: [Self.feature, Self.main])
             await client.set(remoteURLs: Self.remotes("widgets"))
-            await client.set(gitHubCLIStatus: status)
+            await client.set(gitHubAuthenticationStatus: status)
             await client.set(openPullRequest: pullRequest)
             await configure(client)
         }
-        try #require(await eventually { @MainActor in state.gitHubCLIStatus == status })
+        try #require(await eventually { @MainActor in state.gitHubAuthenticationStatus == status })
         return (h, state, repo.client, repo.root)
     }
 
@@ -61,19 +61,31 @@ struct WindowStatePullRequestLookupTests {
 
     // MARK: Starting
 
-    @Test func signedOutSkipsTheLookupAndSigningInThenOpeningThePickerFindsThePR() async throws {
+    @Test func withoutATokenTheLookupStillRuns() async throws {
         let h = Harness()
-        let w = try await adopt(h, status: .signedOut)
-        #expect(w.state.session?.pullRequestInFlight == nil)
-        #expect(await w.client.findOpenPullRequestCalls.isEmpty)
-        let header = { BranchPickerHeaderText.make(snapshot: w.state.branchPickerSnapshot).detail(fetch: nil) }
-        #expect(header() == "GitHub CLI signed out")
-
-        await w.client.set(gitHubCLIStatus: Self.signedIn)
-        w.state.isBranchPickerPresented = true
+        let w = try await adopt(h, status: .anonymous)
         #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(7)) })
         #expect(await w.client.findOpenPullRequestCalls.map(\.remoteBranchName) == ["remote-feature"])
-        #expect(header() == "GitHub: me")
+        let header = BranchPickerHeaderText.make(snapshot: w.state.branchPickerSnapshot).detail(fetch: nil)
+        #expect(header == "GitHub: public only")
+    }
+
+    @Test func aHeldAccountCheckNeitherDelaysNorRepeatsTheLookup() async throws {
+        let h = Harness()
+        let w = try await adopt(h)
+        try #require(await handled(w, 1))
+        await w.client.hold(.gitHubAuthenticationStatus)
+        await w.client.set(openPullRequest: Self.pullRequest(8))
+
+        await w.state.fetchAllRemotes()
+        #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(8)) })
+        #expect(await w.client.heldCount(.gitHubAuthenticationStatus) == 1)
+
+        await w.client.hold(.gitHubAuthenticationStatus, false)
+        await w.client.release(.gitHubAuthenticationStatus)
+        try #require(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
+        #expect(w.state.session?.pullRequestInFlight == nil)
+        #expect(await w.client.findOpenPullRequestCalls.count == 2)
     }
 
     @Test func anUpstreamChangeWithoutACheckoutLooksUpAgain() async throws {
@@ -92,15 +104,15 @@ struct WindowStatePullRequestLookupTests {
         let h = Harness()
         let w = try await adopt(h)
         try #require(await handled(w, 1))
-        let checksBefore = await w.client.gitHubCLIStatusCalls
+        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
         await w.client.set(remoteURLs: Self.remotes("gadgets"))
 
         h.tick(w.root, [.rescan])
         #expect(
             await eventually { @MainActor in w.state.pullRequestLookup?.identity.headRepository.name == "gadgets" })
         #expect(await w.client.findOpenPullRequestCalls.last?.headRepository.name == "gadgets")
-        // A rescan comes with every return to a tab, so it leaves `gh`'s login alone.
-        #expect(await w.client.gitHubCLIStatusCalls == checksBefore)
+        // A rescan comes with every return to a tab, so it leaves the GitHub token alone.
+        #expect(await w.client.gitHubAuthenticationStatusCalls == checksBefore)
     }
 
     @Test func theCreationPathsRemoteReadUpdatesTheIdentity() async throws {
@@ -182,20 +194,58 @@ struct WindowStatePullRequestLookupTests {
         #expect(await eventually { await w.client.findOpenPullRequestCalls.count == 2 })
     }
 
+    @Test func aFailedLookupIsRetriedEvenWhenTheRemoteReadFails() async throws {
+        let h = Harness()
+        let w = try await adopt(h) { await $0.fail(.findOpenPullRequest, with: Self.lookupFailure) }
+        try #require(await handled(w, 1))
+        await w.client.fail(remoteURLs: true)
+        await w.client.fail(.findOpenPullRequest, with: nil)
+
+        await w.state.fetchAllRemotes()
+        #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(7)) })
+    }
+
+    @Test func aCancelledLookupIsNotRecordedAsFailed() async throws {
+        let h = Harness()
+        let w = try await adopt(h) { await $0.fail(.findOpenPullRequest, with: CancellationError()) }
+        try #require(await handled(w, 1))
+        #expect(w.state.session?.failedPullRequestIdentity == nil)
+        #expect(w.state.pullRequestLookup == nil)
+        await w.client.fail(.findOpenPullRequest, with: nil)
+
+        // Automatic: a recorded failure would have been skipped.
+        await w.state.refresh()
+        #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(7)) })
+    }
+
     @Test func fetchDuringAHeldAuthCheckRunsOneFollowUpCheck() async throws {
         let h = Harness()
         let w = try await adopt(h)
-        let checksBefore = await w.client.gitHubCLIStatusCalls
-        await w.client.hold(.gitHubCLIStatus)
+        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
+        await w.client.hold(.gitHubAuthenticationStatus)
         await w.state.fetchAllRemotes()
-        try #require(await eventually { await w.client.heldCount(.gitHubCLIStatus) == 1 })
+        try #require(await eventually { await w.client.heldCount(.gitHubAuthenticationStatus) == 1 })
 
         await w.state.fetchAllRemotes()
         try #require(await eventually { @MainActor in w.state.session?.gitHubAuthPending == true })
-        await w.client.hold(.gitHubCLIStatus, false)
-        await w.client.release(.gitHubCLIStatus)
+        await w.client.hold(.gitHubAuthenticationStatus, false)
+        await w.client.release(.gitHubAuthenticationStatus)
         #expect(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
-        #expect(await w.client.gitHubCLIStatusCalls == checksBefore + 2)
+        #expect(await w.client.gitHubAuthenticationStatusCalls == checksBefore + 2)
+    }
+
+    @Test func aThrowingAccountCheckKeepsTheLastStatusAndPR() async throws {
+        let h = Harness()
+        let w = try await adopt(h)
+        try #require(await handled(w, 1))
+        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
+        await w.client.fail(.gitHubAuthenticationStatus, with: CancellationError())
+
+        await w.state.fetchAllRemotes()
+        try #require(await eventually { await w.client.gitHubAuthenticationStatusCalls == checksBefore + 1 })
+        try #require(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
+        #expect(w.state.gitHubAuthenticationStatus == Self.withToken)
+        #expect(w.state.pullRequestAvailability == .view(Self.pullRequest(7)))
     }
 
     // MARK: Which results stay
@@ -218,18 +268,20 @@ struct WindowStatePullRequestLookupTests {
         #expect(w.state.pullRequestAvailability == .view(Self.pullRequest(8)))
     }
 
-    @Test func aLookupFinishingAfterSigningOutLeavesNothing() async throws {
+    @Test func losingTheTokenKeepsThePRAndTheLookups() async throws {
         let h = Harness()
-        let w = try await adopt(h) { await $0.hold(.findOpenPullRequest) }
-        try #require(await eventually { await w.client.heldCount(.findOpenPullRequest) == 1 })
-        await w.client.set(gitHubCLIStatus: .signedOut)
-        await w.state.fetchAllRemotes()
-        try #require(await eventually { @MainActor in w.state.gitHubCLIStatus == .signedOut })
-
-        await lift(w.client)
+        let w = try await adopt(h)
         try #require(await handled(w, 1))
-        #expect(w.state.pullRequestLookup == nil)
-        #expect(w.state.pullRequestAvailability == .enabled)
+        await w.client.hold(.findOpenPullRequest)
+        await w.client.set(gitHubAuthenticationStatus: .anonymous)
+        await w.client.set(openPullRequest: Self.pullRequest(8))
+
+        await w.state.fetchAllRemotes()
+        try #require(await eventually { @MainActor in w.state.gitHubAuthenticationStatus == .anonymous })
+        #expect(w.state.pullRequestAvailability == .view(Self.pullRequest(7)))
+        try #require(await eventually { await w.client.heldCount(.findOpenPullRequest) == 1 })
+        await lift(w.client)
+        #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(8)) })
     }
 
     @Test func closingTheWindowDuringALookupPublishesNothing() async throws {

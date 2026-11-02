@@ -71,10 +71,10 @@ experience. We want this to be speedy when reviewing large diffs.
   tab of the repository window. Comparisons use revisions captured when the Compare window
   opens. Reopen it to load updated branches. Comparison tabs aren't restored on relaunch.
   **Pull Request mode** (⌘3) takes a GitHub pull request link or `#n`; git fetches the
-  pull request's head from the matching remote, with no GitHub API calls, and the tab
-  compares it with that remote's default branch. If the pull request targets another
-  branch, the result can differ from GitHub's diff. The fetched refs stay in the
-  repository under `refs/diffviewer/pull/`.
+  pull request's head from the matching remote, and the tab compares it with that
+  remote's default branch. If the pull request targets another branch, the result can
+  differ from GitHub's diff. The fetched refs stay in the repository under
+  `refs/diffviewer/pull/`.
 - **Commit** (⌘Return): records the index with your message, prefilled the way
   `git commit` would. ⌘G drafts a message with Apple's on-device model. Hooks run with
   your login shell's PATH, so a pre-commit hook finds Homebrew tools even from a Finder

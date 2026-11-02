@@ -114,7 +114,7 @@ struct TaggedClient: RepoClient {
     func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase {
         throw PullRequestError.alreadyInBase
     }
-    func gitHubCLIStatus() async throws -> GitHubCLIStatus { .notInstalled }
+    func gitHubAuthenticationStatus() async throws -> GitHubAuthenticationStatus { .anonymous }
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? { nil }
 }
 

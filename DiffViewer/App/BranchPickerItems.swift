@@ -41,8 +41,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var newRemoteBranches: Set<String> = []
     /// The remotes that are one GitHub repository for fetch and push, as last read.
     var gitHubRemoteNames: Set<String> = []
-    /// What `gh` says about its login; nil before the first check or without a GitHub remote.
-    var gitHubCLIStatus: GitHubCLIStatus?
+    /// Which GitHub token is in use; nil before the first check or without a GitHub remote.
+    var gitHubAuthenticationStatus: GitHubAuthenticationStatus?
     /// HEAD's branch's pull request identity, which a lookup must match to count.
     var currentPullRequestIdentity: PullRequestIdentity?
     var pullRequestLookup: PullRequestLookup?

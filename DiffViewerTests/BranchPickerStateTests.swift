@@ -881,24 +881,44 @@ struct BranchPickerStateTests {
         #expect(detached.detail(fetch: BranchPickerFetchText(text: "Fetching…")) == "Fetching…")
     }
 
-    @Test func theHeaderNamesTheGitHubCLIAfterTheFetchOnlyWithAGitHubRemote() {
+    @Test func theHeaderNamesTheGitHubTokenAfterTheFetchOnlyWithAGitHubRemote() {
         let fetch = BranchPickerFetchText(text: "Fetched just now", tooltip: "origin: fetched")
         let synced = snapshot(branches: [localBranch("main", upstream: upstream("origin/main"))])
-        let cases: [(GitHubCLIStatus, String, String)] = [
+        let environment = GitHubTokenSource.environment(name: "GH_TOKEN")
+        let cases: [(GitHubAuthenticationStatus, String, String)] = [
             (
-                .signedIn(login: "selwin"), "GitHub: selwin",
-                "Finding pull requests with the GitHub CLI, signed in as selwin"
+                .token(source: environment, login: "selwin"), "GitHub: selwin",
+                "Using the token from GH_TOKEN, signed in as selwin"
             ),
             (
-                .signedOut, "GitHub CLI signed out",
-                "Sign in with `gh auth login --hostname github.com` to find existing pull requests"
+                .token(source: .gitHubCLI, login: "selwin"), "GitHub: selwin",
+                "Using the token from the GitHub CLI, signed in as selwin"
             ),
-            (.notInstalled, "GitHub CLI not installed", "Install the GitHub CLI (gh) to find existing pull requests"),
-            (.failed("Token expired"), "GitHub CLI unavailable", "Token expired"),
+            (
+                .token(source: environment, login: nil), "GitHub: token from GH_TOKEN",
+                "Token available; account name unavailable"
+            ),
+            (
+                .token(source: .gitHubCLI, login: nil), "GitHub: token from the GitHub CLI",
+                "Token available; account name unavailable"
+            ),
+            (
+                .rejected(source: environment), "GitHub token rejected",
+                "GitHub rejected the token from GH_TOKEN. Replace it, or unset it to use the next source."
+            ),
+            (
+                .rejected(source: .gitHubCLI), "GitHub token rejected",
+                "GitHub rejected the token from the GitHub CLI. Sign in again with `gh auth login`."
+            ),
+            (
+                .anonymous, "GitHub: public only",
+                "No GitHub token: only public repositories' pull requests are found. "
+                    + "Set GH_TOKEN or sign in with `gh auth login`."
+            ),
         ]
         for (status, text, tooltip) in cases {
             var taken = synced
-            taken.gitHubCLIStatus = status
+            taken.gitHubAuthenticationStatus = status
             taken.gitHubRemoteNames = ["origin"]
             let header = BranchPickerHeaderText.make(snapshot: taken)
             #expect(header.detail(fetch: fetch) == "Fetched just now · \(text)")
@@ -907,11 +927,11 @@ struct BranchPickerStateTests {
 
         // Repository-level: a detached HEAD still says it; without a GitHub remote nothing does.
         var detached = snapshot(headState: .detached(sha: objectID("x")), branches: [])
-        detached.gitHubCLIStatus = .signedOut
+        detached.gitHubAuthenticationStatus = .anonymous
         detached.gitHubRemoteNames = ["origin"]
-        #expect(BranchPickerHeaderText.make(snapshot: detached).detail(fetch: nil) == "GitHub CLI signed out")
+        #expect(BranchPickerHeaderText.make(snapshot: detached).detail(fetch: nil) == "GitHub: public only")
         var noGitHub = synced
-        noGitHub.gitHubCLIStatus = .signedOut
+        noGitHub.gitHubAuthenticationStatus = .anonymous
         let header = BranchPickerHeaderText.make(snapshot: noGitHub)
         #expect(header.detail(fetch: fetch) == "Fetched just now")
         #expect(header.detailTooltip(fetch: nil) == nil)

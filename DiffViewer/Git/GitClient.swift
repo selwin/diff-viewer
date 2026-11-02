@@ -10,8 +10,12 @@ struct GitClient: RepoClient {
     /// `switchBranch` — and by the remote commands, whose credential helpers resolve on the
     /// login PATH too. Throws only `CancellationError`.
     private let resolveCommandEnvironment: @Sendable () async throws -> ProcessEnvironment
-    /// How long a `gh` run may take; tests shorten it.
+    /// How long `gh auth token` may take; tests shorten it.
     let gitHubCLITimeout: Duration
+    /// Sends GitHub API requests; tests script the answers.
+    let gitHubTransport: GitHubTransport
+    /// Holds GitHub requests back during a rate-limit cooldown; tests use their own.
+    let gitHubRateLimitGate: GitHubRateLimitGate
 
     init(
         repoRoot: URL,
@@ -19,12 +23,16 @@ struct GitClient: RepoClient {
         resolveCommandEnvironment: @escaping @Sendable () async throws -> ProcessEnvironment = {
             ProcessEnvironment(variables: await LoginShellPath.environment(), inheritance: .inherit)
         },
-        gitHubCLITimeout: Duration = GitClient.defaultGitHubCLITimeout
+        gitHubCLITimeout: Duration = GitClient.defaultGitHubCLITimeout,
+        gitHubTransport: @escaping GitHubTransport = GitHubAPI.urlSessionTransport,
+        gitHubRateLimitGate: GitHubRateLimitGate = .shared
     ) {
         self.repoRoot = repoRoot
         self.environmentOverrides = environment
         self.resolveCommandEnvironment = resolveCommandEnvironment
         self.gitHubCLITimeout = gitHubCLITimeout
+        self.gitHubTransport = gitHubTransport
+        self.gitHubRateLimitGate = gitHubRateLimitGate
     }
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")
