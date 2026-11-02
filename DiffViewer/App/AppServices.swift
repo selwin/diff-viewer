@@ -36,6 +36,7 @@ final class AppServices {
         let windows = windows
         let opener = WindowOpener()
         let shellEnvironments = RepositoryShellEnvironmentCache()
+        // `refresh` only starts a resolution, so `beginRefresh` is acknowledged without waiting on a shell.
         let environmentEvents = OrderedEnvironmentLifecycle { event in
             switch event {
             case .refresh(let url): await shellEnvironments.refresh(url)
@@ -84,6 +85,7 @@ final class AppServices {
         delegate.openHandler = { url in coordinator.openFromApp(url) }
         delegate.newTabHandler = { [weak self] in self?.openEmptyWindow() }
         delegate.terminationHandler = { coordinator.applicationWillTerminate() }
+        delegate.activationHandler = { coordinator.applicationDidBecomeActive() }
         delegate.launchHandler = { coordinator.applicationDidFinishLaunching() }
     }
 
@@ -94,7 +96,10 @@ final class AppServices {
     }
 
     func makeWindowState() -> WindowState {
-        WindowState(preferences: preferences, cache: cache, resultCache: resultCache) { root, onChange in
+        WindowState(
+            preferences: preferences, cache: cache, resultCache: resultCache,
+            beginEnvironmentRefresh: environmentEvents.lifecycle.beginRefresh
+        ) { root, onChange in
             RepoWatcher(root: root.url, onChange: onChange)
         }
     }

@@ -125,6 +125,7 @@ extension WindowState {
         session != nil && !isClosed && scope == .workingTree && !isSwitchingBranch && !isConfirmingFileAction
             && !isCommitting && !isCommitSheetPresented && !isCommitPickerPresented && !isBranchPickerPresented
             && !isStashPickerPresented && !isNewBranchSheetPresented && !isStashSheetPresented && pendingMerge == nil
+            && !isGitHubPopoverPresented && !isRepositoryPickerPresented
     }
 
     /// Whether Stage All can run: a staging action can start and Changes holds something to stage.

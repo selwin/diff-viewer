@@ -16,6 +16,7 @@ struct PullRequestParsingTests {
             ("ssh://git@github.com/acme/widgets.git", "acme/widgets"),
             ("https://gitlab.com/acme/widgets.git", nil),
             ("git@gitlab.com:acme/widgets.git", nil),
+            ("ssh://git@gitlab.com/acme/widgets", nil),
             ("https://github.com/acme", nil),
             ("/Users/me/code/widgets", nil),
         ] as [(String, String?)])

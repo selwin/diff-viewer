@@ -63,15 +63,19 @@ struct ContentView: View {
             // Xcode-scheme-picker style: the repository, what is checked out, and what the
             // panes compare.
             ToolbarItem(placement: .navigation) {
-                Text(windowState.title)
-                    // Larger and heavier than the pickers' labels, so the name leads the row.
-                    .font(.system(size: 15, weight: .bold))
-                    // The title the toolbar drew dimmed with the window; this one has to.
-                    .foregroundStyle(appearsActive ? .primary : .secondary)
-                    // Room on both sides so the name reads as a heading, not one more control.
-                    .padding(.horizontal, 10)
+                if windowState.isComparisonTab || windowState.isEmpty {
+                    Text(windowState.title)
+                        // Larger and heavier than the pickers' labels, so the name leads the row.
+                        .font(.system(size: 15, weight: .bold))
+                        // The title the toolbar drew dimmed with the window; this one has to.
+                        .foregroundStyle(appearsActive ? .primary : .secondary)
+                        // Room on both sides so the name reads as a heading, not one more control.
+                        .padding(.horizontal, 10)
+                } else {
+                    RepositoryCapsuleView()
+                }
             }
-            // A bare name, not a glass pill.
+            // The capsule draws its own glass, and a bare name has none.
             .sharedBackgroundVisibility(.hidden)
             // One item, so the pickers sit 8pt apart: as separate items the toolbar would
             // share one glass capsule between them, and a splitter item leaves a wide gap.

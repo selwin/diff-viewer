@@ -129,6 +129,20 @@ struct OrderedEnvironmentLifecycleTests {
         #expect(await recorder.events == [.forget(root.url), .refresh(root.url)])
     }
 
+    @Test func aForgetQueuedBeforeBeginRefreshIsAppliedFirst() async {
+        let recorder = ApplyRecorder()
+        let ordered = OrderedEnvironmentLifecycle { await recorder.apply($0) }
+        let (consumer, root) = (ordered.consumer, root)
+        defer { ordered.finish() }
+
+        ordered.lifecycle.forget(root)
+        #expect(
+            await finishes(
+                onTimeout: { consumer.cancel() },
+                operation: { @MainActor in await ordered.lifecycle.beginRefresh(root) }))
+        #expect(await recorder.events == [.forget(root.url), .refresh(root.url)])
+    }
+
     @Test func finishDrainsQueuedEventsAndDropsLaterOnes() async {
         let recorder = ApplyRecorder()
         let ordered = OrderedEnvironmentLifecycle { await recorder.apply($0) }

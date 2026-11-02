@@ -1,7 +1,8 @@
 import Foundation
 
-/// GitHub's REST API for one repository: which token to use, whose account it is, and the
-/// current branch's open pull request. `GitHubAPI` does the HTTP; the decoders live here.
+/// GitHub's REST API for one repository: which token to use, whose account it is, whether it can
+/// read the repository, and the current branch's open pull request. `GitHubAPI` does the HTTP;
+/// the decoders live here.
 extension GitClient {
     static let defaultGitHubCLITimeout: Duration = .seconds(10)
 
@@ -26,7 +27,10 @@ extension GitClient {
     /// as unset, and an explicit empty value hides an inherited one. Throws only
     /// `CancellationError`; a cancel while `gh` runs takes effect once it exits or times out.
     func resolveGitHubToken() async throws -> GitHubToken? {
-        let environment = try await commandEnvironment()
+        try await resolveGitHubToken(in: try await commandEnvironment())
+    }
+
+    private func resolveGitHubToken(in environment: ProcessEnvironment) async throws -> GitHubToken? {
         let inherited = environment.inheritance == .inherit ? ProcessInfo.processInfo.environment : [:]
         let effective = inherited.merging(environment.variables) { _, own in own }
         for name in Self.gitHubTokenVariables {
@@ -42,17 +46,78 @@ extension GitClient {
     /// installation tokens can't read `/user` but can list pull requests. Throws only
     /// `CancellationError`.
     func gitHubAuthenticationStatus() async throws -> GitHubAuthenticationStatus {
-        guard let token = try await resolveGitHubToken() else { return .anonymous }
+        try await resolveTokenAndStatus(in: try await commandEnvironment()).status
+    }
+
+    /// Everything the title bar needs about `origin`: the token's status, as
+    /// `gitHubAuthenticationStatus` reports it, then whether that token can read the
+    /// repository. With no token, whether `gh` is installed instead. Throws only
+    /// `CancellationError`.
+    func gitHubRepositoryCheck(_ origin: GitHubRepository) async throws -> GitHubRepositoryCheck {
+        let environment = try await commandEnvironment()
+        let (token, status) = try await resolveTokenAndStatus(in: environment)
+        switch (token, status) {
+        case let (token?, .token(source, login)):
+            return .token(source: source, login: login, access: try await repositoryAccess(origin, token: token))
+        case let (_, .rejected(source)):
+            return .rejected(source: source)
+        default:
+            return .anonymous(cli: try await probeGitHubCLI(in: environment))
+        }
+    }
+
+    /// The token, resolved once, and what `/user` says about it.
+    private func resolveTokenAndStatus(
+        in environment: ProcessEnvironment
+    ) async throws -> (token: GitHubToken?, status: GitHubAuthenticationStatus) {
+        guard let token = try await resolveGitHubToken(in: environment) else { return (nil, .anonymous) }
         do {
             let data = try await gitHubAPI.get(path: "/user", token: token.value)
-            return .token(source: token.source, login: try Self.parseLogin(data))
+            return (token, .token(source: token.source, login: try Self.parseLogin(data)))
         } catch is CancellationError {
             throw CancellationError()
         } catch GitHubAPIError.unauthorized {
-            return .rejected(source: token.source)
+            return (token, .rejected(source: token.source))
         } catch {
-            return .token(source: token.source, login: nil)
+            return (token, .token(source: token.source, login: nil))
         }
+    }
+
+    private func repositoryAccess(_ origin: GitHubRepository, token: GitHubToken) async throws
+        -> GitHubRepositoryAccess
+    {
+        do {
+            let data = try await gitHubAPI.get(
+                path: "/repos/\(Self.pathComponent(origin.owner))/\(Self.pathComponent(origin.name))",
+                token: token.value)
+            return Self.parseRepositoryAccess(data)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch GitHubAPIError.unauthorized {
+            return .unauthorized
+        } catch GitHubAPIError.notFound, GitHubAPIError.forbidden {
+            // `forbidden` is a 403 the API didn't read as a rate limit.
+            return .denied
+        } catch {
+            return .transient
+        }
+    }
+
+    /// Whether `gh` is on the command environment's PATH, and its version when it says.
+    private func probeGitHubCLI(in environment: ProcessEnvironment) async throws -> GitHubCLIProbe {
+        guard let executable = Self.gitHubCLIExecutable(in: environment) else { return .missing }
+        var environment = environment
+        environment.variables.merge(Self.gitHubCLIEnvironment) { _, cli in cli }
+        try Task.checkCancellation()
+        guard
+            let run = ShellRun<Data>.spawn(
+                executable: executable, arguments: ["--version"], environment: environment,
+                currentDirectory: repoRoot)
+        else { return .found(version: nil) }
+        let outcome = await run.output(timeout: gitHubCLITimeout, outputLimit: Self.gitHubCLIOutputLimit)
+        try Task.checkCancellation()
+        guard case let .output(data) = outcome else { return .found(version: nil) }
+        return .found(version: GitHubCLIProbe.parseVersion(String(decoding: data, as: UTF8.self)))
     }
 
     /// The oldest open pull request from `identity`'s head branch whose head repository still
@@ -174,6 +239,14 @@ extension GitClient {
         return GitHubPullRequest(number: eligible.number, url: eligible.url)
     }
 
+    /// Decodes repository metadata; malformed JSON or a non-HTTPS browser URL returns `.transient`.
+    static func parseRepositoryAccess(_ data: Data) -> GitHubRepositoryAccess {
+        guard let repository = try? JSONDecoder().decode(RepositoryObject.self, from: data),
+            repository.url.scheme?.lowercased() == "https"
+        else { return .transient }
+        return .found(isPrivate: repository.isPrivate, url: repository.url)
+    }
+
     /// The account name `/user` reports. Throws `GitHubAPIError.unreadableResponse` for
     /// malformed JSON.
     static func parseLogin(_ data: Data) throws -> String {
@@ -208,4 +281,15 @@ private struct PullRequestObject: Decodable {
 /// The part of `/user` the account check reads.
 private struct UserObject: Decodable {
     let login: String
+}
+
+/// The parts of `/repos/{owner}/{repo}` the connection check reads.
+private struct RepositoryObject: Decodable {
+    let isPrivate: Bool
+    let url: URL
+
+    enum CodingKeys: String, CodingKey {
+        case isPrivate = "private"
+        case url = "html_url"
+    }
 }

@@ -177,6 +177,9 @@ protocol RepoClient: Sendable {
     /// Which GitHub token is in use and whose account it is, for display only. Throws only
     /// `CancellationError`.
     func gitHubAuthenticationStatus() async throws -> GitHubAuthenticationStatus
+    /// The token's status and whether it can read `origin`, or with no token whether `gh` is
+    /// installed. Throws only `CancellationError`.
+    func gitHubRepositoryCheck(_ origin: GitHubRepository) async throws -> GitHubRepositoryCheck
     /// The oldest open pull request from `identity`'s head branch, searching the base
     /// repository first, then the head repository. Returns nil only when every searched
     /// repository successfully reports no eligible open pull request; otherwise returns the

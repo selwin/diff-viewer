@@ -74,16 +74,16 @@ struct WindowStatePullRequestLookupTests {
         let h = Harness()
         let w = try await adopt(h)
         try #require(await handled(w, 1))
-        await w.client.hold(.gitHubAuthenticationStatus)
+        await w.client.hold(.gitHubRepositoryCheck)
         await w.client.set(openPullRequest: Self.pullRequest(8))
 
         await w.state.fetchAllRemotes()
         #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(8)) })
-        #expect(await w.client.heldCount(.gitHubAuthenticationStatus) == 1)
+        #expect(await w.client.heldCount(.gitHubRepositoryCheck) == 1)
 
-        await w.client.hold(.gitHubAuthenticationStatus, false)
-        await w.client.release(.gitHubAuthenticationStatus)
-        try #require(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
+        await w.client.hold(.gitHubRepositoryCheck, false)
+        await w.client.release(.gitHubRepositoryCheck)
+        try #require(await eventually { @MainActor in w.state.gitHubConnectionModel?.isChecking == false })
         #expect(w.state.session?.pullRequestInFlight == nil)
         #expect(await w.client.findOpenPullRequestCalls.count == 2)
     }
@@ -104,15 +104,27 @@ struct WindowStatePullRequestLookupTests {
         let h = Harness()
         let w = try await adopt(h)
         try #require(await handled(w, 1))
-        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
         await w.client.set(remoteURLs: Self.remotes("gadgets"))
 
         h.tick(w.root, [.rescan])
         #expect(
             await eventually { @MainActor in w.state.pullRequestLookup?.identity.headRepository.name == "gadgets" })
         #expect(await w.client.findOpenPullRequestCalls.last?.headRepository.name == "gadgets")
-        // A rescan comes with every return to a tab, so it leaves the GitHub token alone.
-        #expect(await w.client.gitHubAuthenticationStatusCalls == checksBefore)
+        // The new origin needs its own connection check.
+        #expect(await eventually { await w.client.gitHubRepositoryCheckCalls.last?.name == "gadgets" })
+    }
+
+    @Test func aRescanWithUnchangedRemotesLeavesTheConnectionAlone() async throws {
+        let h = Harness()
+        let w = try await adopt(h)
+        try #require(await handled(w, 1))
+        let remoteReadsBefore = await w.client.remoteURLsCalls
+
+        h.tick(w.root, [.rescan])
+        try #require(await eventually { await w.client.remoteURLsCalls > remoteReadsBefore })
+        try #require(await eventually { @MainActor in w.state.gitHubConnectionModel?.isChecking == false })
+        // A rescan comes with every return to a tab, so the same origin isn't checked again.
+        #expect(await w.client.gitHubRepositoryCheckCalls.count == 1)
     }
 
     @Test func theCreationPathsRemoteReadUpdatesTheIdentity() async throws {
@@ -218,32 +230,16 @@ struct WindowStatePullRequestLookupTests {
         #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(7)) })
     }
 
-    @Test func fetchDuringAHeldAuthCheckRunsOneFollowUpCheck() async throws {
-        let h = Harness()
-        let w = try await adopt(h)
-        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
-        await w.client.hold(.gitHubAuthenticationStatus)
-        await w.state.fetchAllRemotes()
-        try #require(await eventually { await w.client.heldCount(.gitHubAuthenticationStatus) == 1 })
-
-        await w.state.fetchAllRemotes()
-        try #require(await eventually { @MainActor in w.state.session?.gitHubAuthPending == true })
-        await w.client.hold(.gitHubAuthenticationStatus, false)
-        await w.client.release(.gitHubAuthenticationStatus)
-        #expect(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
-        #expect(await w.client.gitHubAuthenticationStatusCalls == checksBefore + 2)
-    }
-
     @Test func aThrowingAccountCheckKeepsTheLastStatusAndPR() async throws {
         let h = Harness()
         let w = try await adopt(h)
         try #require(await handled(w, 1))
-        let checksBefore = await w.client.gitHubAuthenticationStatusCalls
-        await w.client.fail(.gitHubAuthenticationStatus, with: CancellationError())
+        let checksBefore = await w.client.gitHubRepositoryCheckCalls.count
+        await w.client.fail(.gitHubRepositoryCheck, with: CancellationError())
 
         await w.state.fetchAllRemotes()
-        try #require(await eventually { await w.client.gitHubAuthenticationStatusCalls == checksBefore + 1 })
-        try #require(await eventually { @MainActor in w.state.session?.gitHubAuthInFlight == false })
+        try #require(await eventually { await w.client.gitHubRepositoryCheckCalls.count == checksBefore + 1 })
+        try #require(await eventually { @MainActor in w.state.gitHubConnectionModel?.isChecking == false })
         #expect(w.state.gitHubAuthenticationStatus == Self.withToken)
         #expect(w.state.pullRequestAvailability == .view(Self.pullRequest(7)))
     }

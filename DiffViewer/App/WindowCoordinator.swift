@@ -30,6 +30,8 @@ final class WindowCoordinator {
     }
 
     let preferences: Preferences
+    /// Every repository's GitHub connection, for the repository picker.
+    let gitHubConnections: GitHubConnectionDirectory
     private let prefetcher: any Prefetching
     private let discover: Discoverer
     private let hooks: Hooks
@@ -108,6 +110,9 @@ final class WindowCoordinator {
         self.discover = discover
         self.hooks = hooks
         self.environmentLifecycle = environmentLifecycle
+        gitHubConnections = GitHubConnectionDirectory(
+            lifecycle: environmentLifecycle,
+            loadClosed: GitHubConnectionDirectory.closedLoader(discover: discover, lifecycle: environmentLifecycle))
         for path in defaults.stringArray(forKey: SessionKeys.openRoots) ?? [] {
             let root = RepositoryRoot(path: path)
             restoreList.append(root)
@@ -119,6 +124,9 @@ final class WindowCoordinator {
         preferences.onDiffSettingsChange = { [weak self] in
             guard let self else { return }
             for window in windows.values { window.diffSettingsChanged() }
+        }
+        gitHubConnections.openModel = { [weak self] root in
+            self?.rootIndex[root].flatMap { self?.windows[$0]?.gitHubConnectionModel }
         }
     }
 
@@ -316,6 +324,7 @@ final class WindowCoordinator {
         guard !closedBeforeRegistration.contains(state.id), !state.isClosed, windows[state.id] == nil else { return }
         windows[state.id] = state
         sceneRootSetters[state.id] = setSceneRoot
+        state.gitHubConnectionDirectory = gitHubConnections
         state.onRefreshPublished = { [weak self] state, cause, inputsChanged in
             self?.refreshPublished(state, cause: cause, inputsChanged: inputsChanged)
         }
@@ -412,6 +421,14 @@ final class WindowCoordinator {
         persist()
     }
 
+    /// Credentials may have changed in another app, so the window in front checks its GitHub
+    /// connection again after starting an environment refresh. While the app activates, the key window
+    /// may not be known yet; the last active one stands in.
+    func applicationDidBecomeActive() {
+        let id = keyWindowID ?? lastActiveRepositoryRoot.flatMap { rootIndex[$0] }
+        id.flatMap { windows[$0] }?.recheckGitHubConnection(refreshingEnvironment: true)
+    }
+
     func windowDidResignKey(_ id: WindowID) {
         guard keyWindowID == id else { return }
         deactivate(id)
@@ -449,6 +466,11 @@ final class WindowCoordinator {
     private func refreshPublished(_ state: WindowState, cause: RefreshCause, inputsChanged: Bool) {
         guard state.id == keyWindowID, inputsChanged || cause != .watcher else { return }
         prefetch(for: state.id)
+    }
+
+    /// Open repositories in tab-strip order, for the repository picker.
+    var openRepositoryRootsInTabOrder: [RepositoryRoot] {
+        rootsInSessionOrder().filter { rootIndex[$0] != nil }
     }
 
     // MARK: - Session persistence

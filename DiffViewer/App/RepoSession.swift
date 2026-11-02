@@ -48,11 +48,6 @@ final class RepoSession {
     var headStateCheckSerial = 0
     /// Incremented per GitHub remote read, so only the newest read publishes.
     var gitHubRemoteNamesSerial = 0
-    /// One GitHub account check at a time: which token is in use and whose account it is. A
-    /// request during one sets `gitHubAuthPending`, and a single follow-up check runs when it
-    /// finishes, so a Fetch meanwhile is never dropped.
-    var gitHubAuthInFlight = false
-    var gitHubAuthPending = false
     /// Bumped when a pull request lookup starts and when the lookup is cleared. Only the
     /// lookup of the current generation publishes.
     var pullRequestGeneration = 0
