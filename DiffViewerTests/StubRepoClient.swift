@@ -45,6 +45,7 @@ enum StubCall {
     case pinPullRequest
     case pullRequestBase
     case gitHubAuthenticationStatus
+    case gitHubRepositoryCheck
     case findOpenPullRequest
 }
 
@@ -188,6 +189,10 @@ actor StubRepoClient: RepoClient {
     private var stubbedGitHubAuthenticationStatus = GitHubAuthenticationStatus.anonymous
     private var stubbedOpenPullRequest: GitHubPullRequest?
     private(set) var gitHubAuthenticationStatusCalls = 0
+    /// Answers for the next `gitHubRepositoryCheck` calls, oldest first.
+    private var queuedGitHubRepositoryChecks: [GitHubRepositoryCheck] = []
+    /// Every origin a connection check asked about, in order.
+    private(set) var gitHubRepositoryCheckCalls: [GitHubRepository] = []
     /// Every lookup asked for, in order, whether or not it succeeded.
     private(set) var findOpenPullRequestCalls: [PullRequestIdentity] = []
     private(set) var runningMergePreviews = 0
@@ -551,13 +556,16 @@ actor StubRepoClient: RepoClient {
     func set(gitHubAuthenticationStatus status: GitHubAuthenticationStatus) {
         stubbedGitHubAuthenticationStatus = status
     }
+    /// Queues `check` as the answer to one later `gitHubRepositoryCheck`. With nothing
+    /// queued, a check answers what the stubbed status implies, with a public repository.
+    func enqueue(gitHubRepositoryCheck check: GitHubRepositoryCheck) { queuedGitHubRepositoryChecks.append(check) }
     /// What `findOpenPullRequest` answers for any identity. Read when the call starts, so
     /// held calls can each answer differently.
     func set(openPullRequest pullRequest: GitHubPullRequest?) { stubbedOpenPullRequest = pullRequest }
     /// Makes `call` throw `error`, or stop throwing with nil. Covers `.remotes`,
     /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest`, `.pullRequestBase`,
-    /// `.gitHubAuthenticationStatus` and `.findOpenPullRequest`; read once a held call is
-    /// released, so a test can change it meanwhile.
+    /// `.gitHubAuthenticationStatus`, `.gitHubRepositoryCheck` and `.findOpenPullRequest`; read
+    /// once a held call is released, so a test can change it meanwhile.
     func fail(_ call: StubCall, with error: (any Error)?) { pullRequestErrors[call] = error }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
     func fail(configuredUpstreamRemotes on: Bool) { failsConfiguredUpstreamRemotes = on }
@@ -718,6 +726,32 @@ actor StubRepoClient: RepoClient {
         if isHeld(.gitHubAuthenticationStatus) { await park(.gitHubAuthenticationStatus) }
         if let error = pullRequestErrors[.gitHubAuthenticationStatus] { throw error }
         return snapshot
+    }
+
+    func gitHubRepositoryCheck(_ origin: GitHubRepository) async throws -> GitHubRepositoryCheck {
+        gitHubRepositoryCheckCalls.append(origin)
+        let answer =
+            queuedGitHubRepositoryChecks.isEmpty
+            ? Self.check(implying: stubbedGitHubAuthenticationStatus, origin: origin)
+            : queuedGitHubRepositoryChecks.removeFirst()
+        if isHeld(.gitHubRepositoryCheck) { await park(.gitHubRepositoryCheck) }
+        if let error = pullRequestErrors[.gitHubRepositoryCheck] { throw error }
+        return answer
+    }
+
+    private static func check(
+        implying status: GitHubAuthenticationStatus, origin: GitHubRepository
+    ) -> GitHubRepositoryCheck {
+        switch status {
+        case .anonymous:
+            .anonymous(cli: .found(version: nil))
+        case let .rejected(source):
+            .rejected(source: source)
+        case let .token(source, login):
+            .token(
+                source: source, login: login,
+                access: .found(isPrivate: false, url: URL(string: "https://github.com/\(origin.fullName)")!))
+        }
     }
 
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? {

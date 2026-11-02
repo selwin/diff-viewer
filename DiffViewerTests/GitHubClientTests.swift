@@ -205,6 +205,58 @@ struct GitHubClientTests {
         await #expect(throws: CancellationError.self) { try await task.value }
     }
 
+    // MARK: Repository access
+
+    @Test(
+        arguments: [
+            (
+                200, [:], #"{"private":true,"html_url":"https://github.com/acme/widgets"}"#,
+                .found(isPrivate: true, url: URL(string: "https://github.com/acme/widgets")!)
+            ),
+            (
+                200, [:], #"{"private":false,"html_url":"https://github.com/acme/widgets"}"#,
+                .found(isPrivate: false, url: URL(string: "https://github.com/acme/widgets")!)
+            ),
+            (200, [:], #"{"private":false,"html_url":"http://github.com/acme/widgets"}"#, .transient),
+            (401, [:], "{}", .unauthorized),
+            (404, [:], #"{"message":"Not Found"}"#, .denied),
+            (403, [:], #"{"message":"Must have admin rights"}"#, .denied),
+            (403, ["x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000600"], "{}", .transient),
+            (500, [:], "{}", .transient),
+        ] as [(Int, [String: String], String, GitHubRepositoryAccess)])
+    func theRepositoryEndpointMapsToAccess(
+        status: Int, headers: [String: String], body: String, expected: GitHubRepositoryAccess
+    ) async throws {
+        let directory = try makeDirectory(gh: nil)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let github = FakeGitHub([
+            "/user": .http(200, body: #"{"login":"selwin"}"#),
+            "/repos/acme/widgets": .http(status, headers: headers, body: body),
+        ])
+        let check = try await client(directory, variables: ["GH_TOKEN": "secret"], github: github)
+            .gitHubRepositoryCheck(GitHubRepository(owner: "acme", name: "widgets"))
+        #expect(check == .token(source: .environment(name: "GH_TOKEN"), login: "selwin", access: expected))
+    }
+
+    @Test(
+        arguments: [
+            (
+                #"if [ "$1" = --version ]; then echo "gh version 2.63.0 (2024-11-27)"; else exit 1; fi"#,
+                .found(version: "2.63.0")
+            ),
+            ("exit 1", .found(version: nil)),
+            (nil, .missing),
+        ] as [(String?, GitHubCLIProbe)])
+    func withoutATokenTheCheckProbesTheCLI(script: String?, expected: GitHubCLIProbe) async throws {
+        let directory = try makeDirectory(gh: script)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let github = FakeGitHub()
+        let check = try await client(directory, github: github)
+            .gitHubRepositoryCheck(GitHubRepository(owner: "acme", name: "widgets"))
+        #expect(check == .anonymous(cli: expected))
+        #expect(github.requests.isEmpty)
+    }
+
     // MARK: Lookup
 
     @Test func theBaseRepositoryIsAskedFirstThenTheHead() async throws {

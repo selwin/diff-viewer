@@ -115,6 +115,9 @@ struct TaggedClient: RepoClient {
         throw PullRequestError.alreadyInBase
     }
     func gitHubAuthenticationStatus() async throws -> GitHubAuthenticationStatus { .anonymous }
+    func gitHubRepositoryCheck(_ origin: GitHubRepository) async throws -> GitHubRepositoryCheck {
+        .anonymous(cli: .missing)
+    }
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? { nil }
 }
 
