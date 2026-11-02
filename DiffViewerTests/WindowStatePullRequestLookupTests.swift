@@ -67,13 +67,13 @@ struct WindowStatePullRequestLookupTests {
         #expect(w.state.session?.pullRequestInFlight == nil)
         #expect(await w.client.findOpenPullRequestCalls.isEmpty)
         let header = { BranchPickerHeaderText.make(snapshot: w.state.branchPickerSnapshot).detail(fetch: nil) }
-        #expect(header() == "Up to date · GitHub CLI signed out")
+        #expect(header() == "GitHub CLI signed out")
 
         await w.client.set(gitHubCLIStatus: Self.signedIn)
         w.state.isBranchPickerPresented = true
         #expect(await eventually { @MainActor in w.state.pullRequestAvailability == .view(Self.pullRequest(7)) })
         #expect(await w.client.findOpenPullRequestCalls.map(\.remoteBranchName) == ["remote-feature"])
-        #expect(header() == "Up to date · GitHub: me")
+        #expect(header() == "GitHub: me")
     }
 
     @Test func anUpstreamChangeWithoutACheckoutLooksUpAgain() async throws {

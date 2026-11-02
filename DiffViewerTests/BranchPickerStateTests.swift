@@ -850,7 +850,7 @@ struct BranchPickerStateTests {
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .gone))]), "main",
                 ["Remote gone"]
             ),
-            (named([localBranch("main", upstream: upstream("origin/main"))]), "main", ["Up to date"]),
+            (named([localBranch("main", upstream: upstream("origin/main"))]), "main", []),
             (
                 named([localBranch("main", upstream: upstream("origin/main", tracking: .counts(ahead: 1, behind: 2)))]),
                 "main", ["1 ahead · 2 behind"]
@@ -876,8 +876,7 @@ struct BranchPickerStateTests {
         #expect(header.detail(fetch: nil) == "2 ahead")
         #expect(header.detail(fetch: BranchPickerFetchText(text: "Fetched just now")) == "2 ahead · Fetched just now")
         let synced = state(snapshot(branches: [localBranch("main", upstream: upstream("origin/main"))])).headerText
-        #expect(
-            synced.detail(fetch: BranchPickerFetchText(text: "Fetched just now")) == "Up to date · Fetched just now")
+        #expect(synced.detail(fetch: BranchPickerFetchText(text: "Fetched just now")) == "Fetched just now")
         let detached = state(snapshot(headState: .detached(sha: objectID("x")), branches: [])).headerText
         #expect(detached.detail(fetch: BranchPickerFetchText(text: "Fetching…")) == "Fetching…")
     }
@@ -902,7 +901,7 @@ struct BranchPickerStateTests {
             taken.gitHubCLIStatus = status
             taken.gitHubRemoteNames = ["origin"]
             let header = BranchPickerHeaderText.make(snapshot: taken)
-            #expect(header.detail(fetch: fetch) == "Up to date · Fetched just now · \(text)")
+            #expect(header.detail(fetch: fetch) == "Fetched just now · \(text)")
             #expect(header.detailTooltip(fetch: fetch) == "origin: fetched\n\(tooltip)")
         }
 
@@ -914,7 +913,7 @@ struct BranchPickerStateTests {
         var noGitHub = synced
         noGitHub.gitHubCLIStatus = .signedOut
         let header = BranchPickerHeaderText.make(snapshot: noGitHub)
-        #expect(header.detail(fetch: fetch) == "Up to date · Fetched just now")
+        #expect(header.detail(fetch: fetch) == "Fetched just now")
         #expect(header.detailTooltip(fetch: nil) == nil)
     }
 
