@@ -1,11 +1,5 @@
 import Foundation
 
-/// A remote searched for an existing pull request, and the repository its fetch URL names.
-struct PullRequestLookupTarget: Equatable, Sendable {
-    let remote: String
-    let repository: GitHubRepository
-}
-
 /// GitHub's "Open a pull request" page for a pushed branch. It names no base branch, so
 /// GitHub compares against the base repository's default branch, and no title or body,
 /// so GitHub fills in its own defaults and the repository's template.
@@ -28,7 +22,7 @@ enum GitHubPullRequestLink {
         guard let upstream = branch.upstream, case let .counts(ahead, _) = upstream.tracking else {
             return .failure(.branchChanged)
         }
-        guard let branchName = remoteBranchName(upstream.remoteRef) else { return .failure(.notABranch) }
+        guard let branchName = upstream.remoteBranchName else { return .failure(.notABranch) }
         let head: GitHubRepository
         switch GitHubRemoteValidation.validate(remotes[upstream.remote]) {
         case let .repository(repository): head = repository
@@ -37,50 +31,12 @@ enum GitHubPullRequestLink {
         case .pushesElsewhere: return .failure(.pushesElsewhere(upstream.remote))
         }
         guard ahead == 0 else { return .failure(.unpushed) }
-        let base = base(head: head, remotes: remotes)
+        // A guess, but GitHub's page lets the reader change the base.
+        let base = head.pullRequestBase(in: remotes)
         guard let url = compareURL(head: head, base: base, branch: branchName) else {
             return .failure(.notABranch)
         }
         return .success(url)
-    }
-
-    /// A remote named `upstream` on another GitHub repository, by the convention that a
-    /// fork's `upstream` is the repository it was forked from; otherwise `head` itself.
-    /// Nothing proves the fork relationship, and GitHub's page lets the reader change the
-    /// base. Only the fetch URL counts: nothing is pushed to the base, and a disabled push
-    /// URL is a common guard on `upstream`.
-    private static func base(head: GitHubRepository, remotes: [String: RemoteURLs]) -> GitHubRepository {
-        guard let fetchURL = remotes["upstream"]?.fetchURL,
-            let upstream = GitHubRepository.parse(remoteURL: fetchURL), !upstream.matches(head)
-        else { return head }
-        return upstream
-    }
-
-    /// The remotes to search for a pull request from a branch tracking `upstreamRemote`: that
-    /// remote, then `upstream` when it is the base `make` would compare against. Empty when
-    /// `upstreamRemote` isn't one GitHub repository for fetch and push.
-    static func lookupTargets(
-        for upstreamRemote: String, remotes: [String: RemoteURLs]
-    ) -> [PullRequestLookupTarget] {
-        guard case let .repository(own) = GitHubRemoteValidation.validate(remotes[upstreamRemote]) else { return [] }
-        let targets = [PullRequestLookupTarget(remote: upstreamRemote, repository: own)]
-        let base = base(head: own, remotes: remotes)
-        guard upstreamRemote != "upstream", !base.matches(own) else { return targets }
-        return targets + [PullRequestLookupTarget(remote: "upstream", repository: base)]
-    }
-
-    /// The remotes whose fetch URL names `repository`, so their remote-tracking branches
-    /// are copies of its branches.
-    static func mirrorRemotes(of repository: GitHubRepository, remotes: [String: RemoteURLs]) -> Set<String> {
-        Set(
-            remotes.compactMap { name, urls in
-                GitHubRepository.parse(remoteURL: urls.fetchURL)?.matches(repository) == true ? name : nil
-            })
-    }
-
-    /// `/{owner}/{repo}/pull/{number}`.
-    static func pullRequestURL(repository: GitHubRepository, number: Int) -> URL? {
-        URL(string: "https://github.com/\(encoded(repository.owner))/\(encoded(repository.name))/pull/\(number)")
     }
 
     /// `/{base}/compare/{branch}` for one repository, or `/{base}/compare/{owner}:{repo}:{branch}`
@@ -91,12 +47,6 @@ enum GitHubPullRequestLink {
             ? encoded(branch) : "\(encoded(head.owner)):\(encoded(head.name)):\(encoded(branch))"
         return URL(
             string: "https://github.com/\(encoded(base.owner))/\(encoded(base.name))/compare/\(compared)?quick_pull=1")
-    }
-
-    private static func remoteBranchName(_ remoteRef: String) -> String? {
-        let prefix = "refs/heads/"
-        guard remoteRef.hasPrefix(prefix), remoteRef.count > prefix.count else { return nil }
-        return String(remoteRef.dropFirst(prefix.count))
     }
 
     /// Escaped once for a path, keeping `/` so a branch like `feature/x` reads as GitHub

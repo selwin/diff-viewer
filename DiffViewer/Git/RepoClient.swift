@@ -164,9 +164,6 @@ protocol RepoClient: Sendable {
     /// What `remote` advertises for pull request `number` and for its default branch,
     /// without touching local refs. Throws `PullRequestError.notFound` or `.noDefaultBranch`.
     func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest
-    /// The number of each pull request head `remote` advertises, by head SHA; the highest
-    /// number where several share one. Throws git's diagnostics.
-    func preferredPullRequestNumberByHeadSha(remote: String) async throws -> [String: Int]
     /// Fetches the pull request's head and the default branch into `refs/diffviewer/`,
     /// without pruning or writing anything else. Throws git's diagnostics.
     func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws
@@ -177,4 +174,10 @@ protocol RepoClient: Sendable {
     /// from before the head was merged. Throws `PullRequestError.alreadyInBase` or
     /// `.noCommonHistory`.
     func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase
+    /// Whether the GitHub CLI is installed and signed in to github.com. Throws
+    /// `GitHubCLIError` when `gh` can't be run or its answer can't be read.
+    func gitHubCLIStatus() async throws -> GitHubCLIStatus
+    /// The oldest open pull request from `identity`'s head into its base repository, asked of
+    /// the GitHub CLI; nil when GitHub reports none. Throws `GitHubCLIError`.
+    func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest?
 }

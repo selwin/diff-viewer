@@ -32,7 +32,7 @@ final class BranchPickerContainerView: NSView {
     var onDelete: (LocalBranch, NSWindow?) -> Void = { _, _ in }
     /// The header's Fetch button and ⌘R.
     var onFetch: () -> Void = {}
-    /// The header's pull request button, which opens or creates one.
+    /// The header's pull request button.
     var onPullRequest: () -> Void = {}
     /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
     var onNewBranch: (String?) -> Void = { _ in }

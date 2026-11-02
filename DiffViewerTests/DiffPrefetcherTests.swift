@@ -109,12 +109,13 @@ struct TaggedClient: RepoClient {
     func advertisedPullRequest(number: Int, remote: String) async throws -> AdvertisedPullRequest {
         throw PullRequestError.notFound
     }
-    func preferredPullRequestNumberByHeadSha(remote: String) async throws -> [String: Int] { [:] }
     func fetchPullRequest(_ advertised: AdvertisedPullRequest) async throws {}
     func pinAdvertisedCommits(_ advertised: AdvertisedPullRequest) async throws {}
     func pullRequestBase(headSHA: String, baseTipSHA: String) async throws -> PullRequestComparisonBase {
         throw PullRequestError.alreadyInBase
     }
+    func gitHubCLIStatus() async throws -> GitHubCLIStatus { .notInstalled }
+    func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? { nil }
 }
 
 @MainActor

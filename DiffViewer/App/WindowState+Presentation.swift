@@ -41,15 +41,15 @@ extension WindowState {
         pendingBranchName ?? currentBranchName
     }
 
-    /// What the title bar pill's Pull, Push and Create PR show, for the branch it names. Nil
-    /// when that branch isn't in the list.
+    /// What the title bar pill's Pull, Push and pull request show, for the branch it names.
+    /// Nil when that branch isn't in the list.
     var currentBranchSync: CurrentBranchSyncPresentation? {
         var snapshot = branchPickerSnapshot
         // A checkout's branch is usually listed already, so its segments arrive with its
-        // name rather than partway through the pill's switch. HEAD's pull request isn't its.
+        // name rather than partway through the pill's switch. A lookup counts only for it.
         if let pendingBranchName {
             snapshot.headState = .named(pendingBranchName)
-            if pendingBranchName != currentBranchName { snapshot.existingPullRequest = nil }
+            snapshot.currentPullRequestIdentity = pullRequestIdentity(forBranch: pendingBranchName)
         }
         return CurrentBranchSyncPresentation.make(
             snapshot: snapshot, offersPullRequestCreation: pullRequestOfferedBranchName == displayedBranchName)
@@ -97,15 +97,15 @@ extension WindowState {
     }
 }
 
-/// The title bar's sync actions and optional Create PR action. Their states come from the
-/// same rules as the picker header's.
+/// The title bar's sync actions and optional pull request action. Their states come from
+/// the same rules as the picker header's.
 struct CurrentBranchSyncPresentation: Equatable {
     let branch: String
     let buttons: RowSyncButtons
     /// Nil unless the branch tracks a remote upstream with counts, so no count reads as 0.
     let target: SyncTarget?
-    /// Hidden unless Create PR is offered, Push has nothing left to do, and the branch has
-    /// no pull request yet.
+    /// Hidden unless creating a pull request is offered and Push has nothing left to do;
+    /// inside that, it views one that is already open.
     let pullRequest: PullRequestAvailability
 
     /// Nil unless the read landed and HEAD's branch is listed: a failed read keeps a stale
@@ -119,12 +119,9 @@ struct CurrentBranchSyncPresentation: Equatable {
         let buttons = BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot)
         // Push and Publish take priority; the offer returns when they finish.
         let offered = offersPullRequestCreation && buttons.push == .hidden
-        var pullRequest = offered ? PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true) : .hidden
-        // The offer is to create one; a pull request found for the branch ends it.
-        if case .existing = pullRequest { pullRequest = .hidden }
         return CurrentBranchSyncPresentation(
             branch: name, buttons: buttons, target: SyncPolicy.target(for: branch, readStatus: snapshot.readStatus),
-            pullRequest: pullRequest)
+            pullRequest: offered ? PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true) : .hidden)
     }
 
     var isPublish: Bool { buttons.pushOperation == .publish }
@@ -171,7 +168,7 @@ struct CurrentBranchSyncPresentation: Equatable {
         return "Push \(Self.commits(count)) from \(branch)"
     }
 
-    var pullRequestAccessibilityLabel: String { "Create a pull request for \(branch) on GitHub" }
+    var pullRequestAccessibilityLabel: String { pullRequest.accessibilityLabel(branchName: branch) }
 
     private static func count(_ count: Int?, state: PickerButtonState) -> Int? {
         guard state != .hidden, state != .running, let count, count > 0 else { return nil }
@@ -215,7 +212,7 @@ struct SegmentDeparture: Equatable {
     ) -> SegmentDeparture? {
         guard let old, let new, old.branch == new.branch else { return nil }
         let pull = old.buttons.pull != .hidden && new.buttons.pull == .hidden
-        // Create PR replaces Push in place, so Push has nothing to collapse into.
+        // The pull request segment replaces Push in place, so Push has nothing to collapse into.
         let push = old.buttons.push != .hidden && new.buttons.push == .hidden && new.pullRequest == .hidden
         guard pull || push else { return nil }
         return SegmentDeparture(previous: old, pull: pull, push: push)

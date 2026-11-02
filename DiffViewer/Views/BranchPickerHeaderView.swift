@@ -56,22 +56,23 @@ final class BranchPickerHeaderView: PickerHeaderView {
         } else {
             syncButtons.isHidden = true
         }
-        configurePullRequest(text.pullRequest)
+        configurePullRequest(text.pullRequest, branch: text.branch)
         controls.needsLayout = true
         needsLayout = true
     }
 
-    /// The title sets the button's width and accessibility label, so the controls re-measure.
-    private func configurePullRequest(_ availability: PullRequestAvailability) {
-        pullRequestButton.apply(availability.pickerButtonState, title: availability.buttonTitle)
-        if availability.pickerButtonState == .enabled { pullRequestButton.toolTip = availability.help }
-        controls.invalidateIntrinsicContentSize()
+    private func configurePullRequest(_ availability: PullRequestAvailability, branch: String?) {
+        pullRequestButton.apply(availability.pickerButtonState, title: availability.title)
+        guard availability.isActionable, let branch else { return }
+        let label = availability.accessibilityLabel(branchName: branch)
+        pullRequestButton.setAccessibilityLabel(label)
+        pullRequestButton.toolTip = label
     }
 
     /// Updates only the subtitle, as the fetch time ages.
     func configureFetch(_ fetch: BranchPickerFetchText?) {
         subtitle = text.detail(fetch: fetch)
-        subtitleToolTip = fetch?.tooltip
+        subtitleToolTip = text.detailTooltip(fetch: fetch)
     }
 
     @objc private func fetchClicked() {

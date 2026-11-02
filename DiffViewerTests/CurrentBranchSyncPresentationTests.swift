@@ -3,20 +3,17 @@ import Testing
 
 @testable import DiffViewer
 
-/// What the title bar pill's Pull, Push and Create PR segments show for the current branch.
+/// What the title bar pill's Pull, Push and pull request segments show for the current branch.
 struct CurrentBranchSyncPresentationTests {
     private static func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
         activeSync: ActiveSync? = nil, fetchingRemotes: Set<String> = [], remotes: [String] = ["origin"],
-        configuredUpstreamRemotes: [String: String] = [:], gitHubRemoteNames: Set<String> = [],
-        existingPullRequest: PullRequestLookupResult? = nil
+        configuredUpstreamRemotes: [String: String] = [:], gitHubRemoteNames: Set<String> = []
     ) -> BranchPickerSnapshot {
-        var snapshot = BranchPickerSnapshot(
+        BranchPickerSnapshot(
             headState: headState, branches: branches, readStatus: readStatus, isSwitchingBranch: false,
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredUpstreamRemotes: configuredUpstreamRemotes, gitHubRemoteNames: gitHubRemoteNames)
-        snapshot.existingPullRequest = existingPullRequest
-        return snapshot
     }
 
     private static func tracking(ahead: Int, behind: Int) -> LocalBranch {
@@ -162,14 +159,6 @@ struct CurrentBranchSyncPresentationTests {
             ),
             // Offered, and nothing left to push: Create PR alone makes the segments show.
             (snapshot(branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"]), true, .enabled, true),
-            // The branch already has a pull request: there is nothing to create.
-            (
-                snapshot(
-                    branches: [tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"],
-                    existingPullRequest: PullRequestLookupResult(
-                        number: 88, url: URL(string: "https://github.com/me/widgets/pull/88")!)),
-                true, .hidden, false
-            ),
         ]))
     func createPRShowsOnlyWhenOfferedAndPushIsDone(
         taken: BranchPickerSnapshot, offered: Bool, expected: PullRequestAvailability, showsSegments: Bool
@@ -177,6 +166,26 @@ struct CurrentBranchSyncPresentationTests {
         let sync = try #require(CurrentBranchSyncPresentation.make(snapshot: taken, offersPullRequestCreation: offered))
         #expect(sync.pullRequest == expected)
         #expect(sync.showsSegments == showsSegments)
+    }
+
+    @Test func anOpenPullRequestShowsOnlyInsideTheCreationGate() throws {
+        let url = try #require(URL(string: "https://github.com/me/widgets/pull/7"))
+        let pullRequest = GitHubPullRequest(number: 7, url: url)
+        let remotes = [
+            "origin": RemoteURLs(fetchURL: "git@github.com:me/widgets.git", pushURLs: ["git@github.com:me/widgets.git"])
+        ]
+        var taken = Self.snapshot(branches: [Self.tracking(ahead: 0, behind: 0)], gitHubRemoteNames: ["origin"])
+        let identity = try #require(
+            PullRequestIdentity.make(branch: Self.tracking(ahead: 0, behind: 0), remotes: remotes))
+        taken.currentPullRequestIdentity = identity
+        taken.pullRequestLookup = PullRequestLookup(identity: identity, pullRequest: pullRequest)
+
+        let hidden = try #require(CurrentBranchSyncPresentation.make(snapshot: taken))
+        #expect(hidden.pullRequest == .hidden)
+        let offered = try #require(CurrentBranchSyncPresentation.make(snapshot: taken, offersPullRequestCreation: true))
+        #expect(offered.pullRequest == .view(pullRequest))
+        #expect(offered.pullRequest.title == "PR #7")
+        #expect(offered.pullRequestAccessibilityLabel == "View pull request #7 on GitHub")
     }
 
     private static let publishing = CurrentBranchSyncPresentation(

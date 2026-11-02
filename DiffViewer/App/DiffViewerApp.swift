@@ -318,17 +318,18 @@ struct RepositoryCommands: Commands {
     }
 
     /// The title bar pill's Pull and Push for the current branch, available whenever its
-    /// segments are, then creating or viewing its pull request on GitHub. Each action keeps the window and
-    /// branch it was built with.
+    /// segments are, then Create or View Pull Request on GitHub. Each action keeps the window
+    /// and branch it was built with.
     @ViewBuilder private var syncItems: some View {
         let state = windowState
         let sync = state?.canOpenBranchPicker == true ? state?.currentBranchSync : nil
         let pullRequest = state?.pullRequestAvailability ?? .hidden
-        let canOpenPullRequest = state?.canOpenBranchPicker == true && pullRequest.pickerButtonState == .enabled
-        // ⌘P moves here from an idle Push. An existing pull request is offered with commits
-        // left to push, and Push keeps ⌘P then.
-        let pullRequestHasShortcut = canOpenPullRequest && sync?.pushAction == nil
+        let canOpenPullRequest = state?.canOpenBranchPicker == true && pullRequest.isActionable
+        // ⌘P moves here only from an idle Push: viewing is enabled while Push still has work.
+        let pullRequestTakesShortcut = canOpenPullRequest && sync?.pushAction == nil
         let pullRequestShortcut = KeyboardShortcut("p")
+        let pullRequestTitle =
+            if case .view = pullRequest { "View Pull Request on GitHub" } else { "Create Pull Request on GitHub" }
         Button("Pull") {
             guard let sync else { return }
             Self.startSync(in: state) { await $0.pull(branch: sync.branch) }
@@ -359,13 +360,13 @@ struct RepositoryCommands: Commands {
             }
         } else {
             Button(sync?.buttons.pushTitle ?? "Push") {}
-                .keyboardShortcut(pullRequestHasShortcut ? nil : pullRequestShortcut)
+                .keyboardShortcut(pullRequestTakesShortcut ? nil : pullRequestShortcut)
                 .disabled(true)
         }
-        Button(pullRequest.menuTitle) {
+        Button(pullRequestTitle) {
             Self.startSync(in: state) { await $0.openPullRequest() }
         }
-        .keyboardShortcut(pullRequestHasShortcut ? pullRequestShortcut : nil)
+        .keyboardShortcut(pullRequestTakesShortcut ? pullRequestShortcut : nil)
         .disabled(!canOpenPullRequest)
     }
 

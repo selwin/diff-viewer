@@ -10,17 +10,21 @@ struct GitClient: RepoClient {
     /// `switchBranch` — and by the remote commands, whose credential helpers resolve on the
     /// login PATH too. Throws only `CancellationError`.
     private let resolveCommandEnvironment: @Sendable () async throws -> ProcessEnvironment
+    /// How long a `gh` run may take; tests shorten it.
+    let gitHubCLITimeout: Duration
 
     init(
         repoRoot: URL,
         environment: [String: String] = [:],
         resolveCommandEnvironment: @escaping @Sendable () async throws -> ProcessEnvironment = {
             ProcessEnvironment(variables: await LoginShellPath.environment(), inheritance: .inherit)
-        }
+        },
+        gitHubCLITimeout: Duration = GitClient.defaultGitHubCLITimeout
     ) {
         self.repoRoot = repoRoot
         self.environmentOverrides = environment
         self.resolveCommandEnvironment = resolveCommandEnvironment
+        self.gitHubCLITimeout = gitHubCLITimeout
     }
 
     static let executable = URL(fileURLWithPath: "/usr/bin/git")

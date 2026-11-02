@@ -41,8 +41,11 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     var newRemoteBranches: Set<String> = []
     /// The remotes that are one GitHub repository for fetch and push, as last read.
     var gitHubRemoteNames: Set<String> = []
-    /// The pull request HEAD's branch already has, when a lookup found one that still fits.
-    var existingPullRequest: PullRequestLookupResult?
+    /// What `gh` says about its login; nil before the first check or without a GitHub remote.
+    var gitHubCLIStatus: GitHubCLIStatus?
+    /// HEAD's branch's pull request identity, which a lookup must match to count.
+    var currentPullRequestIdentity: PullRequestIdentity?
+    var pullRequestLookup: PullRequestLookup?
 }
 
 /// Which branch a row stands for. The highlight, reloads and actions all go by it, never
