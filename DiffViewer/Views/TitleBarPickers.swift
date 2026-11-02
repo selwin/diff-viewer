@@ -387,14 +387,21 @@ private struct SegmentAvailability: ViewModifier {
 }
 
 /// Tints one part of the pill on hover, so it is clear which part a click hits.
-private struct PillPartHover: ViewModifier {
+struct PillPartHover: ViewModifier {
     @State private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
+    /// Keeps the part tinted while its popover is open, as a pressed segmented control stays lit.
+    let isPopoverPresented: Bool
     /// Reports whether the part is tinted, so the pill can hide the divider beside it.
-    var onTintChange: ((Bool) -> Void)?
+    let onTintChange: ((Bool) -> Void)?
+
+    init(isPopoverPresented: Bool = false, onTintChange: ((Bool) -> Void)? = nil) {
+        self.isPopoverPresented = isPopoverPresented
+        self.onTintChange = onTintChange
+    }
 
     func body(content: Content) -> some View {
-        let isTinted = isHovering && isEnabled
+        let isTinted = (isHovering && isEnabled) || isPopoverPresented
         content
             .background {
                 if isTinted { Rectangle().fill(.quinary) }

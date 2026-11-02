@@ -60,9 +60,9 @@ struct BranchPickerHeaderText: Equatable {
         case nil:
             nil
         case let .token(source, login?):
-            ("GitHub: \(login)", "Using the token from \(Self.name(source)), signed in as \(login)")
+            ("GitHub: \(login)", "Using the token from \(GitHubTokenSourceText.name(source)), signed in as \(login)")
         case let .token(source, nil):
-            ("GitHub: token from \(Self.name(source))", "Token available; account name unavailable")
+            ("GitHub: token from \(GitHubTokenSourceText.name(source))", "Token available; account name unavailable")
         case .rejected(.gitHubCLI):
             (
                 "GitHub token rejected",
@@ -71,7 +71,7 @@ struct BranchPickerHeaderText: Equatable {
         case let .rejected(source):
             (
                 "GitHub token rejected",
-                "GitHub rejected the token from \(Self.name(source)). Replace it, or unset it to use the next source."
+                "GitHub rejected the token from \(GitHubTokenSourceText.name(source)). Replace it, or unset it to use the next source."
             )
         case .anonymous:
             (
@@ -79,13 +79,6 @@ struct BranchPickerHeaderText: Equatable {
                 "No GitHub token: only public repositories' pull requests are found. "
                     + "Set GH_TOKEN or sign in with `gh auth login`."
             )
-        }
-    }
-
-    private static func name(_ source: GitHubTokenSource) -> String {
-        switch source {
-        case let .environment(name): name
-        case .gitHubCLI: "the GitHub CLI"
         }
     }
 

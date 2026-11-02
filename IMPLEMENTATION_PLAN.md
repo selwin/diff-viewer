@@ -18,7 +18,7 @@ Full plan: ~/.claude/plans/pasted-content-id-b00d-diffviewer-adaptive-widget.md
 **Goal**: RepositoryCapsuleView, GitHubPopover, GitHubMark asset
 **Success Criteria**: screenshots for every state, light and dark
 **Tests**: screenshots only
-**Status**: Not Started
+**Status**: Complete (repository picker popover is a placeholder until Stage 4)
 
 ## Stage 4: Repository picker and connection directory
 **Goal**: GitHubConnectionDirectory, beginRefresh ordering, RepositoryPickerItems, picker popover

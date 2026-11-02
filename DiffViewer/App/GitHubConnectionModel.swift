@@ -128,6 +128,16 @@ final class GitHubConnectionModel {
         isStopped = true
     }
 
+    #if DEBUG
+        /// For screenshots: shows this state and stops every check, so a real one can't replace it.
+        func forceState(origin: OriginIdentity, connection: GitHubConnection?, showsProgress: Bool) {
+            stop()
+            self.origin = origin
+            self.connection = connection
+            self.showsProgress = showsProgress
+        }
+    #endif
+
     // MARK: Checking
 
     /// Revokes the running check's right to publish before cancelling it, so a task that
