@@ -93,7 +93,7 @@ extension WindowState {
             activeSync: activeSync, fetchingRemotes: fetchingRemotes, remotes: remotes,
             configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
             remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches,
-            gitHubRemoteNames: gitHubRemoteNames, gitHubCLIStatus: gitHubCLIStatus,
+            gitHubRemoteNames: gitHubRemoteNames, gitHubAuthenticationStatus: gitHubAuthenticationStatus,
             currentPullRequestIdentity: currentPullRequestIdentity, pullRequestLookup: pullRequestLookup)
     }
 

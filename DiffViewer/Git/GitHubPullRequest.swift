@@ -1,12 +1,31 @@
 import Foundation
 
-/// Whether the GitHub CLI can answer for github.com, as `gh auth status` reports it.
-enum GitHubCLIStatus: Equatable, Sendable {
-    case notInstalled
-    case signedOut
-    case signedIn(login: String)
-    /// `gh` ran but couldn't confirm a login; the text says why.
-    case failed(String)
+/// Where a GitHub token came from, which the branch picker names.
+enum GitHubTokenSource: Equatable, Sendable {
+    /// `GH_TOKEN` or `GITHUB_TOKEN` in the repository's shell environment.
+    case environment(name: String)
+    /// `gh auth token`.
+    case gitHubCLI
+}
+
+/// A github.com token and its source. Its description omits the token value.
+struct GitHubToken: Sendable, CustomStringConvertible {
+    let value: String
+    let source: GitHubTokenSource
+
+    var description: String { "GitHubToken(source: \(source))" }
+}
+
+/// What the app can say about its GitHub credentials. Display only: a lookup runs with
+/// whatever token there is, or none.
+enum GitHubAuthenticationStatus: Equatable, Sendable {
+    /// A token from `source`; `login` is nil when GitHub wouldn't name its account, as with
+    /// a GitHub App installation token.
+    case token(source: GitHubTokenSource, login: String?)
+    /// GitHub answered 401 to the token from `source`.
+    case rejected(source: GitHubTokenSource)
+    /// No token, so only public repositories' pull requests are found.
+    case anonymous
 }
 
 /// An open pull request on github.com.
@@ -55,25 +74,4 @@ extension PullRequestIdentity: Equatable {
 struct PullRequestLookup: Equatable, Sendable {
     let identity: PullRequestIdentity
     let pullRequest: GitHubPullRequest?
-}
-
-/// Why a `gh` run gave no usable output. The descriptions are what the reader sees.
-enum GitHubCLIError: Error, Equatable, Sendable, LocalizedError {
-    case notInstalled
-    case couldNotLaunch
-    case exited(status: Int32)
-    case timedOut
-    case outputTooLarge
-    case unreadableOutput
-
-    var errorDescription: String? {
-        switch self {
-        case .notInstalled: "The GitHub CLI (gh) isn't installed"
-        case .couldNotLaunch: "Couldn't start the GitHub CLI"
-        case let .exited(status): "The GitHub CLI exited with status \(status)"
-        case .timedOut: "The GitHub CLI request timed out"
-        case .outputTooLarge: "The GitHub CLI's answer was too large"
-        case .unreadableOutput: "Couldn't read the GitHub CLI's answer"
-        }
-    }
 }

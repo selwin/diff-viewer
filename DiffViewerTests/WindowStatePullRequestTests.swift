@@ -84,7 +84,7 @@ struct WindowStatePullRequestTests {
             await client.set(headState: .named("feature"))
             await client.set(localBranches: [Self.tracked])
             await client.set(remoteURLs: Self.origin)
-            await client.set(gitHubCLIStatus: .signedIn(login: "me"))
+            await client.set(gitHubAuthenticationStatus: .token(source: .gitHubCLI, login: "me"))
             await client.set(openPullRequest: GitHubPullRequest(number: 7, url: url))
         }
         try #require(await eventually { @MainActor in state.pullRequestAvailability.title == "PR #7" })

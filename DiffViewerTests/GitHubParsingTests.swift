@@ -3,64 +3,38 @@ import Testing
 
 @testable import DiffViewer
 
-/// Reading `gh auth status` and the open pull request lookup.
-struct GitHubCLIParsingTests {
-    private func authStatus(_ json: String) throws -> GitHubCLIStatus {
-        try GitClient.parseAuthStatus(Data(json.utf8))
+/// Decoding the REST answers the pull request lookup and the account check read.
+struct GitHubParsingTests {
+    private func openPullRequest(_ json: String) throws -> GitHubPullRequest? {
+        try GitClient.parseOpenPullRequests(Data(json.utf8))
     }
 
-    private func openPullRequest(_ lines: String) throws -> GitHubPullRequest? {
-        try GitClient.parseOpenPullRequests(Data(lines.utf8))
+    private func item(_ number: Int, url: String? = nil, headRepo: Bool = true) -> String {
+        let link = url ?? "https://github.com/acme/widgets/pull/\(number)"
+        let repo = headRepo ? #"{"full_name":"me/widgets"}"# : "null"
+        return #"{"number":\#(number),"html_url":"\#(link)","head":{"ref":"feature","repo":\#(repo)}}"#
     }
 
-    @Test func authStatusReadsTheActiveGitHubAccount() throws {
+    @Test func aPageGivesItsFirstPullRequestWithAHeadRepository() throws {
+        #expect(try openPullRequest("[]") == nil)
+        #expect(try openPullRequest("[\(item(3, headRepo: false))]") == nil)
         #expect(
-            try authStatus(
-                #"{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"selwin"}]}}"#)
-                == .signedIn(login: "selwin"))
-    }
-
-    @Test func noGitHubAccountIsSignedOut() throws {
-        #expect(try authStatus(#"{"hosts":{}}"#) == .signedOut)
-    }
-
-    @Test(arguments: ["timeout", "error"])
-    func aFailedAccountStateReportsItsError(state: String) throws {
-        #expect(
-            try authStatus(#"{"hosts":{"github.com":[{"state":"\#(state)","active":true,"error":"no network"}]}}"#)
-                == .failed("no network"))
-    }
-
-    @Test func accountsWithoutAnActiveOneFail() throws {
-        #expect(
-            try authStatus(#"{"hosts":{"github.com":[{"state":"success","active":false,"login":"other"}]}}"#)
-                == .failed("No active github.com account in the GitHub CLI"))
-    }
-
-    @Test func malformedAuthStatusThrows() {
-        #expect(throws: (any Error).self) { try authStatus(#"{"hosts":"#) }
-    }
-
-    @Test func noOpenPullRequestsGiveNil() throws {
-        #expect(try openPullRequest("") == nil)
-    }
-
-    @Test func openPullRequestsGiveTheLowestNumberedOne() throws {
-        let lines = """
-            {"html_url":"https://github.com/acme/widgets/pull/12","number":12}
-            {"html_url":"https://github.com/acme/widgets/pull/9","number":9}
-
-            """
-        #expect(
-            try openPullRequest(lines)
+            try openPullRequest("[\(item(3, headRepo: false)),\(item(5)),\(item(9))]")
                 == GitHubPullRequest(
-                    number: 9, url: try #require(URL(string: "https://github.com/acme/widgets/pull/9"))))
+                    number: 5, url: try #require(URL(string: "https://github.com/acme/widgets/pull/5"))))
     }
 
-    @Test func aMalformedPullRequestLineThrows() {
-        #expect(throws: (any Error).self) {
-            try openPullRequest(#"{"html_url":"https://github.com/acme/widgets/pull/9","number":9}"# + "\n{\"number\":")
+    @Test func malformedPagesAndNonWebURLsThrow() {
+        for json in [
+            "{", #"{"message":"Not Found"}"#, #"[{"number":"7"}]"#, "[\(item(7, url: "http://github.com/a/b/pull/7"))]",
+        ] {
+            #expect(throws: GitHubAPIError.unreadableResponse) { try openPullRequest(json) }
         }
+    }
+
+    @Test func theLoginIsReadFromTheUser() throws {
+        #expect(try GitClient.parseLogin(Data(#"{"login":"selwin","id":1}"#.utf8)) == "selwin")
+        #expect(throws: GitHubAPIError.unreadableResponse) { try GitClient.parseLogin(Data(#"{"id":1}"#.utf8)) }
     }
 }
 

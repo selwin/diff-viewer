@@ -1,7 +1,7 @@
 import Foundation
 
-/// The header's face: where HEAD is, how far it is from its upstream, whether the GitHub CLI
-/// can find pull requests, and the current branch's Pull, Push and pull request button.
+/// The header's face: where HEAD is, how far it is from its upstream, which GitHub token
+/// finds pull requests, and the current branch's Pull, Push and pull request button.
 struct BranchPickerHeaderText: Equatable {
     let title: String
     /// What the detail line says about HEAD's upstream; the fetch news follows.
@@ -18,9 +18,9 @@ struct BranchPickerHeaderText: Equatable {
     /// What the title's copy button copies: HEAD's branch name, listed or not yet. Nil
     /// when HEAD is detached or unread.
     var copyableName: String?
-    /// `gh`'s login, shown only in a repository with a GitHub remote: it decides whether
-    /// existing pull requests can be found.
-    var gitHub: GitHubCLIStatus?
+    /// The GitHub token's status, shown only in a repository with a GitHub remote: it decides
+    /// which existing pull requests can be found.
+    var gitHub: GitHubAuthenticationStatus?
 
     /// A header button Tab can reach.
     enum Control: Equatable {
@@ -43,33 +43,49 @@ struct BranchPickerHeaderText: Equatable {
         return order
     }
 
-    /// The detail line: the upstream, the fetch news, then the GitHub CLI.
+    /// The detail line: the upstream, the fetch news, then GitHub.
     func detail(fetch: BranchPickerFetchText?) -> String {
         (detailParts + [fetch?.text ?? "", gitHubText?.text ?? ""]).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// The detail line's tooltip: the fetch's, then the GitHub CLI's, one per line.
+    /// The detail line's tooltip: the fetch's, then GitHub's, one per line.
     func detailTooltip(fetch: BranchPickerFetchText?) -> String? {
         let lines = [fetch?.tooltip, gitHubText?.tooltip].compactMap(\.self)
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
-    /// The GitHub CLI's part of the detail line and what its tooltip explains.
+    /// GitHub's part of the detail line and what its tooltip explains.
     var gitHubText: (text: String, tooltip: String)? {
         switch gitHub {
         case nil:
             nil
-        case let .signedIn(login):
-            ("GitHub: \(login)", "Finding pull requests with the GitHub CLI, signed in as \(login)")
-        case .signedOut:
+        case let .token(source, login?):
+            ("GitHub: \(login)", "Using the token from \(Self.name(source)), signed in as \(login)")
+        case let .token(source, nil):
+            ("GitHub: token from \(Self.name(source))", "Token available; account name unavailable")
+        case .rejected(.gitHubCLI):
             (
-                "GitHub CLI signed out",
-                "Sign in with `gh auth login --hostname github.com` to find existing pull requests"
+                "GitHub token rejected",
+                "GitHub rejected the token from the GitHub CLI. Sign in again with `gh auth login`."
             )
-        case .notInstalled:
-            ("GitHub CLI not installed", "Install the GitHub CLI (gh) to find existing pull requests")
-        case let .failed(message):
-            ("GitHub CLI unavailable", message)
+        case let .rejected(source):
+            (
+                "GitHub token rejected",
+                "GitHub rejected the token from \(Self.name(source)). Replace it, or unset it to use the next source."
+            )
+        case .anonymous:
+            (
+                "GitHub: public only",
+                "No GitHub token: only public repositories' pull requests are found. "
+                    + "Set GH_TOKEN or sign in with `gh auth login`."
+            )
+        }
+    }
+
+    private static func name(_ source: GitHubTokenSource) -> String {
+        switch source {
+        case let .environment(name): name
+        case .gitHubCLI: "the GitHub CLI"
         }
     }
 
@@ -77,7 +93,7 @@ struct BranchPickerHeaderText: Equatable {
         let spinner = snapshot.fetchStatus != .idle
         let canFetch = !spinner && snapshot.activeSync == nil
         // Repository-level, so every path below carries it.
-        let gitHub = snapshot.gitHubRemoteNames.isEmpty ? nil : snapshot.gitHubCLIStatus
+        let gitHub = snapshot.gitHubRemoteNames.isEmpty ? nil : snapshot.gitHubAuthenticationStatus
         guard let headState = snapshot.headState else {
             let title = snapshot.readStatus == .failed ? "Couldn't read branches" : "Loading…"
             return BranchPickerHeaderText(title: title, showsSpinner: spinner, canFetch: canFetch, gitHub: gitHub)
