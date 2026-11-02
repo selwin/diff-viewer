@@ -259,6 +259,63 @@ import Testing
         #expect(fallback.calls == 0)
     }
 
+    // MARK: Beginning a refresh
+
+    /// Applies lifecycle events to this suite's cache, as the app does.
+    @MainActor
+    private func orderedLifecycle() -> OrderedEnvironmentLifecycle {
+        let cache = cache
+        return OrderedEnvironmentLifecycle { event in
+            switch event {
+            case .refresh(let url): await cache.refresh(url)
+            case .forget(let url): await cache.forget(url)
+            }
+        }
+    }
+
+    @MainActor
+    private func beginRefresh(_ root: URL, in ordered: OrderedEnvironmentLifecycle) async throws {
+        try await withTimeLimit(operation: { @MainActor in
+            await ordered.lifecycle.beginRefresh(RepositoryRoot(root))
+        })
+    }
+
+    @MainActor @Test func beginRefreshReturnsAndStartsItsRootWhileAnotherRootsShellIsSuspended() async throws {
+        let ordered = orderedLifecycle()
+        defer { ordered.finish() }
+        try await beginRefresh(root, in: ordered)
+        try await resolver.started.next()
+
+        try await beginRefresh(URL(fileURLWithPath: "/other", isDirectory: true), in: ordered)
+        try await resolver.started.next()
+        #expect(resolver.calls == 2)
+    }
+
+    @MainActor @Test func aReadAfterBeginRefreshWaitsForTheRefreshedEnvironment() async throws {
+        try await populate(["V": "1"])
+        let ordered = orderedLifecycle()
+        defer { ordered.finish() }
+        try await beginRefresh(root, in: ordered)
+
+        let caller = environmentTask()
+        try await expect(.waiterRegistered(root))
+        try await finishResolve(["V": "2"])
+        #expect(try await value(of: caller).variables == ["V": "2"])
+    }
+
+    @MainActor @Test func aReadAfterBeginRefreshTakesThePreviousSnapshotWhenTheWaitRunsOut() async throws {
+        try await populate(["V": "1"])
+        let ordered = orderedLifecycle()
+        defer { ordered.finish() }
+        try await beginRefresh(root, in: ordered)
+
+        let caller = environmentTask()
+        try await expect(.waiterRegistered(root))
+        try await sleeper.started.next()
+        sleeper.releaseAll()
+        #expect(try await value(of: caller).variables == ["V": "1"])
+    }
+
     // MARK: Lifecycle
 
     @Test func aResolutionFromBeforeForgetIsIgnored() async throws {

@@ -22,6 +22,8 @@ final class Harness {
     private(set) var watcherCallbacks: [RepositoryRoot: @MainActor () -> Void] = [:]
     /// Every `onRefreshPublished` call, in order.
     private(set) var published: [(files: [ChangedFile], cause: RefreshCause, inputsChanged: Bool)] = []
+    /// Every environment refresh a window started, by root, in order.
+    private(set) var environmentRefreshes: [RepositoryRoot] = []
 
     init() {
         defaults = UserDefaults(suiteName: suite)!
@@ -43,6 +45,7 @@ final class Harness {
         let state = WindowState(
             preferences: preferences, cache: probeCache(runner), commitMessageGenerator: commitMessageGenerator,
             now: { [weak self] in self?.clock ?? Date() },
+            beginEnvironmentRefresh: { [weak self] in self?.environmentRefreshes.append($0) },
             watchRepository: { [weak self] root, onChange in
                 let watcher = NoopWatcher()
                 self?.watchers[root] = watcher

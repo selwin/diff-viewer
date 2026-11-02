@@ -95,7 +95,7 @@ final class PresentationLog {
 /// Records the hook-environment calls the coordinator makes.
 @MainActor
 final class EnvironmentRecorder {
-    enum Action { case refresh, forget }
+    enum Action { case refresh, forget, beginRefresh }
 
     struct Event: Equatable {
         let action: Action
@@ -107,7 +107,8 @@ final class EnvironmentRecorder {
     var lifecycle: RepositoryEnvironmentLifecycle {
         RepositoryEnvironmentLifecycle(
             refresh: { [self] in events.append(Event(action: .refresh, root: $0)) },
-            forget: { [self] in events.append(Event(action: .forget, root: $0)) })
+            forget: { [self] in events.append(Event(action: .forget, root: $0)) },
+            beginRefresh: { [self] in events.append(Event(action: .beginRefresh, root: $0)) })
     }
 
     func count(_ action: Action, _ root: RepositoryRoot) -> Int {
@@ -248,7 +249,9 @@ final class CoordinatorHarness {
     func client(_ url: URL) -> StubRepoClient { registry.entries[url]!.client }
 
     func makeState() -> WindowState {
-        WindowState(preferences: preferences, cache: cache) { [weak registry] root, onChange in
+        WindowState(
+            preferences: preferences, cache: cache, beginEnvironmentRefresh: environment.lifecycle.beginRefresh
+        ) { [weak registry] root, onChange in
             let watcher = NoopWatcher()
             registry?.watchers[root] = watcher
             registry?.watcherChangeCallbacks[root] = onChange
@@ -347,6 +350,42 @@ struct WindowCoordinatorTests {
         #expect(h.environment.count(.forget, h.root(a)) == 0)
         h.coordinator.remove(w.id)
         #expect(h.environment.count(.forget, h.root(a)) == 1)
+    }
+
+    /// Windows on two repositories whose origins are on GitHub, so activation has a check to run.
+    private func twoGitHubWindows() async -> (h: CoordinatorHarness, a: WindowState, b: WindowState) {
+        let h = CoordinatorHarness()
+        let urls = [h.repo("A"), h.repo("B")]
+        var windows: [WindowState] = []
+        for url in urls {
+            let origin = "git@github.com:acme/\(url.lastPathComponent).git"
+            await h.client(url).set(remoteURLs: ["origin": RemoteURLs(fetchURL: origin, pushURLs: [origin])])
+            let window = h.makeWindow()
+            await h.openAndSettle(url, into: window)
+            // Activation can only recheck an origin the window has read.
+            #expect(await eventually { @MainActor in window.gitHubConnectionModel?.origin != .unknown })
+            windows.append(window)
+        }
+        return (h, windows[0], windows[1])
+    }
+
+    @Test func activationRechecksTheKeyWindowAfterAnEnvironmentRefresh() async throws {
+        let (h, a, b) = await twoGitHubWindows()
+        h.coordinator.windowDidBecomeKey(b.id)
+
+        h.coordinator.applicationDidBecomeActive()
+        try #require(await eventually { @MainActor in h.environment.count(.beginRefresh, b.repositoryRoot!) == 1 })
+        #expect(h.environment.count(.beginRefresh, a.repositoryRoot!) == 0)
+    }
+
+    @Test func activationWithNoKeyWindowRechecksTheLastActiveOne() async throws {
+        let (h, a, b) = await twoGitHubWindows()
+        h.coordinator.windowDidBecomeKey(a.id)
+        h.coordinator.windowDidResignKey(a.id)
+
+        h.coordinator.applicationDidBecomeActive()
+        try #require(await eventually { @MainActor in h.environment.count(.beginRefresh, a.repositoryRoot!) == 1 })
+        #expect(h.environment.count(.beginRefresh, b.repositoryRoot!) == 0)
     }
 
     @Test func titlesDisambiguateSameNamedRepositoriesAndRelaxOnClose() async {

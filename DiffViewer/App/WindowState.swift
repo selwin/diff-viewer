@@ -220,6 +220,11 @@ final class WindowState {
     }
     /// The stash picker popover is up, on the same terms as the commit picker's flag.
     var isStashPickerPresented = false
+    /// The title bar's GitHub popover is up, on the same terms as the commit picker's flag.
+    /// `openGitHubPopover()` opens it.
+    var isGitHubPopoverPresented = false
+    /// The title bar's repository picker is up, on the same terms as the commit picker's flag.
+    var isRepositoryPickerPresented = false
     /// The Stash sheet is up. It opens only while no other overlay is, apart from the stash
     /// picker it replaces.
     var isStashSheetPresented = false
@@ -242,6 +247,13 @@ final class WindowState {
     /// Which GitHub token is in use and whose account it is. Nil before the first check, and
     /// while no remote is on GitHub.
     private(set) var gitHubAuthenticationStatus: GitHubAuthenticationStatus?
+    /// Origin's GitHub connection, for the title bar. Built when a repository is installed.
+    private(set) var gitHubConnectionModel: GitHubConnectionModel?
+    /// Where connection results are published and revisions come from. Set by the coordinator
+    /// when the window registers, before it adopts a repository.
+    @ObservationIgnored var gitHubConnectionDirectory: GitHubConnectionDirectory?
+    /// Revisions for a window with no directory, as in tests.
+    @ObservationIgnored private var unlistedGitHubRevision = 0
     /// The last completed lookup of an open pull request. It counts only while its identity
     /// is still HEAD's.
     private(set) var pullRequestLookup: PullRequestLookup?
@@ -292,14 +304,18 @@ final class WindowState {
     /// The clock the fetch cooldown and the picker's fetch times are measured against;
     /// injected so tests can move it.
     let now: @MainActor () -> Date
+    /// Starts re-resolving a repository's shell environment, before credentials are read again.
+    private let beginEnvironmentRefresh: @MainActor (RepositoryRoot) async -> Void
 
     init(
         preferences: Preferences, cache: DifftCache, resultCache: DiffResultCache = DiffResultCache(),
         commitMessageGenerator: any CommitMessageGenerator = FoundationModelsCommitMessageGenerator(),
         now: @escaping @MainActor () -> Date = Date.init,
+        beginEnvironmentRefresh: @escaping @MainActor (RepositoryRoot) async -> Void,
         watchRepository: @escaping WatcherFactory
     ) {
         self.preferences = preferences
+        self.beginEnvironmentRefresh = beginEnvironmentRefresh
         self.commitMessageGenerator = commitMessageGenerator
         self.now = now
         self.watchRepository = watchRepository
@@ -356,6 +372,7 @@ final class WindowState {
         errorMessage = nil
         isLoading = true
         isLoadingScope = true
+        gitHubConnectionModel = makeGitHubConnectionModel(session: session)
         initialRefresh = Task { [weak self] in
             await self?.refresh(session: session, cause: .initial)
             self?.isLoading = false
@@ -379,10 +396,13 @@ final class WindowState {
         isCommitPickerPresented = false
         isBranchPickerPresented = false
         isStashPickerPresented = false
+        isGitHubPopoverPresented = false
+        isRepositoryPickerPresented = false
         isNewBranchSheetPresented = false
         isStashSheetPresented = false
         pendingMerge = nil
         pendingBranchName = nil
+        gitHubConnectionModel?.stop()
         session?.historySerial += 1
         session?.historyTask?.cancel()
         session?.headStateCheckSerial += 1
@@ -2236,58 +2256,86 @@ extension WindowState {
     /// The only writer of `remoteURLsByName` and `gitHubRemoteNames`. A read finishing after
     /// a newer one started publishes nothing. Without a GitHub remote, nothing about GitHub
     /// is left on show. `refreshesPullRequest` is false when the caller runs the lookup itself.
+    /// Returns whether the read started a connection check.
+    @discardableResult
     private func publishRemoteURLs(
         _ urls: [String: RemoteURLs], session: RepoSession, ticket: Int, refreshesPullRequest: Bool = true
-    ) {
-        guard isLive(session), ticket == session.gitHubRemoteNamesSerial else { return }
+    ) -> Bool {
+        guard isLive(session), ticket == session.gitHubRemoteNamesSerial else { return false }
         remoteURLsByName = urls
         gitHubRemoteNames = GitHubRemoteValidation.qualifyingRemoteNames(in: urls)
         if gitHubRemoteNames.isEmpty {
             gitHubAuthenticationStatus = nil
             clearPullRequestLookup(session: session)
         }
+        // Only origin's fetch URL decides the title bar; pushing elsewhere is the pull request's concern.
+        let origin = urls["origin"].flatMap { GitHubRepository.parse(remoteURL: $0.fetchURL) }
+        let startedCheck =
+            gitHubConnectionModel?.observeOrigin(
+                origin.map { .repository($0) } ?? .none, wantsStatus: !gitHubRemoteNames.isEmpty) ?? false
         if refreshesPullRequest { refreshPullRequestIfNeeded(session: session, force: false) }
+        return startedCheck
     }
 
-    /// Re-reads the remotes and looks HEAD's pull request up again, then, when one is on GitHub
-    /// and `checksAuth`, names the GitHub account. A check is what adoption, Fetch and opening the
-    /// picker ask for, and each forces the lookup, retrying a failed one. The lookup never waits
-    /// for the account, which it doesn't need. Supplemental: a failed remote read keeps the last value.
+    /// Re-reads the remotes and looks HEAD's pull request up again, then, when `checksAuth`,
+    /// checks the GitHub connection unless the read already started a check. A check is what
+    /// adoption, Fetch and opening the picker ask for, and each forces the lookup, retrying a
+    /// failed one. The lookup never waits for the connection, which it doesn't need.
+    /// Supplemental: a failed remote read keeps the last value.
     private func refreshGitHub(session: RepoSession, checksAuth: Bool = true) async {
         guard isLive(session) else { return }
         session.gitHubRemoteNamesSerial += 1
         let ticket = session.gitHubRemoteNamesSerial
+        var startedCheck = false
         if let urls = try? await session.client.remoteURLs() {
-            publishRemoteURLs(urls, session: session, ticket: ticket, refreshesPullRequest: false)
+            startedCheck = publishRemoteURLs(urls, session: session, ticket: ticket, refreshesPullRequest: false)
         }
         // Even after a failed read: the identity already known can still be retried.
         refreshPullRequestIfNeeded(session: session, force: checksAuth)
-        guard checksAuth, isLive(session), !gitHubRemoteNames.isEmpty else { return }
-        if session.gitHubAuthInFlight {
-            session.gitHubAuthPending = true
-            return
-        }
-        session.gitHubAuthInFlight = true
-        defer { session.gitHubAuthInFlight = false }
-        repeat {
-            session.gitHubAuthPending = false
-            await checkGitHubAuth(session: session)
-        } while session.gitHubAuthPending && isLive(session) && !gitHubRemoteNames.isEmpty
+        guard checksAuth, isLive(session), !startedCheck else { return }
+        gitHubConnectionModel?.recheck()
     }
 
-    /// Publishes the GitHub token's status for the branch picker. Display only: no status
-    /// clears or starts a lookup.
-    private func checkGitHubAuth(session: RepoSession) async {
-        let status: GitHubAuthenticationStatus
-        do {
-            status = try await session.client.gitHubAuthenticationStatus()
-        } catch {
-            // Only cancellation reaches here, and it says nothing new: the last status stands.
-            return
+    /// Checks origin's GitHub connection again, without the pull request lookup. Check Again and
+    /// app activation start an environment refresh first, in case credentials changed there.
+    func recheckGitHubConnection(refreshingEnvironment: Bool) {
+        gitHubConnectionModel?.recheck(refreshingEnvironment: refreshingEnvironment)
+    }
+
+    /// Every callback holds the window weakly and drops results once `session` is replaced or
+    /// the window closes.
+    private func makeGitHubConnectionModel(session: RepoSession) -> GitHubConnectionModel {
+        let client = session.client
+        let root = session.root
+        return GitHubConnectionModel(
+            checkRepository: { try await client.gitHubRepositoryCheck($0) },
+            checkStatus: { try await client.gitHubAuthenticationStatus() },
+            beginEnvironmentRefresh: { [beginEnvironmentRefresh] in await beginEnvironmentRefresh(root) },
+            issueRevision: { [weak self] in self?.issueGitHubRevision(for: root) ?? 0 },
+            onPublish: { [weak self] revision, result in
+                guard let self, isLive(session) else { return }
+                applyGitHubCheck(result, revision: revision, root: root)
+            })
+    }
+
+    private func issueGitHubRevision(for root: RepositoryRoot) -> Int {
+        if let gitHubConnectionDirectory { return gitHubConnectionDirectory.issueRevision(for: root) }
+        unlistedGitHubRevision += 1
+        return unlistedGitHubRevision
+    }
+
+    /// The branch picker's status shows only while a remote is on GitHub. A status-only result
+    /// has nothing for the directory.
+    private func applyGitHubCheck(_ result: GitHubCheckResult, revision: Int, root: RepositoryRoot) {
+        switch result {
+        case let .repository(outcome):
+            if !gitHubRemoteNames.isEmpty { gitHubAuthenticationStatus = outcome.status }
+            gitHubConnectionDirectory?.publish(root: root, revision: revision, connection: outcome.connection)
+        case let .statusOnly(status):
+            if !gitHubRemoteNames.isEmpty { gitHubAuthenticationStatus = status }
+        case .notOnGitHub:
+            gitHubConnectionDirectory?.publish(root: root, revision: revision, connection: .notOnGitHub)
         }
-        // A remote read meanwhile may have found no GitHub remote, which clears the status.
-        guard isLive(session), !gitHubRemoteNames.isEmpty else { return }
-        gitHubAuthenticationStatus = status
     }
 
     /// Drops the lookup and whatever could bring it back: a lookup in flight, a queued

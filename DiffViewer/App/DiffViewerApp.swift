@@ -10,6 +10,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var newTabHandler: (@MainActor () -> Void)?
     /// Writes the session snapshot; set once the app's services exist.
     var terminationHandler: (@MainActor () -> Void)?
+    /// Tells the coordinator the app became active; set once the app's services exist.
+    var activationHandler: (@MainActor () -> Void)?
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        activationHandler?()
+    }
 
     /// The one place the session is written at quit. Window closes AppKit performs
     /// afterwards do not rewrite it.

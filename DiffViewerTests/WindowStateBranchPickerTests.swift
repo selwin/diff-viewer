@@ -156,6 +156,7 @@ struct WindowStateBranchPickerTests {
 
     private static let overlays: [WindowState.Overlay] = [
         .commitSheet, .commitPicker, .branchPicker, .stashPicker, .newBranchSheet, .mergeSheet, .stashSheet,
+        .gitHubPopover, .repositoryPicker,
     ]
 
     private func setPresented(_ overlay: WindowState.Overlay, _ on: Bool, in state: WindowState) {
@@ -167,6 +168,8 @@ struct WindowStateBranchPickerTests {
         case .newBranchSheet: state.isNewBranchSheetPresented = on
         case .mergeSheet: state.pendingMerge = on ? mergeTarget : nil
         case .stashSheet: state.isStashSheetPresented = on
+        case .gitHubPopover: state.isGitHubPopoverPresented = on
+        case .repositoryPicker: state.isRepositoryPickerPresented = on
         }
     }
 
@@ -179,13 +182,15 @@ struct WindowStateBranchPickerTests {
         case .newBranchSheet: state.canOpenNewBranchSheet
         case .mergeSheet: state.canOpenMergeSheet
         case .stashSheet: state.canOpenStashSheet
+        case .gitHubPopover: state.canOpenGitHubPopover
+        case .repositoryPicker: state.canOpenRepositoryPicker
         }
     }
 
     /// Only one picker or sheet is up at a time, and Stage All waits for it to close.
     @Test(arguments: [
         WindowState.Overlay.commitSheet, .commitPicker, .branchPicker, .stashPicker, .newBranchSheet, .mergeSheet,
-        .stashSheet,
+        .stashSheet, .gitHubPopover, .repositoryPicker,
     ])
     func anOpenOverlayBlocksTheOthersAndStageAll(_ presented: WindowState.Overlay) async {
         let h = Harness()

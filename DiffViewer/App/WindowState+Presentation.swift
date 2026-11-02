@@ -80,9 +80,27 @@ extension WindowState {
         }
     }
 
+    /// The title bar's GitHub popover opens in an open repository window, like the other popovers.
+    var canOpenGitHubPopover: Bool {
+        session != nil && !isClosed && !isComparisonTab && !isOtherOverlayPresented(besides: .gitHubPopover)
+    }
+
+    /// Opens the GitHub popover and checks the connection again, so it shows what is true now.
+    func openGitHubPopover() {
+        guard canOpenGitHubPopover else { return }
+        isGitHubPopoverPresented = true
+        recheckGitHubConnection(refreshingEnvironment: false)
+    }
+
+    /// The title bar's repository picker, on the same terms.
+    var canOpenRepositoryPicker: Bool {
+        session != nil && !isClosed && !isComparisonTab && !isOtherOverlayPresented(besides: .repositoryPicker)
+    }
+
     /// The sheets and popovers that open one at a time.
     enum Overlay {
         case commitSheet, commitPicker, branchPicker, stashPicker, newBranchSheet, mergeSheet, stashSheet
+        case gitHubPopover, repositoryPicker
     }
 
     /// Whether any presented overlay is outside the allowed exclusions. Only one opens at a time.
@@ -94,6 +112,8 @@ extension WindowState {
             || (!overlays.contains(.newBranchSheet) && isNewBranchSheetPresented)
             || (!overlays.contains(.mergeSheet) && pendingMerge != nil)
             || (!overlays.contains(.stashSheet) && isStashSheetPresented)
+            || (!overlays.contains(.gitHubPopover) && isGitHubPopoverPresented)
+            || (!overlays.contains(.repositoryPicker) && isRepositoryPickerPresented)
     }
 }
 

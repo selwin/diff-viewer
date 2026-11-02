@@ -24,4 +24,4 @@ Full plan: ~/.claude/plans/pasted-content-id-b00d-diffviewer-adaptive-widget.md
 **Goal**: GitHubConnectionDirectory, beginRefresh ordering, RepositoryPickerItems, picker popover
 **Success Criteria**: bounded, revision-guarded background checks
 **Tests**: RepositoryPickerItemsTests, GitHubConnectionDirectoryTests, lifecycle tests
-**Status**: In Progress (non-view parts complete; picker popover not started)
+**Status**: In Progress (directory and `beginRefresh` land with Stage 2; `RepositoryPickerItems` and the picker popover not started)
