@@ -130,10 +130,6 @@ struct BranchPickerState {
         return nil
     }
 
-    private static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
-        "\(author) · \(grouping.rowTimeText(for: date))"
-    }
-
     /// The first highlightable row: the newest branch, or a search's best match.
     private static func initialHighlight(items: [BranchPickerItem]) -> BranchRowID? {
         items.first(where: isHighlightable)?.row?.id
@@ -586,5 +582,15 @@ extension BranchPickerState {
     /// The keys of the rows in `visibleRows` that have one.
     func requestedKeys(visibleRows: Range<Int>) -> Set<MergePreviewKey> {
         Set(visibleRows.clamped(to: items.indices).compactMap { mergePreviewKey(forTableRow: $0) })
+    }
+}
+
+/// Row text, outside the struct body to keep it under the length lint.
+extension BranchPickerState {
+    /// `author · time`, with only the author's first word; just the time without an author.
+    fileprivate static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
+        let time = grouping.rowTimeText(for: date)
+        let name = AuthorName.firstToken(of: author)
+        return name.isEmpty ? time : "\(name) · \(time)"
     }
 }

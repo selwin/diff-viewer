@@ -89,12 +89,17 @@ struct BranchPickerStateTests {
 
     // MARK: Row text
 
-    @Test func subtitlesNameTheAuthorAndTheTime() {
+    @Test func subtitlesNameTheAuthorsFirstWordAndTheTime() {
         let today = localBranch("today", tipCommittedAt: Self.at(19, 9, 5), tipCommitAuthor: "Me")
-        let thisWeek = localBranch("this-week", tipCommittedAt: Self.at(15, 9), tipCommitAuthor: "Alice")
+        let thisWeek = localBranch("this-week", tipCommittedAt: Self.at(15, 9), tipCommitAuthor: "Alice Liddell")
         let remote = remoteBranch("remote", tipCommittedAt: Self.at(1, 9), tipCommitAuthor: "Bob")
         let taken = snapshot(branches: [today, thisWeek], remoteBranches: [remote])
         #expect(state(taken).rows.map(\.subtitle) == ["Me · 09:05", "Alice · Tue", "Bob · 1 Sep"])
+    }
+
+    @Test func subtitleOmitsAuthorAndSeparatorWhenAuthorIsEmpty() {
+        let anonymous = localBranch("anonymous", tipCommittedAt: Self.at(1, 9), tipCommitAuthor: "")
+        #expect(state(snapshot(branches: [anonymous])).rows.map(\.subtitle) == ["1 Sep"])
     }
 
     @Test func eachBranchStateHasItsStatus() {

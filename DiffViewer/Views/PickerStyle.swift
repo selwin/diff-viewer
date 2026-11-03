@@ -14,10 +14,10 @@ enum PickerStyle {
     static let sectionHeaderHeight: CGFloat = 30
     /// How far the row highlight stays from the panel's sides.
     static let highlightInset: CGFloat = 8
-    /// The one edge everything lines up on: the title, tabs, search field,
-    /// section headers, row tiles and footer. Only the row highlight reaches past it.
+    /// The shared leading edge for the title, tabs, search field, section headers, row
+    /// content and footer. Only the row highlight reaches past it.
     static let edgeInset: CGFloat = 22
-    /// Row content sits this far inside the highlight, which puts the tile on `edgeInset`.
+    /// Insets row content from the highlight's leading edge to `edgeInset`.
     static let contentInset: CGFloat = 14
     static let iconTileSize: CGFloat = 32
     static let highlightRadius: CGFloat = 20
@@ -81,6 +81,8 @@ enum PickerStyle {
     static let rowHighlight = dynamic(light: rgb(118, 118, 128, 0.14), dark: NSColor(white: 1, alpha: 0.16))
     static let tileFill = controlFill
     static let accent = dynamic(light: rgb(10, 122, 255), dark: rgb(10, 132, 255))
+    /// The current branch row's fill. That row never takes the highlight.
+    static let currentRowTint = dynamic(light: rgb(10, 122, 255, 0.07), dark: rgb(10, 132, 255, 0.16))
     static let accentTint = dynamic(light: rgb(10, 122, 255, 0.14), dark: rgb(10, 132, 255, 0.24))
     static let warning = dynamic(light: rgb(194, 94, 0), dark: rgb(255, 159, 10))
     static let meta = dynamic(light: rgb(60, 60, 67, 0.6), dark: rgb(235, 235, 245, 0.6))
