@@ -257,6 +257,10 @@ final class WindowState {
     /// The last completed lookup of an open pull request. It counts only while its identity
     /// is still HEAD's.
     private(set) var pullRequestLookup: PullRequestLookup?
+    /// Origin's pull requests for the branch picker's rows, from the last published listing.
+    /// Cleared whenever the listing identity changes, so it always belongs to
+    /// `currentPullRequestListIdentity`.
+    private(set) var branchPullRequests: BranchPullRequests?
     /// Branch offered Create PR after publishing; cleared on branch change or browser open.
     private(set) var pullRequestOfferedBranchName: String?
     /// Branch name to its configured upstream remote. Unlike `upstream`, it includes
@@ -391,6 +395,7 @@ final class WindowState {
         session?.commitDefaultsGeneration += 1
         session?.commitDefaultsTask?.cancel()
         session?.commitGenerationTask?.cancel()
+        session?.pullRequestListTask?.cancel()
         isGeneratingCommitMessage = false
         isCommitSheetPresented = false
         isCommitPickerPresented = false
@@ -1748,6 +1753,8 @@ extension WindowState {
     /// remote's configured mappings name, independently of the worktree and index writes
     /// that chain serializes. A failure is header news, never `errorMessage`.
     func fetchForBranchPicker() async {
+        // The pull request listing runs on its own task; the rows update when it lands.
+        if let session { refreshBranchPullRequests(session: session) }
         await fetchRound(.opening)
     }
 
@@ -2255,7 +2262,8 @@ extension WindowState {
 
     /// The only writer of `remoteURLsByName` and `gitHubRemoteNames`. A read finishing after
     /// a newer one started publishes nothing. Without a GitHub remote, nothing about GitHub
-    /// is left on show. `refreshesPullRequest` is false when the caller runs the lookup itself.
+    /// is left on show, and a new listing identity resets the picker's pull requests.
+    /// `refreshesPullRequest` is false when the caller runs the lookup itself.
     /// Returns whether the read started a connection check.
     @discardableResult
     private func publishRemoteURLs(
@@ -2268,11 +2276,12 @@ extension WindowState {
             gitHubAuthenticationStatus = nil
             clearPullRequestLookup(session: session)
         }
+        branchPullRequestIdentityMayHaveChanged(session: session)
         // Only origin's fetch URL decides the title bar; pushing elsewhere is the pull request's concern.
-        let origin = urls["origin"].flatMap { GitHubRepository.parse(remoteURL: $0.fetchURL) }
         let startedCheck =
             gitHubConnectionModel?.observeOrigin(
-                origin.map { .repository($0) } ?? .none, wantsStatus: !gitHubRemoteNames.isEmpty) ?? false
+                originGitHubRepository.map { .repository($0) } ?? .none, wantsStatus: !gitHubRemoteNames.isEmpty)
+            ?? false
         if refreshesPullRequest { refreshPullRequestIfNeeded(session: session, force: false) }
         return startedCheck
     }
@@ -2292,6 +2301,8 @@ extension WindowState {
         }
         // Even after a failed read: the identity already known can still be retried.
         refreshPullRequestIfNeeded(session: session, force: checksAuth)
+        // Adoption and each fetch round, so the picker's first open has a list.
+        if checksAuth { refreshBranchPullRequests(session: session) }
         guard checksAuth, isLive(session), !startedCheck else { return }
         gitHubConnectionModel?.recheck()
     }
@@ -2632,5 +2643,91 @@ extension WindowState {
         case .conflicts, .appliedButNotDropped: true
         default: false
         }
+    }
+}
+
+// MARK: - Branch pull requests
+
+/// Listing origin's pull requests for the branch picker's rows: when a listing starts, and
+/// which results replace the list on show.
+extension WindowState {
+    /// How long after a listing starts before the same one may start again. A token's rate
+    /// limit allows a shorter wait than an anonymous one.
+    static let pullRequestListCooldownWithToken: TimeInterval = 120
+    static let pullRequestListCooldownWithoutToken: TimeInterval = 600
+
+    /// Origin's repository, from its fetch URL as last read; nil when origin is missing or
+    /// not on GitHub.
+    var originGitHubRepository: GitHubRepository? {
+        remoteURLsByName["origin"].flatMap { GitHubRepository.parse(remoteURL: $0.fetchURL) }
+    }
+
+    /// What the picker's listing reads, from the last remote read.
+    var currentPullRequestListIdentity: PullRequestListIdentity? {
+        guard let head = originGitHubRepository else { return nil }
+        return PullRequestListIdentity(head: head, base: head.pullRequestBase(in: remoteURLsByName))
+    }
+
+    private var pullRequestListCooldown: TimeInterval {
+        if case .token = gitHubAuthenticationStatus { return Self.pullRequestListCooldownWithToken }
+        return Self.pullRequestListCooldownWithoutToken
+    }
+
+    /// Called on every remote publish. A new identity drops the list, the cooldown and any
+    /// listing in flight, then lists the new repositories. Every list and listing came from
+    /// an attempt, so the last attempt's identity is the one they belong to.
+    private func branchPullRequestIdentityMayHaveChanged(session: RepoSession) {
+        let identity = currentPullRequestListIdentity
+        guard identity != session.lastPullRequestListAttemptAt?.identity else { return }
+        branchPullRequests = nil
+        session.lastPullRequestListAttemptAt = nil
+        session.pullRequestListInFlight = nil
+        // The generation already discards its result; cancelling stops its remaining requests.
+        session.pullRequestListTask?.cancel()
+        session.pullRequestListGeneration += 1
+        refreshBranchPullRequests(session: session)
+    }
+
+    /// Lists origin's pull requests unless the same listing is in flight or started within
+    /// the cooldown. The first attempt for an identity always runs.
+    func refreshBranchPullRequests(session: RepoSession) {
+        guard isLive(session), let identity = currentPullRequestListIdentity else { return }
+        // Refresh triggers received during an in-flight request are coalesced. The next
+        // eligible refresh observes later GitHub changes.
+        guard session.pullRequestListInFlight != identity else { return }
+        if let last = session.lastPullRequestListAttemptAt, last.identity == identity,
+            now().timeIntervalSince(last.date) < pullRequestListCooldown
+        {
+            return
+        }
+        session.pullRequestListGeneration += 1
+        let generation = session.pullRequestListGeneration
+        session.pullRequestListInFlight = identity
+        session.lastPullRequestListAttemptAt = (identity, now())
+        session.pullRequestListTask = Task { [weak self] in
+            await self?.listPullRequests(identity, generation: generation, session: session)
+        }
+    }
+
+    /// Runs one listing and publishes it if nothing moved meanwhile: the window, the
+    /// generation and the identity.
+    private func listPullRequests(_ identity: PullRequestListIdentity, generation: Int, session: RepoSession) async {
+        let result: Result<PullRequestListing, any Error>
+        do {
+            result = .success(try await session.client.listPullRequests(head: identity.head, base: identity.base))
+        } catch {
+            result = .failure(error)
+        }
+        defer { session.pullRequestListsFinished += 1 }
+        // A newer start or an identity change owns `pullRequestListInFlight`.
+        guard isLive(session), generation == session.pullRequestListGeneration else { return }
+        session.pullRequestListInFlight = nil
+        // A failed or cancelled refresh preserves the cached list for the same repository
+        // identity and presents no error.
+        guard identity == currentPullRequestListIdentity, case let .success(listing) = result else { return }
+        // Partial refreshes preserve an existing cache, so results from successful sources
+        // may stay stale until a fully successful refresh.
+        guard listing.allSourcesSucceeded || branchPullRequests == nil else { return }
+        branchPullRequests = BranchPullRequests(headRepository: identity.head, listing: listing)
     }
 }

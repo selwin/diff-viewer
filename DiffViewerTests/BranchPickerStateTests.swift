@@ -21,6 +21,7 @@ struct BranchPickerStateTests {
     private let main = localBranch("main", tipCommittedAt: at(19, 13))
     private let feature = localBranch("feature", tipCommittedAt: at(19, 12))
     private let old = localBranch("old", tipCommittedAt: at(18, 9))
+    private let gone = localBranch("gone", upstream: upstream("origin/gone", tracking: .gone))
 
     private func snapshot(
         headState: HeadState? = .named("main"), branches: [LocalBranch], readStatus: BranchReadStatus = .loaded,
@@ -708,6 +709,77 @@ struct BranchPickerStateTests {
                 == BranchRowLabel(text: "Remote gone", style: .upstreamGone))
         picker.setTab(.merge)
         #expect(try picker.trailingLabel(forTableRow: index(.local(name: "feature"), in: picker)) == nil)
+    }
+
+    // MARK: Pull requests
+
+    /// `snapshot` with one origin pull request per entry, numbered from 1 in order.
+    private func withPullRequests(
+        _ snapshot: BranchPickerSnapshot, _ entries: [(branch: String, state: ListedPullRequest.State)],
+        openSourcesSucceeded: Bool = true
+    ) -> BranchPickerSnapshot {
+        let origin = GitHubRepository(owner: "me", name: "widgets")
+        let pullRequests = entries.enumerated().map { offset, entry in
+            ListedPullRequest(
+                number: offset + 1, state: entry.state,
+                url: URL(string: "https://github.com/me/widgets/pull/\(offset + 1)")!, headBranch: entry.branch,
+                headRepository: origin, updatedAt: Self.now)
+        }
+        var result = snapshot
+        result.branchPullRequests = BranchPullRequests(
+            headRepository: origin,
+            listing: PullRequestListing(
+                pullRequests: pullRequests, headDefaultBranch: nil, allSourcesSucceeded: openSourcesSucceeded,
+                openSourcesSucceeded: openSourcesSucceeded))
+        return result
+    }
+
+    /// A local row matches by its upstream's name on origin; a branch on another remote
+    /// never borrows origin's pull request.
+    @Test func rowsTakeTheirPullRequestFromTheSnapshot() {
+        let tracking = localBranch("mine", upstream: upstream("origin/feature"), tipCommittedAt: Self.at(19, 12))
+        let release = remoteBranch("release", tipCommittedAt: Self.at(19, 11))
+        let forked = remoteBranch("release", remote: "fork", tipCommittedAt: Self.at(19, 10))
+        let taken = snapshot(
+            branches: [main, tracking], remotes: ["origin", "fork"], remoteBranches: [release, forked])
+        let picker = state(withPullRequests(taken, [("feature", .open), ("release", .merged)]))
+        #expect(picker.rows.map { $0.pullRequest?.number } == [nil, 1, 2, nil])
+    }
+
+    /// A listing that lands while the picker is open refreshes its row in place.
+    @Test func aListingArrivingRefreshesItsRow() throws {
+        var picker = state(snapshot(branches: [main, gone]))
+        let change = picker.apply(withPullRequests(snapshot(branches: [main, gone]), [("gone", .merged)]))
+        let row = try index(.local(name: "gone"), in: picker)
+        #expect(change.rows == .refresh([row]))
+        #expect(picker.row(forTableRow: row)?.pullRequest?.state == .merged)
+    }
+
+    @Test(
+        arguments: [(.merged, nil), (.closed, nil), (.open, "Remote gone"), (nil, "Remote gone")]
+            as [(ListedPullRequest.State?, String?)])
+    func aGoneUpstreamsLabelGivesWayToAMergedOrClosedPullRequest(
+        pullRequestState: ListedPullRequest.State?, expected: String?
+    ) throws {
+        let entries = pullRequestState.map { [("gone", $0)] } ?? []
+        let picker = state(withPullRequests(snapshot(branches: [main, gone]), entries))
+        #expect(try picker.trailingLabel(forTableRow: index(.local(name: "gone"), in: picker))?.text == expected)
+    }
+
+    @Test func aGoneUpstreamWithAMergedPullRequestStillOffersDelete() throws {
+        let picker = state(withPullRequests(snapshot(branches: [main, gone]), [("gone", .merged)]))
+        #expect(try picker.syncButtons(forTableRow: index(.local(name: "gone"), in: picker))?.delete == .enabled)
+    }
+
+    /// Without every open source, a closed pull request could hide an open one, so it isn't
+    /// matched and the row still says its upstream is gone.
+    @Test func aClosedPullRequestFromAnIncompleteListingLeavesRemoteGone() throws {
+        let taken = withPullRequests(
+            snapshot(branches: [main, gone]), [("gone", .closed)], openSourcesSucceeded: false)
+        let picker = state(taken)
+        let row = try index(.local(name: "gone"), in: picker)
+        #expect(picker.row(forTableRow: row)?.pullRequest == nil)
+        #expect(picker.trailingLabel(forTableRow: row)?.text == "Remote gone")
     }
 
     // MARK: Tab filtering

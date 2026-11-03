@@ -30,6 +30,11 @@ struct BranchPullRequests: Equatable, Sendable {
         name == headDefaultBranch ? nil : byHeadBranch[name]
     }
 
+    /// A picker row's pull request, matched by its branch on origin.
+    func pullRequest(for source: BranchPickerRow.Source) -> ListedPullRequest? {
+        Self.headBranch(for: source).flatMap(pullRequest(forHeadBranch:))
+    }
+
     /// The branch on `origin` that a row's pull request would have as its head. A branch on
     /// another remote has no pull request from `origin`, so it must not borrow one by name.
     static func headBranch(for source: BranchPickerRow.Source) -> String? {

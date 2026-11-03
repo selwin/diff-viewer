@@ -97,7 +97,8 @@ struct BranchPickerState {
                 source: .local(branch), name: branch.name,
                 subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
                 status: .local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]),
-                collidesWithLocalName: false)
+                collidesWithLocalName: false,
+                pullRequest: snapshot.branchPullRequests?.pullRequest(for: .local(branch)))
         }
     }
 
@@ -113,7 +114,8 @@ struct BranchPickerState {
                 id: .remote(ref: branch.ref), kind: .remoteOnly, source: .remote(branch), name: name,
                 subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
                 status: snapshot.newRemoteBranches.contains(branch.ref) ? .new : .none,
-                collidesWithLocalName: collides)
+                collidesWithLocalName: collides,
+                pullRequest: snapshot.branchPullRequests?.pullRequest(for: .remote(branch)))
         }
     }
 
@@ -327,7 +329,7 @@ struct BranchPickerState {
         case .merge:
             return preview.map(MergePreviewText.label(for:))
         case .switchBranch:
-            guard !row.status.text.isEmpty else { return nil }
+            guard !row.status.text.isEmpty, !row.pullRequestExplainsGoneUpstream else { return nil }
             return BranchRowLabel(text: row.status.text, style: row.status.labelStyle)
         }
     }

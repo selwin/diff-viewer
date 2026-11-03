@@ -14,7 +14,7 @@
 **Goal**: Background, identity-keyed, single-flight refresh; rows get `pullRequest`; `Remote gone` hidden for merged/closed.
 **Success Criteria**: Lifecycle and presentation tests pass.
 **Tests**: `WindowStateBranchPullRequestTests`, `BranchPickerStateTests`.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: The capsule
 **Goal**: `PullRequestCapsuleButton`, colours, click to open, context menu, screenshot fixture.

@@ -94,7 +94,8 @@ extension WindowState {
             configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
             remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches,
             gitHubRemoteNames: gitHubRemoteNames, gitHubAuthenticationStatus: gitHubAuthenticationStatus,
-            currentPullRequestIdentity: currentPullRequestIdentity, pullRequestLookup: pullRequestLookup)
+            currentPullRequestIdentity: currentPullRequestIdentity, pullRequestLookup: pullRequestLookup,
+            branchPullRequests: branchPullRequests)
     }
 
     /// The pull request button's state for the menu, which reads the same snapshot the header does.
