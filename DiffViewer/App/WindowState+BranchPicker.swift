@@ -74,6 +74,15 @@ extension WindowState {
         pendingMerge = target
     }
 
+    /// A picker row's pull request. The popover closes once the browser has opened it.
+    func openPullRequest(url: URL) {
+        if openURL(url) {
+            isBranchPickerPresented = false
+        } else {
+            errorMessage = "Couldn't open the browser"
+        }
+    }
+
     /// Whether `name` is a local branch as of the last read. Git refuses one created since.
     func hasLocalBranch(named name: String) -> Bool {
         branches.contains { $0.name == name }

@@ -22,6 +22,9 @@ import Foundation
 ///   `DIFFVIEWER_SNAPSHOT` then renders the popover's window.
 /// - `DIFFVIEWER_BRANCH_PICKER=1` opens the branch picker popover, rendered the same way;
 ///   `DIFFVIEWER_BRANCH_PICKER_TAB=merge` opens it on the Merge tab.
+/// - `DIFFVIEWER_PULL_REQUEST_FIXTURE=<head branch>:<open|draft|merged|closed>[,...]` shows
+///   those pull requests on the picker's rows in place of GitHub's, numbered 1, 2, 3…, and
+///   keeps them for the session without asking GitHub. Keys are origin branch names.
 /// - `DIFFVIEWER_STASH_PICKER=1` opens the stash picker popover, rendered the same way.
 /// - `DIFFVIEWER_GITHUB_POPOVER=1` opens the title bar's GitHub popover, rendered the same way.
 /// - `DIFFVIEWER_REPOSITORY_PICKER=1` opens the title bar's repository picker, rendered the same way.
@@ -147,6 +150,7 @@ enum DebugLaunchOptions {
                 || env["DIFFVIEWER_FOCUS_LIST"] == "1" || trayExpansion != nil
                 || env["DIFFVIEWER_MERGE_SHEET"] != nil || env["DIFFVIEWER_COMPARE"] != nil
                 || env["DIFFVIEWER_COMPARE_WINDOW"] != nil || env["DIFFVIEWER_COMPARE_WINDOW_PR"] != nil
+                || env["DIFFVIEWER_PULL_REQUEST_FIXTURE"] != nil
             guard !opens.isEmpty || dump || needsWindow || env["DIFFVIEWER_TAB_STEPS"] != nil else { return }
             let nextCount = Int(env["DIFFVIEWER_NEXT"] ?? "") ?? 0
             // One ordered sequence: opens finish before the target window is chosen, so the
@@ -192,6 +196,8 @@ enum DebugLaunchOptions {
                 await applyMergeOptions(env: env, in: windowState)
                 windowState.isCommitSheetPresented = commitSheet
                 windowState.isCommitPickerPresented = commitPicker
+                // Before the picker opens, so its first rows already show the fixture.
+                applyPullRequestFixture(env["DIFFVIEWER_PULL_REQUEST_FIXTURE"], in: windowState)
                 windowState.isBranchPickerPresented = branchPicker
                 windowState.isStashPickerPresented = stashPicker
                 applyGitHub(state: gitHubState, popover: gitHubPopover, in: windowState)

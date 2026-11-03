@@ -132,7 +132,7 @@ enum PickerStyle {
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 
-    nonisolated private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+    nonisolated static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { isDark($0) ? dark : light }
     }
 
@@ -147,7 +147,7 @@ enum PickerStyle {
         }
     }
 
-    nonisolated private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1)
+    nonisolated static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat, _ alpha: CGFloat = 1)
         -> NSColor
     {
         NSColor(srgbRed: red / 255, green: green / 255, blue: blue / 255, alpha: alpha)

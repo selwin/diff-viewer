@@ -270,4 +270,30 @@ struct WindowStateBranchPullRequestTests {
         #expect(w.state.session?.pullRequestListInFlight == nil)
         #expect(await w.client.listPullRequestsCalls.count == 1)
     }
+
+    // MARK: Opening
+
+    /// The URLs a stubbed browser was asked to open.
+    @MainActor private final class Browser {
+        var opened: [URL] = []
+    }
+
+    @Test(arguments: [true, false])
+    func openingARowsPullRequestClosesThePickerOnlyOnceTheBrowserOpens(opens: Bool) async throws {
+        let h = Harness()
+        let w = try await adopt(h)
+        let browser = Browser()
+        w.state.openURL = { url in
+            browser.opened.append(url)
+            return opens
+        }
+        w.state.isBranchPickerPresented = true
+        let url = try #require(URL(string: "https://github.com/me/widgets/pull/7"))
+
+        w.state.openPullRequest(url: url)
+        #expect(browser.opened == [url])
+        #expect(w.state.isBranchPickerPresented == !opens)
+        #expect(w.state.errorMessage == (opens ? nil : "Couldn't open the browser"))
+        #expect(await w.client.switchBranchCalls.isEmpty)
+    }
 }

@@ -1,14 +1,15 @@
 import AppKit
 
-/// A branch row: the name with a copy button after it over `author · time`, and on the
-/// right its status and the Pull/Push pills. The current branch adds a checkmark before
-/// the name and a tint; a remote-only branch adds a cloud after it.
+/// A branch row: the name with a copy button after it over `author · time` and the
+/// branch's pull request, and on the right its status and the Pull/Push pills. The current
+/// branch adds a checkmark before the name and a tint; a remote-only branch adds a cloud
+/// after it.
 /// The copy button and pills show on the highlighted row; pills also stay
 /// while their operation runs. In Switch a highlighted row's status fades out as its
 /// pills fade in, only when the pills show; in Merge the preview stays. The current branch's row
 /// takes no highlight, so its copy button shows while the pointer is over it. As a table
 /// cell it stays an accessibility cell; a press, or the named accessibility action,
-/// activates the row, and the copy and the pills' actions are offered beside it.
+/// activates the row, and the copy, pull request and pills' actions are offered beside it.
 final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     static let identifier = NSUserInterfaceItemIdentifier("BranchPickerRowView")
 
@@ -19,6 +20,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private static let checkImage = symbolImage("checkmark", pointSize: 14, weight: .bold)
     private static let cloudImage = symbolImage("cloud", pointSize: 15, weight: .regular)
     private static let lineGap: CGFloat = 1
+    /// Between the subtitle's text, its `·` and the pull request capsule.
+    private static let subtitleGap: CGFloat = 5
     /// Between the name and the copy button, whose hover fill already pads the icon.
     private static let copyGap: CGFloat = 0
     private static let animationDuration: TimeInterval = 0.18
@@ -47,10 +50,13 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Copies the name the row shows, remote prefix included.
     let copyButton = PickerCopyButton(label: "Copy Branch Name")
 
-    /// The copy button and pills: the table sends clicks on them to the buttons, never to
-    /// the row.
+    /// Opens the row's pull request; hidden on a row without one.
+    let pullRequestCapsule = PullRequestCapsuleButton()
+
+    /// The copy button, the pull request capsule and the pills: the table sends clicks on
+    /// them to the buttons, never to the row.
     var accessories: [NSView] {
-        syncButtons.map { [copyButton, $0] } ?? [copyButton]
+        [copyButton, pullRequestCapsule] + (syncButtons.map { [$0] } ?? [])
     }
 
     /// What is shown, or fading in; see `showSyncButtons`.
@@ -70,6 +76,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private let cloudView = BranchPickerRowView.iconView(cloudImage, tint: .secondaryLabelColor)
     private let name = PickerLabel.make(font: PickerStyle.nameFont, color: .labelColor)
     private let subtitle = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
+    /// Its own label, so the subtitle truncates without taking the dot with it.
+    private let pullRequestSeparator = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
     private let status = BranchRowStatusView(frame: .zero)
     private var row: BranchPickerRow?
     private var accessibilityActionName = "Switch to branch"
@@ -82,7 +90,13 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         identifier = Self.identifier
         // Like the pills: the search field keeps the keyboard.
         copyButton.refusesFirstResponder = true
-        for view in [checkView, cloudView, name, copyButton, subtitle, status] { addSubview(view) }
+        pullRequestSeparator.stringValue = "·"
+        pullRequestSeparator.setAccessibilityElement(false)
+        for view in [
+            checkView, cloudView, name, copyButton, subtitle, pullRequestSeparator, pullRequestCapsule, status,
+        ] {
+            addSubview(view)
+        }
         // `.activeAlways`: a scripted launch never makes the popover key.
         addTrackingArea(
             NSTrackingArea(
@@ -108,6 +122,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         name.attributedStringValue = Self.attributedName(row)
         subtitle.stringValue = row.subtitle
         copyButton.configure(text: row.name)
+        pullRequestCapsule.configure(pullRequest: row.pullRequest, isRowHighlighted: isHighlighted)
+        pullRequestSeparator.isHidden = row.pullRequest == nil
         status.configure(trailing)
         // Reused pills start full; `layout()` compacts them if the row is crowded.
         syncButtons?.reservesShortcutWidth = true
@@ -131,11 +147,13 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         isHighlighted = highlighted
         self.hidesStatus = hidesStatus
         updateCopyButton()
+        pullRequestCapsule.setRowHighlighted(highlighted)
     }
 
     /// Redraws the drawn parts with the current accessibility display options.
     func refreshRendering() {
         needsDisplay = true
+        pullRequestCapsule.needsDisplay = true
         status.refreshRendering()
         syncButtons?.refreshRendering()
         // A Reduce Motion change mid-fade should not leave it running.
@@ -229,6 +247,12 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
                     guard let self else { return false }
                     copyButton.copyText()
                     return true
+                })
+        }
+        if row?.pullRequest != nil {
+            actions.append(
+                NSAccessibilityCustomAction(name: "Open pull request") { [weak self] in
+                    self?.pullRequestCapsule.accessibilityPerformPress() ?? false
                 })
         }
         actions += syncButtons?.accessibilityCustomActions() ?? []
@@ -413,7 +437,9 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     private func layoutText(_ layout: BranchRowTrailingLayout) {
         let nameHeight = PickerViewGeometry.naturalSize(of: name).height
         let subtitleHeight = PickerViewGeometry.naturalSize(of: subtitle).height
-        let top = ((bounds.height - nameHeight - Self.lineGap - subtitleHeight) / 2).rounded()
+        // Every row makes room for the capsule, so names line up whether or not a row has one.
+        let subtitleLineHeight = max(subtitleHeight, PullRequestCapsuleButton.height)
+        let top = ((bounds.height - nameHeight - Self.lineGap - subtitleLineHeight) / 2).rounded()
         let side = PickerCopyButton.side
         copyButtonFits = layout.showsCopyButton
         let room = max(layout.nameWidth, 0)
@@ -432,11 +458,40 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             NSRect(x: lineEnd + Self.copyGap, y: top + (nameHeight - side) / 2, width: side, height: side),
             options: PickerViewGeometry.pixelAlignment)
         let lineWidth = leadingIconRoom + room + trailingIconRoom + (copyButtonFits ? Self.copyGap + side : 0)
-        subtitle.frame = NSRect(
-            x: textX, y: name.frame.maxY + Self.lineGap, width: lineWidth, height: subtitleHeight)
+        layoutSubtitleLine(
+            y: name.frame.maxY + Self.lineGap, width: lineWidth, textHeight: subtitleHeight,
+            lineHeight: subtitleLineHeight)
         updateCopyButton()
-        // A reused cell's button may have moved out from under the pointer.
+        // A reused cell's buttons may have moved out from under the pointer.
         copyButton.refreshHover(animated: false)
+        pullRequestCapsule.refreshHover()
+    }
+
+    /// The subtitle, then its `·` and the pull request capsule right after the text. Those
+    /// two keep their full width; the subtitle truncates to leave them room.
+    private func layoutSubtitleLine(y: CGFloat, width: CGFloat, textHeight: CGFloat, lineHeight: CGFloat) {
+        let textY = y + (lineHeight - textHeight) / 2
+        guard !pullRequestCapsule.isHidden else {
+            subtitle.frame = NSRect(x: textX, y: textY, width: width, height: textHeight)
+            return
+        }
+        // Gaps are between the glyphs: a label's frame pads its text on each side.
+        let separatorWidth = PickerViewGeometry.naturalSize(of: pullRequestSeparator).width
+        let padding = (separatorWidth - pullRequestSeparator.attributedStringValue.size().width) / 2
+        let separatorGap = Self.subtitleGap - padding * 2
+        let capsuleGap = Self.subtitleGap - padding
+        let capsuleWidth = pullRequestCapsule.width
+        let room = width - separatorGap - separatorWidth - capsuleGap - capsuleWidth
+        let subtitleWidth = max(min(PickerViewGeometry.naturalSize(of: subtitle).width, room), 0)
+        subtitle.frame = NSRect(x: textX, y: textY, width: subtitleWidth, height: textHeight)
+        pullRequestSeparator.frame = NSRect(
+            x: subtitle.frame.maxX + separatorGap, y: textY, width: separatorWidth, height: textHeight)
+        let height = PullRequestCapsuleButton.height
+        pullRequestCapsule.frame = backingAlignedRect(
+            NSRect(
+                x: pullRequestSeparator.frame.maxX + capsuleGap, y: y + (lineHeight - height) / 2, width: capsuleWidth,
+                height: height),
+            options: PickerViewGeometry.pixelAlignment)
     }
 
     /// Places `icon` at `x`, centred on the line. Sized from its image, as the room reserved

@@ -2677,6 +2677,9 @@ extension WindowState {
     /// listing in flight, then lists the new repositories. Every list and listing came from
     /// an attempt, so the last attempt's identity is the one they belong to.
     private func branchPullRequestIdentityMayHaveChanged(session: RepoSession) {
+        #if DEBUG
+            if DebugLaunchOptions.pinsPullRequestList { return }
+        #endif
         let identity = currentPullRequestListIdentity
         guard identity != session.lastPullRequestListAttemptAt?.identity else { return }
         branchPullRequests = nil
@@ -2691,6 +2694,9 @@ extension WindowState {
     /// Lists origin's pull requests unless the same listing is in flight or started within
     /// the cooldown. The first attempt for an identity always runs.
     func refreshBranchPullRequests(session: RepoSession) {
+        #if DEBUG
+            if DebugLaunchOptions.pinsPullRequestList { return }
+        #endif
         guard isLive(session), let identity = currentPullRequestListIdentity else { return }
         // Refresh triggers received during an in-flight request are coalesced. The next
         // eligible refresh observes later GitHub changes.
@@ -2730,4 +2736,12 @@ extension WindowState {
         guard listing.allSourcesSucceeded || branchPullRequests == nil else { return }
         branchPullRequests = BranchPullRequests(headRepository: identity.head, listing: listing)
     }
+
+    #if DEBUG
+        /// Shows the launch fixture's pull requests, for screenshots. No listing ever runs
+        /// while `DebugLaunchOptions.pinsPullRequestList` is set, so nothing replaces them.
+        func pinBranchPullRequests(_ pullRequests: BranchPullRequests) {
+            branchPullRequests = pullRequests
+        }
+    #endif
 }
