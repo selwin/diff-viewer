@@ -8,7 +8,7 @@
 **Goal**: `listPullRequests(head:base:)`, `ListedPullRequest`, `BranchPullRequests` index.
 **Success Criteria**: Parsing, listing-failure and matching tests pass; nothing wired into the UI.
 **Tests**: Parsing, listing failures, matching (see plan).
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: Refresh in the window; rows carry their PR
 **Goal**: Background, identity-keyed, single-flight refresh; rows get `pullRequest`; `Remote gone` hidden for merged/closed.

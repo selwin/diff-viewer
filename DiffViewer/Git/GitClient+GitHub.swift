@@ -20,7 +20,7 @@ extension GitClient {
     /// Checked in this order, as `gh` itself does.
     private static let gitHubTokenVariables = ["GH_TOKEN", "GITHUB_TOKEN"]
 
-    private var gitHubAPI: GitHubAPI { GitHubAPI(transport: gitHubTransport, gate: gitHubRateLimitGate) }
+    var gitHubAPI: GitHubAPI { GitHubAPI(transport: gitHubTransport, gate: gitHubRateLimitGate) }
 
     /// The token for github.com: `GH_TOKEN`, then `GITHUB_TOKEN` in the command environment,
     /// then `gh auth token`; nil when none has one. An empty or whitespace-only value counts
@@ -212,7 +212,7 @@ extension GitClient {
     }
 
     /// Escapes a repository's owner or name for the API path, so it stays one segment.
-    private static func pathComponent(_ text: String) -> String {
+    static func pathComponent(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/")))
             ?? text
     }

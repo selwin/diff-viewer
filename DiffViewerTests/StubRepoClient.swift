@@ -47,6 +47,7 @@ enum StubCall {
     case gitHubAuthenticationStatus
     case gitHubRepositoryCheck
     case findOpenPullRequest
+    case listPullRequests
 }
 
 /// The calls parked on one `StubCall`, and whether new ones park too.
@@ -188,6 +189,8 @@ actor StubRepoClient: RepoClient {
     private(set) var pullRequestBaseRequests: [(headSHA: String, baseTipSHA: String)] = []
     private var stubbedGitHubAuthenticationStatus = GitHubAuthenticationStatus.anonymous
     private var stubbedOpenPullRequest: GitHubPullRequest?
+    private var stubbedPullRequestListing = PullRequestListing(
+        pullRequests: [], headDefaultBranch: nil, allSourcesSucceeded: true, openSourcesSucceeded: true)
     private(set) var gitHubAuthenticationStatusCalls = 0
     /// Answers for the next `gitHubRepositoryCheck` calls, oldest first.
     private var queuedGitHubRepositoryChecks: [GitHubRepositoryCheck] = []
@@ -195,6 +198,8 @@ actor StubRepoClient: RepoClient {
     private(set) var gitHubRepositoryCheckCalls: [GitHubRepository] = []
     /// Every lookup asked for, in order, whether or not it succeeded.
     private(set) var findOpenPullRequestCalls: [PullRequestIdentity] = []
+    /// Every listing asked for, in order, whether or not it succeeded.
+    private(set) var listPullRequestsCalls: [(head: GitHubRepository, base: GitHubRepository)] = []
     private(set) var runningMergePreviews = 0
     private(set) var mostRunningMergePreviews = 0
     struct MergeCall: Equatable {
@@ -562,9 +567,12 @@ actor StubRepoClient: RepoClient {
     /// What `findOpenPullRequest` answers for any identity. Read when the call starts, so
     /// held calls can each answer differently.
     func set(openPullRequest pullRequest: GitHubPullRequest?) { stubbedOpenPullRequest = pullRequest }
+    /// What `listPullRequests` answers; read when the call starts, like `set(openPullRequest:)`.
+    func set(pullRequestListing listing: PullRequestListing) { stubbedPullRequestListing = listing }
     /// Makes `call` throw `error`, or stop throwing with nil. Covers `.remotes`,
     /// `.advertisedPullRequest`, `.fetchPullRequest`, `.pinPullRequest`, `.pullRequestBase`,
-    /// `.gitHubAuthenticationStatus`, `.gitHubRepositoryCheck` and `.findOpenPullRequest`; read
+    /// `.gitHubAuthenticationStatus`, `.gitHubRepositoryCheck`, `.findOpenPullRequest` and
+    /// `.listPullRequests`; read
     /// once a held call is released, so a test can change it meanwhile.
     func fail(_ call: StubCall, with error: (any Error)?) { pullRequestErrors[call] = error }
     func set(configuredUpstreamRemotes remotes: [String: String]) { stubbedUpstreamRemotes = remotes }
@@ -759,6 +767,14 @@ actor StubRepoClient: RepoClient {
         let snapshot = stubbedOpenPullRequest
         if isHeld(.findOpenPullRequest) { await park(.findOpenPullRequest) }
         if let error = pullRequestErrors[.findOpenPullRequest] { throw error }
+        return snapshot
+    }
+
+    func listPullRequests(head: GitHubRepository, base: GitHubRepository) async throws -> PullRequestListing {
+        listPullRequestsCalls.append((head: head, base: base))
+        let snapshot = stubbedPullRequestListing
+        if isHeld(.listPullRequests) { await park(.listPullRequests) }
+        if let error = pullRequestErrors[.listPullRequests] { throw error }
         return snapshot
     }
 

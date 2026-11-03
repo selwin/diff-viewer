@@ -6,7 +6,7 @@ import Testing
 
 /// Answers GitHub requests by URL and records them. A first page is routed by its path, a
 /// later one by its whole URL; anything unrouted is a 404.
-private final class FakeGitHub: Sendable {
+final class FakeGitHub: Sendable {
     enum Reply: Sendable {
         case http(Int, headers: [String: String] = [:], body: String)
         /// Waits until the request's task is cancelled.

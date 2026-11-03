@@ -185,4 +185,9 @@ protocol RepoClient: Sendable {
     /// repository successfully reports no eligible open pull request; otherwise returns the
     /// first match or throws the first failure.
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest?
+    /// Every pull request of `base` and `head`'s repositories that the branch picker can show:
+    /// all open ones, and the newest page of closed ones. A failing source is skipped and
+    /// reported in the listing; throws only when every source failed, or at once for a rate
+    /// limit or cancellation.
+    func listPullRequests(head: GitHubRepository, base: GitHubRepository) async throws -> PullRequestListing
 }
