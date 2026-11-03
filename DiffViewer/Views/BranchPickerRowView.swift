@@ -2,8 +2,7 @@ import AppKit
 
 /// A branch row: the name with a copy button after it over `author · time` and the
 /// branch's pull request, and on the right its status and the Pull/Push pills. The current
-/// branch adds a checkmark before the name and a tint; a remote-only branch adds a cloud
-/// after it.
+/// branch's row is tinted; a remote-only branch adds a cloud after its name.
 /// The copy button and pills show on the highlighted row; pills also stay
 /// while their operation runs. In Switch a highlighted row's status fades out as its
 /// pills fade in, only when the pills show; in Merge the preview stays. The current branch's row
@@ -15,9 +14,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     /// The least room the name keeps; the trailing items give way first.
     static let nameMinimum: CGFloat = 72
-    /// Between the name and the checkmark or cloud beside it.
+    /// Between the name and the cloud after it.
     private static let iconGap: CGFloat = 6
-    private static let checkImage = symbolImage("checkmark", pointSize: 14, weight: .bold)
     private static let cloudImage = symbolImage("cloud", pointSize: 15, weight: .regular)
     private static let lineGap: CGFloat = 1
     /// Between the subtitle's text, its `·` and the pull request capsule.
@@ -72,7 +70,6 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     /// Set before `showSyncButtons`, which shows or fades the status to match.
     private var hidesStatus = false
 
-    private let checkView = BranchPickerRowView.iconView(checkImage, tint: PickerStyle.accent)
     private let cloudView = BranchPickerRowView.iconView(cloudImage, tint: .secondaryLabelColor)
     private let name = PickerLabel.make(font: PickerStyle.nameFont, color: .labelColor)
     private let subtitle = PickerLabel.make(font: PickerStyle.metaFont, color: PickerStyle.meta)
@@ -93,7 +90,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         pullRequestSeparator.stringValue = "·"
         pullRequestSeparator.setAccessibilityElement(false)
         for view in [
-            checkView, cloudView, name, copyButton, subtitle, pullRequestSeparator, pullRequestCapsule, status,
+            cloudView, name, copyButton, subtitle, pullRequestSeparator, pullRequestCapsule, status,
         ] {
             addSubview(view)
         }
@@ -117,7 +114,6 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
     ) {
         self.row = row
         stopAnimating()
-        checkView.isHidden = row.kind != .current
         cloudView.isHidden = row.kind != .remoteOnly
         name.attributedStringValue = Self.attributedName(row)
         subtitle.stringValue = row.subtitle
@@ -358,11 +354,6 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
 
     private var contentMaxX: CGFloat { textX + Self.lineWidth(rowWidth: bounds.width) }
 
-    /// The checkmark and its gap, before the name.
-    private var leadingIconRoom: CGFloat {
-        row?.kind == .current ? Self.checkImage.size.width + Self.iconGap : 0
-    }
-
     /// The cloud and its gap, after the name.
     private var trailingIconRoom: CGFloat {
         row?.kind == .remoteOnly ? Self.iconGap + Self.cloudImage.size.width : 0
@@ -376,8 +367,8 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
             syncPills: pills?.width(reservingShortcuts: true) ?? 0,
             compactSyncPills: pills?.width(reservingShortcuts: false) ?? 0,
             copyButton: Self.copyGap + PickerCopyButton.side, gap: PickerStyle.trailingGap)
-        // The checkmark and cloud never shrink; the name and trailing items share the rest.
-        let available = Self.lineWidth(rowWidth: bounds.width) - leadingIconRoom - trailingIconRoom
+        // The cloud never shrinks; the name and trailing items share the rest.
+        let available = Self.lineWidth(rowWidth: bounds.width) - trailingIconRoom
         return .make(available: available, nameMinimum: Self.nameMinimum, widths: widths)
     }
 
@@ -431,7 +422,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         status.frame = frames.status
     }
 
-    /// The checkmark, the name, truncating, the cloud, then the copy button, over the
+    /// The name, truncating, the cloud, then the copy button, over the
     /// subtitle. The button's room is kept while it is hidden, so the name does not shift as
     /// the highlight moves; a crowded line gives it up.
     private func layoutText(_ layout: BranchRowTrailingLayout) {
@@ -443,12 +434,10 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         let side = PickerCopyButton.side
         copyButtonFits = layout.showsCopyButton
         let room = max(layout.nameWidth, 0)
-        let nameX = textX + leadingIconRoom
         let hasCloud = !cloudView.isHidden
         // The cloud sits right after the visible name, so the name is no wider than its text.
         let nameWidth = copyButtonFits || hasCloud ? min(PickerViewGeometry.naturalSize(of: name).width, room) : room
-        name.frame = NSRect(x: nameX, y: top, width: nameWidth, height: nameHeight)
-        positionIcon(checkView, x: textX, onLineAt: top, height: nameHeight)
+        name.frame = NSRect(x: textX, y: top, width: nameWidth, height: nameHeight)
         var lineEnd = name.frame.maxX
         if hasCloud {
             positionIcon(cloudView, x: lineEnd + Self.iconGap, onLineAt: top, height: nameHeight)
@@ -457,7 +446,7 @@ final class BranchPickerRowView: NSTableCellView, PickerRowAccessoryHosting {
         copyButton.frame = backingAlignedRect(
             NSRect(x: lineEnd + Self.copyGap, y: top + (nameHeight - side) / 2, width: side, height: side),
             options: PickerViewGeometry.pixelAlignment)
-        let lineWidth = leadingIconRoom + room + trailingIconRoom + (copyButtonFits ? Self.copyGap + side : 0)
+        let lineWidth = room + trailingIconRoom + (copyButtonFits ? Self.copyGap + side : 0)
         layoutSubtitleLine(
             y: name.frame.maxY + Self.lineGap, width: lineWidth, textHeight: subtitleHeight,
             lineHeight: subtitleLineHeight)

@@ -5,11 +5,12 @@ import AppKit
 /// on the highlighted row, it fills solid with white content. The icon and number are
 /// drawn rather than subviews, so every click lands on the button.
 final class PullRequestCapsuleButton: NSButton {
-    static let height: CGFloat = 18
-    private static let padding: CGFloat = 7
-    private static let iconSide: CGFloat = 11
-    private static let iconGap: CGFloat = 4
-    private static let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+    static let height: CGFloat = 16
+    private static let padding: CGFloat = 6
+    private static let iconSide: CGFloat = 10
+    private static let iconGap: CGFloat = 3
+    /// The subtitle's size and weight, so the number reads as part of `author · time`.
+    private static let font = NSFont.monospacedDigitSystemFont(ofSize: PickerStyle.metaFont.pointSize, weight: .regular)
     private static let mark = NSImage(resource: .gitHubMark)
 
     /// Called with the pull request's page on a click or an accessibility press.
