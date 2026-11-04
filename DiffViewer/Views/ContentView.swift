@@ -73,6 +73,8 @@ struct ContentView: View {
                         .padding(.horizontal, 10)
                 } else {
                     RepositoryCapsuleView()
+                        // The toolbar sets separate items flush; this matches the pickers' 8pt gap.
+                        .padding(.trailing, 8)
                 }
             }
             // The capsule draws its own glass, and a bare name has none.
