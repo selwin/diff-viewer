@@ -35,6 +35,28 @@ struct SidebarClickMonitor: NSViewRepresentable {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError() }
 
+        /// Neither SwiftUI nor the list's clip view hit-tests into the bottom safe area, so a
+        /// row drawn in the Changes list's padding would fall through to this view, which sits
+        /// behind the List. Handing those points to the table keeps those rows clickable; a
+        /// scroller still takes its own.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let own = super.hitTest(point), let superview, let scroll = listScrollView,
+                let scrollParent = scroll.superview
+            else { return super.hitTest(point) }
+            let hit = scroll.hitTest(scrollParent.convert(point, from: superview)) ?? own
+            guard hit === scroll, let table = scroll.documentView, let clip = table.superview else { return hit }
+            return table.hitTest(clip.convert(point, from: superview)) ?? scroll
+        }
+
+        /// The List this view sits behind. Both sidebar lists share a hosting view, so their
+        /// frames tell them apart.
+        private var listScrollView: NSScrollView? {
+            let frameInWindow = convert(bounds, to: nil)
+            return superview?.superview?.subviews.lazy
+                .compactMap { $0.subviews.first as? NSScrollView }
+                .first { $0.convert($0.bounds, to: nil).contains(frameInWindow) }
+        }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             if let monitor { NSEvent.removeMonitor(monitor) }
