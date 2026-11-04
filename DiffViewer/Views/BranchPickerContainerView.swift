@@ -34,6 +34,8 @@ final class BranchPickerContainerView: NSView {
     var onFetch: () -> Void = {}
     /// The header's pull request button.
     var onPullRequest: () -> Void = {}
+    /// A row's pull request capsule or menu item; takes the pull request's page.
+    var onOpenPullRequest: (URL) -> Void = { _ in }
     /// The New Branch… row, Return on it, and ⌘N; takes the name the search proposes.
     var onNewBranch: (String?) -> Void = { _ in }
     /// The Compare… row and ⇧⌘D.

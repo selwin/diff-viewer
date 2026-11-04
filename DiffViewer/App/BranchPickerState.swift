@@ -97,7 +97,8 @@ struct BranchPickerState {
                 source: .local(branch), name: branch.name,
                 subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
                 status: .local(branch, configuredRemote: snapshot.configuredUpstreamRemotes[branch.name]),
-                collidesWithLocalName: false)
+                collidesWithLocalName: false,
+                pullRequest: snapshot.branchPullRequests?.pullRequest(for: .local(branch)))
         }
     }
 
@@ -113,7 +114,8 @@ struct BranchPickerState {
                 id: .remote(ref: branch.ref), kind: .remoteOnly, source: .remote(branch), name: name,
                 subtitle: subtitle(author: branch.tipCommitAuthor, date: branch.tipCommittedAt, grouping: grouping),
                 status: snapshot.newRemoteBranches.contains(branch.ref) ? .new : .none,
-                collidesWithLocalName: collides)
+                collidesWithLocalName: collides,
+                pullRequest: snapshot.branchPullRequests?.pullRequest(for: .remote(branch)))
         }
     }
 
@@ -128,10 +130,6 @@ struct BranchPickerState {
         }
         if case let .remote(remote) = SyncPolicy.publishRemote(remotes: remotes) { return remote }
         return nil
-    }
-
-    private static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
-        "\(author) · \(grouping.rowTimeText(for: date))"
     }
 
     /// The first highlightable row: the newest branch, or a search's best match.
@@ -331,7 +329,7 @@ struct BranchPickerState {
         case .merge:
             return preview.map(MergePreviewText.label(for:))
         case .switchBranch:
-            guard !row.status.text.isEmpty else { return nil }
+            guard !row.status.text.isEmpty, !row.pullRequestExplainsGoneUpstream else { return nil }
             return BranchRowLabel(text: row.status.text, style: row.status.labelStyle)
         }
     }
@@ -586,5 +584,15 @@ extension BranchPickerState {
     /// The keys of the rows in `visibleRows` that have one.
     func requestedKeys(visibleRows: Range<Int>) -> Set<MergePreviewKey> {
         Set(visibleRows.clamped(to: items.indices).compactMap { mergePreviewKey(forTableRow: $0) })
+    }
+}
+
+/// Row text, outside the struct body to keep it under the length lint.
+extension BranchPickerState {
+    /// `author · time`, with only the author's first word; just the time without an author.
+    fileprivate static func subtitle(author: String, date: Date, grouping: CommitDayGrouping) -> String {
+        let time = grouping.rowTimeText(for: date)
+        let name = AuthorName.firstToken(of: author)
+        return name.isEmpty ? time : "\(name) · \(time)"
     }
 }

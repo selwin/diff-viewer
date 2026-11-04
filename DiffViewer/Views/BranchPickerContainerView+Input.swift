@@ -21,6 +21,12 @@ extension BranchPickerContainerView: NSTableViewDataSource, NSTableViewDelegate 
                 tableView.makeView(withIdentifier: BranchPickerRowView.identifier, owner: nil)
                 as? BranchPickerRowView ?? BranchPickerRowView(frame: .zero)
             cell.copyButton.onCopy = { [weak self] in self?.returnFocusToSearchField() }
+            // Set on every reuse, and the capsule passes its own URL, so a reused cell never
+            // opens another row's pull request.
+            cell.pullRequestCapsule.onOpen = { [weak self] url in
+                self?.returnFocusToSearchField()
+                self?.onOpenPullRequest(url)
+            }
             cell.configure(
                 entry, trailing: state.trailingLabel(forTableRow: row, preview: mergePreview(forTableRow: row)),
                 blockedReason: state.blockedReason(forTableRow: row), actionName: activationName(for: entry))
@@ -122,12 +128,38 @@ extension BranchPickerContainerView {
     func menu(forTableRow row: Int) -> NSMenu? {
         guard let branch = state.row(forTableRow: row) else { return nil }
         let menu = NSMenu()
+        // Bound now, like the name below.
+        if let pullRequest = branch.pullRequest {
+            let open = NSMenuItem(
+                title: "Open Pull Request #\(pullRequest.number) on GitHub", action: #selector(openPullRequestChosen),
+                keyEquivalent: "")
+            let copy = NSMenuItem(
+                title: "Copy Pull Request Link", action: #selector(copyPullRequestLinkChosen), keyEquivalent: "")
+            for item in [open, copy] {
+                item.target = self
+                item.representedObject = pullRequest.url
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
         let item = NSMenuItem(title: "Copy Branch Name", action: #selector(copyBranchNameChosen), keyEquivalent: "")
         item.target = self
         // Bound now: a refresh can move or replace the row while the menu is open.
         item.representedObject = BranchNameCopy(name: branch.name, rowID: branch.id)
         menu.addItem(item)
         return menu
+    }
+
+    @objc private func openPullRequestChosen(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        returnFocusToSearchField()
+        onOpenPullRequest(url)
+    }
+
+    @objc private func copyPullRequestLinkChosen(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        PickerCopyButton.copyToPasteboard(url.absoluteString)
+        returnFocusToSearchField()
     }
 
     @objc private func copyBranchNameChosen(_ sender: NSMenuItem) {

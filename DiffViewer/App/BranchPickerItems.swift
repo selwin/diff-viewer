@@ -46,6 +46,8 @@ struct BranchPickerSnapshot: Equatable, Sendable {
     /// HEAD's branch's pull request identity, which a lookup must match to count.
     var currentPullRequestIdentity: PullRequestIdentity?
     var pullRequestLookup: PullRequestLookup?
+    /// Origin's pull requests by head branch, from the last published listing.
+    var branchPullRequests: BranchPullRequests?
 }
 
 /// Which branch a row stands for. The highlight, reloads and actions all go by it, never
@@ -191,6 +193,8 @@ struct BranchPickerRow: Equatable {
     /// A remote-only branch whose name a local branch already has: checking it out would
     /// collide with that branch.
     let collidesWithLocalName: Bool
+    /// The branch's pull request on origin, open or not, from the last listing.
+    let pullRequest: ListedPullRequest?
     /// The name's characters the query matched; empty when no query is active.
     var matchedRanges: [Range<String.Index>] = []
 
@@ -199,6 +203,13 @@ struct BranchPickerRow: Equatable {
         case let .local(branch): branch.tipCommittedAt
         case let .remote(branch): branch.tipCommittedAt
         }
+    }
+
+    /// A merged or closed pull request usually explains a deleted upstream, so "Remote gone"
+    /// would add nothing. Only the label is hidden; the status and the branch's Delete stay.
+    var pullRequestExplainsGoneUpstream: Bool {
+        guard status == .upstreamGone, let state = pullRequest?.state else { return false }
+        return state == .merged || state == .closed
     }
 }
 

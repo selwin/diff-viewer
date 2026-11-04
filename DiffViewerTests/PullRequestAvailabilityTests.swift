@@ -123,10 +123,9 @@ struct PullRequestAvailabilityTests {
         #expect(unpushed.focusOrder == [.copy, .fetch, .push])
     }
 
-    @Test func theHeaderOffersAViewablePullRequestToTabWhileAhead() throws {
-        let ahead = try Self.viewing(Self.snapshot(branches: [Self.tracking(tracking: .counts(ahead: 1, behind: 0))]))
-        let header = BranchPickerHeaderText.make(snapshot: ahead)
-        #expect(header.pullRequest == .view(Self.pullRequest))
-        #expect(header.focusOrder == [.copy, .fetch, .push, .pullRequest])
+    @Test func theHeaderLeavesAnExistingPullRequestToTheRowCapsule() throws {
+        let header = BranchPickerHeaderText.make(snapshot: try Self.viewing(Self.snapshot()))
+        #expect(header.pullRequest == .hidden)
+        #expect(header.focusOrder == [.copy, .fetch])
     }
 }

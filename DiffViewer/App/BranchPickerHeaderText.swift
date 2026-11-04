@@ -109,9 +109,16 @@ struct BranchPickerHeaderText: Equatable {
                 title: name, detailParts: detailParts, showsSpinner: spinner,
                 canFetch: canFetch, branch: name,
                 buttons: BranchPickerState.syncButtons(for: branch, isCurrent: true, snapshot: snapshot),
-                // The picker only opens in a window that can offer it.
-                pullRequest: PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true),
+                pullRequest: pullRequest(snapshot: snapshot),
                 copyableName: name, gitHub: gitHub)
         }
+    }
+
+    /// Only creating is offered here: an existing pull request is already the current row's
+    /// capsule. The picker only opens in a window that can offer it.
+    private static func pullRequest(snapshot: BranchPickerSnapshot) -> PullRequestAvailability {
+        let availability = PullRequestAvailability.make(snapshot: snapshot, isWindowEligible: true)
+        if case .view = availability { return .hidden }
+        return availability
     }
 }

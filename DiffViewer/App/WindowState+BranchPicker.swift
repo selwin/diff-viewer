@@ -74,6 +74,15 @@ extension WindowState {
         pendingMerge = target
     }
 
+    /// A picker row's pull request. The popover closes once the browser has opened it.
+    func openPullRequest(url: URL) {
+        if openURL(url) {
+            isBranchPickerPresented = false
+        } else {
+            errorMessage = "Couldn't open the browser"
+        }
+    }
+
     /// Whether `name` is a local branch as of the last read. Git refuses one created since.
     func hasLocalBranch(named name: String) -> Bool {
         branches.contains { $0.name == name }
@@ -94,7 +103,8 @@ extension WindowState {
             configuredUpstreamRemotes: configuredUpstreamRemotes, lastFetchRound: lastFetchRound,
             remoteBranches: remoteBranches, newRemoteBranches: newRemoteBranches,
             gitHubRemoteNames: gitHubRemoteNames, gitHubAuthenticationStatus: gitHubAuthenticationStatus,
-            currentPullRequestIdentity: currentPullRequestIdentity, pullRequestLookup: pullRequestLookup)
+            currentPullRequestIdentity: currentPullRequestIdentity, pullRequestLookup: pullRequestLookup,
+            branchPullRequests: branchPullRequests)
     }
 
     /// The pull request button's state for the menu, which reads the same snapshot the header does.

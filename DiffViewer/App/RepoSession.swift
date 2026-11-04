@@ -61,6 +61,18 @@ final class RepoSession {
     /// The identity whose last lookup failed. Only a forced request retries it; a discarded
     /// result never sets it.
     var failedPullRequestIdentity: PullRequestIdentity?
+    /// Bumped when a pull request listing starts and when the listing identity changes. Only
+    /// the listing of the current generation publishes.
+    var pullRequestListGeneration = 0
+    /// What the current listing reads, so a trigger meanwhile is dropped.
+    var pullRequestListInFlight: PullRequestListIdentity?
+    /// The listing in flight, cancelled once it is superseded or the window closes.
+    var pullRequestListTask: Task<Void, Never>?
+    /// When a listing last started, successful or not. The cooldown counts from it.
+    var lastPullRequestListAttemptAt: (identity: PullRequestListIdentity, date: Date)?
+    /// Incremented once a listing's result is fully handled, published or discarded. Lets
+    /// tests wait for the handling rather than for the client's answer.
+    var pullRequestListsFinished = 0
     /// Incremented per stash-list read, so only the newest read publishes.
     var stashSerial = 0
     /// The newest stash-list read. Older ones run on; their tickets keep them from publishing.

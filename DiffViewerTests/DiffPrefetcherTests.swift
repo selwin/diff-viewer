@@ -119,6 +119,10 @@ struct TaggedClient: RepoClient {
         .anonymous(cli: .missing)
     }
     func findOpenPullRequest(_ identity: PullRequestIdentity) async throws -> GitHubPullRequest? { nil }
+    func listPullRequests(head: GitHubRepository, base: GitHubRepository) async throws -> PullRequestListing {
+        PullRequestListing(
+            pullRequests: [], headDefaultBranch: nil, allSourcesSucceeded: true, openSourcesSucceeded: true)
+    }
 }
 
 @MainActor
