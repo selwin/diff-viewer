@@ -56,7 +56,23 @@ final class DiffPaneView: NSView {
 
     /// The text selected in this pane, in document rows and raw UTF-16 offsets.
     var selection: PaneSelection? {
-        didSet { if selection != oldValue { needsDisplay = true } }
+        didSet {
+            if selection != oldValue { needsDisplay = true }
+            if selection != nil { fileNameSelection = nil }
+        }
+    }
+
+    /// The text selected in a changeset file band's name. Exclusive with `selection`.
+    var fileNameSelection: FileNameSelection? {
+        didSet {
+            if fileNameSelection != oldValue { needsDisplay = true }
+            if fileNameSelection != nil { selection = nil }
+        }
+    }
+
+    func clearSelection() {
+        selection = nil
+        fileNameSelection = nil
     }
 
     /// Called when a text selection starts or Select All is invoked here, so the other pane
@@ -99,7 +115,7 @@ final class DiffPaneView: NSView {
         self.model = model
         switch mode {
         case .replace:
-            selection = nil
+            clearSelection()
             isSelectingText = false
             documentGeneration += 1
             copyFeedbackTimer?.invalidate()
@@ -142,6 +158,8 @@ final class DiffPaneView: NSView {
     struct HeaderLines {
         /// Nil on the new pane.
         let name: CTLine?
+        /// `name`'s string, which a name selection indexes into. Nil on the new pane.
+        let nameString: String?
         /// Nil on the old pane, or for a file at the repository root.
         let directory: CTLine?
         /// Nil on the old pane, or when neither side changed.

@@ -96,12 +96,12 @@ final class SideBySideContainerView: NSView {
             addSubview(scroll)
         }
         leftPane.onInteraction = { [weak self] in
-            self?.rightPane.selection = nil
+            self?.rightPane.clearSelection()
             self?.findOwnedSelection = nil
             self?.onPaneInteraction?(.old)
         }
         rightPane.onInteraction = { [weak self] in
-            self?.leftPane.selection = nil
+            self?.leftPane.clearSelection()
             self?.findOwnedSelection = nil
             self?.onPaneInteraction?(.new)
         }

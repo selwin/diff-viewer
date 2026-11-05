@@ -45,6 +45,7 @@ struct FileHeaderView: View {
                 KindBadge(kind: file.kind)
                     .fixedSize()
                 Text(file.fileName)
+                    .textSelection(.enabled)
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -52,6 +53,7 @@ struct FileHeaderView: View {
                     .help(file.path)
                 if let original = file.originalPath {
                     Text("← \(original)")
+                        .textSelection(.enabled)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

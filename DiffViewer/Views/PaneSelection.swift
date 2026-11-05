@@ -43,6 +43,28 @@ struct PaneSelection: Equatable, Sendable {
     func includesLineEnd(ofRow row: Int) -> Bool { row < end.row }
 }
 
+/// A selection inside the name on a changeset file band. Bands are not document rows,
+/// so `PaneSelection` cannot point at them.
+struct FileNameSelection: Equatable, Sendable {
+    let section: Int
+    /// UTF-16 offsets into the full name string.
+    var anchor: Int
+    var head: Int
+
+    var range: Range<Int> { min(anchor, head)..<max(anchor, head) }
+    var isEmpty: Bool { anchor == head }
+
+    /// The text in `range`, clamped to `string` and widened to whole characters.
+    func text(in string: String) -> String {
+        let line = string as NSString
+        let lower = min(max(range.lowerBound, 0), line.length)
+        let upper = min(max(range.upperBound, lower), line.length)
+        guard upper > lower else { return "" }
+        let rounded = line.rangeOfComposedCharacterSequences(for: NSRange(location: lower, length: upper - lower))
+        return line.substring(with: rounded)
+    }
+}
+
 extension PaneSelection {
     /// Selects `range` within one row. In an extension so the memberwise init stays.
     init(row: Int, range: Range<Int>) {

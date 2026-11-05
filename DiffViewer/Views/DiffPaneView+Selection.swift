@@ -39,6 +39,7 @@ extension DiffPaneView {
         if isOnScopeCopy || separatorHidden(at: point) != nil || moveMarkerTarget(at: point) != nil {
             return .pointingHand
         }
+        if fileNameTarget(at: point) != nil { return .iBeam }
         guard let model, !isOverGutter(point), let (_, row) = documentRow(at: point), model.cell(atRow: row) != nil
         else { return .arrow }
         return .iBeam
@@ -199,6 +200,7 @@ extension DiffPaneView {
 
     override func mouseDown(with event: NSEvent) {
         isSelectingText = false
+        fileNameSelection = nil
         let point = convert(event.locationInWindow, from: nil)
         if let hidden = scopeCopyTarget(at: point) {
             return copyScopeName(hidden: hidden, generation: documentGeneration)
@@ -211,6 +213,20 @@ extension DiffPaneView {
             return onFoldAction(Self.action(for: control ?? .expandRun, hidden: hidden))
         }
         if let onJumpToDocumentRow, let row = moveMarkerTarget(at: point) { return onJumpToDocumentRow(row) }
+        if let (section, offset) = fileNameTarget(at: point), let name = fileNameText(section: section) {
+            window?.makeFirstResponder(self)
+            onInteraction?()
+            isSelectingText = true
+            if event.clickCount >= 3 {
+                fileNameSelection = FileNameSelection(section: section, anchor: 0, head: name.utf16.count)
+            } else if event.clickCount == 2 {
+                let word = WordSelection.range(in: name, at: offset)
+                fileNameSelection = FileNameSelection(section: section, anchor: word.lowerBound, head: word.upperBound)
+            } else {
+                fileNameSelection = FileNameSelection(section: section, anchor: offset, head: offset)
+            }
+            return
+        }
         guard let position = textPosition(at: point) else { return super.mouseDown(with: event) }
         window?.makeFirstResponder(self)
         onInteraction?()
@@ -226,6 +242,13 @@ extension DiffPaneView {
 
     override func mouseDragged(with event: NSEvent) {
         guard isSelectingText else { return }
+        if let selection = fileNameSelection, let model {
+            if let name = fileNameLayout(section: selection.section, model: model) {
+                let x = convert(event.locationInWindow, from: nil).x - name.x
+                fileNameSelection?.head = Self.fileNameOffset(forX: x, line: name.line, length: name.text.utf16.count)
+            }
+            return
+        }
         autoscroll(with: event)
         if let position = textPosition(at: convert(event.locationInWindow, from: nil)) {
             selection?.head = position
@@ -235,6 +258,7 @@ extension DiffPaneView {
     override func mouseUp(with event: NSEvent) {
         isSelectingText = false
         if selection?.isEmpty == true { selection = nil }
+        if fileNameSelection?.isEmpty == true { fileNameSelection = nil }
     }
 
     private func wordRange(at position: TextPosition) -> Range<Int>? {
@@ -245,8 +269,14 @@ extension DiffPaneView {
     // MARK: - Edit menu
 
     @objc func copy(_ sender: Any?) {
-        guard let model, let selection else { return }
-        let text = model.text(in: selection)
+        let text: String
+        if let name = selectedFileNameText() {
+            text = name
+        } else if let model, let selection {
+            text = model.text(in: selection)
+        } else {
+            return
+        }
         guard !text.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -254,6 +284,11 @@ extension DiffPaneView {
     }
 
     override func selectAll(_ sender: Any?) {
+        // A name being selected acts like its own text field, so ⌘A stays inside it.
+        if let current = fileNameSelection, let text = fileNameText(section: current.section) {
+            fileNameSelection = FileNameSelection(section: current.section, anchor: 0, head: text.utf16.count)
+            return
+        }
         guard let model else { return }
         onInteraction?()
         selection = model.fullSelection
@@ -262,8 +297,8 @@ extension DiffPaneView {
 
 extension DiffPaneView: NSUserInterfaceValidations {
     func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
-        if item.action == #selector(copy(_:)) { return selection != nil }
-        if item.action == #selector(selectAll(_:)) { return !(model?.rows.isEmpty ?? true) }
+        if item.action == #selector(copy(_:)) { return selection != nil || fileNameSelection != nil }
+        if item.action == #selector(selectAll(_:)) { return fileNameSelection != nil || !(model?.rows.isEmpty ?? true) }
         return true
     }
 }

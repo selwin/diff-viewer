@@ -33,17 +33,92 @@ extension DiffPaneView {
             let badgeRect = NSRect(
                 x: rowRect.minX + Self.fileHeaderInset, y: rowRect.minY + 3, width: badgeSize, height: badgeSize)
             drawBadge(section.file.kind, in: badgeRect, context: context)
-            let textX = badgeRect.maxX + 6
-            if let name = lines.name,
-                let line = truncated(
-                    name, truncation: .end, availableWidth: rowRect.maxX - textInset - textX,
-                    color: DiffTheme.headerText)
-            {
-                drawLine(line, at: CGPoint(x: textX, y: baseline), context: context)
+            if let name = fileNameLayout(section: index, model: model) {
+                drawFileNameSelection(section: index, name: name, in: rowRect, context: context)
+                drawLine(name.line, at: CGPoint(x: name.x, y: baseline), context: context)
             }
         case .new:
             drawRail(lines, in: rowRect, baseline: baseline, context: context)
         }
+    }
+
+    private func drawFileNameSelection(section: Int, name: FileNameLayout, in rowRect: NSRect, context: CGContext) {
+        guard let selection = fileNameSelection, selection.section == section, !selection.isEmpty else { return }
+        let length = name.text.utf16.count
+        let lower = Self.fileNameX(forOffset: selection.range.lowerBound, line: name.line, length: length)
+        let upper = Self.fileNameX(forOffset: selection.range.upperBound, line: name.line, length: length)
+        NSColor.selectedTextBackgroundColor.setFill()
+        context.fill(
+            NSRect(
+                x: name.x + min(lower, upper), y: rowRect.minY + 1, width: abs(upper - lower),
+                height: rowRect.height - 2))
+    }
+
+    /// The name as a band draws it. Drawing and hit testing share this, so the selection
+    /// lines up with the glyphs.
+    struct FileNameLayout {
+        let line: CTLine
+        let x: CGFloat
+        let text: String
+    }
+
+    /// Nil on the new pane or with no room. Every band has the same x extent, so no row is needed.
+    func fileNameLayout(section index: Int, model: PaneModel) -> FileNameLayout? {
+        guard model.side == .old, model.sections.indices.contains(index) else { return nil }
+        let lines = headerLines(section: index, model: model)
+        // Past the badge, which is as wide as the row is high less 6 pt, and a 6 pt gap.
+        let x = visibleRect.minX + Self.fileHeaderInset + layout.rowHeight
+        guard let name = lines.name, let text = lines.nameString,
+            let line = truncated(
+                name, truncation: .end, availableWidth: visibleRect.maxX - textInset - x, color: DiffTheme.headerText)
+        else { return nil }
+        return FileNameLayout(line: line, x: x, text: text)
+    }
+
+    /// The x of a string offset, from the line's start. Core Text answers 0 both for text the
+    /// ellipsis cut off and for a real position at the line's start (the first character of
+    /// a right-to-left run can sit there), so only the carets tell them apart. Cut text
+    /// takes the x of the string's end, which is the far edge of the ellipsis in either direction.
+    static func fileNameX(forOffset offset: Int, line: CTLine, length: Int) -> CGFloat {
+        var isDrawn = false
+        CTLineEnumerateCaretOffsets(line) { _, index, isLeadingEdge, stop in
+            if index == offset, isLeadingEdge {
+                isDrawn = true
+                stop.pointee = true
+            }
+        }
+        return CGFloat(CTLineGetOffsetForStringIndex(line, isDrawn ? offset : length, nil))
+    }
+
+    /// The string offset at `x`, from the line's start. Core Text resolves direction, and maps
+    /// the ellipsis and anything past it to the string's end, so a drag there takes the cut text.
+    static func fileNameOffset(forX x: CGFloat, line: CTLine, length: Int) -> Int {
+        let index = CTLineGetStringIndexForPosition(line, CGPoint(x: x, y: 0))
+        return min(max(index == kCFNotFound ? 0 : index, 0), length)
+    }
+
+    /// The band and name offset under `point`, only over the drawn name itself.
+    func fileNameTarget(at point: NSPoint) -> (section: Int, offset: Int)? {
+        guard let model, point.y >= 0, point.y < layout.contentHeight else { return nil }
+        let index = layout.row(atY: point.y)
+        guard index < displayRows.count, case let .fileHeader(section) = displayRows[index],
+            let name = fileNameLayout(section: section, model: model)
+        else { return nil }
+        let x = point.x - name.x
+        guard x >= 0, x <= CGFloat(CTLineGetTypographicBounds(name.line, nil, nil, nil)) else { return nil }
+        return (section, Self.fileNameOffset(forX: x, line: name.line, length: name.text.utf16.count))
+    }
+
+    /// The full text a name selection indexes into.
+    func fileNameText(section: Int) -> String? {
+        guard let model, model.sections.indices.contains(section) else { return nil }
+        return headerLines(section: section, model: model).nameString
+    }
+
+    /// The text of the name selection, or nil when there is none.
+    func selectedFileNameText() -> String? {
+        guard let selection = fileNameSelection, let text = fileNameText(section: selection.section) else { return nil }
+        return selection.text(in: text)
     }
 
     /// Churn first, right-aligned against the edge; then, when both are present and at
@@ -120,12 +195,14 @@ extension DiffPaneView {
         let lines: HeaderLines
         switch model.side {
         case .old:
+            let name = nameText(for: section.file)
             lines = HeaderLines(
-                name: CTLineCreateWithAttributedString(nameText(for: section.file)), directory: nil, churn: nil)
+                name: CTLineCreateWithAttributedString(name), nameString: name.string, directory: nil, churn: nil)
         case .new:
             let directory = section.file.directory
             lines = HeaderLines(
                 name: nil,
+                nameString: nil,
                 directory: directory.isEmpty ? nil : CTLineCreateWithAttributedString(secondaryText(directory)),
                 churn: churnText(for: section).map(CTLineCreateWithAttributedString))
         }

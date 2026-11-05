@@ -34,7 +34,7 @@ extension SideBySideContainerView {
         // Set directly, so neither pane reports an interaction.
         let selection = PaneSelection(row: match.documentRow, range: match.utf16Range)
         pane(for: side).selection = selection
-        pane(for: other).selection = nil
+        pane(for: other).clearSelection()
         findOwnedSelection = (side, selection)
     }
 

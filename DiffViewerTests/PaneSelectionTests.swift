@@ -1,3 +1,5 @@
+import AppKit
+import CoreText
 import Testing
 
 @testable import DiffViewer
@@ -159,5 +161,96 @@ struct PaneSelectionTests {
         #expect(Self.oldModel.lineLength(ofRow: 2) == 0)
         #expect(Self.newModel.lineLength(ofRow: 2) == 8)
         #expect(Self.newModel.lineLength(ofRow: 99) == 0)
+    }
+
+    @Test func fileNameSelectionRangeAndText() {
+        #expect(FileNameSelection(section: 0, anchor: 5, head: 2).range == 2..<5)
+        // An offset inside the emoji's surrogate pair still copies the whole emoji.
+        let name = "a😀b"
+        #expect(FileNameSelection(section: 0, anchor: 0, head: 2).text(in: name) == "a😀")
+        #expect(FileNameSelection(section: 0, anchor: 1, head: 99).text(in: name) == "😀b")
+        #expect(FileNameSelection(section: 0, anchor: 8, head: 9).text(in: name) == "")
+    }
+
+    /// What the two geometry helpers answer for a name, computed up front because a
+    /// `CTLine` is not `Sendable` and so cannot appear inside `#expect`.
+    @MainActor
+    private struct NameGeometry {
+        let width: CGFloat
+        let xs: [CGFloat]
+        let offsetBefore: Int
+        let offsetPast: Int
+        let offsetAtThreeChars: Int
+
+        init(_ string: String, widthFraction: Double = 1, charAdvance: CGFloat = 0) throws {
+            let font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+            let attributes: [NSAttributedString.Key: Any] = [.font: font]
+            let full = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attributes))
+            let token = CTLineCreateWithAttributedString(NSAttributedString(string: "\u{2026}", attributes: attributes))
+            let target = CTLineGetTypographicBounds(full, nil, nil, nil) * widthFraction
+            let line = widthFraction == 1 ? full : try #require(CTLineCreateTruncatedLine(full, target, .end, token))
+            let length = string.utf16.count
+            let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            self.width = width
+            xs = (0...length).map { DiffPaneView.fileNameX(forOffset: $0, line: line, length: length) }
+            offsetBefore = DiffPaneView.fileNameOffset(forX: -3, line: line, length: length)
+            offsetPast = DiffPaneView.fileNameOffset(forX: width + 3, line: line, length: length)
+            offsetAtThreeChars = DiffPaneView.fileNameOffset(forX: charAdvance * 3.2, line: line, length: length)
+        }
+    }
+
+    @Test @MainActor func fileNameGeometryOnATruncatedLine() throws {
+        let string = "averyveryverylongfilename.swift"
+        let advance = try NameGeometry("a").width
+        let name = try NameGeometry(string, widthFraction: 0.5, charAdvance: advance)
+        let length = string.utf16.count
+        #expect(name.offsetBefore == 0)
+        #expect(name.offsetAtThreeChars == 3)
+        #expect(name.offsetPast == length)
+        #expect(abs(name.xs[3] - advance * 3) < 0.01)
+        // Text the ellipsis cut off, and the end itself, reach the ellipsis' far edge.
+        #expect(name.xs[length - 1] == name.width)
+        #expect(name.xs[length] == name.width)
+    }
+
+    @Test @MainActor func fileNameGeometryFollowsTextDirection() throws {
+        let hebrew = "שלוםעולםשלום"
+        let length = hebrew.utf16.count
+        let name = try NameGeometry(hebrew)
+        #expect(name.xs[0] == name.width)
+        #expect(name.xs[length] == 0)
+        #expect(name.offsetBefore == length)
+        #expect(name.offsetPast == 0)
+
+        // Truncated, the ellipsis sits at the left, so cut text reaches x = 0.
+        let cut = try NameGeometry(hebrew, widthFraction: 0.5)
+        #expect(cut.xs[0] == cut.width)
+        #expect(cut.xs[length - 1] == 0)
+
+        // ".swift" is drawn first, so offset 5, its first character after the dot, is a real x = 0.
+        #expect(try NameGeometry("שלום.swift").xs[5] == 0)
+    }
+
+    @Test @MainActor func fileNameAndTextSelectionsAreExclusiveAndSelectAllStaysInTheName() {
+        let section = ChangesetSection(
+            file: changedFile("Sources/name.swift"), rowRange: 0..<0, oldLineOffset: 0, newLineOffset: 0,
+            oldLineCount: 0, newLineCount: 0, added: 0, deleted: 0, outcome: .binary)
+        let model = PaneModel(side: .old, rows: [], lines: [], sections: [section], changeBlocks: [])
+        let pane = DiffPaneView(frame: .zero)
+        pane.install(model, mode: .replace)
+
+        pane.fileNameSelection = FileNameSelection(section: 0, anchor: 1, head: 2)
+        pane.selectAll(nil)
+        #expect(pane.selectedFileNameText() == "name.swift")
+
+        pane.selection = PaneSelection(row: 0, range: 0..<1)
+        #expect(pane.fileNameSelection == nil)
+        pane.fileNameSelection = FileNameSelection(section: 0, anchor: 0, head: 1)
+        #expect(pane.selection == nil)
+
+        pane.install(model, mode: .append)
+        #expect(pane.fileNameSelection != nil)
+        pane.install(model, mode: .replace)
+        #expect(pane.fileNameSelection == nil)
     }
 }
