@@ -50,7 +50,7 @@ struct FindScopeControl: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(onSelect: onSelect) }
 
-    final class Coordinator: NSObject {
+    @MainActor final class Coordinator: NSObject {
         var onSelect: (DocumentSide) -> Void
 
         init(onSelect: @escaping (DocumentSide) -> Void) { self.onSelect = onSelect }

@@ -78,7 +78,7 @@ enum DiffAligner {
             var anchors: [(old: Int, new: Int)] = []
             var lastNew = -1
             for pair in hints.pairs where deleteSet.contains(pair.old) && insertSet.contains(pair.new) {
-                if pair.new > lastNew, anchors.last.map { pair.old > $0.old } ?? true {
+                if pair.new > lastNew, anchors.last.map({ pair.old > $0.old }) ?? true {
                     // A line with no change entry has nothing marked changed.
                     let oldHasUnchangedContent = {
                         hints.oldChanges[pair.old].map { hasUnchangedContent(oldLines[pair.old], changes: $0) } ?? true

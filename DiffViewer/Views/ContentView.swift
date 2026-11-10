@@ -75,6 +75,8 @@ struct ContentView: View {
                     RepositoryCapsuleView()
                         // The toolbar sets separate items flush; this matches the pickers' 8pt gap.
                         .padding(.trailing, 8)
+                        // Clear of the sidebar toggle, and flush with the tab bar's leading edge.
+                        .padding(.leading, 4.5)
                 }
             }
             // The capsule draws its own glass, and a bare name has none.

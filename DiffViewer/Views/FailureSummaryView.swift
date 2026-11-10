@@ -73,7 +73,7 @@ struct FailureSummaryView: View {
         let sparkle = Text("\u{00A0}\(Image(systemName: "sparkles"))")
             .font(Font(NSFont.systemFont(ofSize: font.pointSize * 0.8)))
             .foregroundStyle(.secondary)
-        return (isSummary ? Text(text) + sparkle : Text(text))
+        return (isSummary ? Text("\(text)\(sparkle)") : Text(text))
             .font(Font(font))
             .lineLimit(2)
             .truncationMode(.tail)
