@@ -1,6 +1,7 @@
 import AppKit
 
 /// The pickers' one-line text: a label that truncates at its tail.
+@MainActor
 enum PickerLabel {
     static func make(font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) -> NSTextField {
         let field = NSTextField(labelWithString: "")

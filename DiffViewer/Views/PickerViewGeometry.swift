@@ -1,6 +1,7 @@
 import AppKit
 
 /// Measuring and placing the pickers' labels.
+@MainActor
 enum PickerViewGeometry {
     /// A truncating label's `intrinsicContentSize` is capped by its current frame; the
     /// cell's size is the text's natural size.
